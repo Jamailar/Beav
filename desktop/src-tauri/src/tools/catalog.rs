@@ -563,12 +563,20 @@ fn fs_knowledge_list_input_schema() -> Value {
                 string_schema("Optional advisor id when not bound by session."),
             ),
             (
+                "sourceId",
+                string_schema("Optional registered document source id to search instead of advisor/shared knowledge."),
+            ),
+            (
+                "rootPath",
+                string_schema("Optional registered document source root path when sourceId is not available."),
+            ),
+            (
                 "path",
-                string_schema("Optional advisor-relative path to list."),
+                string_schema("Optional source-relative path to list."),
             ),
             (
                 "pattern",
-                string_schema("Optional advisor-relative glob pattern."),
+                string_schema("Optional source-relative glob pattern."),
             ),
             (
                 "limit",
@@ -588,12 +596,20 @@ fn fs_knowledge_search_input_schema() -> Value {
                 string_schema("Optional advisor id when not bound by session."),
             ),
             (
+                "sourceId",
+                string_schema("Optional registered document source id to search instead of advisor/shared knowledge."),
+            ),
+            (
+                "rootPath",
+                string_schema("Optional registered document source root path when sourceId is not available."),
+            ),
+            (
                 "path",
-                string_schema("Optional advisor-relative path to scope the search."),
+                string_schema("Optional source-relative path to scope the search."),
             ),
             (
                 "pattern",
-                string_schema("Optional advisor-relative glob pattern."),
+                string_schema("Optional source-relative glob pattern."),
             ),
             ("query", string_schema("Free-text query to search for.")),
             (
@@ -617,7 +633,19 @@ fn fs_knowledge_read_input_schema() -> Value {
                 "advisorId",
                 string_schema("Optional advisor id when not bound by session."),
             ),
-            ("path", string_schema("Advisor-relative file path to read.")),
+            (
+                "sourceId",
+                string_schema("Optional registered document source id to read instead of advisor/shared knowledge."),
+            ),
+            (
+                "rootPath",
+                string_schema("Optional registered document source root path when sourceId is not available."),
+            ),
+            (
+                "blockId",
+                string_schema("Optional indexed block id returned by knowledge.search."),
+            ),
+            ("path", string_schema("Source-relative file path to read.")),
             ("offset", integer_schema("0-based line offset.", 0, 100_000)),
             ("limit", integer_schema("Maximum lines to read.", 1, 400)),
             (
@@ -625,7 +653,7 @@ fn fs_knowledge_read_input_schema() -> Value {
                 integer_schema("Maximum response characters.", 200, 20_000),
             ),
         ],
-        &["path"],
+        &[],
         None,
     )
 }
@@ -1111,7 +1139,7 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "knowledge.list",
         namespace: "knowledge",
-        description: "List entries inside advisor or shared knowledge storage.",
+        description: "List entries inside advisor knowledge, shared knowledge, or a registered document source.",
         input_schema: fs_knowledge_list_input_schema,
         output_schema: file_system_output_schema,
         mutating: false,
@@ -1122,7 +1150,7 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "knowledge.read",
         namespace: "knowledge",
-        description: "Read one advisor or shared knowledge file.",
+        description: "Read one advisor/shared knowledge file or one indexed block from a registered document source.",
         input_schema: fs_knowledge_read_input_schema,
         output_schema: file_system_output_schema,
         mutating: false,
@@ -1133,7 +1161,7 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "knowledge.search",
         namespace: "knowledge",
-        description: "Search advisor or shared knowledge files by text query.",
+        description: "Search advisor knowledge, shared knowledge, or a registered document source by text query.",
         input_schema: fs_knowledge_search_input_schema,
         output_schema: file_system_output_schema,
         mutating: false,

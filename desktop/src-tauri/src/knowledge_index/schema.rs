@@ -56,6 +56,28 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_files_item_id
             ON knowledge_files(item_id);
+        CREATE TABLE IF NOT EXISTS knowledge_document_blocks (
+            block_id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_name TEXT NOT NULL DEFAULT '',
+            root_path TEXT NOT NULL,
+            absolute_path TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            file_extension TEXT,
+            title TEXT,
+            language TEXT,
+            block_index INTEGER NOT NULL,
+            line_start INTEGER NOT NULL,
+            line_end INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            normalized_text TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_document_blocks_source_path
+            ON knowledge_document_blocks(source_id, relative_path, block_index);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_document_blocks_document
+            ON knowledge_document_blocks(document_id, block_index);
         CREATE TABLE IF NOT EXISTS knowledge_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL

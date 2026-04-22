@@ -322,9 +322,12 @@ fn knowledge_fs_call(action: &'static str, arguments: &Value) -> NormalizedToolC
     payload.insert("scope".to_string(), json!("knowledge"));
     payload.insert("action".to_string(), json!(action));
     copy_if_present(&mut payload, arguments, "advisorId");
+    copy_if_present(&mut payload, arguments, "sourceId");
+    copy_if_present(&mut payload, arguments, "rootPath");
     copy_if_present(&mut payload, arguments, "path");
     copy_if_present(&mut payload, arguments, "pattern");
     copy_if_present(&mut payload, arguments, "query");
+    copy_if_present(&mut payload, arguments, "blockId");
     copy_if_present(&mut payload, arguments, "offset");
     copy_if_present(&mut payload, arguments, "limit");
     copy_if_present(&mut payload, arguments, "maxChars");

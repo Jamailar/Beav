@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod document_blocks;
 pub mod fingerprint;
 pub mod indexer;
 pub mod jobs;

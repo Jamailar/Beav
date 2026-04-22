@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 
+use crate::knowledge_index::document_blocks;
 use crate::persistence::with_store;
 use crate::{payload_field, payload_string, AppState};
 
@@ -20,6 +21,7 @@ const DEFAULT_SNIPPET_CHARS: usize = 220;
 #[derive(Debug, Clone)]
 enum KnowledgeScopeKind {
     Advisor,
+    DocumentSource,
     Workspace,
 }
 
@@ -28,6 +30,8 @@ struct KnowledgeScope {
     kind: KnowledgeScopeKind,
     advisor_id: Option<String>,
     advisor_name: Option<String>,
+    source_id: Option<String>,
+    source_name: Option<String>,
     root: PathBuf,
 }
 
@@ -37,6 +41,35 @@ pub fn execute_glob(
     arguments: &Value,
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
+    if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
+        let root_path = scoped_root_path(&scope);
+        let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
+        let pattern_text = list_pattern_for_scope(&scope, arguments)?;
+        let pattern = compile_pattern(&pattern_text)?;
+        let mut matched = collect_matching_files(&scope.root, &pattern)?;
+        matched.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        let total_matches = matched.len();
+        matched.truncate(limit);
+        return Ok(json!({
+            "scopeKind": scope_kind_label(&scope),
+            "advisorId": scope.advisor_id,
+            "advisorName": scope.advisor_name,
+            "sourceId": scope.source_id,
+            "sourceName": scope.source_name,
+            "rootPath": root_path,
+            "pattern": pattern_text,
+            "totalMatches": total_matches,
+            "files": matched.into_iter().map(|item| {
+                json!({
+                    "path": item.relative_path,
+                    "name": item.name,
+                    "extension": item.extension,
+                    "sizeBytes": item.size_bytes,
+                    "updatedAt": item.updated_at_ms
+                })
+            }).collect::<Vec<_>>()
+        }));
+    }
     let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
     let pattern_text = list_pattern_for_scope(&scope, arguments)?;
     let pattern = compile_pattern(&pattern_text)?;
@@ -49,6 +82,8 @@ pub fn execute_glob(
         "scopeKind": scope_kind_label(&scope),
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
+        "sourceId": scope.source_id,
+        "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
         "pattern": pattern_text,
         "totalMatches": total_matches,
@@ -73,6 +108,9 @@ pub fn execute_grep(
     let query = payload_string(arguments, "query")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "redbox_fs(action=knowledge.search) requires query".to_string())?;
+    if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
+        return execute_source_search(state, &scope, arguments, &query);
+    }
     let pattern_text = search_pattern_for_scope(&scope, arguments)?;
     let pattern = compile_pattern(&pattern_text)?;
     let limit = parse_usize(arguments, "limit", DEFAULT_GREP_LIMIT, MAX_GREP_LIMIT);
@@ -112,6 +150,8 @@ pub fn execute_grep(
         "scopeKind": scope_kind_label(&scope),
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
+        "sourceId": scope.source_id,
+        "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
         "pattern": pattern_text,
         "query": query,
@@ -126,6 +166,29 @@ pub fn execute_read(
     arguments: &Value,
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
+    if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
+        if let Some(block_id) = payload_string(arguments, "blockId").filter(|value| !value.trim().is_empty()) {
+            if let Some(block) = document_blocks::read_block(state, &block_id)? {
+                return Ok(json!({
+                    "scopeKind": scope_kind_label(&scope),
+                    "sourceId": block.source_id,
+                    "sourceName": block.source_name,
+                    "documentId": block.document_id,
+                    "blockId": block.block_id,
+                    "rootPath": block.root_path,
+                    "path": block.relative_path,
+                    "absolutePath": block.absolute_path,
+                    "title": block.title,
+                    "language": block.language,
+                    "blockIndex": block.block_index,
+                    "lineStart": block.line_start,
+                    "lineEnd": block.line_end,
+                    "content": truncate_chars(&block.text, parse_usize(arguments, "maxChars", DEFAULT_READ_MAX_CHARS, 20_000))
+                }));
+            }
+            return Err(format!("knowledge block does not exist: {block_id}"));
+        }
+    }
     let relative_path = payload_string(arguments, "path")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "redbox_fs(action=knowledge.read) requires path".to_string())
@@ -151,6 +214,8 @@ pub fn execute_read(
         "scopeKind": scope_kind_label(&scope),
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
+        "sourceId": scope.source_id,
+        "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
         "path": relative_path,
         "absolutePath": target_path.display().to_string(),
@@ -193,8 +258,14 @@ fn resolve_scope(
             kind: KnowledgeScopeKind::Advisor,
             advisor_id: Some(advisor.0),
             advisor_name: Some(advisor.1),
+            source_id: None,
+            source_name: None,
             root,
         });
+    }
+
+    if let Some(source_scope) = resolve_document_source_scope(state, arguments)? {
+        return Ok(source_scope);
     }
 
     let has_workspace_target = payload_string(arguments, "path")
@@ -213,8 +284,51 @@ fn resolve_scope(
         kind: KnowledgeScopeKind::Workspace,
         advisor_id: None,
         advisor_name: None,
+        source_id: None,
+        source_name: None,
         root: crate::workspace_root(state)?.join("knowledge"),
     })
+}
+
+fn resolve_document_source_scope(
+    state: &State<'_, AppState>,
+    arguments: &Value,
+) -> Result<Option<KnowledgeScope>, String> {
+    let requested_source_id = payload_string(arguments, "sourceId")
+        .filter(|value| !value.trim().is_empty());
+    let requested_root_path = payload_string(arguments, "rootPath")
+        .filter(|value| !value.trim().is_empty());
+    if requested_source_id.is_none() && requested_root_path.is_none() {
+        return Ok(None);
+    }
+    let requested_root_path = requested_root_path.as_deref().map(PathBuf::from);
+    let matched = with_store(state, |store| {
+        Ok(store
+            .document_sources
+            .iter()
+            .find(|item| {
+                requested_source_id.as_deref() == Some(item.id.as_str())
+                    || requested_root_path
+                        .as_ref()
+                        .is_some_and(|path| path == &PathBuf::from(&item.root_path))
+            })
+            .map(|item| (item.id.clone(), item.name.clone(), item.root_path.clone())))
+    })?;
+    let Some((source_id, source_name, root_path)) = matched else {
+        return Err("registered document source not found".to_string());
+    };
+    let root = PathBuf::from(root_path);
+    if !root.exists() {
+        return Err(format!("document source root does not exist: {}", root.display()));
+    }
+    Ok(Some(KnowledgeScope {
+        kind: KnowledgeScopeKind::DocumentSource,
+        advisor_id: None,
+        advisor_name: None,
+        source_id: Some(source_id),
+        source_name: Some(source_name),
+        root,
+    }))
 }
 
 fn list_pattern_for_scope(scope: &KnowledgeScope, arguments: &Value) -> Result<String, String> {
@@ -275,7 +389,7 @@ fn normalize_scope_relative_path(scope: &KnowledgeScope, value: &str) -> Result<
         return Ok(String::new());
     }
     match scope.kind {
-        KnowledgeScopeKind::Advisor => Ok(normalized),
+        KnowledgeScopeKind::Advisor | KnowledgeScopeKind::DocumentSource => Ok(normalized),
         KnowledgeScopeKind::Workspace => {
             let stripped = normalized
                 .strip_prefix("knowledge/")
@@ -297,8 +411,93 @@ fn normalize_scope_relative_path(scope: &KnowledgeScope, value: &str) -> Result<
 fn scope_kind_label(scope: &KnowledgeScope) -> &'static str {
     match scope.kind {
         KnowledgeScopeKind::Advisor => "advisor",
+        KnowledgeScopeKind::DocumentSource => "document-source",
         KnowledgeScopeKind::Workspace => "workspace",
     }
+}
+
+fn scoped_root_path(scope: &KnowledgeScope) -> String {
+    scope.root.display().to_string()
+}
+
+fn execute_source_search(
+    state: &State<'_, AppState>,
+    scope: &KnowledgeScope,
+    arguments: &Value,
+    query: &str,
+) -> Result<Value, String> {
+    let source_id = scope
+        .source_id
+        .as_deref()
+        .ok_or_else(|| "document source id is missing".to_string())?;
+    let pattern_text = search_pattern_for_scope(scope, arguments)?;
+    let pattern = compile_pattern(&pattern_text)?;
+    let limit = parse_usize(arguments, "limit", DEFAULT_GREP_LIMIT, MAX_GREP_LIMIT);
+    let snippet_chars = parse_usize(arguments, "snippetChars", DEFAULT_SNIPPET_CHARS, 800);
+    let indexed_count = document_blocks::count_blocks_for_source(state, source_id)?;
+    if indexed_count > 0 {
+        let hits = document_blocks::search_blocks(state, source_id, query, &pattern, limit, snippet_chars)?;
+        return Ok(json!({
+            "scopeKind": scope_kind_label(scope),
+            "sourceId": scope.source_id,
+            "sourceName": scope.source_name,
+            "rootPath": scoped_root_path(scope),
+            "pattern": pattern_text,
+            "query": query,
+            "searchMode": "indexed-blocks",
+            "totalMatches": hits.len(),
+            "hits": hits
+        }));
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut files = collect_matching_files(&scope.root, &pattern)?;
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let mut hits = Vec::<Value>::new();
+    for file in files {
+        if hits.len() >= limit {
+            break;
+        }
+        if !is_text_file(&file.absolute_path) {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&file.absolute_path) else {
+            continue;
+        };
+        for (index, line) in content.lines().enumerate() {
+            if !line.to_lowercase().contains(&query_lower) {
+                continue;
+            }
+            let document_id = format!(
+                "{}:{}",
+                source_id,
+                file.relative_path
+            );
+            hits.push(json!({
+                "documentId": document_id,
+                "sourceId": source_id,
+                "sourceName": scope.source_name,
+                "path": file.relative_path,
+                "absolutePath": file.absolute_path.display().to_string(),
+                "lineNumber": index + 1,
+                "snippet": truncate_chars(line.trim(), snippet_chars),
+            }));
+            if hits.len() >= limit {
+                break;
+            }
+        }
+    }
+    Ok(json!({
+        "scopeKind": scope_kind_label(scope),
+        "sourceId": scope.source_id,
+        "sourceName": scope.source_name,
+        "rootPath": scoped_root_path(scope),
+        "pattern": pattern_text,
+        "query": query,
+        "searchMode": "filesystem-fallback",
+        "totalMatches": hits.len(),
+        "hits": hits
+    }))
 }
 
 fn resolve_session_advisor_id(
@@ -477,6 +676,8 @@ mod tests {
             kind: KnowledgeScopeKind::Workspace,
             advisor_id: None,
             advisor_name: None,
+            source_id: None,
+            source_name: None,
             root: PathBuf::from("/tmp/workspace/knowledge"),
         }
     }
@@ -514,6 +715,8 @@ mod tests {
             kind: KnowledgeScopeKind::Workspace,
             advisor_id: None,
             advisor_name: None,
+            source_id: None,
+            source_name: None,
             root,
         };
         let arguments = json!({
