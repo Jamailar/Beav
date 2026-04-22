@@ -433,14 +433,25 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 }
 
 fn read_http_request(stream: &mut TcpStream, max_body_bytes: usize) -> Result<String, String> {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 4096];
     let mut header_end = None;
     let mut content_length = 0_usize;
     loop {
         match stream.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) => {
+                if let Some(end) = header_end {
+                    let body_bytes = buffer.len().saturating_sub(end);
+                    if body_bytes < content_length {
+                        return Err(format!(
+                            "HTTP request body 不完整: expected {} bytes, got {}",
+                            content_length, body_bytes
+                        ));
+                    }
+                }
+                break;
+            }
             Ok(bytes_read) => {
                 buffer.extend_from_slice(&chunk[..bytes_read]);
                 if header_end.is_none() {
@@ -473,7 +484,15 @@ fn read_http_request(stream: &mut TcpStream, max_body_bytes: usize) -> Result<St
                 ) =>
             {
                 if header_end.is_some() {
-                    break;
+                    let end = header_end.unwrap_or(0);
+                    let body_bytes = buffer.len().saturating_sub(end);
+                    if body_bytes >= content_length {
+                        break;
+                    }
+                    return Err(format!(
+                        "HTTP request body 读取超时: expected {} bytes, got {}",
+                        content_length, body_bytes
+                    ));
                 }
                 return Err("HTTP request 读取超时".to_string());
             }
