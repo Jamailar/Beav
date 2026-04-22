@@ -8,7 +8,7 @@ use crate::commands::chat_state::{
 };
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_tool_result};
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::SessionToolResultRecord;
+use crate::runtime::{RuntimeApprovalResolutionPayload, SessionToolResultRecord};
 use crate::session_lineage_fields;
 use crate::skills::{
     active_skill_activation_items, merge_requested_skills_into_session,
@@ -262,10 +262,18 @@ pub fn handle_send_channel(
             Ok(())
         }
         "chat:confirm-tool" | "ai:confirm-tool" => {
-            let call_id = payload_string(&payload, "callId").unwrap_or_else(|| make_id("call"));
-            let confirmed = payload_field(&payload, "confirmed")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
+            let resolution =
+                serde_json::from_value::<RuntimeApprovalResolutionPayload>(payload.clone())
+                    .unwrap_or_else(|_| {
+                        RuntimeApprovalResolutionPayload::new(
+                            payload_string(&payload, "callId").unwrap_or_else(|| make_id("call")),
+                            payload_field(&payload, "confirmed")
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false),
+                        )
+                    });
+            let call_id = resolution.call_id.clone();
+            let confirmed = resolution.confirmed;
             let session_id = with_store_mut(state, |store| {
                 let session_id = latest_session_id(store);
                 let (runtime_id, parent_runtime_id, source_task_id) =
@@ -294,7 +302,9 @@ pub fn handle_send_channel(
                     original_chars: None,
                     prompt_chars: None,
                     truncated: false,
-                    payload: Some(json!({ "confirmed": confirmed })),
+                    payload: serde_json::to_value(&resolution)
+                        .ok()
+                        .or_else(|| Some(json!({ "callId": call_id, "confirmed": confirmed }))),
                     created_at: now_i64(),
                     updated_at: now_i64(),
                 });

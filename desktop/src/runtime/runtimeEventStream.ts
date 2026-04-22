@@ -17,6 +17,21 @@ type TaskScopedPayload = RuntimeScopedPayload & {
   taskId: string;
 };
 
+export type ToolConfirmationType = 'edit' | 'exec' | 'info';
+
+export interface ToolConfirmationDetails {
+  type: ToolConfirmationType;
+  title: string;
+  description: string;
+  impact?: string;
+}
+
+export interface ToolConfirmRequestPayload {
+  callId: string;
+  name: string;
+  details: ToolConfirmationDetails;
+}
+
 export interface RuntimeEventStreamHandlers {
   getActiveSessionId?: () => string | null | undefined;
   onPhaseStart?: (payload: RuntimeScopedPayload & { phase: string; runtimeMode: string }) => void;
@@ -70,7 +85,7 @@ export interface RuntimeEventStreamHandlers {
   onChatError?: (payload: RuntimeScopedPayload & { errorPayload: UnknownRecord }) => void;
   onChatSessionTitleUpdated?: (payload: RuntimeScopedPayload & { title: string }) => void;
   onChatSkillActivated?: (payload: RuntimeScopedPayload & { name: string; description: string }) => void;
-  onChatToolConfirmRequest?: (payload: RuntimeScopedPayload & { request: UnknownRecord }) => void;
+  onChatToolConfirmRequest?: (payload: RuntimeScopedPayload & { request: ToolConfirmRequestPayload }) => void;
   onCreativeChatUserMessage?: (payload: { roomId: string; message: UnknownRecord }) => void;
   onCreativeChatAdvisorStart?: (payload: {
     roomId: string;
@@ -127,6 +142,32 @@ function toOptionalText(value: unknown): string | undefined {
 function toTextArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => toText(item)).filter((item) => Boolean(item));
+}
+
+function normalizeToolConfirmRequest(value: unknown): ToolConfirmRequestPayload | null {
+  const record = toRecord(value);
+  const detailsRecord = toRecord(record.details);
+  const detailType = toText(detailsRecord.type);
+  if (detailType !== 'edit' && detailType !== 'exec' && detailType !== 'info') {
+    return null;
+  }
+  const callId = toText(record.callId);
+  const name = toText(record.name);
+  const title = toText(detailsRecord.title);
+  const description = String(detailsRecord.description || '');
+  if (!callId || !name || !title || !description.trim()) {
+    return null;
+  }
+  return {
+    callId,
+    name,
+    details: {
+      type: detailType,
+      title,
+      description,
+      impact: toOptionalText(detailsRecord.impact),
+    },
+  };
 }
 
 function shouldSkipBySession(handlers: RuntimeEventStreamHandlers, sessionId: string): boolean {
@@ -356,10 +397,12 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       return;
     }
     if (checkpointType === 'chat.tool_confirm_request') {
+      const request = normalizeToolConfirmRequest(checkpointPayload);
+      if (!request) return;
       handlers.onChatToolConfirmRequest?.({
         sessionId,
         ...runtimeMeta,
-        request: checkpointPayload,
+        request,
       });
       return;
     }

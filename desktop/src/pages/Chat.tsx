@@ -16,7 +16,7 @@ import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/Messa
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
@@ -1980,7 +1980,7 @@ export function Chat({
         handleSkillActivated(null, { name, description });
       },
       onChatToolConfirmRequest: ({ request }) => {
-        handleConfirmRequest(null, request as unknown as ToolConfirmRequest);
+        handleConfirmRequest(null, request as ToolConfirmRequestPayload);
       },
     });
 
