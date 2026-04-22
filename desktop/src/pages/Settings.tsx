@@ -3671,10 +3671,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         const sourceModelsForDisplay = isOfficialSource
                           ? (isOfficialSourceLoggedIn ? sourceModels : [])
                           : sourceModels;
-                        const sourceRemoteModels = getSourceAvailableModels(source.id);
-                        const sourceModelDraft = String(sourceModelDrafts[source.id] || '');
-                        const sourceModelDraftTrimmed = sourceModelDraft.trim();
-                        const sourceModelCapability = sourceModelCapabilityDrafts[source.id] || 'chat';
                         const localGuide = getLocalGuideForSource(source);
                         const allowEmptyKey = isLocalAiSource(source);
 
@@ -3890,7 +3886,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                           onClick={() => openAddModelModal(source)}
                                           className="px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors"
                                         >
-                                          {isOfficialSource ? '添加模型' : '浏览候选'}
+                                          添加模型
                                         </button>
                                         <button
                                           type="button"
@@ -3906,60 +3902,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                         </button>
                                       </div>
                                     </div>
-
-                                    {!isOfficialSource && (
-                                      <div className="rounded-lg border border-dashed border-border bg-surface-primary/70 px-3 py-3 space-y-2">
-                                        <div className="flex items-center justify-between gap-2">
-                                          <div className="text-[11px] font-medium text-text-primary">手动添加模型</div>
-                                          <div className="text-[11px] text-text-tertiary">
-                                            不依赖模型列表 API
-                                          </div>
-                                        </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px,auto] gap-2">
-                                          <div className="space-y-1">
-                                            <input
-                                              type="text"
-                                              list={`ai-source-inline-model-options-${source.id}`}
-                                              value={sourceModelDraft}
-                                              onChange={(e) => setSourceModelDrafts((prev) => ({ ...prev, [source.id]: e.target.value }))}
-                                              placeholder="直接输入模型 ID，例如 gpt-4.1 / claude-sonnet-4 / qwen-plus"
-                                              className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                                            />
-                                            <datalist id={`ai-source-inline-model-options-${source.id}`}>
-                                              {sourceRemoteModels.map((item) => (
-                                                <option key={item.id} value={item.id} />
-                                              ))}
-                                            </datalist>
-                                            <div className="text-[11px] text-text-tertiary">
-                                              厂商不返回候选模型时，直接填官方模型 ID 后加入当前源即可。
-                                            </div>
-                                          </div>
-                                          <select
-                                            value={sourceModelCapability}
-                                            onChange={(e) => setSourceModelCapabilityDrafts((prev) => ({
-                                              ...prev,
-                                              [source.id]: e.target.value as ModelCapability,
-                                            }))}
-                                            className="bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                                          >
-                                            <option value="chat">语言模型</option>
-                                            <option value="transcription">转录模型</option>
-                                            <option value="audio">音频生成</option>
-                                            <option value="image">图片生成</option>
-                                            <option value="video">视频生成</option>
-                                            <option value="embedding">向量模型</option>
-                                          </select>
-                                          <button
-                                            type="button"
-                                            onClick={() => handleAddSourceModel(source.id)}
-                                            disabled={!sourceModelDraftTrimmed}
-                                            className="px-3 py-2 text-xs bg-text-primary text-background rounded hover:opacity-90 transition-opacity disabled:opacity-50"
-                                          >
-                                            加入当前源
-                                          </button>
-                                        </div>
-                                      </div>
-                                    )}
 
                                     {isModelListExpanded && (
                                       sourceModelsForDisplay.length ? (
@@ -4663,7 +4605,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         ))}
                       </div>
                     ) : (
-                      <div className="text-xs text-text-tertiary">暂无候选模型，可点击“刷新候选”拉取。</div>
+                      <div className="text-xs text-text-tertiary">
+                        暂无候选模型，可直接手动输入模型 ID，或点击“刷新候选”拉取。
+                      </div>
                     )}
                   </div>
                 </div>
