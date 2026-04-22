@@ -2,6 +2,7 @@ const serverStatusEl = document.getElementById('server-status');
 const pageMetaEl = document.getElementById('page-meta');
 const resultEl = document.getElementById('result');
 const actionHintEl = document.getElementById('action-hint');
+const updatePanelEl = document.getElementById('update-panel');
 const updateStatusEl = document.getElementById('update-status');
 const updateMetaEl = document.getElementById('update-meta');
 
@@ -182,21 +183,16 @@ async function refreshUpdateStatus(forceRefresh) {
   }).catch(() => null);
 
   const update = normalizeUpdateState(response?.update);
-  const hasFailed = response?.success === false && update.lastError;
-
-  if (update.hasUpdate) {
-    updateStatusEl.textContent = `发现新版本 ${update.latestVersion}，当前版本 ${update.currentVersion}`;
-    updateStatusEl.className = 'status error';
-  } else if (hasFailed) {
-    updateStatusEl.textContent = `更新检查失败：${update.lastError}`;
-    updateStatusEl.className = 'status error';
-  } else if (update.checkStatus === 'checking') {
-    updateStatusEl.textContent = '正在检查插件更新...';
-    updateStatusEl.className = 'status';
-  } else {
-    updateStatusEl.textContent = `当前已是最新版本 ${update.currentVersion}`;
-    updateStatusEl.className = 'status ok';
+  if (!update.hasUpdate) {
+    updatePanelEl?.classList.add('hidden');
+    updateMetaEl.classList.add('hidden');
+    updateMetaEl.textContent = '';
+    return;
   }
+
+  updatePanelEl?.classList.remove('hidden');
+  updateStatusEl.textContent = `发现新版本 ${update.latestVersion}，当前版本 ${update.currentVersion}`;
+  updateStatusEl.className = 'status error';
 
   const lines = [
     `当前版本：${update.currentVersion}`,
@@ -205,11 +201,7 @@ async function refreshUpdateStatus(forceRefresh) {
   if (update.lastCheckedAt) {
     lines.push(`最近检查：${formatDateTime(update.lastCheckedAt)}`);
   }
-  if (update.hasUpdate) {
-    lines.push('更新方式：打开开源仓库 Plugin 目录，重新加载扩展。');
-  } else if (update.lastError) {
-    lines.push(`最近错误：${update.lastError}`);
-  }
+  lines.push('更新方式：打开开源仓库 Plugin 目录，重新加载扩展。');
 
   updateMetaEl.textContent = lines.join('\n');
   updateMetaEl.classList.remove('hidden');
