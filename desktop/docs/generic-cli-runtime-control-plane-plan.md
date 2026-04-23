@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-execution_stage: registry_and_manifest_execution
+execution_stage: installer_and_sandbox_abstractions
 last_updated: 2026-04-23
 owner: codex
 target_files:

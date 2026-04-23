@@ -11,14 +11,14 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::cli_runtime::{
-    append_execution_log_chunk, authorize_cli_execution, emit_cli_escalation_requested,
-    emit_cli_execution_log, emit_cli_execution_started, emit_cli_execution_status,
-    emit_cli_verification_finished, execution_log_metadata, execution_log_paths,
-    find_cli_execution_by_id, initialize_execution_logs, load_host_shell_env, merge_execution_env,
-    resolve_cli_environment, run_cli_verification, upsert_cli_execution_record,
-    write_execution_logs, CliEnvironmentResolveRequest, CliEscalationRequestRecord,
-    CliExecuteRequest, CliExecutionRecord, CliExecutionStatus, CliVerificationStatus,
-    CliVerifyRule,
+    append_execution_log_chunk, authorize_cli_execution, build_cli_sandbox_spec,
+    emit_cli_escalation_requested, emit_cli_execution_log, emit_cli_execution_started,
+    emit_cli_execution_status, emit_cli_verification_finished, execution_log_metadata,
+    execution_log_paths, find_cli_execution_by_id, initialize_execution_logs, load_host_shell_env,
+    merge_execution_env, resolve_cli_environment, run_cli_verification, sandbox_metadata,
+    spawn_cli_terminal, upsert_cli_execution_record, write_execution_logs,
+    CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest,
+    CliExecutionRecord, CliExecutionStatus, CliVerificationStatus, CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
 use crate::{make_id, now_i64, AppState};
@@ -125,26 +125,6 @@ fn run_local_command_capture(
         stdout: output.stdout,
         stderr: output.stderr,
     })
-}
-
-fn spawn_local_command(
-    argv: &[String],
-    cwd: &Path,
-    env: &BTreeMap<String, String>,
-) -> Result<Child, String> {
-    let program = argv
-        .first()
-        .cloned()
-        .ok_or_else(|| "cli execute requires argv[0]".to_string())?;
-    let mut command = Command::new(program);
-    command.args(&argv[1..]);
-    command.current_dir(cwd);
-    command.envs(env);
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    configure_background_command(&mut command);
-    command.spawn().map_err(|error| error.to_string())
 }
 
 fn register_background_execution(
@@ -320,7 +300,8 @@ fn launch_background_execution<RT: Runtime>(
     stderr_path: &Path,
 ) -> Result<(), String> {
     initialize_execution_logs(stdout_path, stderr_path)?;
-    let mut child = spawn_local_command(&request.argv, Path::new(cwd), env)?;
+    let terminal = spawn_cli_terminal(&request.argv, Path::new(cwd), env)?;
+    let mut child = terminal.child;
     let stdout_reader = child
         .stdout
         .take()
@@ -488,6 +469,7 @@ pub fn execute_cli_command<RT: Runtime>(
         &resolution.environment,
         Path::new(&cwd),
     )?;
+    let sandbox = build_cli_sandbox_spec(&request, &resolution.environment, Path::new(&cwd));
 
     let mut record = CliExecutionRecord {
         id: execution_id,
@@ -516,6 +498,19 @@ pub fn execute_cli_command<RT: Runtime>(
             policy.escalation.as_ref(),
             policy.approved_by_existing_grant,
         )),
+    };
+    record.metadata = match record.metadata.take() {
+        Some(Value::Object(mut object)) => {
+            object.insert("sandbox".to_string(), sandbox_metadata(&sandbox));
+            Some(Value::Object(object))
+        }
+        Some(other) => Some(json!({
+            "log": other,
+            "sandbox": sandbox_metadata(&sandbox),
+        })),
+        None => Some(json!({
+            "sandbox": sandbox_metadata(&sandbox),
+        })),
     };
     record = upsert_cli_execution_record(state, record)?;
     emit_cli_execution_started(app, &record);
