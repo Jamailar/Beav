@@ -14,12 +14,12 @@ use crate::cli_runtime::{
     ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_environment_by_id,
     find_cli_execution_by_id, find_cli_tool_by_command, find_cli_tool_by_id,
     find_cli_tool_manifest_by_tool_id, list_cli_environments, list_cli_tool_records,
-    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, refresh_cli_execution,
-    run_cli_verification, upsert_cli_tool_manifest, upsert_cli_tool_record,
+    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, prepare_cli_install,
+    refresh_cli_execution, run_cli_verification, upsert_cli_tool_manifest, upsert_cli_tool_record,
     CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
     CliEnvironmentRecord, CliEnvironmentScope, CliExecuteRequest, CliExecutionStatus,
-    CliInstallMethod, CliInstallRequest, CliInstallResult, CliToolHealth, CliToolManifestRecord,
-    CliToolRecord, CliToolSource, CliVerifyExecutionRequest, CliVerifyResult,
+    CliInstallRequest, CliInstallResult, CliToolHealth, CliToolManifestRecord, CliToolRecord,
+    CliToolSource, CliVerifyExecutionRequest, CliVerifyResult,
 };
 use crate::{make_id, payload_string, AppState};
 
@@ -423,119 +423,6 @@ fn install_tool_command(request: &CliInstallRequest) -> String {
         .unwrap_or_else(|| request.spec.trim().to_string())
 }
 
-fn build_install_env(
-    install_method: &CliInstallMethod,
-    environment: &CliEnvironmentRecord,
-) -> BTreeMap<String, String> {
-    let root = Path::new(&environment.root_path);
-    let mut env = BTreeMap::new();
-    match install_method {
-        CliInstallMethod::Go => {
-            env.insert(
-                "GOBIN".to_string(),
-                root.join("bin").to_string_lossy().to_string(),
-            );
-        }
-        CliInstallMethod::Pnpm => {
-            env.insert(
-                "PNPM_HOME".to_string(),
-                root.join("bin").to_string_lossy().to_string(),
-            );
-        }
-        CliInstallMethod::Uv => {
-            env.insert(
-                "UV_TOOL_DIR".to_string(),
-                root.join("uv-tools").to_string_lossy().to_string(),
-            );
-            env.insert(
-                "UV_TOOL_BIN_DIR".to_string(),
-                root.join("bin").to_string_lossy().to_string(),
-            );
-        }
-        _ => {}
-    }
-    env
-}
-
-fn build_install_argv(
-    install_method: &CliInstallMethod,
-    spec: &str,
-    environment: &CliEnvironmentRecord,
-    tool_command: &str,
-) -> Result<Vec<String>, String> {
-    let normalized_spec = spec.trim();
-    if normalized_spec.is_empty() {
-        return Err("spec is required for cli install".to_string());
-    }
-    let argv = match install_method {
-        CliInstallMethod::Manual => {
-            return Err("manual install must be performed by the user".to_string());
-        }
-        CliInstallMethod::Npm => vec![
-            "npm".to_string(),
-            "install".to_string(),
-            "--prefix".to_string(),
-            environment.root_path.clone(),
-            "--no-save".to_string(),
-            normalized_spec.to_string(),
-        ],
-        CliInstallMethod::Pnpm => vec![
-            "pnpm".to_string(),
-            "add".to_string(),
-            "--dir".to_string(),
-            environment.root_path.clone(),
-            normalized_spec.to_string(),
-        ],
-        CliInstallMethod::Python => vec![
-            "python3".to_string(),
-            "-m".to_string(),
-            "pip".to_string(),
-            "install".to_string(),
-            "--prefix".to_string(),
-            environment.root_path.clone(),
-            normalized_spec.to_string(),
-        ],
-        CliInstallMethod::Uv => vec![
-            "uv".to_string(),
-            "tool".to_string(),
-            "install".to_string(),
-            normalized_spec.to_string(),
-        ],
-        CliInstallMethod::Cargo => vec![
-            "cargo".to_string(),
-            "install".to_string(),
-            "--root".to_string(),
-            environment.root_path.clone(),
-            normalized_spec.to_string(),
-        ],
-        CliInstallMethod::Go => vec![
-            "go".to_string(),
-            "install".to_string(),
-            normalized_spec.to_string(),
-        ],
-        CliInstallMethod::Binary => {
-            if normalized_spec.starts_with("http://") || normalized_spec.starts_with("https://") {
-                vec![
-                    "curl".to_string(),
-                    "-fsSL".to_string(),
-                    normalized_spec.to_string(),
-                    "-o".to_string(),
-                    Path::new(&environment.root_path)
-                        .join("bin")
-                        .join(tool_command)
-                        .to_string_lossy()
-                        .to_string(),
-                ]
-            } else {
-                return Err(
-                    "binary install currently supports only direct download URLs".to_string(),
-                );
-            }
-        }
-    };
-    Ok(argv)
-}
-
 fn install_summary(
     tool_name: &str,
     status: &CliExecutionStatus,
@@ -589,7 +476,8 @@ fn install_value(
         request.spec.trim(),
     );
 
-    let mut execution_env = build_install_env(&request.install_method, &environment);
+    let install_plan = prepare_cli_install(&request, &environment, &tool_name)?;
+    let mut execution_env = install_plan.env.clone();
     for (key, value) in &request.env {
         execution_env.insert(key.clone(), value.clone());
     }
@@ -603,12 +491,7 @@ fn install_value(
             runtime_id: request.runtime_id.clone(),
             environment_id: Some(environment.id.clone()),
             tool_id: Some(tool_name.clone()),
-            argv: build_install_argv(
-                &request.install_method,
-                &request.spec,
-                &environment,
-                &tool_name,
-            )?,
+            argv: install_plan.argv.clone(),
             cwd: Some(environment.root_path.clone()),
             use_pty: false,
             verification_rules: Vec::new(),
@@ -862,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn build_install_argv_uses_scope_specific_package_manager_forms() {
+    fn prepare_cli_install_uses_scope_specific_package_manager_forms() {
         let environment = CliEnvironmentRecord {
             id: "cli-env-app-global".to_string(),
             scope: CliEnvironmentScope::AppGlobal,
@@ -876,8 +759,17 @@ mod tests {
             metadata: None,
         };
         assert_eq!(
-            build_install_argv(&CliInstallMethod::Pnpm, "cowsay", &environment, "cowsay")
-                .expect("argv should build"),
+            prepare_cli_install(
+                &CliInstallRequest {
+                    install_method: CliInstallMethod::Pnpm,
+                    spec: "cowsay".to_string(),
+                    ..CliInstallRequest::default()
+                },
+                &environment,
+                "cowsay",
+            )
+            .expect("argv should build")
+            .argv,
             vec![
                 "pnpm".to_string(),
                 "add".to_string(),
@@ -887,8 +779,17 @@ mod tests {
             ]
         );
         assert_eq!(
-            build_install_argv(&CliInstallMethod::Npm, "eslint", &environment, "eslint")
-                .expect("argv should build"),
+            prepare_cli_install(
+                &CliInstallRequest {
+                    install_method: CliInstallMethod::Npm,
+                    spec: "eslint".to_string(),
+                    ..CliInstallRequest::default()
+                },
+                &environment,
+                "eslint",
+            )
+            .expect("argv should build")
+            .argv,
             vec![
                 "npm".to_string(),
                 "install".to_string(),
