@@ -6,11 +6,12 @@
 
 - `main.rs`：应用入口、状态定义、Tauri 生命周期、模块装配。
 - `commands/`：IPC/频道命令处理层（按业务域拆分）。
+- `document_ingest/`：文档源接入层，负责 copied-file / tracked-folder / vault 注册与 workspace 托管复制。
 - `events/`：统一事件发射与前端兼容事件桥接。
 - `persistence/`：本地状态读取、持久化、工作区 hydrate。
 - `scheduler/`：后台调度计算、任务派生状态。
 - `runtime.rs`：运行时核心类型与通用运行时辅助。
-- `knowledge.rs`：知识库 workspace-first 写入、开放 ingest contract、本地 HTTP 适配。
+- `knowledge.rs`：知识库 workspace-first 写入、batch ingest 编排、本地 HTTP 适配。
 - `*_helpers/*.rs`：按能力拆分的辅助与执行模块（profile、mcp、io、media、import 等）。
 
 ## 文档约定
