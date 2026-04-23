@@ -19,10 +19,11 @@ const WanderPage = lazy(async () => ({ default: (await import('./pages/Wander'))
 const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw')).RedClaw }));
 const MediaLibraryPage = lazy(async () => ({ default: (await import('./pages/MediaLibrary')).MediaLibrary }));
 const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/CoverStudio')).CoverStudio }));
+const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages/GenerationStudio')).GenerationStudio }));
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
 
-export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
+export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'group-chat' | 'members';
 
@@ -40,6 +41,7 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'redclaw',
   'media-library',
   'cover-studio',
+  'generation-studio',
   'subjects',
   'workboard',
 ]);
@@ -71,6 +73,21 @@ export interface PendingChatMessage {
       summary?: string;
       cover?: string;
     }>;
+  };
+}
+
+export interface GenerationIntent {
+  mode: 'image' | 'video';
+  source: 'standalone' | 'media-library' | 'manuscripts' | 'cover-studio';
+  sourceTitle?: string;
+  bindTarget?: {
+    manuscriptPath?: string;
+    projectId?: string;
+  };
+  preset?: {
+    aspectRatio?: string;
+    resolution?: '720p' | '1080p';
+    durationSeconds?: number;
   };
 }
 
@@ -220,6 +237,7 @@ function App() {
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
+  const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['manuscripts']));
   const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
   const [clipboardCandidate, setClipboardCandidate] = useState<YouTubeClipboardCandidate | null>(null);
@@ -348,6 +366,16 @@ function App() {
   // 稿件页面消费后清除
   const clearPendingManuscriptFile = () => {
     setPendingManuscriptFile(null);
+  };
+
+  const navigateToGenerationStudio = (intent: GenerationIntent) => {
+    uiTraceInteraction('app', 'nav_to_generation_studio', { to: 'generation-studio', mode: intent.mode, source: intent.source });
+    setPendingGenerationIntent(intent);
+    setCurrentView('generation-studio');
+  };
+
+  const clearPendingGenerationIntent = () => {
+    setPendingGenerationIntent(null);
   };
 
   const setViewPersistent = useCallback((view: ViewType, persistent: boolean) => {
@@ -592,6 +620,7 @@ function App() {
                 pendingFile={pendingManuscriptFile}
                 onFileConsumed={clearPendingManuscriptFile}
                 onNavigateToRedClaw={navigateToRedClaw}
+                onNavigateToGenerationStudio={navigateToGenerationStudio}
                 isActive={currentView === 'manuscripts'}
                 onImmersiveModeChange={setImmersiveMode}
               />
@@ -639,7 +668,10 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'media-library') && (
           <div className={currentView === 'media-library' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'media-library' ? <ViewLoadingFallback /> : null}>
-              <MediaLibraryPage isActive={currentView === 'media-library'} />
+              <MediaLibraryPage
+                isActive={currentView === 'media-library'}
+                onNavigateToGenerationStudio={navigateToGenerationStudio}
+              />
             </Suspense>
           </div>
         )}
@@ -647,6 +679,18 @@ function App() {
           <div className={currentView === 'cover-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'cover-studio' ? <ViewLoadingFallback /> : null}>
               <CoverStudioPage isActive={currentView === 'cover-studio'} />
+            </Suspense>
+          </div>
+        )}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'generation-studio') && (
+          <div className={currentView === 'generation-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'generation-studio' ? <ViewLoadingFallback /> : null}>
+              <GenerationStudioPage
+                isActive={currentView === 'generation-studio' || persistentViews.has('generation-studio')}
+                pendingIntent={pendingGenerationIntent}
+                onIntentConsumed={clearPendingGenerationIntent}
+                onExecutionStateChange={(active) => setViewPersistent('generation-studio', active)}
+              />
             </Suspense>
           </div>
         )}

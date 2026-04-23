@@ -1142,7 +1142,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     model: String(settings?.image_model || 'gpt-image-1'),
                     aspectRatio: String(settings?.image_aspect_ratio || '3:4'),
                     size: String(settings?.image_size || ''),
-                    quality: String(settings?.image_quality || 'standard'),
+                    quality: String(settings?.image_quality || 'auto'),
                     count: 1,
                     projectId: '',
                     titlePrefix: title.slice(0, 32),

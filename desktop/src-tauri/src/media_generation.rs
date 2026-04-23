@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use crate::{
-    configure_background_command, decode_base64_bytes, normalize_base_url, payload_field,
-    payload_string, run_curl_bytes, run_curl_json, run_curl_json_response, HTTP_STATUS_MARKER,
+    configure_background_command, decode_base64_bytes, format_http_error_message,
+    http_error_details_from_value, normalize_base_url, payload_field, payload_string,
+    run_curl_bytes, run_curl_json, run_curl_json_response, HTTP_STATUS_MARKER,
 };
 
 const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
@@ -66,6 +67,27 @@ fn normalize_image_edit_url(endpoint: &str) -> String {
     } else {
         format!("{normalized}/images/edits")
     }
+}
+
+fn ensure_successful_image_response(
+    operation: &str,
+    method: &str,
+    url: &str,
+    response: crate::HttpJsonResponse,
+) -> Result<Value, String> {
+    if (200..300).contains(&response.status) {
+        return Ok(response.body);
+    }
+    let details = http_error_details_from_value(response.status, &response.body);
+    let line = format!(
+        "{} operation={} url={}",
+        crate::http_error_debug_line("image-http", method, url, &details),
+        operation,
+        url
+    );
+    eprintln!("{line}");
+    crate::append_debug_trace_global(line);
+    Err(format_http_error_message("Image generation", &details))
 }
 
 fn is_official_gemini_endpoint(endpoint: &str) -> bool {
@@ -310,8 +332,9 @@ fn infer_aspect_ratio_from_size(size: Option<&str>) -> Option<&'static str> {
 fn map_quality_to_openai(quality: Option<&str>) -> Option<String> {
     match quality.map(str::trim).unwrap_or_default() {
         "high" | "hd" => Some("high".to_string()),
-        "standard" | "medium" | "low" => Some("standard".to_string()),
-        "auto" | "" => None,
+        "medium" => Some("medium".to_string()),
+        "low" => Some("low".to_string()),
+        "standard" | "auto" | "" => None,
         other => Some(other.to_string()),
     }
 }
@@ -680,19 +703,24 @@ fn run_openai_image_request(
         }
         return result;
     }
-    run_curl_json(
+    let request_url = normalize_image_generation_url(endpoint);
+    let mut body = json!({
+        "model": model,
+        "prompt": prompt,
+        "n": count,
+        "size": map_aspect_ratio_to_image_size(aspect_ratio.as_deref(), size.as_deref()),
+        "response_format": "b64_json"
+    });
+    if let Some(quality) = quality {
+        if let Some(body_object) = body.as_object_mut() {
+            body_object.insert("quality".to_string(), json!(quality));
+        }
+    }
+    ensure_successful_image_response(
+        "openai-images.generate",
         "POST",
-        &normalize_image_generation_url(endpoint),
-        api_key,
-        &[],
-        Some(json!({
-            "model": model,
-            "prompt": prompt,
-            "n": count,
-            "size": map_aspect_ratio_to_image_size(aspect_ratio.as_deref(), size.as_deref()),
-            "quality": quality.unwrap_or_else(|| "standard".to_string()),
-            "response_format": "b64_json"
-        })),
+        &request_url,
+        run_curl_json_response("POST", &request_url, api_key, &[], Some(body), None)?,
     )
 }
 
@@ -790,10 +818,13 @@ fn run_openai_json_image_request(
             payload_string(payload, "aspectRatio").as_deref(),
             payload_string(payload, "size").as_deref(),
         ),
-        "quality": map_quality_to_openai(payload_string(payload, "quality").as_deref()),
         "response_format": "b64_json"
     });
     if let Some(body_object) = body.as_object_mut() {
+        if let Some(quality) = map_quality_to_openai(payload_string(payload, "quality").as_deref())
+        {
+            body_object.insert("quality".to_string(), json!(quality));
+        }
         if let Some(extra_object) = extra_fields.as_object() {
             for (key, value) in extra_object {
                 if !value.is_null() {
@@ -802,7 +833,12 @@ fn run_openai_json_image_request(
             }
         }
     }
-    run_curl_json("POST", endpoint, api_key, &[], Some(body))
+    ensure_successful_image_response(
+        "openai-images.generate",
+        "POST",
+        endpoint,
+        run_curl_json_response("POST", endpoint, api_key, &[], Some(body), None)?,
+    )
 }
 
 fn run_dashscope_image_request(

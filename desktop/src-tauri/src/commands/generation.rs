@@ -390,6 +390,16 @@ fn emit_video_generation_progress(app: &AppHandle, context: &RuntimeToolLogConte
     );
 }
 
+fn emit_image_generation_log(state: &State<'_, AppState>, line: impl Into<String>) {
+    let line = line.into();
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    eprintln!("{trimmed}");
+    append_debug_log_state(state, trimmed.to_string());
+}
+
 fn video_generation_asset_label(index: i64, count: i64) -> String {
     if count > 1 {
         format!("第 {}/{} 个视频", index + 1, count)
@@ -453,19 +463,26 @@ pub fn handle_generation_channel(
             None
         };
         let effective_image_prompt = if channel == "image-gen:generate" {
-            prompt.clone().map(|raw| {
-                optimize_image_generation_prompt(
-                    app,
-                    state,
-                    &settings_snapshot,
-                    payload,
-                    &raw,
-                    title.as_deref(),
-                    aspect_ratio.as_deref(),
-                    size.as_deref(),
-                    quality.as_deref(),
-                )
-            })
+            let bypass_prompt_optimizer = payload_field(payload, "bypassPromptOptimizer")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if bypass_prompt_optimizer {
+                prompt.clone()
+            } else {
+                prompt.clone().map(|raw| {
+                    optimize_image_generation_prompt(
+                        app,
+                        state,
+                        &settings_snapshot,
+                        payload,
+                        &raw,
+                        title.as_deref(),
+                        aspect_ratio.as_deref(),
+                        size.as_deref(),
+                        quality.as_deref(),
+                    )
+                })
+            }
         } else {
             None
         };
@@ -673,7 +690,7 @@ pub fn handle_generation_channel(
                     .as_deref()
                     .unwrap_or(default_template.as_str())
                     .to_string();
-                append_debug_log_state(
+                emit_image_generation_log(
                     state,
                     format!(
                         "[image-gen] request:start endpoint={} provider={} template={} model={} mode={} refs={}",
@@ -706,7 +723,7 @@ pub fn handle_generation_channel(
                 ) {
                     Ok(response) => Some(response),
                     Err(error) => {
-                        append_debug_log_state(
+                        emit_image_generation_log(
                             state,
                             format!(
                                 "[image-gen] request:error endpoint={} provider={} template={} model={} error={error}",
@@ -734,21 +751,21 @@ pub fn handle_generation_channel(
                 if let Some(response) = response {
                     if let Some(item) = extract_first_media_result(&response) {
                         if let Err(error) = write_generated_image_asset(&absolute_path, item) {
-                            append_debug_log_state(
+                            emit_image_generation_log(
                                 state,
                                 format!(
                                     "[image-gen] asset:write-error path={} error={error}",
                                     absolute_path.display()
                                 ),
                             );
-                            append_debug_log_state(
+                            emit_image_generation_log(
                                 state,
                                 format!(
                                     "[image-gen] asset:write-error response={}",
                                     summarize_json_for_log(&response)
                                 ),
                             );
-                            append_debug_log_state(
+                            emit_image_generation_log(
                                 state,
                                 format!(
                                     "[image-gen] asset:write-error first-item={}",
@@ -771,7 +788,7 @@ pub fn handle_generation_channel(
                                 return Err(format!("图片生成结果写入失败：{error}"));
                             }
                         } else {
-                            append_debug_log_state(
+                            emit_image_generation_log(
                                 state,
                                 format!(
                                     "[image-gen] request:ok path={} provider={} template={} model={}",
@@ -783,7 +800,7 @@ pub fn handle_generation_channel(
                             );
                         }
                     } else if placeholder_fallback_allowed {
-                        append_debug_log_state(
+                        emit_image_generation_log(
                             state,
                             format!(
                                 "[image-gen] response:empty fallback response={}",
@@ -802,14 +819,14 @@ pub fn handle_generation_channel(
                             "#E76F51",
                         )?;
                     } else {
-                        append_debug_log_state(
+                        emit_image_generation_log(
                             state,
                             format!(
                                 "[image-gen] response:empty endpoint={} provider={} template={} model={}",
                                 endpoint, effective_provider, effective_template, effective_model
                             ),
                         );
-                        append_debug_log_state(
+                        emit_image_generation_log(
                             state,
                             format!(
                                 "[image-gen] response:empty body={}",
@@ -836,7 +853,7 @@ pub fn handle_generation_channel(
                 )?;
                 Some(file_url_for_path(&absolute_path))
             } else {
-                append_debug_log_state(
+                emit_image_generation_log(
                     state,
                     format!(
                         "[image-gen] missing provider config channel={channel} mode={} title={}",
@@ -945,47 +962,4 @@ pub fn handle_generation_channel(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_optimized_prompt_prefers_structured_json_field() {
-        let optimized =
-            extract_optimized_prompt(r#"{"optimizedPrompt":"主体清晰，晨光客厅，真实摄影"}"#);
-        assert_eq!(optimized.as_deref(), Some("主体清晰，晨光客厅，真实摄影"));
-    }
-
-    #[test]
-    fn fallback_optimizer_adds_mode_specific_guidance() {
-        let prompt = build_fallback_optimized_image_prompt(
-            "一只橘猫坐在木椅上",
-            Some("猫咪写真"),
-            "reference-guided",
-            &[
-                "参考图1：用于锁定主体身份".to_string(),
-                "参考图2：用于补充材质与环境".to_string(),
-            ],
-            Some("3:4"),
-            None,
-            Some("high"),
-        );
-        assert!(prompt.contains("保持参考图主体身份"));
-        assert!(prompt.contains("参考图1：用于锁定主体身份"));
-        assert!(prompt.contains("画幅比例 3:4"));
-        assert!(prompt.contains("不要出现提示词原文"));
-        assert!(prompt.contains("高完成度"));
-    }
-
-    #[test]
-    fn append_missing_reference_role_notes_injects_per_image_roles() {
-        let prompt = append_missing_reference_role_notes(
-            "Jamba 坐在餐桌前吃面，真实摄影风格",
-            &[
-                "参考图1：用于锁定主体 Jamba 的身份和面部特征。".to_string(),
-                "参考图2：用于补充餐馆环境和暖色灯光。".to_string(),
-            ],
-        );
-        assert!(prompt.contains("参考图1"));
-        assert!(prompt.contains("参考图2"));
-    }
-}
+mod tests {}

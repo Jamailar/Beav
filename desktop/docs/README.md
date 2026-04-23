@@ -14,6 +14,7 @@
 
 - [architecture/system-overview.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/architecture/system-overview.md)
 - [architecture/product-module-breakdown.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/architecture/product-module-breakdown.md)
+- [app-optimization-roadmap.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/app-optimization-roadmap.md)
 - [redbox-local-runtime-migration-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/redbox-local-runtime-migration-plan.md)
 - [legal-grade-retrieval-architecture-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/legal-grade-retrieval-architecture-plan.md)
 - [legal-grade-retrieval-execution-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/legal-grade-retrieval-execution-plan.md)
@@ -24,6 +25,12 @@
 - [ai-runtime-maintenance-overview.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/ai-runtime-maintenance-overview.md)
 - [agent-collaboration-upgrade-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/agent-collaboration-upgrade-plan.md)
 - [skill-runtime-v2.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/skill-runtime-v2.md)
+
+### Archive
+
+- [archive/README.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/archive/README.md)
+- [completed-tasks-archive-2026-04-23.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/archive/completed-tasks-archive-2026-04-23.md)
+- [completed-docs-archive-2026-04-23.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/archive/completed-docs-archive-2026-04-23.md)
 
 ### Development
 

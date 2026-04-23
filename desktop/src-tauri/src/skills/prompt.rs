@@ -51,12 +51,12 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let mut preflight_rules = Vec::<&str>::new();
     let available_names = resolved
         .visible_skills
         .iter()
         .map(|skill| skill.name.as_str())
         .collect::<Vec<_>>();
-    let mut preflight_rules = Vec::<&str>::new();
     if available_names
         .iter()
         .any(|name| name.eq_ignore_ascii_case("image-prompt-optimizer"))

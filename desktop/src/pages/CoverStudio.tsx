@@ -341,7 +341,7 @@ const normalizeTemplate = (raw: unknown): CoverTemplate | null => {
         titleGuide: String(item.titleGuide || item.prompt || ''),
         promptSwitches: normalizePromptSwitches(item.promptSwitches),
         model: String(item.model || 'gpt-image-1'),
-        quality: String(item.quality || 'standard'),
+        quality: String(item.quality || 'auto'),
         count: Math.max(1, Math.min(4, Number.isFinite(count) ? Math.floor(count) : 1)),
         updatedAt: String(item.updatedAt || new Date().toISOString()),
         prompt: String(item.prompt || ''),
@@ -369,7 +369,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [templateImage, setTemplateImage] = useState<{ name: string; dataUrl: string } | null>(null);
     const [count, setCount] = useState(1);
     const [model, setModel] = useState('gpt-image-1');
-    const [quality, setQuality] = useState('standard');
+    const [quality, setQuality] = useState('auto');
 
     const [baseImage, setBaseImage] = useState<{ name: string; dataUrl: string } | null>(null);
     const [promptSwitches, setPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_PROMPT_SWITCHES);
@@ -418,7 +418,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         setTemplateImage(null);
         setCount(1);
         setModel(settings.image_model || 'gpt-image-1');
-        setQuality(settings.image_quality || 'standard');
+        setQuality(settings.image_quality || 'auto');
         setBaseImage(null);
         setPromptSwitches(DEFAULT_PROMPT_SWITCHES);
         setTitleInputMode('titles');
@@ -434,7 +434,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             setSettings(next);
             setSpaceId(next.active_space_id || 'default');
             setModel(next.image_model || 'gpt-image-1');
-            setQuality(next.image_quality || 'standard');
+            setQuality(next.image_quality || 'auto');
         } catch (error) {
             console.error('Failed to load cover settings:', error);
         }
@@ -547,7 +547,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         setActiveTemplateId(template.id);
         setCount(Math.max(1, Math.min(4, Number(template.count) || 1)));
         setModel(template.model || 'gpt-image-1');
-        setQuality(template.quality || 'standard');
+        setQuality(template.quality || 'auto');
         setPromptSwitches(normalizePromptSwitches(template.promptSwitches));
         setTemplateImage(template.templateImage
             ? { name: `${template.name}-模板图`, dataUrl: template.templateImage }

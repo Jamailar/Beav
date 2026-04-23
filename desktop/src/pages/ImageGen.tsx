@@ -56,7 +56,7 @@ export function ImageGen() {
     const [model, setModel] = useState('');
     const [aspectRatio, setAspectRatio] = useState('3:4');
     const [size, setSize] = useState('');
-    const [quality, setQuality] = useState('standard');
+    const [quality, setQuality] = useState('auto');
     const [generationMode, setGenerationMode] = useState<'text-to-image' | 'reference-guided' | 'image-to-image'>('text-to-image');
     const [referenceImages, setReferenceImages] = useState<Array<{ name: string; dataUrl: string }>>([]);
     const [isReadingRefImages, setIsReadingRefImages] = useState(false);
@@ -72,7 +72,7 @@ export function ImageGen() {
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality || 'standard');
+            setQuality(next.image_quality || 'auto');
         } catch (e) {
             console.error('Failed to load image settings:', e);
             setSettings({});
@@ -101,6 +101,7 @@ export function ImageGen() {
                 : 'text-to-image';
             const result = await window.ipcRenderer.invoke('image-gen:generate', {
                 prompt,
+                bypassPromptOptimizer: true,
                 projectId: projectId.trim() || undefined,
                 title: title.trim() || undefined,
                 generationMode: effectiveMode,
