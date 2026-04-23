@@ -85,7 +85,7 @@
 ![Manuscripts](./images/manuscripts.png)
 
 ### 创作页（生图 / 生视频）
-![Creation Page](./images/creation-page.png)
+![Creation Page](./images/creation-page.jpg)
 
 ### RedClaw
 ![RedClaw](./images/redclaw.png)
