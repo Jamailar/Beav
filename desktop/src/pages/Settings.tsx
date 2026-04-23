@@ -80,6 +80,7 @@ import {
   SettingsSaveBar,
   ToolsSettingsSection,
 } from './settings/SettingsSections';
+import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 
 const MIN_CHAT_MAX_TOKENS = 1024;
 const DEFAULT_CHAT_MAX_TOKENS = 262144;
@@ -116,6 +117,17 @@ type SettingsTab = 'general' | 'ai' | 'tools' | 'remote';
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
+type CliRuntimeInstallMethodOption = 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+type CliRuntimeInstallQueueItem = {
+  installId: string;
+  toolName: string;
+  environmentId?: string;
+  installMethod?: string;
+  spec?: string;
+  status: string;
+  summary?: string;
+  updatedAt: number;
+};
 type AssistantDaemonDraft = {
   enabled: boolean;
   autoStart: boolean;
@@ -879,6 +891,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isPreparingBrowserPlugin, setIsPreparingBrowserPlugin] = useState(false);
   const [cliRuntimeTools, setCliRuntimeTools] = useState<CliRuntimeToolRecord[]>([]);
   const [cliRuntimeEnvironments, setCliRuntimeEnvironments] = useState<CliRuntimeEnvironmentRecord[]>([]);
+  const [cliRuntimeInstallDraft, setCliRuntimeInstallDraft] = useState<{
+    environmentId: string;
+    installMethod: CliRuntimeInstallMethodOption;
+    spec: string;
+    toolName: string;
+  }>({
+    environmentId: '',
+    installMethod: 'pnpm',
+    spec: '',
+    toolName: '',
+  });
+  const [cliRuntimeInstallQueue, setCliRuntimeInstallQueue] = useState<CliRuntimeInstallQueueItem[]>([]);
+  const [cliRuntimeInstalling, setCliRuntimeInstalling] = useState(false);
   const [cliRuntimeStatusMessage, setCliRuntimeStatusMessage] = useState('');
   const [isCliRuntimeRefreshing, setIsCliRuntimeRefreshing] = useState(false);
   const [cliRuntimeInspectingToolId, setCliRuntimeInspectingToolId] = useState('');
@@ -2941,6 +2966,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
+  const upsertCliRuntimeInstallQueueItem = useCallback((item: CliRuntimeInstallQueueItem) => {
+    setCliRuntimeInstallQueue((prev) => {
+      const next = prev.filter((entry) => entry.installId !== item.installId);
+      next.unshift(item);
+      return next
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, 8);
+    });
+  }, []);
+
   const loadCliRuntimeDashboard = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
       setIsCliRuntimeRefreshing(true);
@@ -2968,6 +3003,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (!options?.silent) {
         setCliRuntimeStatusMessage(`已刷新 CLI runtime：${nextTools.length} 个工具，${nextEnvironments.length} 个环境`);
       }
+      setCliRuntimeInstallDraft((current) => {
+        if (current.environmentId && nextEnvironments.some((item) => item.id === current.environmentId)) {
+          return current;
+        }
+        const fallbackEnvironment = nextEnvironments[0]?.id || '';
+        if (!fallbackEnvironment || fallbackEnvironment === current.environmentId) {
+          return current;
+        }
+        return {
+          ...current,
+          environmentId: fallbackEnvironment,
+        };
+      });
     } catch (error) {
       console.error('Failed to load CLI runtime dashboard', error);
       if (!options?.silent) {
@@ -3036,6 +3084,64 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, [formData.workspace_dir, loadCliRuntimeDashboard]);
 
+  const handleInstallCliRuntimeTool = useCallback(async () => {
+    const environmentId = String(cliRuntimeInstallDraft.environmentId || '').trim()
+      || cliRuntimeEnvironments[0]?.id
+      || '';
+    const spec = String(cliRuntimeInstallDraft.spec || '').trim();
+    const toolName = String(cliRuntimeInstallDraft.toolName || '').trim();
+    if (!environmentId) {
+      setCliRuntimeStatusMessage('请先选择一个 CLI environment');
+      return;
+    }
+    if (!spec) {
+      setCliRuntimeStatusMessage('请填写要安装的 spec，例如 ffmpeg-static 或 @scope/tool');
+      return;
+    }
+    setCliRuntimeInstalling(true);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.install({
+        environmentId,
+        installMethod: cliRuntimeInstallDraft.installMethod,
+        spec,
+        toolName: toolName || undefined,
+      });
+      const installId = String((result as { installId?: string } | null)?.installId || '').trim();
+      if (installId) {
+        upsertCliRuntimeInstallQueueItem({
+          installId,
+          toolName: String((result as { toolName?: string } | null)?.toolName || toolName || spec),
+          environmentId,
+          installMethod: cliRuntimeInstallDraft.installMethod,
+          spec,
+          status: String((result as { status?: string } | null)?.status || 'queued'),
+          summary: String((result as { summary?: string } | null)?.summary || ''),
+          updatedAt: Date.now(),
+        });
+      }
+      await loadCliRuntimeDashboard({ silent: true });
+      setCliRuntimeStatusMessage(
+        String((result as { summary?: string } | null)?.summary || `已触发安装：${toolName || spec}`),
+      );
+      setCliRuntimeInstallDraft((current) => ({
+        ...current,
+        toolName: '',
+        spec: '',
+        environmentId,
+      }));
+    } catch (error) {
+      console.error('Failed to install CLI runtime tool', error);
+      setCliRuntimeStatusMessage(`安装失败：${String(error)}`);
+    } finally {
+      setCliRuntimeInstalling(false);
+    }
+  }, [
+    cliRuntimeEnvironments,
+    cliRuntimeInstallDraft,
+    loadCliRuntimeDashboard,
+    upsertCliRuntimeInstallQueueItem,
+  ]);
+
   const handleOpenCliRuntimeEnvironmentRoot = useCallback(async (rootPath: string) => {
     const normalizedPath = String(rootPath || '').trim();
     if (!normalizedPath) return;
@@ -3049,6 +3155,51 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setCliRuntimeStatusMessage(`打开目录失败：${String(error)}`);
     }
   }, []);
+
+  useEffect(() => subscribeRuntimeEventStream({
+    onCliInstallStarted: ({
+      installId,
+      toolName,
+      environmentId,
+      installMethod,
+      spec,
+    }) => {
+      const normalizedInstallId = String(installId || '').trim();
+      if (!normalizedInstallId) return;
+      upsertCliRuntimeInstallQueueItem({
+        installId: normalizedInstallId,
+        toolName,
+        environmentId,
+        installMethod,
+        spec,
+        status: 'running',
+        summary: `正在安装 ${toolName}`,
+        updatedAt: Date.now(),
+      });
+    },
+    onCliInstallFinished: ({
+      installId,
+      toolName,
+      environmentId,
+      status,
+      summary,
+      raw,
+    }) => {
+      const normalizedInstallId = String(installId || '').trim();
+      if (!normalizedInstallId) return;
+      upsertCliRuntimeInstallQueueItem({
+        installId: normalizedInstallId,
+        toolName,
+        environmentId,
+        installMethod: typeof raw.installMethod === 'string' ? raw.installMethod : undefined,
+        spec: typeof raw.spec === 'string' ? raw.spec : undefined,
+        status,
+        summary,
+        updatedAt: Date.now(),
+      });
+      void loadCliRuntimeDashboard({ silent: true });
+    },
+  }), [loadCliRuntimeDashboard, upsertCliRuntimeInstallQueueItem]);
 
   const loadBrowserPluginStatus = useCallback(async () => {
     try {
@@ -4593,13 +4744,18 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
               <ToolsSettingsSection
                 cliRuntimeTools={cliRuntimeTools}
                 cliRuntimeEnvironments={cliRuntimeEnvironments}
+                cliRuntimeInstallDraft={cliRuntimeInstallDraft}
+                setCliRuntimeInstallDraft={setCliRuntimeInstallDraft}
+                cliRuntimeInstallQueue={cliRuntimeInstallQueue}
                 cliRuntimeStatusMessage={cliRuntimeStatusMessage}
                 isCliRuntimeRefreshing={isCliRuntimeRefreshing}
+                cliRuntimeInstalling={cliRuntimeInstalling}
                 cliRuntimeInspectingToolId={cliRuntimeInspectingToolId}
                 cliRuntimeCreatingEnvironment={cliRuntimeCreatingEnvironment}
                 handleRefreshCliRuntime={loadCliRuntimeDashboard}
                 handleInspectCliRuntimeTool={handleInspectCliRuntimeTool}
                 handleCreateCliRuntimeEnvironment={handleCreateCliRuntimeEnvironment}
+                handleInstallCliRuntimeTool={handleInstallCliRuntimeTool}
                 handleOpenCliRuntimeEnvironmentRoot={handleOpenCliRuntimeEnvironmentRoot}
                 isSyncingMcp={isSyncingMcp}
                 handleDiscoverAndImportMcp={handleDiscoverAndImportMcp}

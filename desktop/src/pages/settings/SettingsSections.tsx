@@ -1861,13 +1861,37 @@ export function MemorySettingsSection({
 interface ToolsSettingsSectionProps {
     cliRuntimeTools: CliRuntimeToolRecord[];
     cliRuntimeEnvironments: CliRuntimeEnvironmentRecord[];
+    cliRuntimeInstallDraft: {
+        environmentId: string;
+        installMethod: 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+        spec: string;
+        toolName: string;
+    };
+    setCliRuntimeInstallDraft: Dispatch<SetStateAction<{
+        environmentId: string;
+        installMethod: 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+        spec: string;
+        toolName: string;
+    }>>;
+    cliRuntimeInstallQueue: Array<{
+        installId: string;
+        toolName: string;
+        environmentId?: string;
+        installMethod?: string;
+        spec?: string;
+        status: string;
+        summary?: string;
+        updatedAt: number;
+    }>;
     cliRuntimeStatusMessage: string;
     isCliRuntimeRefreshing: boolean;
+    cliRuntimeInstalling: boolean;
     cliRuntimeInspectingToolId: string;
     cliRuntimeCreatingEnvironment: CliRuntimeEnvironmentScope | '';
     handleRefreshCliRuntime: () => Promise<void>;
     handleInspectCliRuntimeTool: (toolId: string) => Promise<void>;
     handleCreateCliRuntimeEnvironment: (scope: CliRuntimeEnvironmentScope) => Promise<void>;
+    handleInstallCliRuntimeTool: () => Promise<void>;
     handleOpenCliRuntimeEnvironmentRoot: (rootPath: string) => Promise<void>;
     isSyncingMcp: boolean;
     handleDiscoverAndImportMcp: () => Promise<void>;
@@ -1992,13 +2016,18 @@ interface ToolsSettingsSectionProps {
 export function ToolsSettingsSection({
     cliRuntimeTools,
     cliRuntimeEnvironments,
+    cliRuntimeInstallDraft,
+    setCliRuntimeInstallDraft,
+    cliRuntimeInstallQueue,
     cliRuntimeStatusMessage,
     isCliRuntimeRefreshing,
+    cliRuntimeInstalling,
     cliRuntimeInspectingToolId,
     cliRuntimeCreatingEnvironment,
     handleRefreshCliRuntime,
     handleInspectCliRuntimeTool,
     handleCreateCliRuntimeEnvironment,
+    handleInstallCliRuntimeTool,
     handleOpenCliRuntimeEnvironmentRoot,
     isSyncingMcp,
     handleDiscoverAndImportMcp,
@@ -2189,6 +2218,23 @@ export function ToolsSettingsSection({
                 return 'task-ephemeral';
             default:
                 return scope;
+        }
+    };
+
+    const cliInstallStatusTone = (status: string) => {
+        switch (status) {
+            case 'completed':
+                return 'bg-green-500/10 text-green-600';
+            case 'running':
+            case 'pending':
+                return 'bg-blue-500/10 text-blue-600';
+            case 'waiting-approval':
+                return 'bg-amber-500/10 text-amber-600';
+            case 'failed':
+            case 'cancelled':
+                return 'bg-red-500/10 text-red-600';
+            default:
+                return 'bg-surface-secondary border border-border text-text-tertiary';
         }
     };
 
@@ -2451,6 +2497,119 @@ export function ToolsSettingsSection({
                         {cliRuntimeStatusMessage}
                     </div>
                 ) : null}
+
+                <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                    <div>
+                        <div className="text-xs font-medium text-text-primary">受控安装入口</div>
+                        <div className="text-[11px] text-text-tertiary mt-1">
+                            通过 CLI Runtime 安装工具到托管环境，并在下方保留最近安装队列。
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)] gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">目标环境</div>
+                                <select
+                                    value={cliRuntimeInstallDraft.environmentId}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        environmentId: event.target.value,
+                                    }))}
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                >
+                                    {cliRuntimeEnvironments.map((environment) => (
+                                        <option key={environment.id} value={environment.id}>
+                                            {environment.id} · {cliEnvironmentScopeLabel(environment.scope)}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">安装方式</div>
+                                <select
+                                    value={cliRuntimeInstallDraft.installMethod}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        installMethod: event.target.value as typeof current.installMethod,
+                                    }))}
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                >
+                                    {['pnpm', 'npm', 'uv', 'python', 'cargo', 'go', 'binary'].map((method) => (
+                                        <option key={method} value={method}>
+                                            {method}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label className="space-y-1 md:col-span-2">
+                                <div className="text-[11px] text-text-tertiary">Spec</div>
+                                <input
+                                    value={cliRuntimeInstallDraft.spec}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        spec: event.target.value,
+                                    }))}
+                                    placeholder="例如：ffmpeg-static、@larksuiteoapi/cli 或 https://example.com/tool"
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">工具名（可选）</div>
+                                <input
+                                    value={cliRuntimeInstallDraft.toolName}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        toolName: event.target.value,
+                                    }))}
+                                    placeholder="例如：ffmpeg"
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                />
+                            </label>
+                            <div className="flex items-end">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleInstallCliRuntimeTool()}
+                                    disabled={cliRuntimeInstalling || cliRuntimeEnvironments.length === 0}
+                                    className="w-full px-3 py-2 rounded bg-accent-primary text-white text-sm hover:opacity-90 disabled:opacity-50"
+                                >
+                                    {cliRuntimeInstalling ? '安装中...' : '开始安装'}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                            <div className="text-xs font-medium text-text-primary">最近安装队列</div>
+                            {cliRuntimeInstallQueue.length === 0 ? (
+                                <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                    暂无最近安装记录。
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {cliRuntimeInstallQueue.map((item) => (
+                                        <div key={item.installId} className="rounded border border-border bg-surface-primary/60 px-3 py-2 space-y-1.5">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-sm font-medium text-text-primary">{item.toolName}</div>
+                                                <span className={clsx('px-1.5 py-0.5 rounded text-[10px]', cliInstallStatusTone(item.status))}>
+                                                    {item.status}
+                                                </span>
+                                            </div>
+                                            <div className="text-[11px] text-text-secondary break-all">
+                                                {(item.installMethod || 'install')} · {item.spec || 'n/a'}
+                                            </div>
+                                            <div className="text-[11px] text-text-tertiary">
+                                                env: {item.environmentId || 'n/a'} · {formatCliTime(item.updatedAt)}
+                                            </div>
+                                            {item.summary ? (
+                                                <div className="text-[11px] text-text-secondary">{item.summary}</div>
+                                            ) : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-4">
                     <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
