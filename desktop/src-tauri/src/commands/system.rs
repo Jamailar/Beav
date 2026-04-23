@@ -4,6 +4,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::logging::event::LogLevel;
+use crate::logging::{
+    create_report_from_trigger, dismiss_pending_report, export_bundle_for_report,
+    list_pending_reports_value, log_renderer_event, recent_value,
+    status_value as logging_status_value, update_upload_consent, upload_pending_report,
+};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
     now_iso, payload_field, payload_string, payload_value_as_string, pick_files_native,
@@ -139,6 +145,15 @@ pub fn handle_system_channel(
         | "debug:get-recent"
         | "debug:get-runtime-summary"
         | "debug:open-log-dir"
+        | "logs:get-status"
+        | "logs:get-recent"
+        | "logs:open-dir"
+        | "logs:list-pending-reports"
+        | "logs:export-bundle"
+        | "logs:upload-report"
+        | "logs:dismiss-report"
+        | "logs:set-upload-consent"
+        | "logs:append-renderer"
         | "clipboard:read-text"
         | "clipboard:write-html" => (|| -> Result<Value, String> {
             match channel {
@@ -225,29 +240,95 @@ pub fn handle_system_channel(
                     );
                     Ok(json!({ "success": true }))
                 }
-                "debug:get-status" => Ok(json!({
-                    "enabled": true,
-                    "logDirectory": store_root(state)?.display().to_string(),
-                })),
+                "debug:get-status" | "logs:get-status" => logging_status_value(state),
                 "debug:get-recent" => {
                     let limit = payload_field(payload, "limit")
                         .and_then(|value| value.as_i64())
                         .unwrap_or(50)
                         .clamp(1, 200) as usize;
-                    with_store(state, |store| {
-                        let mut lines = store.debug_logs.clone();
-                        if lines.is_empty() {
-                            lines.push(format!("{} | RedBox Rust host is active.", now_iso()));
-                        }
-                        lines.truncate(limit);
-                        Ok(json!({ "lines": lines }))
-                    })
+                    Ok(recent_value(limit))
                 }
                 "debug:get-runtime-summary" => crate::build_runtime_diagnostics_summary(state),
-                "debug:open-log-dir" => {
-                    let path = store_root(state)?;
+                "debug:open-log-dir" | "logs:open-dir" => {
+                    let path = store_root(state)?.join("logs");
                     open::that(&path).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "path": path.display().to_string() }))
+                }
+                "logs:get-recent" => {
+                    let limit = payload_field(payload, "limit")
+                        .and_then(|value| value.as_i64())
+                        .unwrap_or(50)
+                        .clamp(1, 200) as usize;
+                    Ok(recent_value(limit))
+                }
+                "logs:list-pending-reports" => list_pending_reports_value(),
+                "logs:export-bundle" => {
+                    let report_id = if let Some(report_id) = payload_string(payload, "reportId") {
+                        report_id
+                    } else {
+                        create_report_from_trigger(
+                            state,
+                            "manual-export",
+                            "用户手动导出诊断包",
+                            payload
+                                .get("includeAdvancedContext")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                            json!({
+                                "source": "settings",
+                            }),
+                        )?
+                        .id
+                    };
+                    let path = export_bundle_for_report(state, &report_id)?;
+                    Ok(
+                        json!({ "success": true, "reportId": report_id, "path": path.display().to_string() }),
+                    )
+                }
+                "logs:upload-report" => {
+                    let report_id = payload_string(payload, "reportId")
+                        .ok_or_else(|| "reportId is required".to_string())?;
+                    upload_pending_report(state, &report_id)
+                }
+                "logs:dismiss-report" => {
+                    let report_id = payload_string(payload, "reportId")
+                        .ok_or_else(|| "reportId is required".to_string())?;
+                    dismiss_pending_report(&report_id)
+                }
+                "logs:set-upload-consent" => {
+                    let consent =
+                        payload_string(payload, "consent").unwrap_or_else(|| "none".to_string());
+                    let auto_send_same_crash = payload
+                        .get("autoSendSameCrash")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    update_upload_consent(state, &consent, auto_send_same_crash)
+                }
+                "logs:append-renderer" => {
+                    let level =
+                        payload_string(payload, "level").unwrap_or_else(|| "error".to_string());
+                    let category = payload_string(payload, "category")
+                        .unwrap_or_else(|| "plugin.bridge".to_string());
+                    let event = payload_string(payload, "event")
+                        .unwrap_or_else(|| "renderer.log".to_string());
+                    let message = payload_string(payload, "message")
+                        .unwrap_or_else(|| "renderer log".to_string());
+                    log_renderer_event(
+                        match level.to_ascii_lowercase().as_str() {
+                            "trace" => LogLevel::Trace,
+                            "debug" => LogLevel::Debug,
+                            "warn" => LogLevel::Warn,
+                            "error" => LogLevel::Error,
+                            _ => LogLevel::Info,
+                        },
+                        &category,
+                        &event,
+                        &message,
+                        payload_field(payload, "fields")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    );
+                    Ok(json!({ "success": true }))
                 }
                 "clipboard:read-text" => Ok(json!(Clipboard::new()
                     .and_then(|mut clipboard| clipboard.get_text())

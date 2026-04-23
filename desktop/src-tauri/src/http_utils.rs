@@ -171,6 +171,22 @@ pub(crate) fn http_error_debug_line(
     )
 }
 
+fn append_http_error_debug_log(
+    scope: &str,
+    method: &str,
+    url: &str,
+    status: u16,
+    raw: &str,
+    transport: Option<&str>,
+) {
+    let details = http_error_details_from_text(status, raw);
+    let mut line = http_error_debug_line(scope, method, url, &details);
+    if let Some(transport) = transport.map(str::trim).filter(|value| !value.is_empty()) {
+        line.push_str(&format!(" transport={transport}"));
+    }
+    crate::append_debug_trace_global(line);
+}
+
 fn serialized_json_body(body: Option<&Value>) -> Result<Option<Vec<u8>>, String> {
     body.map(serde_json::to_vec)
         .transpose()
@@ -395,6 +411,16 @@ fn execute_curl_json_response_once(
             if force_http1_1 { "http1.1" } else { "default" },
             status
         ));
+        if !(200..300).contains(&status) {
+            append_http_error_debug_log(
+                "http-json",
+                method,
+                url,
+                status,
+                "",
+                Some(if force_http1_1 { "http1.1" } else { "default" }),
+            );
+        }
         return Ok(HttpJsonResponse {
             status,
             body: json!({}),
@@ -404,12 +430,12 @@ fn execute_curl_json_response_once(
     let parsed = serde_json::from_str(normalized_body).map_err(|error| {
         let message = format!("Invalid JSON response: {error}");
         crate::append_debug_trace_global(format!(
-            "[http][curl-json] invalid_json method={} url={} transport={} status={} body_preview={} error={}",
+            "[http][curl-json] invalid_json method={} url={} transport={} status={} body={} error={}",
             method,
             url,
             if force_http1_1 { "http1.1" } else { "default" },
             status,
-            truncate_http_error(normalized_body),
+            normalized_body,
             truncate_http_error(&message)
         ));
         message
@@ -418,6 +444,16 @@ fn execute_curl_json_response_once(
         status,
         body: parsed,
     };
+    if !(200..300).contains(&response.status) {
+        append_http_error_debug_log(
+            "http-json",
+            method,
+            url,
+            response.status,
+            normalized_body,
+            Some(if force_http1_1 { "http1.1" } else { "default" }),
+        );
+    }
     if allow_official_reauth_retry && response.status == 401 {
         if let Some(refreshed_api_key) =
             crate::try_refresh_official_auth_for_ai_request(url, api_key, "json-http-401")?

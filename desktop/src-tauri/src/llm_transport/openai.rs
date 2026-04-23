@@ -402,6 +402,21 @@ async fn run_stream_attempt(
                                 &mut thought_closed,
                             )
                             .map_err(|error| {
+                                append_debug_trace_state(
+                                    state,
+                                    format!(
+                                        "[ai-http] invalid_sse_event method=POST url={} runtimeMode={} model={} transport={} error={} raw={}",
+                                        format!(
+                                            "{}/chat/completions",
+                                            normalize_base_url(&config.base_url)
+                                        ),
+                                        runtime_mode,
+                                        config.model_name,
+                                        transport_mode.as_str(),
+                                        error,
+                                        event_data_lines.join("\n"),
+                                    ),
+                                );
                                 LlmTransportError::new(
                                     TransportErrorKind::Parse,
                                     transport_mode,
@@ -472,6 +487,18 @@ async fn run_stream_attempt(
             &mut thought_closed,
         )
         .map_err(|error| {
+            append_debug_trace_state(
+                state,
+                format!(
+                    "[ai-http] invalid_sse_event method=POST url={} runtimeMode={} model={} transport={} error={} raw={}",
+                    format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+                    runtime_mode,
+                    config.model_name,
+                    transport_mode.as_str(),
+                    error,
+                    event_data_lines.join("\n"),
+                ),
+            );
             LlmTransportError::new(TransportErrorKind::Parse, transport_mode, error)
         })?;
     }
@@ -550,6 +577,18 @@ async fn run_json_attempt(
         return Ok(json!({}));
     }
     serde_json::from_str::<Value>(&raw).map_err(|error| {
+        append_debug_trace_state(
+            state,
+            format!(
+                "[ai-http] invalid_json method=POST url={} status={} transport={} model={} error={} raw={}",
+                format!("{}/chat/completions", normalize_base_url(&config.base_url)),
+                status,
+                transport_mode.as_str(),
+                config.model_name,
+                error,
+                raw,
+            ),
+        );
         LlmTransportError::new(
             TransportErrorKind::Parse,
             transport_mode,

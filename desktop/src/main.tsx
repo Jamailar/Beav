@@ -4,7 +4,8 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import 'tippy.js/dist/tippy.css'
 import './index.css'
-import { appAlert } from './utils/appDialogs'
+import { appAlert, appConfirm } from './utils/appDialogs'
+import { installRendererDiagnostics, reportRendererError } from './logging/client'
 
 const THEME_STORAGE_KEY = 'redbox:theme-mode:v1';
 
@@ -23,6 +24,7 @@ const initializeThemeMode = () => {
 };
 
 initializeThemeMode();
+installRendererDiagnostics();
 
 window.alert = ((message?: unknown) => {
   void appAlert(String(message ?? ''));
@@ -33,6 +35,30 @@ const disableNativeContextMenu = (event: MouseEvent) => {
 };
 
 document.addEventListener('contextmenu', disableNativeContextMenu);
+
+void window.ipcRenderer.on('diagnostics:report-pending', async (payload) => {
+  const summary = typeof payload?.summary === 'string'
+    ? payload.summary
+    : '已生成新的诊断报告。';
+  const reportId = typeof payload?.id === 'string' ? payload.id : '';
+  const confirmed = await appConfirm(
+    `${summary}\n\n是否现在上传这份诊断报告？你也可以稍后在“设置 > 常规设置 > 诊断与日志”里处理。`,
+    {
+      title: '发送诊断报告',
+      confirmLabel: '立即上传',
+      cancelLabel: '稍后处理',
+    },
+  );
+  if (!confirmed || !reportId) {
+    return;
+  }
+  const result = await window.ipcRenderer.logs.uploadReport(reportId);
+  if (result?.success) {
+    await appAlert('诊断报告已上传。');
+    return;
+  }
+  await appAlert(`诊断报告上传失败：${result?.error || '未知错误'}`);
+});
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
@@ -46,6 +72,13 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error("Uncaught error:", error, errorInfo);
+    void reportRendererError(error, {
+      category: 'plugin.bridge',
+      event: 'react.error_boundary',
+      fields: {
+        componentStack: errorInfo.componentStack,
+      },
+    });
   }
 
   render() {
