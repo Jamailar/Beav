@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod citation_anchors;
 pub mod document_blocks;
 pub mod fingerprint;
+pub mod hybrid;
 pub mod indexer;
 pub mod jobs;
 pub mod schema;

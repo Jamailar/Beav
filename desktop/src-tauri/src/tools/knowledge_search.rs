@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 
-use crate::knowledge_index::{citation_anchors, document_blocks};
+use crate::knowledge_index::{citation_anchors, document_blocks, hybrid::RetrievalMode};
 use crate::persistence::with_store;
 use crate::{payload_field, payload_string, AppState};
 
@@ -493,6 +493,7 @@ fn execute_source_search(
     let pattern = compile_pattern(&pattern_text)?;
     let limit = parse_usize(arguments, "limit", DEFAULT_GREP_LIMIT, MAX_GREP_LIMIT);
     let snippet_chars = parse_usize(arguments, "snippetChars", DEFAULT_SNIPPET_CHARS, 800);
+    let retrieval_mode = parse_retrieval_mode(arguments);
     let indexed_count = document_blocks::count_blocks_for_source(state, source_id)?;
     if indexed_count > 0 {
         let hits = document_blocks::search_blocks(
@@ -502,9 +503,10 @@ fn execute_source_search(
             &pattern,
             limit,
             snippet_chars,
+            retrieval_mode,
         )?;
         let (hit_payloads, evidence_pack) =
-            build_hit_payloads_and_evidence_pack(state, &hits, query)?;
+            build_hit_payloads_and_evidence_pack(state, &hits, query, retrieval_mode)?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
             "sourceId": scope.source_id,
@@ -512,7 +514,7 @@ fn execute_source_search(
             "rootPath": scoped_root_path(scope),
             "pattern": pattern_text,
             "query": query,
-            "searchMode": "indexed-blocks",
+            "searchMode": if retrieval_mode == RetrievalMode::Hybrid { "indexed-blocks-hybrid" } else { "indexed-blocks-lexical" },
             "totalMatches": hits.len(),
             "hits": hit_payloads,
             "evidencePack": evidence_pack
@@ -579,6 +581,7 @@ fn build_hit_payloads_and_evidence_pack(
     state: &State<'_, AppState>,
     hits: &[document_blocks::DocumentBlockHit],
     query: &str,
+    retrieval_mode: RetrievalMode,
 ) -> Result<(Vec<Value>, Value), String> {
     let mut hit_payloads = Vec::<Value>::new();
     let mut evidences = Vec::<Value>::new();
@@ -620,9 +623,13 @@ fn build_hit_payloads_and_evidence_pack(
             "anchorIds": anchor_ids,
             "ranking": {
                 "lexicalScore": hit.lexical_score,
+                "semanticScore": hit.semantic_score,
+                "fusionScore": hit.fusion_score,
+                "rerankScore": hit.rerank_score,
                 "legalScore": hit.legal_score,
                 "totalScore": hit.total_score
-            }
+            },
+            "retrievalLanes": hit.retrieval_lanes,
         }));
         evidences.push(json!({
             "documentId": hit.document_id,
@@ -642,6 +649,7 @@ fn build_hit_payloads_and_evidence_pack(
                 "documentType": hit.document_type,
                 "isSuperseded": hit.is_superseded
             },
+            "retrievalLanes": hit.retrieval_lanes,
             "anchorIds": anchors.iter().map(|item| item.anchor_id.clone()).collect::<Vec<_>>(),
             "anchors": anchors,
             "quotePreview": anchors.first().map(|item| item.quote_text.clone())
@@ -651,6 +659,11 @@ fn build_hit_payloads_and_evidence_pack(
         hit_payloads,
         json!({
             "query": query,
+            "queryPlan": {
+                "retrievalMode": if retrieval_mode == RetrievalMode::Hybrid { "hybrid" } else { "lexical" },
+                "fusion": if retrieval_mode == RetrievalMode::Hybrid { "weighted-rrf" } else { "none" },
+                "rerankers": ["legal-aware", "citation-aware", "confidence-aware"]
+            },
             "evidences": evidences,
             "groundingContract": {
                 "claimField": "claim",
@@ -659,6 +672,17 @@ fn build_hit_payloads_and_evidence_pack(
             }
         }),
     ))
+}
+
+fn parse_retrieval_mode(arguments: &Value) -> RetrievalMode {
+    match payload_string(arguments, "retrievalMode")
+        .unwrap_or_else(|| "hybrid".to_string())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "lexical" => RetrievalMode::Lexical,
+        _ => RetrievalMode::Hybrid,
+    }
 }
 
 fn resolve_session_advisor_id(
