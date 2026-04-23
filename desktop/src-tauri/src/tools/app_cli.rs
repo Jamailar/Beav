@@ -2746,6 +2746,11 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         {
             return result;
         }
+        if let Some(result) = commands::cli_runtime::handle_cli_runtime_channel(
+            self.app, self.state, channel, &payload,
+        ) {
+            return result;
+        }
         if let Some(result) = commands::chat_sessions_wander::handle_chat_sessions_wander_channel(
             self.app, self.state, channel, &payload,
         ) {
