@@ -5,7 +5,11 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri::State;
 
-use crate::knowledge_index::{citation_anchors, document_blocks, hybrid::RetrievalMode};
+use crate::knowledge_index::{
+    citation_anchors, document_blocks,
+    hybrid::RetrievalMode,
+    query_profile::{self, QueryProfile},
+};
 use crate::persistence::with_store;
 use crate::{payload_field, payload_string, AppState};
 
@@ -493,7 +497,9 @@ fn execute_source_search(
     let pattern = compile_pattern(&pattern_text)?;
     let limit = parse_usize(arguments, "limit", DEFAULT_GREP_LIMIT, MAX_GREP_LIMIT);
     let snippet_chars = parse_usize(arguments, "snippetChars", DEFAULT_SNIPPET_CHARS, 800);
-    let retrieval_mode = parse_retrieval_mode(arguments);
+    let query_profile = query_profile::build_query_profile(query);
+    let retrieval_mode = parse_retrieval_mode(arguments, &query_profile);
+    let query_profile_json = query_profile::query_profile_to_json(&query_profile);
     let indexed_count = document_blocks::count_blocks_for_source(state, source_id)?;
     if indexed_count > 0 {
         let hits = document_blocks::search_blocks(
@@ -505,8 +511,13 @@ fn execute_source_search(
             snippet_chars,
             retrieval_mode,
         )?;
-        let (hit_payloads, evidence_pack) =
-            build_hit_payloads_and_evidence_pack(state, &hits, query, retrieval_mode)?;
+        let (hit_payloads, evidence_pack) = build_hit_payloads_and_evidence_pack(
+            state,
+            &hits,
+            query,
+            retrieval_mode,
+            &query_profile,
+        )?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
             "sourceId": scope.source_id,
@@ -514,6 +525,12 @@ fn execute_source_search(
             "rootPath": scoped_root_path(scope),
             "pattern": pattern_text,
             "query": query,
+            "queryProfile": query_profile_json.clone(),
+            "queryPlan": build_query_plan_value(
+                &query_profile_json,
+                retrieval_mode,
+                if retrieval_mode == RetrievalMode::Hybrid { "indexed-blocks-hybrid" } else { "indexed-blocks-lexical" }
+            ),
             "searchMode": if retrieval_mode == RetrievalMode::Hybrid { "indexed-blocks-hybrid" } else { "indexed-blocks-lexical" },
             "totalMatches": hits.len(),
             "hits": hit_payloads,
@@ -571,6 +588,8 @@ fn execute_source_search(
         "rootPath": scoped_root_path(scope),
         "pattern": pattern_text,
         "query": query,
+        "queryProfile": query_profile_json.clone(),
+        "queryPlan": build_query_plan_value(&query_profile_json, retrieval_mode, "filesystem-fallback"),
         "searchMode": "filesystem-fallback",
         "totalMatches": hits.len(),
         "hits": hits
@@ -582,9 +601,11 @@ fn build_hit_payloads_and_evidence_pack(
     hits: &[document_blocks::DocumentBlockHit],
     query: &str,
     retrieval_mode: RetrievalMode,
+    query_profile: &QueryProfile,
 ) -> Result<(Vec<Value>, Value), String> {
     let mut hit_payloads = Vec::<Value>::new();
     let mut evidences = Vec::<Value>::new();
+    let query_profile_json = query_profile::query_profile_to_json(query_profile);
     for hit in hits {
         let anchors = citation_anchors::anchors_for_block_query(state, &hit.block_id, query, 3)?;
         let anchor_ids = anchors
@@ -659,10 +680,16 @@ fn build_hit_payloads_and_evidence_pack(
         hit_payloads,
         json!({
             "query": query,
+            "queryProfile": query_profile_json.clone(),
             "queryPlan": {
-                "retrievalMode": if retrieval_mode == RetrievalMode::Hybrid { "hybrid" } else { "lexical" },
+                "intent": query_profile_json.get("intent").cloned().unwrap_or(Value::Null),
+                "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
                 "fusion": if retrieval_mode == RetrievalMode::Hybrid { "weighted-rrf" } else { "none" },
-                "rerankers": ["legal-aware", "citation-aware", "confidence-aware"]
+                "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
+                "citationRequirement": query_profile_json.get("citationRequirement").cloned().unwrap_or(Value::Null),
+                "documentTypeHints": query_profile_json.get("documentTypeHints").cloned().unwrap_or(Value::Null),
+                "legalBiases": query_profile_json.get("legalBiases").cloned().unwrap_or(Value::Null),
+                "rerankers": query_profile.rerankers
             },
             "evidences": evidences,
             "groundingContract": {
@@ -674,14 +701,26 @@ fn build_hit_payloads_and_evidence_pack(
     ))
 }
 
-fn parse_retrieval_mode(arguments: &Value) -> RetrievalMode {
-    match payload_string(arguments, "retrievalMode")
-        .unwrap_or_else(|| "hybrid".to_string())
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "lexical" => RetrievalMode::Lexical,
-        _ => RetrievalMode::Hybrid,
+fn build_query_plan_value(
+    query_profile_json: &Value,
+    retrieval_mode: RetrievalMode,
+    search_mode: &str,
+) -> Value {
+    json!({
+        "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
+        "searchMode": search_mode,
+        "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
+        "citationRequirement": query_profile_json.get("citationRequirement").cloned().unwrap_or(Value::Null),
+        "documentTypeHints": query_profile_json.get("documentTypeHints").cloned().unwrap_or(Value::Null),
+        "rerankers": query_profile_json.get("rerankers").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn parse_retrieval_mode(arguments: &Value, query_profile: &QueryProfile) -> RetrievalMode {
+    match payload_string(arguments, "retrievalMode").map(|value| value.to_ascii_lowercase()) {
+        Some(value) if value == "lexical" => RetrievalMode::Lexical,
+        Some(value) if value == "hybrid" => RetrievalMode::Hybrid,
+        _ => query_profile.recommended_retrieval_mode,
     }
 }
 
@@ -855,6 +894,7 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::knowledge_index::query_profile::build_query_profile;
 
     fn workspace_scope() -> KnowledgeScope {
         KnowledgeScope {
@@ -910,5 +950,30 @@ mod tests {
         let pattern = list_pattern_for_scope(&scope, &arguments).unwrap();
         assert_eq!(pattern, "redbook/knowledge-123/**/*");
         let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn parse_retrieval_mode_defaults_to_query_profile_recommendation() {
+        let statute_profile = build_query_profile("请引用民法典第577条原文");
+        assert_eq!(
+            parse_retrieval_mode(&json!({}), &statute_profile),
+            RetrievalMode::Lexical
+        );
+
+        let synthesis_profile =
+            build_query_profile("compare contract breach remedy across multiple documents");
+        assert_eq!(
+            parse_retrieval_mode(&json!({}), &synthesis_profile),
+            RetrievalMode::Hybrid
+        );
+    }
+
+    #[test]
+    fn explicit_retrieval_mode_overrides_query_profile_recommendation() {
+        let profile = build_query_profile("请引用民法典第577条原文");
+        assert_eq!(
+            parse_retrieval_mode(&json!({ "retrievalMode": "hybrid" }), &profile),
+            RetrievalMode::Hybrid
+        );
     }
 }

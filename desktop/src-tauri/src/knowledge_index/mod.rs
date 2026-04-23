@@ -8,6 +8,7 @@ pub mod fingerprint;
 pub mod hybrid;
 pub mod indexer;
 pub mod jobs;
+pub mod query_profile;
 pub mod schema;
 pub mod watcher;
 
