@@ -146,6 +146,7 @@ pub fn detect_tool(command: &str, env: &BTreeMap<String, String>) -> CliToolReco
         name: command.to_string(),
         executable: command.to_string(),
         resolved_path: resolved_path.map(|path| path.to_string_lossy().to_string()),
+        environment_id: None,
         source: CliToolSource::System,
         install_method: None,
         install_spec: None,

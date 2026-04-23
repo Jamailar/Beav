@@ -6,18 +6,20 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
-    add_installed_tool_to_environment, approve_cli_escalation, cancel_cli_execution,
-    create_task_ephemeral_environment, default_detect_commands, deny_cli_escalation, detect_many,
-    detect_tool, emit_cli_escalation_resolved, emit_cli_execution_status,
+    add_installed_tool_to_environment, approve_cli_escalation, build_cli_tool_manifest,
+    cancel_cli_execution, create_task_ephemeral_environment, default_detect_commands,
+    deny_cli_escalation, detect_tool, emit_cli_escalation_resolved, emit_cli_execution_status,
     emit_cli_install_finished, emit_cli_install_started, emit_cli_verification_finished,
     ensure_app_global_environment, ensure_workspace_environment,
     ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_environment_by_id,
-    find_cli_execution_by_id, list_cli_environments, load_cli_execution_snapshot,
-    load_host_shell_env, merge_execution_env, refresh_cli_execution, run_cli_verification,
+    find_cli_execution_by_id, find_cli_tool_by_command, find_cli_tool_by_id,
+    find_cli_tool_manifest_by_tool_id, list_cli_environments, list_cli_tool_records,
+    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, refresh_cli_execution,
+    run_cli_verification, upsert_cli_tool_manifest, upsert_cli_tool_record,
     CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
     CliEnvironmentRecord, CliEnvironmentScope, CliExecuteRequest, CliExecutionStatus,
-    CliInstallMethod, CliInstallRequest, CliInstallResult, CliToolHealth, CliToolSource,
-    CliVerifyExecutionRequest, CliVerifyResult,
+    CliInstallMethod, CliInstallRequest, CliInstallResult, CliToolHealth, CliToolManifestRecord,
+    CliToolRecord, CliToolSource, CliVerifyExecutionRequest, CliVerifyResult,
 };
 use crate::{make_id, payload_string, AppState};
 
@@ -128,42 +130,214 @@ fn list_tool_commands(state: &State<'_, AppState>) -> Result<Vec<String>, String
             }
         }
     }
+    for tool in list_cli_tool_records(state)? {
+        let executable = tool.executable.trim();
+        if !executable.is_empty() {
+            commands.insert(executable.to_string());
+        }
+        let name = tool.name.trim();
+        if !name.is_empty() {
+            commands.insert(name.to_string());
+        }
+    }
     Ok(commands.into_iter().collect())
+}
+
+fn tool_source_for_environment(environment: &CliEnvironmentRecord) -> CliToolSource {
+    match environment.scope {
+        CliEnvironmentScope::WorkspaceLocal => CliToolSource::WorkspaceManaged,
+        CliEnvironmentScope::AppGlobal | CliEnvironmentScope::TaskEphemeral => {
+            CliToolSource::AppManaged
+        }
+    }
+}
+
+fn environment_scope_rank(scope: &CliEnvironmentScope) -> u8 {
+    match scope {
+        CliEnvironmentScope::AppGlobal => 0,
+        CliEnvironmentScope::WorkspaceLocal => 1,
+        CliEnvironmentScope::TaskEphemeral => 2,
+    }
+}
+
+fn merge_tool_metadata(existing: Option<&Value>, generated: Option<Value>) -> Option<Value> {
+    let mut merged = serde_json::Map::<String, Value>::new();
+    if let Some(Value::Object(object)) = existing {
+        for (key, value) in object {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(Value::Object(object)) = generated {
+        for (key, value) in object {
+            merged.insert(key, value);
+        }
+    }
+    if merged.is_empty() {
+        None
+    } else {
+        Some(Value::Object(merged))
+    }
+}
+
+fn manifest_metadata(manifest: &CliToolManifestRecord) -> Value {
+    json!({
+        "commandCount": manifest.commands.len(),
+        "supportsJsonOutput": manifest.supports_json_output,
+        "supportsVersionFlag": manifest.supports_version_flag,
+        "helpExcerpt": manifest.help_excerpt,
+        "preferredParser": manifest.preferred_parser,
+        "manifestGeneratedAt": manifest.generated_at,
+    })
+}
+
+fn merge_detected_tool_with_stored(
+    detected: CliToolRecord,
+    stored: Option<&CliToolRecord>,
+    environment: Option<&CliEnvironmentRecord>,
+    manifest: Option<&CliToolManifestRecord>,
+) -> CliToolRecord {
+    let mut merged = detected;
+    if let Some(stored) = stored {
+        if merged.name.trim().is_empty() {
+            merged.name = stored.name.clone();
+        }
+        if merged.executable.trim().is_empty() {
+            merged.executable = stored.executable.clone();
+        }
+        merged.install_method = stored.install_method.clone().or(merged.install_method);
+        merged.install_spec = stored.install_spec.clone().or(merged.install_spec);
+        merged.manifest_id = stored.manifest_id.clone().or(merged.manifest_id);
+        merged.environment_id = merged
+            .environment_id
+            .clone()
+            .or(stored.environment_id.clone());
+        if matches!(merged.source, CliToolSource::System)
+            && !matches!(stored.source, CliToolSource::System)
+            && merged.health != CliToolHealth::Ready
+        {
+            merged.source = stored.source.clone();
+        }
+        merged.metadata = merge_tool_metadata(stored.metadata.as_ref(), merged.metadata);
+    }
+    if let Some(environment) = environment {
+        merged.environment_id = Some(environment.id.clone());
+        merged.source = tool_source_for_environment(environment);
+    }
+    if let Some(manifest) = manifest {
+        merged.manifest_id = Some(manifest.id.clone());
+        merged.metadata =
+            merge_tool_metadata(merged.metadata.as_ref(), Some(manifest_metadata(manifest)));
+    }
+    merged
+}
+
+fn detect_tool_across_environments(
+    state: &State<'_, AppState>,
+    command: &str,
+    host_env: &BTreeMap<String, String>,
+) -> Result<CliToolRecord, String> {
+    let stored = find_cli_tool_by_command(state, command)?;
+    let manifest = stored.as_ref().and_then(|tool| {
+        find_cli_tool_manifest_by_tool_id(state, &tool.id)
+            .ok()
+            .flatten()
+    });
+    let mut environments = list_cli_environments(state)?;
+    let preferred_environment_id = stored
+        .as_ref()
+        .and_then(|tool| tool.environment_id.as_deref())
+        .map(ToString::to_string);
+    environments.sort_by(|left, right| {
+        let left_preferred = preferred_environment_id
+            .as_deref()
+            .is_some_and(|value| value == left.id);
+        let right_preferred = preferred_environment_id
+            .as_deref()
+            .is_some_and(|value| value == right.id);
+        left_preferred
+            .cmp(&right_preferred)
+            .reverse()
+            .then(environment_scope_rank(&left.scope).cmp(&environment_scope_rank(&right.scope)))
+            .then(right.updated_at.cmp(&left.updated_at))
+    });
+
+    for environment in &environments {
+        let merged_env = merge_execution_env(host_env, environment, None);
+        let detected = detect_tool(command, &merged_env);
+        if detected.health == CliToolHealth::Ready {
+            return Ok(merge_detected_tool_with_stored(
+                detected,
+                stored.as_ref(),
+                Some(environment),
+                manifest.as_ref(),
+            ));
+        }
+    }
+
+    let detected = detect_tool(command, host_env);
+    Ok(merge_detected_tool_with_stored(
+        detected,
+        stored.as_ref(),
+        None,
+        manifest.as_ref(),
+    ))
+}
+
+fn detect_registered_tools(
+    state: &State<'_, AppState>,
+    commands: &[String],
+) -> Result<Vec<CliToolRecord>, String> {
+    let host_env = load_host_env();
+    let mut records = BTreeMap::<String, CliToolRecord>::new();
+    for command in commands {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let detected = detect_tool_across_environments(state, trimmed, &host_env)?;
+        records.insert(detected.id.clone(), detected);
+    }
+    Ok(records.into_values().collect())
 }
 
 fn inspect_tool_value(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Option<Value>, String> {
-    let env = load_host_env();
-    if let Some(command) = payload_string(payload, "command") {
-        return Ok(Some(to_cli_runtime_ipc_value(detect_tool(&command, &env))?));
-    }
-
-    let requested_tool = payload_string(payload, "toolId")
+    let requested = payload_string(payload, "command")
+        .or_else(|| payload_string(payload, "toolId"))
         .or_else(|| payload_string(payload, "executable"))
         .unwrap_or_default();
-    if requested_tool.is_empty() {
+    if requested.is_empty() {
         return Ok(None);
     }
 
-    let commands = list_tool_commands(state)?;
-    let matched = detect_many(&commands, &env)
-        .into_iter()
-        .find(|tool| {
-            tool.id == requested_tool
-                || tool.executable == requested_tool
-                || tool.name == requested_tool
-        })
-        .or_else(|| {
-            if requested_tool.starts_with("cli-tool-") {
-                None
-            } else {
-                Some(detect_tool(&requested_tool, &env))
-            }
-        });
+    let host_env = load_host_env();
+    let requested_command = if requested.starts_with("cli-tool-") {
+        find_cli_tool_by_id(state, &requested)?
+            .map(|tool| tool.executable)
+            .or_else(|| {
+                list_tool_commands(state).ok().and_then(|commands| {
+                    commands
+                        .into_iter()
+                        .find(|command| detect_tool(command, &host_env).id == requested)
+                })
+            })
+            .unwrap_or_default()
+    } else {
+        requested.clone()
+    };
+    if requested_command.trim().is_empty() {
+        return Ok(None);
+    }
 
-    matched.map(to_cli_runtime_ipc_value).transpose()
+    let mut tool = detect_tool_across_environments(state, &requested_command, &host_env)?;
+    if let Some(manifest) = build_cli_tool_manifest(&tool, &host_env) {
+        let manifest = upsert_cli_tool_manifest(state, manifest)?;
+        tool = merge_detected_tool_with_stored(tool, None, None, Some(&manifest));
+    }
+    let tool = upsert_cli_tool_record(state, tool)?;
+    Ok(Some(to_cli_runtime_ipc_value(tool)?))
 }
 
 fn create_environment_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
@@ -247,15 +421,6 @@ fn install_tool_command(request: &CliInstallRequest) -> String {
         .map(ToString::to_string)
         .or_else(|| infer_tool_command(&request.spec))
         .unwrap_or_else(|| request.spec.trim().to_string())
-}
-
-fn install_source_for_environment(environment: &CliEnvironmentRecord) -> CliToolSource {
-    match environment.scope {
-        CliEnvironmentScope::WorkspaceLocal => CliToolSource::WorkspaceManaged,
-        CliEnvironmentScope::AppGlobal | CliEnvironmentScope::TaskEphemeral => {
-            CliToolSource::AppManaged
-        }
-    }
 }
 
 fn build_install_env(
@@ -453,9 +618,15 @@ fn install_value(
 
     let merged_env = merge_execution_env(&load_host_env(), &environment, Some(&execution_env));
     let mut detected_tool = detect_tool(&tool_name, &merged_env);
-    detected_tool.source = install_source_for_environment(&environment);
+    detected_tool.source = tool_source_for_environment(&environment);
+    detected_tool.environment_id = Some(environment.id.clone());
     detected_tool.install_method = Some(request.install_method.clone());
     detected_tool.install_spec = Some(request.spec.trim().to_string());
+    if let Some(manifest) = build_cli_tool_manifest(&detected_tool, &merged_env) {
+        let manifest = upsert_cli_tool_manifest(state, manifest)?;
+        detected_tool = merge_detected_tool_with_stored(detected_tool, None, None, Some(&manifest));
+    }
+    let detected_tool = upsert_cli_tool_record(state, detected_tool)?;
 
     let installed = execution.status == CliExecutionStatus::Completed
         && detected_tool.health == CliToolHealth::Ready;
@@ -610,7 +781,7 @@ pub fn handle_cli_runtime_channel(
             } else {
                 request.commands
             };
-            let tools = detect_many(&commands, &load_host_env());
+            let tools = detect_registered_tools(state, &commands)?;
             Ok(json!({
                 "success": true,
                 "tools": tools,
@@ -621,7 +792,7 @@ pub fn handle_cli_runtime_channel(
                 Ok(commands) => commands,
                 Err(error) => return Some(Err(error)),
             };
-            to_cli_runtime_ipc_value(detect_many(&commands, &load_host_env()))
+            detect_registered_tools(state, &commands).and_then(to_cli_runtime_ipc_value)
         }
         "cli-runtime:inspect" => {
             inspect_tool_value(state, payload).map(|value| value.unwrap_or(Value::Null))

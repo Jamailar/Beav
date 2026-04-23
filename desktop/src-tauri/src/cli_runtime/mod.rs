@@ -9,6 +9,10 @@ mod environment_store;
 mod events;
 #[path = "executor.rs"]
 mod executor;
+#[path = "introspection.rs"]
+mod introspection;
+#[path = "manifest_store.rs"]
+mod manifest_store;
 #[path = "path_env.rs"]
 mod path_env;
 #[path = "policy.rs"]
@@ -26,6 +30,8 @@ pub use detector::*;
 pub use environment_store::*;
 pub use events::*;
 pub use executor::*;
+pub use introspection::*;
+pub use manifest_store::*;
 pub use path_env::*;
 pub use policy::*;
 pub use process_store::*;

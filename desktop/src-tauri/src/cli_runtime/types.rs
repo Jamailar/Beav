@@ -127,6 +127,7 @@ pub struct CliToolRecord {
     pub name: String,
     pub executable: String,
     pub resolved_path: Option<String>,
+    pub environment_id: Option<String>,
     pub source: CliToolSource,
     pub install_method: Option<CliInstallMethod>,
     pub install_spec: Option<String>,
