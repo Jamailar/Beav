@@ -2330,7 +2330,15 @@ export function ToolsSettingsSection({
                                             <div>manifest: {tool.manifestId || 'n/a'}</div>
                                             <div>environment: {tool.environmentId || '未绑定'}</div>
                                             <div>checked: {formatCliTime(tool.lastCheckedAt)}</div>
+                                            <div>commands: {String(tool.metadata?.commandCount || 'n/a')}</div>
+                                            <div>json: {tool.metadata?.supportsJsonOutput ? 'yes' : 'no'}</div>
                                         </div>
+
+                                        {typeof tool.metadata?.helpExcerpt === 'string' && tool.metadata.helpExcerpt.trim() ? (
+                                            <div className="rounded border border-border bg-surface-primary/60 px-2.5 py-2 text-[10px] text-text-tertiary font-mono whitespace-pre-wrap break-all max-h-28 overflow-auto">
+                                                {tool.metadata.helpExcerpt}
+                                            </div>
+                                        ) : null}
                                     </div>
                                 ))}
                             </div>

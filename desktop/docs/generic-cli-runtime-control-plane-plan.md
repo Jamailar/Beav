@@ -1,8 +1,8 @@
 ---
 doc_type: plan
-execution_status: not_started
-execution_stage: architecture_proposed
-last_updated: 2026-04-22
+execution_status: in_progress
+execution_stage: registry_and_manifest_execution
+last_updated: 2026-04-23
 owner: codex
 target_files:
   - desktop/src-tauri/src/cli_runtime/*
