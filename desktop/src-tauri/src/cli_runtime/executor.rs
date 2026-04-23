@@ -14,11 +14,12 @@ use crate::cli_runtime::{
     append_execution_log_chunk, authorize_cli_execution, build_cli_sandbox_spec,
     emit_cli_escalation_requested, emit_cli_execution_log, emit_cli_execution_started,
     emit_cli_execution_status, emit_cli_verification_finished, execution_log_metadata,
-    execution_log_paths, find_cli_execution_by_id, initialize_execution_logs, load_host_shell_env,
-    merge_execution_env, resolve_cli_environment, run_cli_verification, sandbox_metadata,
-    spawn_cli_terminal, upsert_cli_execution_record, write_execution_logs,
-    CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest,
-    CliExecutionRecord, CliExecutionStatus, CliVerificationStatus, CliVerifyRule,
+    execution_log_paths, find_cli_execution_by_id, initialize_execution_logs,
+    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, resolve_cli_environment,
+    run_cli_verification, sandbox_metadata, spawn_cli_terminal, upsert_cli_execution_record,
+    write_execution_logs, CliEnvironmentResolveRequest, CliEscalationRequestRecord,
+    CliExecuteRequest, CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus,
+    CliVerificationStatus, CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
 use crate::{make_id, now_i64, AppState};
@@ -585,6 +586,81 @@ pub fn execute_cli_command<RT: Runtime>(
     Ok(record)
 }
 
+fn execution_failure_summary(snapshot: &CliExecutionSnapshot) -> String {
+    if snapshot.execution.status == CliExecutionStatus::AwaitingEscalation {
+        return "cli execution requires escalation before it can continue".to_string();
+    }
+    if snapshot.execution.verification_status == CliVerificationStatus::Failed {
+        if let Some(summary) = snapshot
+            .verifications
+            .iter()
+            .find(|record| record.status == CliVerificationStatus::Failed)
+            .map(|record| record.summary.trim().to_string())
+            .filter(|summary| !summary.is_empty())
+        {
+            return summary;
+        }
+    }
+    let stderr = snapshot.stderr_tail.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+    let stdout = snapshot.stdout_tail.trim();
+    if !stdout.is_empty() {
+        return stdout.to_string();
+    }
+    match &snapshot.execution.status {
+        CliExecutionStatus::Failed => snapshot
+            .execution
+            .exit_code
+            .map(|code| format!("cli execution failed with exit code {code}"))
+            .unwrap_or_else(|| "cli execution failed".to_string()),
+        CliExecutionStatus::Cancelled => "cli execution was cancelled".to_string(),
+        other => format!("cli execution did not complete successfully: {other:?}"),
+    }
+}
+
+pub fn run_managed_cli_command<RT: Runtime>(
+    app: &AppHandle<RT>,
+    state: &State<'_, AppState>,
+    request: CliExecuteRequest,
+    max_chars: usize,
+) -> Result<CliExecutionSnapshot, String> {
+    let execution = execute_cli_command(app, state, request)?;
+    if execution.status == CliExecutionStatus::AwaitingEscalation {
+        let snapshot = load_cli_execution_snapshot(state, &execution.id, max_chars)?
+            .ok_or_else(|| format!("cli execution not found after launch: {}", execution.id))?;
+        return Err(execution_failure_summary(&snapshot));
+    }
+
+    let final_execution = if execution.status == CliExecutionStatus::Running {
+        loop {
+            if let Some(refreshed) = refresh_cli_execution(app, &execution.id)? {
+                break refreshed;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    } else {
+        execution
+    };
+
+    let snapshot =
+        load_cli_execution_snapshot(state, &final_execution.id, max_chars)?.ok_or_else(|| {
+            format!(
+                "cli execution not found after completion: {}",
+                final_execution.id
+            )
+        })?;
+    let failed = matches!(
+        snapshot.execution.status,
+        CliExecutionStatus::Failed | CliExecutionStatus::Cancelled
+    ) || snapshot.execution.verification_status == CliVerificationStatus::Failed;
+    if failed {
+        return Err(execution_failure_summary(&snapshot));
+    }
+    Ok(snapshot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -867,5 +943,31 @@ mod tests {
             .expect("snapshot should exist");
         assert_eq!(snapshot.execution.status, CliExecutionStatus::Cancelled);
         assert!(snapshot.execution.finished_at.is_some());
+    }
+
+    #[test]
+    fn run_managed_cli_command_returns_snapshot_for_completed_command() {
+        let _guard = executor_test_lock()
+            .lock()
+            .expect("executor test lock should not be poisoned");
+        let app = build_test_app();
+        let app_handle = app.handle().clone();
+        let state = app.state::<crate::AppState>();
+        let cwd = std::env::temp_dir();
+
+        let snapshot = run_managed_cli_command(
+            &app_handle,
+            &state,
+            CliExecuteRequest {
+                argv: vec!["rustc".to_string(), "--version".to_string()],
+                cwd: Some(cwd.to_string_lossy().to_string()),
+                ..CliExecuteRequest::default()
+            },
+            400,
+        )
+        .expect("managed command should succeed");
+
+        assert_eq!(snapshot.execution.status, CliExecutionStatus::Completed);
+        assert!(snapshot.stdout_tail.contains("rustc"));
     }
 }
