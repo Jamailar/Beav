@@ -12,6 +12,7 @@ mod cli_runtime;
 mod commands;
 mod desktop_io;
 mod diagnostics;
+mod document_ingest;
 mod document_parse;
 mod events;
 mod helpers;

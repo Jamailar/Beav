@@ -152,6 +152,7 @@ Status: Current
 
 - 已完成已注册文档源的 block 索引与 `knowledge.search/read` 的 `sourceId/rootPath/blockId` 支持
 - 已补原生文本 `pdf` 抽取与多文档源监听
+- 已将 document source ingest contract 独立下沉到 `src-tauri/src/document_ingest/registry.rs`，不再把注册逻辑继续堆在 `knowledge.rs`
 
 ## Stage 2: 通用解析标准层
 
