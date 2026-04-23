@@ -176,6 +176,11 @@ pub(crate) fn run_openai_provider_turn(
             );
             let mut fallback_body = body.clone();
             fallback_body["stream"] = json!(false);
+            if provider_profile_from_config(config).supports_reasoning_split() {
+                if let Some(object) = fallback_body.as_object_mut() {
+                    object.remove("reasoning_split");
+                }
+            }
             let turn_policy = provider_profile_from_config(config).turn_policy(
                 runtime_mode,
                 InteractiveToolChoice::Auto,

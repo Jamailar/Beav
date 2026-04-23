@@ -23,6 +23,10 @@ fn qwen_compat_capabilities() -> ProviderCapabilities {
     }
 }
 
+fn minimax_capabilities() -> ProviderCapabilities {
+    openai_capabilities()
+}
+
 fn anthropic_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
@@ -82,14 +86,24 @@ pub(crate) fn provider_profile_from_parts(
             capabilities: gemini_capabilities(),
         },
         _ => {
-            let capabilities = if lower_hint.contains("qwen") || lower_hint.contains("dashscope") {
+            let provider_family = if lower_hint.contains("minimax")
+                || lower_hint.contains("minimaxi.com")
+                || lower_hint.contains("minimax.io")
+            {
+                ProviderFamily::MiniMax
+            } else {
+                ProviderFamily::OpenAiCompat
+            };
+            let capabilities = if provider_family == ProviderFamily::MiniMax {
+                minimax_capabilities()
+            } else if lower_hint.contains("qwen") || lower_hint.contains("dashscope") {
                 qwen_compat_capabilities()
             } else {
                 openai_capabilities()
             };
             ProviderProfile {
                 key: normalized_provider_key(protocol, base_url, model_name),
-                provider_family: ProviderFamily::OpenAiCompat,
+                provider_family,
                 capabilities,
             }
         }
@@ -123,6 +137,16 @@ mod tests {
         let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
         assert!(!profile.should_disable_thinking("chat", true));
         assert!(profile.capabilities.supports_tool_choice_required);
+    }
+
+    #[test]
+    fn minimax_profiles_are_detected_and_enable_provider_specific_policies() {
+        let profile =
+            provider_profile_from_parts("openai", "https://api.minimaxi.com/v1", "MiniMax-M2.7");
+        assert_eq!(profile.provider_family, ProviderFamily::MiniMax);
+        assert!(profile.prefers_http11_transport());
+        assert!(profile.prefers_curl_json_transport());
+        assert!(profile.supports_reasoning_split());
     }
 
     #[test]
