@@ -118,10 +118,10 @@ pub fn build_user_skill_record(name: &str) -> SkillRecord {
 pub fn build_market_skill_record(slug: &str) -> SkillRecord {
     SkillRecord {
         name: slug.to_string(),
-        description: format!("Installed from market: {slug}"),
+        description: format!("Market placeholder skill: {slug}"),
         location: format!("redbox://skills/market/{slug}"),
         body: format!(
-            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: session\ncontextNote: Installed from market.\n---\n# {slug}\n\nThis skill was registered from the RedBox market installer.\n\nReplace this body with the upstream skill contract or add runtime modifiers here."
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: session\ncontextNote: Registered as a market placeholder. This does not provision CLI tools or external runtimes.\n---\n# {slug}\n\nThis skill entry was registered from the RedBox market installer as a placeholder only.\n\nIt does not install upstream toolchains, npm packages, binaries, or other external runtimes.\nUse the CLI Runtime control plane to provision required tools, then replace this body with the upstream skill contract or runtime modifiers."
         ),
         source_scope: Some("user".to_string()),
         is_builtin: Some(false),

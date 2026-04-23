@@ -253,7 +253,10 @@ pub fn handle_skills_ai_channel(
                     "success": true,
                     "displayName": slug,
                     "location": created.location,
-                    "path": path.display().to_string()
+                    "path": path.display().to_string(),
+                    "placeholder": true,
+                    "requiresCliRuntimeBootstrap": true,
+                    "summary": "Market skill registered as a placeholder only. External CLI tools and runtimes must be provisioned through cli_runtime.*."
                 }))
             }
             "ai:roles:list" => Ok(json!([
