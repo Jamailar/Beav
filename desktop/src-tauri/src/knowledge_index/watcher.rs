@@ -31,6 +31,19 @@ fn desired_watch_roots(app: &AppHandle) -> Vec<PathBuf> {
             roots.push(root);
         }
     }
+    let advisor_roots = with_store(&state, |store| {
+        Ok(store
+            .advisors
+            .iter()
+            .filter_map(|item| crate::advisor_knowledge_dir(&state, &item.id).ok())
+            .collect::<Vec<_>>())
+    })
+    .unwrap_or_default();
+    for root in advisor_roots {
+        if root.exists() && !roots.iter().any(|item| item == &root) {
+            roots.push(root);
+        }
+    }
     roots.sort();
     roots
 }

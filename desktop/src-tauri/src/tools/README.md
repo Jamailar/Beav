@@ -57,7 +57,7 @@
   - `knowledge.list`
   - `knowledge.read`
   - `knowledge.search`
-- `knowledge.search` 在 document source 路径下应返回结构化 `queryProfile` / `queryPlan` / `evidencePack`，不要把检索画像和证据链隐藏在自由文本里。
+- `knowledge.search` 在 indexed knowledge scope 下应返回结构化 `queryProfile` / `queryPlan` / `evidencePack`；这不仅包括 document source，也包括 advisor/member knowledge。
 - `redbox_editor` 的运行时 schema 走 `action + payload`；兼容层可以把旧的扁平字段整理成 canonical 形态，但新资产不要再依赖旧写法。
 
 ## 输出与兼容

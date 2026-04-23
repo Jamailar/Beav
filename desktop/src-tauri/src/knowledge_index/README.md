@@ -34,6 +34,7 @@
 - hybrid 排序输出需要显式带 `retrievalLanes` 和 ranking breakdown，不能把 fusion / rerank 变成黑盒
 - Stage 7 起 release gate 依赖固定 fixture 测试；任一阈值不达标都应直接阻塞发布
 - 对法律检索查询要先做 query profile，明确 intent、citation requirement、granularity，再决定默认 lexical/hybrid 路径
+- advisor/member knowledge 也必须进入同一套 block/anchor 索引链，不能只让 registered document source 使用 indexed retrieval
 
 ## Verification
 
