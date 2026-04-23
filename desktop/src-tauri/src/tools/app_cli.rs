@@ -4253,7 +4253,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "skills save --location <path> --content \"...\"",
             "skills enable --name <skill>",
             "skills disable --name <skill>",
-            "skills market-install --slug <slug>",
+            "skills market-install --slug <slug>  # placeholder registration only; use cli_runtime.* to provision external tools",
         ],
         "mcp" => vec![
             "mcp list",
