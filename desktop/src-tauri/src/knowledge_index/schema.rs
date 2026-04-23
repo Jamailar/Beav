@@ -110,6 +110,7 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             line_end INTEGER NOT NULL,
             text TEXT NOT NULL,
             normalized_text TEXT NOT NULL,
+            semantic_vector_json TEXT NOT NULL DEFAULT '[]',
             updated_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_document_blocks_source_path
@@ -194,6 +195,12 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         &conn,
         "knowledge_document_blocks",
         "section_path_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        &conn,
+        "knowledge_document_blocks",
+        "semantic_vector_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     ensure_column(

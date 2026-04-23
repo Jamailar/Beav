@@ -395,6 +395,7 @@ mod tests {
             line_end: 3,
             text: "First sentence. Second sentence.\nThird line.".to_string(),
             normalized_text: "first sentence second sentence third line".to_string(),
+            semantic_vector_json: "[]".to_string(),
             updated_at: "2026-04-22".to_string(),
         }
     }

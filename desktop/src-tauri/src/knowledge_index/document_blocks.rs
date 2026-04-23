@@ -12,12 +12,17 @@ use crate::{
         canonical_store::{self, CanonicalDocumentRow},
         catalog_db_path,
         fingerprint::fingerprint_file,
+        hybrid::{
+            citation_rerank_bonus, expand_query, query_embedding, semantic_similarity,
+            semantic_vector_json, weighted_rrf, RetrievalMode,
+        },
         schema::ensure_catalog_ready,
     },
     AppState,
 };
 
 const MAX_INDEXED_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_SEMANTIC_SCAN_BLOCKS: usize = 1200;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentBlockRecord {
@@ -48,6 +53,7 @@ pub(crate) struct DocumentBlockRecord {
     pub line_end: i64,
     pub text: String,
     pub normalized_text: String,
+    pub semantic_vector_json: String,
     pub updated_at: String,
 }
 
@@ -81,8 +87,12 @@ pub(crate) struct DocumentBlockHit {
     pub line_end: i64,
     pub snippet: String,
     pub lexical_score: f64,
+    pub semantic_score: f64,
+    pub fusion_score: f64,
+    pub rerank_score: f64,
     pub legal_score: f64,
     pub total_score: f64,
+    pub retrieval_lanes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,13 +124,13 @@ pub(crate) fn replace_blocks(
                     ocr_confidence, jurisdiction, authority, authority_level, effective_date,
                     expiry_date, document_type, is_superseded, page, block_type,
                     section_path_json, block_index, line_start, line_end, text,
-                    normalized_text, updated_at
+                    normalized_text, semantic_vector_json, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10, ?11, ?12,
                     ?13, ?14, ?15, ?16, ?17, ?18,
                     ?19, ?20, ?21, ?22, ?23, ?24,
-                    ?25, ?26, ?27, ?28
+                    ?25, ?26, ?27, ?28, ?29
                 )
                 "#,
             )
@@ -154,6 +164,7 @@ pub(crate) fn replace_blocks(
                 block.line_end,
                 block.text,
                 block.normalized_text,
+                block.semantic_vector_json,
                 block.updated_at
             ])
             .map_err(|error| error.to_string())?;
@@ -182,19 +193,26 @@ pub(crate) fn search_blocks(
     pattern: &Pattern,
     limit: usize,
     snippet_chars: usize,
+    retrieval_mode: RetrievalMode,
 ) -> Result<Vec<DocumentBlockHit>, String> {
     let conn = connection(state)?;
     let normalized_query = normalize_text(query);
-    let query_terms = extract_query_terms(&normalized_query);
-    if query_terms.is_empty() {
+    let lexical_terms = extract_query_terms(&normalized_query);
+    if lexical_terms.is_empty() {
         return Ok(Vec::new());
     }
+    let expanded_query = expand_query(&normalized_query, lexical_terms.clone());
     let candidate_limit = (limit * 24).max(limit);
     let lower_query = query.to_lowercase();
     let mut params = vec![SqlValue::Text(source_id.to_string())];
     let mut fragments = Vec::new();
     let mut next_param = 2usize;
-    for term in &query_terms {
+    let sparse_terms = if retrieval_mode == RetrievalMode::Hybrid {
+        &expanded_query.sparse_terms
+    } else {
+        &expanded_query.lexical_terms
+    };
+    for term in sparse_terms {
         let like = format!("%{term}%");
         fragments.push(format!(
             "(normalized_text LIKE ?{start} OR lower(COALESCE(title, '')) LIKE ?{mid} OR lower(relative_path) LIKE ?{end})",
@@ -215,7 +233,8 @@ pub(crate) fn search_blocks(
                    relative_path, file_extension, title, language, content_origin,
                    ocr_confidence, jurisdiction, authority, authority_level, effective_date,
                    expiry_date, document_type, is_superseded, page, block_type,
-                   section_path_json, block_index, line_start, line_end, text
+                   section_path_json, block_index, line_start, line_end, text,
+                   semantic_vector_json
             FROM knowledge_document_blocks
             WHERE source_id = ?1
               AND ({})
@@ -232,7 +251,15 @@ pub(crate) fn search_blocks(
         .map_err(|error| error.to_string())?;
 
     let today = current_iso_date();
-    let mut scored_hits = Vec::new();
+    let query_embedding = if retrieval_mode == RetrievalMode::Hybrid {
+        Some(query_embedding(
+            &expanded_query.normalized_query,
+            &expanded_query.sparse_terms,
+        ))
+    } else {
+        None
+    };
+    let mut lexical_hits = Vec::new();
     for row in candidates {
         let (
             block_id,
@@ -261,6 +288,7 @@ pub(crate) fn search_blocks(
             line_start,
             line_end,
             text,
+            semantic_vector_json,
         ) = row.map_err(|error| error.to_string())?;
         if !pattern.matches_path_with(Path::new(&relative_path), glob_match_options()) {
             continue;
@@ -271,25 +299,13 @@ pub(crate) fn search_blocks(
             &relative_path,
             &normalized_query,
             &lower_query,
-            &query_terms,
+            &expanded_query.lexical_terms,
             language.as_deref(),
         );
         if lexical_score <= 0.0 {
             continue;
         }
-        let legal_metadata = LegalMetadata {
-            jurisdiction: jurisdiction.clone(),
-            authority: authority.clone(),
-            authority_level,
-            effective_date: effective_date.clone(),
-            expiry_date: expiry_date.clone(),
-            document_type: document_type.clone(),
-            is_superseded,
-        };
-        let legal_score = legal_priority_score(&legal_metadata, &today);
-        let total_score =
-            lexical_score + legal_score + confidence_score(&content_origin, ocr_confidence);
-        scored_hits.push(DocumentBlockHit {
+        lexical_hits.push(SearchCandidate {
             block_id,
             document_id,
             source_id,
@@ -311,14 +327,154 @@ pub(crate) fn search_blocks(
             is_superseded,
             page,
             block_type,
-            section_path: decode_section_path(&section_path_json),
+            section_path_json,
             block_index,
             line_start,
             line_end,
-            snippet: build_snippet(&text, query, snippet_chars),
+            text,
+            semantic_vector_json,
             lexical_score,
+        });
+    }
+
+    let mut merged = lexical_hits
+        .into_iter()
+        .map(|candidate| (candidate.block_id.clone(), candidate))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut semantic_order = std::collections::HashMap::<String, usize>::new();
+    let mut lexical_order = std::collections::HashMap::<String, usize>::new();
+
+    let mut lexical_ranked = merged
+        .values()
+        .map(|candidate| (candidate.block_id.clone(), candidate.lexical_score))
+        .collect::<Vec<_>>();
+    lexical_ranked.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (index, (block_id, _)) in lexical_ranked.into_iter().enumerate() {
+        lexical_order.insert(block_id, index);
+    }
+
+    if retrieval_mode == RetrievalMode::Hybrid {
+        let semantic_candidates =
+            semantic_candidates_for_source(&conn, source_id, pattern, MAX_SEMANTIC_SCAN_BLOCKS)?;
+        let mut semantic_ranked = semantic_candidates
+            .into_iter()
+            .filter_map(|candidate| {
+                let query_embedding = query_embedding.as_ref()?;
+                let score = semantic_similarity(query_embedding, &candidate.semantic_vector_json);
+                if score <= 0.0 {
+                    return None;
+                }
+                if !merged.contains_key(&candidate.block_id) {
+                    merged.insert(candidate.block_id.clone(), candidate.clone());
+                }
+                Some((candidate.block_id, score))
+            })
+            .collect::<Vec<_>>();
+        semantic_ranked.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (index, (block_id, _)) in semantic_ranked.into_iter().enumerate() {
+            semantic_order.insert(block_id, index);
+        }
+    }
+
+    let mut scored_hits = Vec::new();
+    for (_, candidate) in merged {
+        let semantic_score = if retrieval_mode == RetrievalMode::Hybrid {
+            query_embedding
+                .as_ref()
+                .map(|embedding| semantic_similarity(embedding, &candidate.semantic_vector_json))
+                .unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let legal_metadata = LegalMetadata {
+            jurisdiction: candidate.jurisdiction.clone(),
+            authority: candidate.authority.clone(),
+            authority_level: candidate.authority_level,
+            effective_date: candidate.effective_date.clone(),
+            expiry_date: candidate.expiry_date.clone(),
+            document_type: candidate.document_type.clone(),
+            is_superseded: candidate.is_superseded,
+        };
+        let legal_score = legal_priority_score(&legal_metadata, &today);
+        let fusion_score = if retrieval_mode == RetrievalMode::Hybrid {
+            weighted_rrf(
+                lexical_order.get(&candidate.block_id).copied(),
+                semantic_order.get(&candidate.block_id).copied(),
+                1.0,
+                0.9,
+            )
+        } else {
+            weighted_rrf(
+                lexical_order.get(&candidate.block_id).copied(),
+                None,
+                1.0,
+                0.0,
+            )
+        };
+        let rerank_score = legal_score
+            + citation_rerank_bonus(
+                candidate.page,
+                &candidate.block_type,
+                &candidate.content_origin,
+                candidate.ocr_confidence,
+            )
+            + confidence_score(&candidate.content_origin, candidate.ocr_confidence);
+        let total_score = candidate.lexical_score
+            + (semantic_score * 12.0)
+            + (fusion_score * 250.0)
+            + rerank_score;
+        let mut retrieval_lanes = Vec::new();
+        if lexical_order.contains_key(&candidate.block_id) {
+            retrieval_lanes.push("lexical".to_string());
+        }
+        if semantic_order.contains_key(&candidate.block_id) {
+            retrieval_lanes.push("semantic".to_string());
+        }
+        scored_hits.push(DocumentBlockHit {
+            block_id: candidate.block_id,
+            document_id: candidate.document_id,
+            source_id: candidate.source_id,
+            source_name: candidate.source_name,
+            root_path: candidate.root_path,
+            path: candidate.path,
+            absolute_path: candidate.absolute_path,
+            file_extension: candidate.file_extension,
+            title: candidate.title,
+            language: candidate.language,
+            content_origin: candidate.content_origin,
+            ocr_confidence: candidate.ocr_confidence,
+            jurisdiction: candidate.jurisdiction,
+            authority: candidate.authority,
+            authority_level: candidate.authority_level,
+            effective_date: candidate.effective_date,
+            expiry_date: candidate.expiry_date,
+            document_type: candidate.document_type,
+            is_superseded: candidate.is_superseded,
+            page: candidate.page,
+            block_type: candidate.block_type,
+            section_path: decode_section_path(&candidate.section_path_json),
+            block_index: candidate.block_index,
+            line_start: candidate.line_start,
+            line_end: candidate.line_end,
+            snippet: build_snippet(&candidate.text, query, snippet_chars),
+            lexical_score: candidate.lexical_score,
+            semantic_score,
+            fusion_score,
+            rerank_score,
             legal_score,
             total_score,
+            retrieval_lanes,
         });
     }
     scored_hits.sort_by(|left, right| {
@@ -351,7 +507,7 @@ pub(crate) fn read_block(
                ocr_confidence, jurisdiction, authority, authority_level, effective_date,
                expiry_date, document_type, is_superseded, page, block_type,
                section_path_json, block_index, line_start, line_end, text,
-               normalized_text, updated_at
+               normalized_text, semantic_vector_json, updated_at
         FROM knowledge_document_blocks
         WHERE block_id = ?1
         "#,
@@ -385,7 +541,8 @@ pub(crate) fn read_block(
                 line_end: row.get(24)?,
                 text: row.get(25)?,
                 normalized_text: row.get(26)?,
-                updated_at: row.get(27)?,
+                semantic_vector_json: row.get(27)?,
+                updated_at: row.get(28)?,
             })
         },
     )
@@ -586,14 +743,117 @@ fn block_records_from_document(
             line_end: block.line_end,
             text: block.text.clone(),
             normalized_text,
+            semantic_vector_json: semantic_vector_json(&format!(
+                "{}\n{}\n{}",
+                document.title.clone().unwrap_or_default(),
+                block.block_type,
+                block.text
+            )),
             updated_at: updated_at.to_string(),
         });
     }
     Ok(records)
 }
 
+#[derive(Debug, Clone)]
+struct SearchCandidate {
+    block_id: String,
+    document_id: String,
+    source_id: String,
+    source_name: String,
+    root_path: String,
+    path: String,
+    absolute_path: String,
+    file_extension: Option<String>,
+    title: Option<String>,
+    language: Option<String>,
+    content_origin: String,
+    ocr_confidence: Option<f64>,
+    jurisdiction: Option<String>,
+    authority: Option<String>,
+    authority_level: Option<i64>,
+    effective_date: Option<String>,
+    expiry_date: Option<String>,
+    document_type: Option<String>,
+    is_superseded: bool,
+    page: Option<i64>,
+    block_type: String,
+    section_path_json: String,
+    block_index: i64,
+    line_start: i64,
+    line_end: i64,
+    text: String,
+    semantic_vector_json: String,
+    lexical_score: f64,
+}
+
 fn decode_section_path(raw: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+fn semantic_candidates_for_source(
+    conn: &Connection,
+    source_id: &str,
+    pattern: &Pattern,
+    limit: usize,
+) -> Result<Vec<SearchCandidate>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
+                   relative_path, file_extension, title, language, content_origin,
+                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+                   expiry_date, document_type, is_superseded, page, block_type,
+                   section_path_json, block_index, line_start, line_end, text,
+                   semantic_vector_json
+            FROM knowledge_document_blocks
+            WHERE source_id = ?1
+            LIMIT ?2
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(params![source_id, limit as i64], |row| {
+            Ok(SearchCandidate {
+                block_id: row.get(0)?,
+                document_id: row.get(1)?,
+                source_id: row.get(2)?,
+                source_name: row.get(3)?,
+                root_path: row.get(4)?,
+                absolute_path: row.get(5)?,
+                path: row.get(6)?,
+                file_extension: row.get(7)?,
+                title: row.get(8)?,
+                language: row.get(9)?,
+                content_origin: row.get(10)?,
+                ocr_confidence: row.get(11)?,
+                jurisdiction: row.get(12)?,
+                authority: row.get(13)?,
+                authority_level: row.get(14)?,
+                effective_date: row.get(15)?,
+                expiry_date: row.get(16)?,
+                document_type: row.get(17)?,
+                is_superseded: row.get(18)?,
+                page: row.get(19)?,
+                block_type: row.get(20)?,
+                section_path_json: row.get(21)?,
+                block_index: row.get(22)?,
+                line_start: row.get(23)?,
+                line_end: row.get(24)?,
+                text: row.get(25)?,
+                semantic_vector_json: row.get(26)?,
+                lexical_score: 0.0,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    let mut candidates = Vec::new();
+    for row in rows {
+        let candidate = row.map_err(|error| error.to_string())?;
+        if pattern.matches_path_with(Path::new(&candidate.path), glob_match_options()) {
+            candidates.push(candidate);
+        }
+    }
+    Ok(candidates)
 }
 
 fn normalize_text(input: &str) -> String {
@@ -768,6 +1028,7 @@ fn row_to_search_tuple(
         i64,
         i64,
         String,
+        String,
     ),
     rusqlite::Error,
 > {
@@ -798,6 +1059,7 @@ fn row_to_search_tuple(
         row.get(23)?,
         row.get(24)?,
         row.get(25)?,
+        row.get(26)?,
     ))
 }
 

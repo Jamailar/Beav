@@ -2,7 +2,7 @@
 doc_type: plan
 execution_status: in_progress
 last_updated: 2026-04-23
-execution_stage: stage5_completed
+execution_stage: stage6_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -427,6 +427,13 @@ Status: Current
 
 - hybrid 能力成为增强项而不是硬依赖
 - rerank 带来明确可测收益
+
+### Progress Notes
+
+- 已新增 hybrid planner：`knowledge.search` 默认走 `hybrid`，并可用 `retrievalMode=lexical` 关闭增强链路
+- block 索引已持久化本地 dense 向量缓存，检索时执行 `sparse expansion + semantic lane + weighted RRF`
+- rerank 已接入 `legal-aware + citation-aware + confidence-aware` 规则，结果返回 `retrievalLanes` 和完整 ranking breakdown
+- 已新增离线对比报告：[hybrid-retrieval-evaluation-report.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/hybrid-retrieval-evaluation-report.md)
 
 ## Stage 7: 评测、审计与发布准入
 

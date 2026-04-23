@@ -794,6 +794,10 @@ fn fs_knowledge_search_input_schema() -> Value {
             ),
             ("query", string_schema("Free-text query to search for.")),
             (
+                "retrievalMode",
+                string_schema("Optional retrieval mode: `hybrid` (default) or `lexical`."),
+            ),
+            (
                 "limit",
                 integer_schema("Maximum matches to return.", 1, 100),
             ),

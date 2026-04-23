@@ -12,6 +12,7 @@
 - `indexer.rs`: 索引构建
 - `document_parse/legal_metadata.rs`: 法律元数据抽取与日期/法域识别
 - `document_parse/ocr.rs`: 扫描 PDF / 图片 OCR 解析
+- `hybrid.rs`: sparse expansion、dense lane、RRF 融合与离线评测
 - `jobs.rs`: 异步任务和重建调度
 - `watcher.rs`: 目录监听
 - `fingerprint.rs`: 变更识别
@@ -27,6 +28,8 @@
 - 已失效/废止文档需要在结果里显式标记，不能只做隐藏降权
 - Stage 5 起 OCR block 会显式带 `contentOrigin=ocr` 和 `ocrConfidence`
 - 扫描 PDF 先走原生文本抽取；失败或为空时才回退到 OCR，避免把 native PDF 和 OCR PDF 混为一类
+- Stage 6 起 `knowledge.search` 默认走 hybrid，可通过 `retrievalMode=lexical` 关闭增强链路
+- hybrid 排序输出需要显式带 `retrievalLanes` 和 ranking breakdown，不能把 fusion / rerank 变成黑盒
 
 ## Verification
 
