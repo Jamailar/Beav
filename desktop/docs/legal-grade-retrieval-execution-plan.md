@@ -1,8 +1,8 @@
 ---
 doc_type: plan
-execution_status: in_progress
+execution_status: completed
 last_updated: 2026-04-23
-execution_stage: stage6_completed
+execution_stage: stage7_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -484,6 +484,12 @@ Status: Current
 - 质量闸门上线
 - 审计可回放
 - 发布标准明确
+
+### Progress Notes
+
+- 已新增固定 fixture 的 benchmark runner 与 grounding audit，代码在 `knowledge_index/evaluation.rs`
+- Stage 7 现在通过失败测试直接阻塞 release gate，而不是依赖人工检查
+- 已补 release gate 报告与检查清单：[retrieval-release-gate-report.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/retrieval-release-gate-report.md)
 
 ## Phase Dependencies
 

@@ -2,6 +2,8 @@ pub mod canonical_store;
 pub mod catalog;
 pub mod citation_anchors;
 pub mod document_blocks;
+#[cfg(test)]
+pub mod evaluation;
 pub mod fingerprint;
 pub mod hybrid;
 pub mod indexer;

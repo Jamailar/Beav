@@ -17,6 +17,8 @@
 - [redbox-local-runtime-migration-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/redbox-local-runtime-migration-plan.md)
 - [legal-grade-retrieval-architecture-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/legal-grade-retrieval-architecture-plan.md)
 - [legal-grade-retrieval-execution-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/legal-grade-retrieval-execution-plan.md)
+- [hybrid-retrieval-evaluation-report.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/hybrid-retrieval-evaluation-report.md)
+- [retrieval-release-gate-report.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/retrieval-release-gate-report.md)
 - [aionrs-comparison-optimization-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/aionrs-comparison-optimization-plan.md)
 - [migration-architecture.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/migration-architecture.md)
 - [ai-runtime-maintenance-overview.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/ai-runtime-maintenance-overview.md)
