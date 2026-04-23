@@ -1,7 +1,7 @@
 ---
 doc_type: plan
-execution_status: in_progress
-execution_stage: installer_and_sandbox_abstractions
+execution_status: completed
+execution_stage: completed
 last_updated: 2026-04-23
 owner: codex
 target_files:
@@ -24,6 +24,16 @@ success_metrics:
 ---
 
 # RedConvert 通用 CLI Runtime Control Plane 改造蓝图
+
+## Execution Result
+
+本计划已在 `2026-04-23` 完成当前定义范围内的落地，实现结果包括：
+
+- 宿主侧完成 CLI runtime canonical store、dynamic manifest、installer backend、policy + sandbox、PTY transport、execution record、verification 与 runtime event 接线。
+- `app_cli(action="cli_runtime.*")` 已成为统一的模型调用面，支持 detect / inspect / environment.create / install / execute / verify / escalation。
+- 视频链路中的 `ffmpeg` 与 `remotion` 已改为通过 CLI runtime 执行，日志、校验与执行记录统一进入 control plane。
+- Settings 已提供 CLI Runtime dashboard、托管安装入口与 recent install queue；Chat / runtime event stream / ProcessTimeline 已消费 CLI install / exec / escalation / verify 事件。
+- `skills:market-install` 已重新定义为 placeholder registration，不再误导为“已安装外部 CLI/runtime”。
 
 ## 1. Goal
 
