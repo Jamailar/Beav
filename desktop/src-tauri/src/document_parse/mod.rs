@@ -1,4 +1,5 @@
 mod legal_metadata;
+mod ocr;
 
 use calamine::{open_workbook_auto, Data, Reader};
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,7 @@ use std::path::Path;
 pub(crate) use legal_metadata::LegalMetadata;
 
 const PARSER_NAME: &str = "redbox-canonical";
-const PARSER_VERSION: &str = "stage4-v1";
+const PARSER_VERSION: &str = "stage5-v1";
 const MAX_CANONICAL_BLOCK_CHARS: usize = 1600;
 const MAX_CANONICAL_BLOCK_LINES: usize = 24;
 const MAX_ZIP_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
@@ -34,6 +35,8 @@ pub(crate) struct CanonicalBlock {
     pub line_end: i64,
     pub text: String,
     pub language: Option<String>,
+    pub content_origin: String,
+    pub ocr_confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +57,8 @@ pub(crate) struct CanonicalDocument {
     pub source_type: String,
     pub title: Option<String>,
     pub language: Option<String>,
+    pub content_origin: String,
+    pub ocr_average_confidence: Option<f64>,
     #[serde(default)]
     pub legal_metadata: LegalMetadata,
     pub parser_info: ParserInfo,
@@ -104,6 +109,7 @@ pub(crate) fn parse_path(
         "xlsx" => parse_xlsx(path)?,
         "eml" => parse_eml(path)?,
         "zip" => parse_zip(path)?,
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" => parse_image_ocr(path)?,
         _ => read_utf8_sections(path, "plain-text-fallback", vec!["body".to_string()])?,
     };
 
@@ -131,12 +137,16 @@ pub(crate) fn parse_path(
             &section.section_path,
             section.page,
             section.language.clone(),
+            &section.content_origin,
+            section.ocr_confidence,
         ));
     }
     if blocks.is_empty() {
         return Ok(None);
     }
     let language = dominant_language(&blocks);
+    let content_origin = dominant_content_origin(&blocks);
+    let ocr_average_confidence = average_ocr_confidence(&blocks);
     let joined_text = blocks
         .iter()
         .take(12)
@@ -157,6 +167,8 @@ pub(crate) fn parse_path(
         source_type: extension,
         title,
         language,
+        content_origin,
+        ocr_average_confidence,
         legal_metadata,
         parser_info: ParserInfo {
             parser_name: PARSER_NAME.to_string(),
@@ -177,6 +189,8 @@ struct ParsedSection {
     page: Option<i64>,
     text: String,
     language: Option<String>,
+    content_origin: String,
+    ocr_confidence: Option<f64>,
     fallback_used: bool,
     attachment_path: Option<String>,
 }
@@ -194,6 +208,8 @@ fn read_utf8_sections(
             page: Some(1),
             language: detect_language(&content),
             text: content,
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
             fallback_used: false,
             attachment_path: None,
         }])),
@@ -223,12 +239,17 @@ fn parse_pdf(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
             page: Some(1),
             language: detect_language(&text),
             text,
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
             fallback_used: false,
             attachment_path: None,
         }])),
-        Ok(_) => Ok(None),
-        Err(_) => Ok(None),
+        Ok(_) | Err(_) => ocr::ocr_pdf_to_sections(path),
     }
+}
+
+fn parse_image_ocr(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+    ocr::ocr_image_to_sections(path)
 }
 
 fn parse_docx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
@@ -253,6 +274,8 @@ fn parse_docx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
         page: Some(1),
         language: detect_language(&text),
         text,
+        content_origin: "native".to_string(),
+        ocr_confidence: None,
         fallback_used: false,
         attachment_path: None,
     }]))
@@ -285,6 +308,8 @@ fn parse_pptx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
             page: Some((index + 1) as i64),
             language: detect_language(&text),
             text,
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
             fallback_used: false,
             attachment_path: None,
         });
@@ -329,6 +354,8 @@ fn parse_xlsx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
             page: None,
             language: detect_language(&text),
             text,
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
             fallback_used: false,
             attachment_path: None,
         });
@@ -384,6 +411,8 @@ fn parse_eml(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
         page: None,
         language: detect_language(&text),
         text,
+        content_origin: "native".to_string(),
+        ocr_confidence: None,
         fallback_used: false,
         attachment_path: None,
     }];
@@ -395,6 +424,8 @@ fn parse_eml(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
             page: None,
             language: None,
             text: format!("Attachment: {attachment}"),
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
             fallback_used: false,
             attachment_path: Some(attachment),
         });
@@ -478,6 +509,8 @@ fn parse_zip_entry_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSe
                     page: Some(1),
                     language: detect_language(&text),
                     text,
+                    content_origin: "native".to_string(),
+                    ocr_confidence: None,
                     fallback_used: false,
                     attachment_path: Some(name.to_string()),
                 }]
@@ -495,6 +528,8 @@ fn parse_zip_entry_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSe
                     page: Some(1),
                     language: detect_language(&text),
                     text,
+                    content_origin: "native".to_string(),
+                    ocr_confidence: None,
                     fallback_used: false,
                     attachment_path: Some(name.to_string()),
                 }]
@@ -541,6 +576,8 @@ fn parse_docx_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSection
         page: Some(1),
         language: detect_language(&text),
         text,
+        content_origin: "native".to_string(),
+        ocr_confidence: None,
         fallback_used: false,
         attachment_path: Some(name.to_string()),
     }]))
@@ -579,6 +616,8 @@ fn parse_pptx_bytes(name: &str, bytes: &[u8]) -> Result<Option<Vec<ParsedSection
             page: Some((index + 1) as i64),
             language: detect_language(&text),
             text,
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
             fallback_used: false,
             attachment_path: Some(name.to_string()),
         });
@@ -630,6 +669,8 @@ fn split_into_canonical_blocks(
     section_path: &[String],
     page: Option<i64>,
     language: Option<String>,
+    content_origin: &str,
+    ocr_confidence: Option<f64>,
 ) -> Vec<CanonicalBlock> {
     let mut blocks = Vec::new();
     let mut current_lines = Vec::new();
@@ -655,6 +696,8 @@ fn split_into_canonical_blocks(
                 line_end: line_no.saturating_sub(1) as i64,
                 text: current_lines.join("\n"),
                 language: language.clone(),
+                content_origin: content_origin.to_string(),
+                ocr_confidence,
             });
             current_lines.clear();
             current_chars = 0;
@@ -679,6 +722,8 @@ fn split_into_canonical_blocks(
             line_end: line_no as i64,
             text: current_lines.join("\n"),
             language,
+            content_origin: content_origin.to_string(),
+            ocr_confidence,
         });
     }
     blocks
@@ -743,6 +788,35 @@ fn dominant_language(blocks: &[CanonicalBlock]) -> Option<String> {
     } else {
         Some("en".to_string())
     }
+}
+
+fn dominant_content_origin(blocks: &[CanonicalBlock]) -> String {
+    let native = blocks
+        .iter()
+        .filter(|block| block.content_origin == "native")
+        .count();
+    let ocr = blocks
+        .iter()
+        .filter(|block| block.content_origin == "ocr")
+        .count();
+    if native > 0 && ocr > 0 {
+        "mixed".to_string()
+    } else if ocr > 0 {
+        "ocr".to_string()
+    } else {
+        "native".to_string()
+    }
+}
+
+fn average_ocr_confidence(blocks: &[CanonicalBlock]) -> Option<f64> {
+    let values = blocks
+        .iter()
+        .filter_map(|block| block.ocr_confidence)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return None;
+    }
+    Some(values.iter().sum::<f64>() / values.len() as f64)
 }
 
 #[cfg(test)]

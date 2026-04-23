@@ -11,6 +11,7 @@
 - `document_blocks.rs`: block 级索引构建与查询
 - `indexer.rs`: 索引构建
 - `document_parse/legal_metadata.rs`: 法律元数据抽取与日期/法域识别
+- `document_parse/ocr.rs`: 扫描 PDF / 图片 OCR 解析
 - `jobs.rs`: 异步任务和重建调度
 - `watcher.rs`: 目录监听
 - `fingerprint.rs`: 变更识别
@@ -24,6 +25,8 @@
 - 文件未变更时优先复用 canonical cache，避免重复解析
 - Stage 4 起 block 命中会附带 `legalMetadata`，并使用 `lexical score + legal score` 排序
 - 已失效/废止文档需要在结果里显式标记，不能只做隐藏降权
+- Stage 5 起 OCR block 会显式带 `contentOrigin=ocr` 和 `ocrConfidence`
+- 扫描 PDF 先走原生文本抽取；失败或为空时才回退到 OCR，避免把 native PDF 和 OCR PDF 混为一类
 
 ## Verification
 

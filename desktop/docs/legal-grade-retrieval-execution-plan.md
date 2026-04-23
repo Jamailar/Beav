@@ -2,7 +2,7 @@
 doc_type: plan
 execution_status: in_progress
 last_updated: 2026-04-23
-execution_stage: stage4_completed
+execution_stage: stage5_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -379,6 +379,13 @@ Status: Current
 - 扫描件进入检索主链路
 - OCR 结果具备引用能力
 - OCR 风险可控
+
+### Progress Notes
+
+- 已新增 OCR parser path：扫描 PDF 通过 `pdftoppm` 渲染页图，再由 macOS Vision OCR 进入 canonical blocks
+- 图片类文件已支持直接 OCR 入库，block 会持久化 `contentOrigin=ocr` 和 `ocrConfidence`
+- `knowledge.search/read` 已返回 OCR provenance，OCR 命中结果不会与原生文本结果混淆
+- 排序已接入 OCR 置信度惩罚，低置信结果默认显著降权
 
 ## Stage 6: Hybrid 检索与 Rerank
 
