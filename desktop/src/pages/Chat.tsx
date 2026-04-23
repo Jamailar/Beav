@@ -273,6 +273,18 @@ function findLastRunningThinkingIndex(messages: Message[]): number {
   return -1;
 }
 
+function hasCommittedAssistantReply(messages: Message[]): boolean {
+  const lastReplyIndex = findLastAssistantReplyIndex(messages);
+  if (lastReplyIndex === -1) return false;
+  const message = messages[lastReplyIndex];
+  return Boolean(
+    message
+    && message.role === 'ai'
+    && !message.isStreaming
+    && String(message.content || '').trim().length > 0
+  );
+}
+
 function parseMessageTimestampMs(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value > 1e12 ? value : value * 1000;
@@ -963,6 +975,7 @@ export function Chat({
 
   const selectSession = async (sessionId: string) => {
     if (!isActiveRef.current) return;
+    setErrorNotice(null);
     setCurrentSessionId(sessionId);
     if (fixedSessionId && sessionId === fixedSessionId) {
       const warm = readFixedSessionWarmSnapshot(sessionId);
@@ -1111,6 +1124,7 @@ export function Chat({
       const session = await window.ipcRenderer.chat.createSession('New Chat');
       setSessions(prev => [session, ...prev]);
       setCurrentSessionId(session.id);
+      setErrorNotice(null);
       setMessages([]);
     } catch (error) {
       console.error('Failed to create session:', error);
@@ -1286,6 +1300,7 @@ export function Chat({
       if (!isActiveRef.current) return;
       if (name === 'thinking') {
         responseCompletedRef.current = false;
+        setErrorNotice(null);
       }
       setMessages(prev => {
         const lastReplyIndex = findLastAssistantReplyIndex(prev);
@@ -1357,6 +1372,13 @@ export function Chat({
       if (!isActiveRef.current) return;
       const content = data?.content;
       if (!content) return;
+      if (responseCompletedRef.current) {
+        debugUi('thought_delta:ignored_after_response_end', {
+          sessionId: currentSessionIdRef.current,
+          chunkChars: content.length,
+        });
+        return;
+      }
       setMessages(prev => {
         let runningThinkingIndex = findLastRunningThinkingIndex(prev);
         let next = [...prev];
@@ -1421,6 +1443,13 @@ export function Chat({
         return;
       }
       if (!content) return;
+      if (responseCompletedRef.current) {
+        debugUi('response_chunk:ignored_after_response_end', {
+          sessionId: currentSessionIdRef.current,
+          chunkChars: content.length,
+        });
+        return;
+      }
       setMessages(prev => {
         const runningThinkingIndex = findLastRunningThinkingIndex(prev);
         if (runningThinkingIndex === -1) return prev;
@@ -2227,6 +2256,17 @@ export function Chat({
 
     const handleError = (_: unknown, error: ChatErrorEventPayload | string) => {
       if (!isActiveRef.current) return;
+      if (responseCompletedRef.current) {
+        debugUi('response_error:ignored_after_response_end', {
+          sessionId: currentSessionIdRef.current,
+          error: typeof error === 'string' ? error : error?.message || 'unknown',
+        });
+        setMessages((prev) => {
+          if (!hasCommittedAssistantReply(prev)) return prev;
+          return prev;
+        });
+        return;
+      }
       suppressComposerFocus('error', 3000);
       blurComposer('error');
       const notice = normalizeChatErrorNotice(error);

@@ -6,6 +6,7 @@ use super::{InteractiveToolChoice, ProviderTurnPolicy};
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ProviderFamily {
     OpenAiCompat,
+    MiniMax,
     Anthropic,
     Gemini,
 }
@@ -33,6 +34,26 @@ pub(crate) struct ProviderProfile {
 }
 
 impl ProviderProfile {
+    pub(crate) fn is_minimax(&self) -> bool {
+        matches!(self.provider_family, ProviderFamily::MiniMax)
+    }
+
+    pub(crate) fn prefers_http11_transport(&self) -> bool {
+        self.is_minimax()
+    }
+
+    pub(crate) fn prefers_identity_encoding_for_streaming(&self) -> bool {
+        self.is_minimax()
+    }
+
+    pub(crate) fn prefers_curl_json_transport(&self) -> bool {
+        self.is_minimax()
+    }
+
+    pub(crate) fn supports_reasoning_split(&self) -> bool {
+        self.is_minimax() && self.capabilities.supports_thinking
+    }
+
     pub(crate) fn should_disable_thinking(
         &self,
         runtime_mode: &str,

@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_TYPE};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -17,7 +17,8 @@ use crate::events::{
 use crate::{
     append_debug_trace_state, format_http_error_message, http_error_debug_line,
     http_error_details_from_text, is_chat_runtime_cancel_requested, normalize_base_url, now_ms,
-    text_snippet, try_refresh_official_auth_for_ai_request, update_chat_runtime_state, AppState,
+    provider_profile_from_config, run_curl_json_response, text_snippet,
+    try_refresh_official_auth_for_ai_request, update_chat_runtime_state, AppState,
     InteractiveToolCall, ResolvedChatConfig, StreamingChatCompletion, StreamingToolDelta,
 };
 
@@ -61,12 +62,23 @@ fn transport_preference_key(config: &ResolvedChatConfig) -> String {
     )
 }
 
+fn openai_provider_profile(config: &ResolvedChatConfig) -> crate::provider_compat::ProviderProfile {
+    provider_profile_from_config(config)
+}
+
 fn preferred_transport_mode(config: &ResolvedChatConfig) -> TransportMode {
+    let provider_profile = openai_provider_profile(config);
     preference_store()
         .lock()
         .ok()
         .and_then(|guard| guard.get(&transport_preference_key(config)).copied())
-        .unwrap_or(TransportMode::Auto)
+        .unwrap_or_else(|| {
+            if provider_profile.prefers_http11_transport() {
+                TransportMode::Http11
+            } else {
+                TransportMode::Auto
+            }
+        })
 }
 
 fn remember_transport_mode(config: &ResolvedChatConfig, mode: TransportMode) {
@@ -92,6 +104,8 @@ async fn send_openai_request(
     max_time_seconds: Option<u64>,
 ) -> Result<reqwest::Response, LlmTransportError> {
     let url = format!("{}/chat/completions", normalize_base_url(&config.base_url));
+    let provider_profile = openai_provider_profile(config);
+    let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let client = openai_client(transport_mode).map_err(|error| {
         LlmTransportError::new(TransportErrorKind::Unknown, transport_mode, error)
     })?;
@@ -99,6 +113,19 @@ async fn send_openai_request(
         .post(url)
         .header(CONTENT_TYPE, "application/json")
         .json(body);
+    request = request.header(
+        ACCEPT,
+        if streaming {
+            "text/event-stream"
+        } else {
+            "application/json"
+        },
+    );
+    if provider_profile.prefers_identity_encoding_for_streaming() {
+        request = request
+            .header(ACCEPT_ENCODING, "identity")
+            .header(CONNECTION, "keep-alive");
+    }
     if let Some(api_key) = config
         .api_key
         .as_deref()
@@ -114,6 +141,28 @@ async fn send_openai_request(
         .send()
         .await
         .map_err(|error| (transport_mode, error).into())
+}
+
+fn curl_headers_for_openai_request(
+    config: &ResolvedChatConfig,
+    body: &Value,
+) -> Vec<(&'static str, String)> {
+    let provider_profile = openai_provider_profile(config);
+    let mut headers = Vec::new();
+    let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    headers.push((
+        "Accept",
+        if streaming {
+            "text/event-stream".to_string()
+        } else {
+            "application/json".to_string()
+        },
+    ));
+    if provider_profile.prefers_identity_encoding_for_streaming() {
+        headers.push(("Accept-Encoding", "identity".to_string()));
+        headers.push(("Connection", "keep-alive".to_string()));
+    }
+    headers
 }
 
 async fn parse_error_response(
@@ -164,6 +213,34 @@ fn finalize_thought_phase(app: &AppHandle, session_id: &str) {
     );
 }
 
+fn openai_reasoning_fragments(delta: &Value) -> Vec<String> {
+    let mut fragments = Vec::new();
+    for key in ["reasoning_content", "reasoning"] {
+        if let Some(text) = delta
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            fragments.push(text.to_string());
+        }
+    }
+    if let Some(items) = delta.get("reasoning_details").and_then(Value::as_array) {
+        for item in items {
+            if let Some(text) = item
+                .get("text")
+                .or_else(|| item.get("content"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                fragments.push(text.to_string());
+            }
+        }
+    }
+    fragments
+}
+
 fn openai_tool_arguments_text(value: Option<&Value>) -> Option<String> {
     let raw = value?;
     match raw {
@@ -183,6 +260,7 @@ fn process_openai_sse_event(
     result: &mut StreamingChatCompletion,
     tool_deltas: &mut Vec<StreamingToolDelta>,
     saw_tool_calls: &mut bool,
+    saw_reasoning: &mut bool,
     responding_started: &mut bool,
     thought_closed: &mut bool,
 ) -> Result<bool, String> {
@@ -217,6 +295,13 @@ fn process_openai_sse_event(
         .unwrap_or("");
     if !finish_reason.is_empty() {
         result.terminal_reason = Some(finish_reason.to_string());
+    }
+
+    for fragment in openai_reasoning_fragments(&delta) {
+        *saw_reasoning = true;
+        if let Some(current_session_id) = session_id {
+            emit_runtime_text_delta(app, current_session_id, "thought", &fragment);
+        }
     }
 
     if let Some(items) = delta.get("tool_calls").and_then(|value| value.as_array()) {
@@ -367,8 +452,13 @@ async fn run_stream_attempt(
     let mut result = StreamingChatCompletion::default();
     let mut tool_deltas = Vec::<StreamingToolDelta>::new();
     let mut saw_tool_calls = false;
+    let mut saw_reasoning = false;
     let mut responding_started = false;
     let mut thought_closed = false;
+    let stream_started_at = now_ms();
+    let mut first_chunk_at_ms = None::<u128>;
+    let mut chunk_count = 0usize;
+    let mut chunk_bytes = 0usize;
 
     loop {
         if session_id
@@ -383,6 +473,11 @@ async fn run_stream_attempt(
         }
         match tokio::time::timeout(Duration::from_millis(250), stream.next()).await {
             Ok(Some(Ok(chunk))) => {
+                if first_chunk_at_ms.is_none() {
+                    first_chunk_at_ms = Some(now_ms());
+                }
+                chunk_count += 1;
+                chunk_bytes += chunk.len();
                 pending.push_str(&String::from_utf8_lossy(&chunk));
                 while let Some(index) = pending.find('\n') {
                     let mut line = pending.drain(..=index).collect::<String>();
@@ -398,6 +493,7 @@ async fn run_stream_attempt(
                                 &mut result,
                                 &mut tool_deltas,
                                 &mut saw_tool_calls,
+                                &mut saw_reasoning,
                                 &mut responding_started,
                                 &mut thought_closed,
                             )
@@ -445,6 +541,28 @@ async fn run_stream_attempt(
                                         finalize_thought_phase(app, current_session_id);
                                     }
                                 }
+                                if saw_reasoning && !thought_closed {
+                                    if let Some(current_session_id) = session_id {
+                                        finalize_thought_phase(app, current_session_id);
+                                    }
+                                }
+                                append_debug_trace_state(
+                                    state,
+                                    format!(
+                                        "[runtime][stream][openai][{}] attempt_complete transport={} first_chunk_ms={} chunk_count={} chunk_bytes={} content_chars={} reasoning_seen={} tool_calls={} elapsed={}ms",
+                                        session_id.unwrap_or("no-session"),
+                                        transport_mode.as_str(),
+                                        first_chunk_at_ms
+                                            .map(|ts| (ts - stream_started_at).to_string())
+                                            .unwrap_or_else(|| "none".to_string()),
+                                        chunk_count,
+                                        chunk_bytes,
+                                        result.content.chars().count(),
+                                        saw_reasoning,
+                                        result.tool_calls.len(),
+                                        now_ms() - stream_started_at,
+                                    ),
+                                );
                                 return Ok(result);
                             }
                         }
@@ -456,6 +574,22 @@ async fn run_stream_attempt(
                 }
             }
             Ok(Some(Err(error))) => {
+                append_debug_trace_state(
+                    state,
+                    format!(
+                        "[runtime][stream][openai][{}] chunk_error transport={} first_chunk_ms={} chunk_count={} chunk_bytes={} content_chars={} reasoning_seen={} error={}",
+                        session_id.unwrap_or("no-session"),
+                        transport_mode.as_str(),
+                        first_chunk_at_ms
+                            .map(|ts| (ts - stream_started_at).to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        chunk_count,
+                        chunk_bytes,
+                        result.content.chars().count(),
+                        saw_reasoning,
+                        text_snippet(&error.to_string(), 240),
+                    ),
+                );
                 return Err((transport_mode, error).into());
             }
             Ok(None) => {
@@ -483,6 +617,7 @@ async fn run_stream_attempt(
             &mut result,
             &mut tool_deltas,
             &mut saw_tool_calls,
+            &mut saw_reasoning,
             &mut responding_started,
             &mut thought_closed,
         )
@@ -511,8 +646,68 @@ async fn run_stream_attempt(
             finalize_thought_phase(app, current_session_id);
         }
     }
+    if saw_reasoning && !thought_closed {
+        if let Some(current_session_id) = session_id {
+            finalize_thought_phase(app, current_session_id);
+        }
+    }
     finalize_tool_calls(&mut result, tool_deltas, session_id, runtime_mode);
+    append_debug_trace_state(
+        state,
+        format!(
+            "[runtime][stream][openai][{}] attempt_eof transport={} first_chunk_ms={} chunk_count={} chunk_bytes={} content_chars={} reasoning_seen={} tool_calls={} elapsed={}ms",
+            session_id.unwrap_or("no-session"),
+            transport_mode.as_str(),
+            first_chunk_at_ms
+                .map(|ts| (ts - stream_started_at).to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            chunk_count,
+            chunk_bytes,
+            result.content.chars().count(),
+            saw_reasoning,
+            result.tool_calls.len(),
+            now_ms() - stream_started_at,
+        ),
+    );
     Ok(result)
+}
+
+fn run_openai_json_attempt_via_curl(
+    state: &State<'_, AppState>,
+    config: &ResolvedChatConfig,
+    body: &Value,
+    max_time_seconds: Option<u64>,
+) -> Result<Value, LlmTransportError> {
+    let url = format!("{}/chat/completions", normalize_base_url(&config.base_url));
+    let headers = curl_headers_for_openai_request(config, body);
+    let response = run_curl_json_response(
+        "POST",
+        &url,
+        config.api_key.as_deref(),
+        &headers,
+        Some(body.clone()),
+        max_time_seconds,
+    )
+    .map_err(|error| LlmTransportError::from_message(TransportMode::Http11, error))?;
+    if !(200..300).contains(&response.status) {
+        let raw =
+            serde_json::to_string(&response.body).unwrap_or_else(|_| response.body.to_string());
+        let details = http_error_details_from_text(response.status, &raw);
+        append_debug_trace_state(
+            state,
+            format!(
+                "{} | transport=curl-http1.1",
+                http_error_debug_line("ai-http", "POST", &url, &details),
+            ),
+        );
+        return Err(LlmTransportError::with_status(
+            TransportMode::Http11,
+            response.status,
+            format_http_error_message("AI request", &details),
+            Some(raw),
+        ));
+    }
+    Ok(response.body)
 }
 
 async fn run_json_attempt(
@@ -678,6 +873,10 @@ pub(crate) fn run_openai_json_chat_completion_transport(
     max_time_seconds: Option<u64>,
     allow_official_reauth_retry: bool,
 ) -> Result<Value, LlmTransportError> {
+    let provider_profile = openai_provider_profile(config);
+    if provider_profile.prefers_curl_json_transport() {
+        return run_openai_json_attempt_via_curl(state, config, body, max_time_seconds);
+    }
     let attempt = |mode| {
         run_transport_future(run_json_attempt(
             state,
@@ -716,5 +915,41 @@ pub(crate) fn run_openai_json_chat_completion_transport(
             Ok(value)
         }
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{openai_provider_profile, openai_reasoning_fragments, preferred_transport_mode};
+    use crate::llm_transport::TransportMode;
+    use crate::provider_compat::ProviderFamily;
+    use crate::runtime::ResolvedChatConfig;
+    use serde_json::json;
+
+    #[test]
+    fn minimax_defaults_to_http11_transport() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            base_url: "https://api.minimaxi.com/v1".to_string(),
+            api_key: None,
+            model_name: "MiniMax-M2.7".to_string(),
+        };
+        assert_eq!(preferred_transport_mode(&config), TransportMode::Http11);
+        assert_eq!(
+            openai_provider_profile(&config).provider_family,
+            ProviderFamily::MiniMax
+        );
+    }
+
+    #[test]
+    fn extracts_reasoning_fragments_from_minimax_delta() {
+        let fragments = openai_reasoning_fragments(&json!({
+            "reasoning_details": [
+                { "type": "text", "text": "step one" },
+                { "text": "step two" }
+            ],
+            "reasoning_content": "step zero"
+        }));
+        assert_eq!(fragments, vec!["step zero", "step one", "step two"]);
     }
 }

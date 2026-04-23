@@ -6349,6 +6349,12 @@ fn run_openai_interactive_chat_runtime(
         if turn_policy.disable_thinking {
             body["enable_thinking"] = json!(false);
         }
+        if provider_profile.supports_reasoning_split()
+            && !turn_policy.disable_thinking
+            && !is_wander
+        {
+            body["reasoning_split"] = json!(true);
+        }
         if is_wander {
             body["temperature"] = json!(0.4);
             body["max_tokens"] = json!(900);

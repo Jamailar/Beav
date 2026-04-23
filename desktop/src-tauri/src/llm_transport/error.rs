@@ -67,6 +67,17 @@ impl LlmTransportError {
         }
     }
 
+    pub(crate) fn from_message(transport_mode: TransportMode, message: impl Into<String>) -> Self {
+        let raw = message.into();
+        Self {
+            kind: classify_raw_transport_message(&raw),
+            transport_mode,
+            message: raw.clone(),
+            http_status: None,
+            raw: Some(raw),
+        }
+    }
+
     pub(crate) fn should_retry_with_http1(self: &Self) -> bool {
         matches!(
             self.kind,
