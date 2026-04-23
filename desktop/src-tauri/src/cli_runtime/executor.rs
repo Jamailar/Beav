@@ -15,11 +15,11 @@ use crate::cli_runtime::{
     emit_cli_escalation_requested, emit_cli_execution_log, emit_cli_execution_started,
     emit_cli_execution_status, emit_cli_verification_finished, execution_log_metadata,
     execution_log_paths, find_cli_execution_by_id, initialize_execution_logs,
-    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, resolve_cli_environment,
-    run_cli_verification, sandbox_metadata, spawn_cli_terminal, upsert_cli_execution_record,
-    write_execution_logs, CliEnvironmentResolveRequest, CliEscalationRequestRecord,
-    CliExecuteRequest, CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus,
-    CliVerificationStatus, CliVerifyRule,
+    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, prepare_cli_launch,
+    resolve_cli_environment, run_cli_verification, sandbox_metadata, spawn_cli_terminal,
+    upsert_cli_execution_record, write_execution_logs, CliEnvironmentResolveRequest,
+    CliEscalationRequestRecord, CliExecuteRequest, CliExecutionRecord, CliExecutionSnapshot,
+    CliExecutionStatus, CliVerificationStatus, CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
 use crate::{make_id, now_i64, AppState};
@@ -110,15 +110,13 @@ fn run_local_command_capture(
     argv: &[String],
     cwd: &Path,
     env: &BTreeMap<String, String>,
+    sandbox: &crate::cli_runtime::CliSandboxSpec,
 ) -> Result<LocalCliCommandOutput, String> {
-    let program = argv
-        .first()
-        .cloned()
-        .ok_or_else(|| "cli execute requires argv[0]".to_string())?;
-    let mut command = Command::new(program);
-    command.args(&argv[1..]);
+    let launch = prepare_cli_launch(sandbox, argv, env)?;
+    let mut command = Command::new(launch.program);
+    command.args(&launch.args);
     command.current_dir(cwd);
-    command.envs(env);
+    command.envs(&launch.env);
     configure_background_command(&mut command);
     let output = command.output().map_err(|error| error.to_string())?;
     Ok(LocalCliCommandOutput {
@@ -297,11 +295,12 @@ fn launch_background_execution<RT: Runtime>(
     record: &CliExecutionRecord,
     cwd: &str,
     env: &BTreeMap<String, String>,
+    sandbox: &crate::cli_runtime::CliSandboxSpec,
     stdout_path: &Path,
     stderr_path: &Path,
 ) -> Result<(), String> {
     initialize_execution_logs(stdout_path, stderr_path)?;
-    let terminal = spawn_cli_terminal(&request.argv, Path::new(cwd), env)?;
+    let terminal = spawn_cli_terminal(&request.argv, Path::new(cwd), env, sandbox)?;
     let mut child = terminal.child;
     let stdout_reader = child
         .stdout
@@ -534,6 +533,7 @@ pub fn execute_cli_command<RT: Runtime>(
             &record,
             &cwd,
             &merged_env,
+            &sandbox,
             &stdout_path,
             &stderr_path,
         ) {
@@ -542,11 +542,11 @@ pub fn execute_cli_command<RT: Runtime>(
         };
     }
 
-    let local_output = match run_local_command_capture(&request.argv, Path::new(&cwd), &merged_env)
-    {
-        Ok(output) => output,
-        Err(error) => return fail_execution_launch(app, state, record, error),
-    };
+    let local_output =
+        match run_local_command_capture(&request.argv, Path::new(&cwd), &merged_env, &sandbox) {
+            Ok(output) => output,
+            Err(error) => return fail_execution_launch(app, state, record, error),
+        };
     write_execution_logs(
         &stdout_path,
         &stderr_path,
@@ -680,9 +680,14 @@ mod tests {
     fn run_local_command_capture_collects_stdout() {
         let cwd = std::env::temp_dir();
         let env = std::env::vars().collect::<BTreeMap<String, String>>();
-        let output =
-            run_local_command_capture(&["rustc".to_string(), "--version".to_string()], &cwd, &env)
-                .expect("rustc should run");
+        let sandbox = crate::cli_runtime::CliSandboxSpec::default();
+        let output = run_local_command_capture(
+            &["rustc".to_string(), "--version".to_string()],
+            &cwd,
+            &env,
+            &sandbox,
+        )
+        .expect("rustc should run");
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert_eq!(output.exit_code, Some(0));
         assert!(stdout.contains("rustc"));
@@ -692,10 +697,12 @@ mod tests {
     fn run_local_command_capture_reports_non_zero_exit_code() {
         let cwd = std::env::temp_dir();
         let env = std::env::vars().collect::<BTreeMap<String, String>>();
+        let sandbox = crate::cli_runtime::CliSandboxSpec::default();
         let output = run_local_command_capture(
             &["rustc".to_string(), "--definitely-invalid-flag".to_string()],
             &cwd,
             &env,
+            &sandbox,
         )
         .expect("rustc should still execute");
         assert_ne!(output.exit_code, Some(0));
@@ -707,9 +714,14 @@ mod tests {
     fn write_execution_logs_round_trip_with_capture_output() {
         let cwd = std::env::temp_dir();
         let env = std::env::vars().collect::<BTreeMap<String, String>>();
-        let output =
-            run_local_command_capture(&["rustc".to_string(), "--version".to_string()], &cwd, &env)
-                .expect("rustc should run");
+        let sandbox = crate::cli_runtime::CliSandboxSpec::default();
+        let output = run_local_command_capture(
+            &["rustc".to_string(), "--version".to_string()],
+            &cwd,
+            &env,
+            &sandbox,
+        )
+        .expect("rustc should run");
         let temp_root = std::env::temp_dir().join(format!("redbox-cli-exec-{}", crate::now_i64()));
         fs::create_dir_all(&temp_root).expect("temp dir should exist");
         let stdout_path = temp_root.join("stdout.log");
