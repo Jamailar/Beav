@@ -37,7 +37,7 @@ import {
 } from '../components/manuscripts/richpostPreviewImage';
 import { stabilizeRichpostPagination } from '../components/manuscripts/richpostPaginationGuard';
 import { appAlert, appConfirm } from '../utils/appDialogs';
-import type { ImmersiveMode, PendingChatMessage } from '../App';
+import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from '../App';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { composeMarkdownWithFrontmatter, parseMarkdownFrontmatter } from '../utils/markdownFrontmatter';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
@@ -462,6 +462,7 @@ interface ManuscriptsProps {
     pendingFile?: string | null;
     onFileConsumed?: () => void;
     onNavigateToRedClaw?: (message: PendingChatMessage) => void;
+    onNavigateToGenerationStudio?: (intent: GenerationIntent) => void;
     isActive?: boolean;
     onImmersiveModeChange?: (mode: ImmersiveMode) => void;
 }
@@ -841,7 +842,7 @@ function collectFileMetaMap(nodes: FileNode[]): Record<string, FileCardMeta> {
     return next;
 }
 
-export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, isActive = false, onImmersiveModeChange }: ManuscriptsProps) {
+export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, onNavigateToGenerationStudio, isActive = false, onImmersiveModeChange }: ManuscriptsProps) {
     const [mode, setMode] = useState<'gallery' | 'editor'>('gallery');
     const [editorFile, setEditorFile] = useState<string | null>(null);
     const [editorDescriptor, setEditorDescriptor] = useState<EditorDescriptor | null>(null);
@@ -905,7 +906,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [model, setModel] = useState('');
     const [aspectRatio, setAspectRatio] = useState('3:4');
     const [size, setSize] = useState('');
-    const [quality, setQuality] = useState('standard');
+    const [quality, setQuality] = useState('auto');
     const [generationMode, setGenerationMode] = useState<'text-to-image' | 'reference-guided' | 'image-to-image'>('text-to-image');
     const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([]);
     const [isReadingRefImages, setIsReadingRefImages] = useState(false);
@@ -1106,7 +1107,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality || 'standard');
+            setQuality(next.image_quality || 'auto');
         } catch (settingsError) {
             console.error('Failed to load image settings:', settingsError);
         }
@@ -2543,6 +2544,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             const effectiveMode = referenceImages.length > 0 ? generationMode : 'text-to-image';
             const result = await window.ipcRenderer.invoke('image-gen:generate', {
                 prompt,
+                bypassPromptOptimizer: true,
                 projectId: genProjectId.trim() || undefined,
                 title: genTitle.trim() || undefined,
                 generationMode: effectiveMode,
@@ -3323,8 +3325,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     <button
                                         type="button"
                                         onClick={() => {
-                                            setIsImageModalOpen(true);
-                                            void loadSettings();
+                                            onNavigateToGenerationStudio?.({
+                                                mode: 'image',
+                                                source: 'manuscripts',
+                                                sourceTitle: editorDescriptor?.title || editorFile || '稿件工作区',
+                                                bindTarget: editorFile ? { manuscriptPath: editorFile } : undefined,
+                                            });
                                         }}
                                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold text-text-tertiary transition-all hover:text-text-primary hover:bg-black/[0.02]"
                                     >
@@ -3334,8 +3340,12 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                     <button
                                         type="button"
                                         onClick={() => {
-                                            setIsVideoModalOpen(true);
-                                            void loadSettings();
+                                            onNavigateToGenerationStudio?.({
+                                                mode: 'video',
+                                                source: 'manuscripts',
+                                                sourceTitle: editorDescriptor?.title || editorFile || '稿件工作区',
+                                                bindTarget: editorFile ? { manuscriptPath: editorFile } : undefined,
+                                            });
                                         }}
                                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold text-text-tertiary transition-all hover:text-text-primary hover:bg-black/[0.02]"
                                     >

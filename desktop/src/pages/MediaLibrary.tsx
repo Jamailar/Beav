@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
+import type { GenerationIntent } from '../App';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import { appAlert, appConfirm } from '../utils/appDialogs';
@@ -279,7 +280,13 @@ function getMasonryColumnCount(width: number): number {
     return 1;
 }
 
-export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
+export function MediaLibrary({
+    isActive = true,
+    onNavigateToGenerationStudio,
+}: {
+    isActive?: boolean;
+    onNavigateToGenerationStudio?: (intent: GenerationIntent) => void;
+}) {
     const [assets, setAssets] = useState<MediaAsset[]>([]);
     const [manuscripts, setManuscripts] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
@@ -298,7 +305,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
     const [model, setModel] = useState('');
     const [aspectRatio, setAspectRatio] = useState('3:4');
     const [size, setSize] = useState('');
-    const [quality, setQuality] = useState('standard');
+    const [quality, setQuality] = useState('auto');
     const [generationMode, setGenerationMode] = useState<'text-to-image' | 'reference-guided' | 'image-to-image'>('text-to-image');
     const [referenceImages, setReferenceImages] = useState<Array<{ name: string; dataUrl: string }>>([]);
     const [isReadingRefImages, setIsReadingRefImages] = useState(false);
@@ -399,7 +406,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality || 'standard');
+            setQuality(next.image_quality || 'auto');
         } catch (e) {
             if (requestId !== loadSettingsRequestRef.current) return;
             console.error('Failed to load image settings:', e);
@@ -672,6 +679,7 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                 : 'text-to-image';
             const result = await window.ipcRenderer.invoke('image-gen:generate', {
                 prompt,
+                bypassPromptOptimizer: true,
                 projectId: genProjectId.trim() || undefined,
                 title: genTitle.trim() || undefined,
                 generationMode: effectiveMode,
@@ -898,7 +906,11 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
 
                     <div className="ml-auto flex items-center gap-1.5">
                         <button
-                            onClick={() => setIsImageModalOpen(true)}
+                            onClick={() => onNavigateToGenerationStudio?.({
+                                mode: 'image',
+                                source: 'media-library',
+                                sourceTitle: '媒体库画廊',
+                            })}
                             className="h-7 px-2.5 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                         >
                             <span className="inline-flex items-center gap-1">
@@ -907,7 +919,11 @@ export function MediaLibrary({ isActive = true }: { isActive?: boolean }) {
                             </span>
                         </button>
                         <button
-                            onClick={() => setIsVideoModalOpen(true)}
+                            onClick={() => onNavigateToGenerationStudio?.({
+                                mode: 'video',
+                                source: 'media-library',
+                                sourceTitle: '媒体库画廊',
+                            })}
                             className="h-7 px-2.5 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
                         >
                             <span className="inline-flex items-center gap-1">

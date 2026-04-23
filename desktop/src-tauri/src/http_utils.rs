@@ -1,10 +1,53 @@
 use base64::Engine;
+use regex::Regex;
 use serde_json::{json, Value};
+use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::configure_background_command;
 
 pub(crate) const HTTP_STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
+
+struct CurlJsonDebugCapture {
+    dir: PathBuf,
+    response_headers_path: PathBuf,
+    trace_path: PathBuf,
+}
+
+impl CurlJsonDebugCapture {
+    fn new() -> Result<Self, String> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "redbox-curl-json-{}-{timestamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        Ok(Self {
+            response_headers_path: dir.join("response-headers.txt"),
+            trace_path: dir.join("trace.txt"),
+            dir,
+        })
+    }
+
+    fn response_headers(&self) -> String {
+        read_debug_text_file(&self.response_headers_path)
+    }
+
+    fn trace(&self) -> String {
+        read_debug_text_file(&self.trace_path)
+    }
+}
+
+impl Drop for CurlJsonDebugCapture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct HttpJsonResponse {
@@ -59,6 +102,107 @@ fn build_curl_json_command(
         command.arg("--data-binary").arg("@-");
     }
     Ok(command)
+}
+
+fn read_debug_text_file(path: &Path) -> String {
+    fs::read_to_string(path)
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn split_debug_stdout_sections(stdout: &str) -> (String, Option<String>) {
+    match stdout.rsplit_once(HTTP_STATUS_MARKER) {
+        Some((body, status_text)) => (
+            body.trim().to_string(),
+            Some(status_text.trim().to_string()),
+        ),
+        None => (stdout.trim().to_string(), None),
+    }
+}
+
+fn debug_request_headers(api_key: Option<&str>, extra_headers: &[(&str, String)]) -> String {
+    let mut lines = vec!["Content-Type: application/json".to_string()];
+    if api_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        lines.push("Authorization: Bearer <REDACTED>".to_string());
+    }
+    for (header, value) in extra_headers {
+        lines.push(format!("{header}: {value}"));
+    }
+    lines.join("\n")
+}
+
+fn debug_request_body(serialized_body: Option<&[u8]>) -> String {
+    serialized_body
+        .map(|payload| String::from_utf8_lossy(payload).trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "<empty>".to_string())
+}
+
+fn redact_http_debug_text(raw: &str, api_key: Option<&str>) -> String {
+    let mut redacted = raw.to_string();
+    if let Some(api_key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        redacted = redacted.replace(api_key, "<REDACTED>");
+    }
+    if let Ok(pattern) = Regex::new(r"(?im)(authorization:\s*bearer\s+)[^\r\n]+") {
+        redacted = pattern
+            .replace_all(&redacted, "${1}<REDACTED>")
+            .into_owned();
+    }
+    if let Ok(pattern) = Regex::new(r"sk-[A-Za-z0-9_-]+") {
+        redacted = pattern.replace_all(&redacted, "<REDACTED>").into_owned();
+    }
+    redacted.trim().to_string()
+}
+
+fn render_debug_section(label: &str, content: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        format!("{label}:\n<empty>")
+    } else {
+        format!("{label}:\n{trimmed}")
+    }
+}
+
+fn emit_curl_json_diagnostics(
+    method: &str,
+    url: &str,
+    transport: &str,
+    exit_status: &str,
+    error: Option<&str>,
+    request_headers: &str,
+    request_body: &str,
+    response_headers: &str,
+    response_body: &str,
+    response_status_trailer: Option<&str>,
+    stderr: &str,
+    trace: &str,
+) {
+    let mut sections = vec![format!(
+        "[http][curl-json] diagnostic method={} url={} transport={} exit_status={}",
+        method, url, transport, exit_status
+    )];
+    if let Some(error) = error.map(str::trim).filter(|value| !value.is_empty()) {
+        sections.push(format!("error:\n{error}"));
+    }
+    if let Some(status) = response_status_trailer
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        sections.push(format!("response_status_trailer:\n{status}"));
+    }
+    sections.push(render_debug_section("request_headers", request_headers));
+    sections.push(render_debug_section("request_body", request_body));
+    sections.push(render_debug_section("response_headers", response_headers));
+    sections.push(render_debug_section("response_body", response_body));
+    sections.push(render_debug_section("stderr", stderr));
+    sections.push(render_debug_section("trace", trace));
+    let line = sections.join("\n");
+    eprintln!("{line}");
+    crate::append_debug_trace_global(line);
 }
 
 fn payload_error_code(value: &Value) -> Option<String> {
@@ -224,7 +368,7 @@ pub(crate) fn spawn_curl_json_process_with_transport(
         command.stdin(std::process::Stdio::piped());
     }
     let mut child = command.spawn().map_err(|error| error.to_string())?;
-    if let Some(payload) = serialized_body {
+    if let Some(ref payload) = serialized_body {
         let mut stdin = child
             .stdin
             .take()
@@ -343,6 +487,7 @@ fn execute_curl_json_response_once(
     force_http1_1: bool,
 ) -> Result<HttpJsonResponse, String> {
     let serialized_body = serialized_json_body(body.as_ref())?;
+    let debug_capture = CurlJsonDebugCapture::new()?;
     let mut command = build_curl_json_command(
         method,
         url,
@@ -354,6 +499,10 @@ fn execute_curl_json_response_once(
         force_http1_1,
     )?;
     command
+        .arg("-D")
+        .arg(&debug_capture.response_headers_path)
+        .arg("--trace-ascii")
+        .arg(&debug_capture.trace_path)
         .arg("-w")
         .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"));
     command.stdout(std::process::Stdio::piped());
@@ -362,7 +511,7 @@ fn execute_curl_json_response_once(
         command.stdin(std::process::Stdio::piped());
     }
     let mut child = command.spawn().map_err(|error| error.to_string())?;
-    if let Some(payload) = serialized_body {
+    if let Some(ref payload) = serialized_body {
         let mut stdin = child
             .stdin
             .take()
@@ -375,25 +524,51 @@ fn execute_curl_json_response_once(
     let output = child
         .wait_with_output()
         .map_err(|error| error.to_string())?;
+    let transport = if force_http1_1 { "http1.1" } else { "default" };
+    let stderr_text = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
+    let (response_body, response_status_trailer) = split_debug_stdout_sections(&stdout_text);
+    let request_headers = debug_request_headers(api_key, extra_headers);
+    let request_body = debug_request_body(serialized_body.as_deref());
+    let response_headers = redact_http_debug_text(&debug_capture.response_headers(), api_key);
+    let trace = redact_http_debug_text(&debug_capture.trace(), api_key);
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let error = if stderr.is_empty() {
+        let stdout = stdout_text.trim().to_string();
+        let error = if stderr_text.is_empty() {
             format!("curl failed with status {}", output.status)
         } else {
-            stderr
+            stderr_text.clone()
         };
-        crate::append_debug_trace_global(format!(
-            "[http][curl-json] curl_error method={} url={} transport={} exit_status={} error={}",
+        let line = format!(
+            "[http][curl-json] curl_error method={} url={} transport={} exit_status={} error={} stdout={}",
             method,
             url,
-            if force_http1_1 { "http1.1" } else { "default" },
+            transport,
             output.status,
-            truncate_http_error(&error)
-        ));
+            truncate_http_error(&error),
+            truncate_http_debug_payload(&stdout)
+        );
+        eprintln!("{line}");
+        crate::append_debug_trace_global(line);
+        emit_curl_json_diagnostics(
+            method,
+            url,
+            transport,
+            &output.status.to_string(),
+            Some(&error),
+            &request_headers,
+            &request_body,
+            &response_headers,
+            &response_body,
+            response_status_trailer.as_deref(),
+            &stderr_text,
+            &trace,
+        );
         return Err(error);
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout = stdout_text;
     let (body_text, status_text) = stdout
         .rsplit_once(HTTP_STATUS_MARKER)
         .ok_or_else(|| "Invalid HTTP response trailer".to_string())?;
@@ -404,22 +579,28 @@ fn execute_curl_json_response_once(
     let normalized_body = body_text.trim();
 
     if normalized_body.is_empty() {
-        crate::append_debug_trace_global(format!(
+        let line = format!(
             "[http][curl-json] empty_json_body method={} url={} transport={} status={}",
-            method,
-            url,
-            if force_http1_1 { "http1.1" } else { "default" },
-            status
-        ));
+            method, url, transport, status
+        );
+        eprintln!("{line}");
+        crate::append_debug_trace_global(line);
         if !(200..300).contains(&status) {
-            append_http_error_debug_log(
-                "http-json",
+            emit_curl_json_diagnostics(
                 method,
                 url,
-                status,
+                transport,
+                &output.status.to_string(),
+                None,
+                &request_headers,
+                &request_body,
+                &response_headers,
                 "",
-                Some(if force_http1_1 { "http1.1" } else { "default" }),
+                Some(status_text.trim()),
+                &stderr_text,
+                &trace,
             );
+            append_http_error_debug_log("http-json", method, url, status, "", Some(transport));
         }
         return Ok(HttpJsonResponse {
             status,
@@ -429,15 +610,17 @@ fn execute_curl_json_response_once(
 
     let parsed = serde_json::from_str(normalized_body).map_err(|error| {
         let message = format!("Invalid JSON response: {error}");
-        crate::append_debug_trace_global(format!(
+        let line = format!(
             "[http][curl-json] invalid_json method={} url={} transport={} status={} body={} error={}",
             method,
             url,
-            if force_http1_1 { "http1.1" } else { "default" },
+            transport,
             status,
             normalized_body,
             truncate_http_error(&message)
-        ));
+        );
+        eprintln!("{line}");
+        crate::append_debug_trace_global(line);
         message
     })?;
     let response = HttpJsonResponse {
@@ -445,13 +628,27 @@ fn execute_curl_json_response_once(
         body: parsed,
     };
     if !(200..300).contains(&response.status) {
+        emit_curl_json_diagnostics(
+            method,
+            url,
+            transport,
+            &output.status.to_string(),
+            None,
+            &request_headers,
+            &request_body,
+            &response_headers,
+            normalized_body,
+            Some(status_text.trim()),
+            &stderr_text,
+            &trace,
+        );
         append_http_error_debug_log(
             "http-json",
             method,
             url,
             response.status,
             normalized_body,
-            Some(if force_http1_1 { "http1.1" } else { "default" }),
+            Some(transport),
         );
     }
     if allow_official_reauth_retry && response.status == 401 {
@@ -493,6 +690,14 @@ fn truncate_http_error(raw: &str) -> String {
         let prefix = trimmed.chars().take(LIMIT).collect::<String>();
         format!("{prefix}...")
     }
+}
+
+fn truncate_http_debug_payload(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    truncate_http_error(trimmed)
 }
 
 pub(crate) fn run_curl_json(

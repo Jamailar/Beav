@@ -26,8 +26,6 @@ use crate::{
     workspace_root, AppState,
 };
 
-const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
-
 pub struct AppCliExecutor<'a> {
     app: &'a AppHandle,
     state: &'a State<'a, AppState>,
@@ -35,6 +33,8 @@ pub struct AppCliExecutor<'a> {
     session_id: Option<&'a str>,
     tool_call_id: Option<&'a str>,
 }
+
+const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
 
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
@@ -4183,7 +4183,6 @@ fn help_response(namespace: Option<&str>) -> Value {
             "media delete --asset-id <assetId>",
         ],
         "image" => vec![
-            "skills invoke --name image-prompt-optimizer  # before the first image generate in chat-driven workflows",
             "image generate --prompt \"...\" [--mode reference-guided] [--reference-images /abs/a.png,/abs/b.png]",
             "image generate --prompt \"...\" [--subject-ids subject_a,subject_b]",
             "image history list",
@@ -4306,44 +4305,6 @@ mod tests {
             is_builtin: Some(true),
             disabled,
         }
-    }
-
-    #[test]
-    fn preflight_skill_activation_item_requires_runtime_compatibility() {
-        let skills = vec![test_skill(
-            IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
-            "chatroom, redclaw, image-generation",
-            Some(false),
-        )];
-
-        let item =
-            preflight_skill_activation_item(&skills, "redclaw", IMAGE_PROMPT_OPTIMIZER_SKILL_NAME);
-
-        assert_eq!(
-            item,
-            Some((
-                IMAGE_PROMPT_OPTIMIZER_SKILL_NAME.to_string(),
-                "image-prompt-optimizer desc".to_string(),
-            ))
-        );
-        assert_eq!(
-            preflight_skill_activation_item(&skills, "wander", IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,),
-            None
-        );
-    }
-
-    #[test]
-    fn preflight_skill_activation_item_skips_disabled_skill() {
-        let skills = vec![test_skill(
-            IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
-            "chatroom, redclaw, image-generation",
-            Some(true),
-        )];
-
-        assert_eq!(
-            preflight_skill_activation_item(&skills, "redclaw", IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,),
-            None
-        );
     }
 
     #[test]

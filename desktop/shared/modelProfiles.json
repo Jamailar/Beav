@@ -99,6 +99,18 @@
         "notes": "Speech-to-text family."
     },
     {
+        "id": "openai-image-family",
+        "vendor": "openai",
+        "displayName": "OpenAI image generation models",
+        "matchers": [
+            "\\bimage-\\d+\\b",
+            "\\bgpt-image-\\d+\\b"
+        ],
+        "capabilities": ["image"],
+        "inputCapabilities": [],
+        "notes": "Image generation family, including image-2 and GPT Image variants."
+    },
+    {
         "id": "anthropic-claude-4-family",
         "vendor": "anthropic",
         "displayName": "Claude 4 family",
