@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
+use crate::cli_runtime::{prepare_cli_launch, CliSandboxSpec};
 use crate::process_utils::configure_background_command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,15 +19,13 @@ pub fn spawn_cli_terminal(
     argv: &[String],
     cwd: &Path,
     env: &BTreeMap<String, String>,
+    sandbox: &CliSandboxSpec,
 ) -> Result<CliTerminalHandle, String> {
-    let program = argv
-        .first()
-        .cloned()
-        .ok_or_else(|| "cli execute requires argv[0]".to_string())?;
-    let mut command = Command::new(program);
-    command.args(&argv[1..]);
+    let launch = prepare_cli_launch(sandbox, argv, env)?;
+    let mut command = Command::new(launch.program);
+    command.args(&launch.args);
     command.current_dir(cwd);
-    command.envs(env);
+    command.envs(&launch.env);
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -46,7 +45,7 @@ mod tests {
     fn spawn_cli_terminal_rejects_empty_argv() {
         let env = BTreeMap::new();
         let cwd = std::env::temp_dir();
-        let error = match spawn_cli_terminal(&[], &cwd, &env) {
+        let error = match spawn_cli_terminal(&[], &cwd, &env, &CliSandboxSpec::default()) {
             Ok(_) => panic!("empty argv should fail"),
             Err(error) => error,
         };
