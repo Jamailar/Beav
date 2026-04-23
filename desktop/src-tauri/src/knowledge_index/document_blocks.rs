@@ -31,6 +31,8 @@ pub(crate) struct DocumentBlockRecord {
     pub file_extension: Option<String>,
     pub title: Option<String>,
     pub language: Option<String>,
+    pub content_origin: String,
+    pub ocr_confidence: Option<f64>,
     pub jurisdiction: Option<String>,
     pub authority: Option<String>,
     pub authority_level: Option<i64>,
@@ -62,6 +64,8 @@ pub(crate) struct DocumentBlockHit {
     pub file_extension: Option<String>,
     pub title: Option<String>,
     pub language: Option<String>,
+    pub content_origin: String,
+    pub ocr_confidence: Option<f64>,
     pub jurisdiction: Option<String>,
     pub authority: Option<String>,
     pub authority_level: Option<i64>,
@@ -106,16 +110,17 @@ pub(crate) fn replace_blocks(
                 r#"
                 INSERT INTO knowledge_document_blocks (
                     block_id, document_id, source_id, source_name, root_path, absolute_path,
-                    relative_path, file_extension, title, language, jurisdiction, authority,
-                    authority_level, effective_date, expiry_date, document_type,
-                    is_superseded, page, block_type, section_path_json, block_index, line_start,
-                    line_end, text, normalized_text, updated_at
+                    relative_path, file_extension, title, language, content_origin,
+                    ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+                    expiry_date, document_type, is_superseded, page, block_type,
+                    section_path_json, block_index, line_start, line_end, text,
+                    normalized_text, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10, ?11, ?12,
                     ?13, ?14, ?15, ?16, ?17, ?18,
                     ?19, ?20, ?21, ?22, ?23, ?24,
-                    ?25, ?26
+                    ?25, ?26, ?27, ?28
                 )
                 "#,
             )
@@ -132,6 +137,8 @@ pub(crate) fn replace_blocks(
                 block.file_extension,
                 block.title,
                 block.language,
+                block.content_origin,
+                block.ocr_confidence,
                 block.jurisdiction,
                 block.authority,
                 block.authority_level,
@@ -205,10 +212,10 @@ pub(crate) fn search_blocks(
         .prepare(&format!(
             r#"
             SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
-                   relative_path, file_extension, title, language, jurisdiction, authority,
-                   authority_level, effective_date, expiry_date, document_type,
-                   is_superseded, page, block_type, section_path_json, block_index,
-                   line_start, line_end, text
+                   relative_path, file_extension, title, language, content_origin,
+                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+                   expiry_date, document_type, is_superseded, page, block_type,
+                   section_path_json, block_index, line_start, line_end, text
             FROM knowledge_document_blocks
             WHERE source_id = ?1
               AND ({})
@@ -238,6 +245,8 @@ pub(crate) fn search_blocks(
             file_extension,
             title,
             language,
+            content_origin,
+            ocr_confidence,
             jurisdiction,
             authority,
             authority_level,
@@ -278,7 +287,8 @@ pub(crate) fn search_blocks(
             is_superseded,
         };
         let legal_score = legal_priority_score(&legal_metadata, &today);
-        let total_score = lexical_score + legal_score;
+        let total_score =
+            lexical_score + legal_score + confidence_score(&content_origin, ocr_confidence);
         scored_hits.push(DocumentBlockHit {
             block_id,
             document_id,
@@ -290,6 +300,8 @@ pub(crate) fn search_blocks(
             file_extension,
             title,
             language,
+            content_origin,
+            ocr_confidence,
             jurisdiction,
             authority,
             authority_level,
@@ -335,10 +347,11 @@ pub(crate) fn read_block(
     conn.query_row(
         r#"
         SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
-               relative_path, file_extension, title, language, jurisdiction, authority,
-               authority_level, effective_date, expiry_date, document_type,
-               is_superseded, page, block_type, section_path_json, block_index,
-               line_start, line_end, text, normalized_text, updated_at
+               relative_path, file_extension, title, language, content_origin,
+               ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+               expiry_date, document_type, is_superseded, page, block_type,
+               section_path_json, block_index, line_start, line_end, text,
+               normalized_text, updated_at
         FROM knowledge_document_blocks
         WHERE block_id = ?1
         "#,
@@ -355,22 +368,24 @@ pub(crate) fn read_block(
                 file_extension: row.get(7)?,
                 title: row.get(8)?,
                 language: row.get(9)?,
-                jurisdiction: row.get(10)?,
-                authority: row.get(11)?,
-                authority_level: row.get(12)?,
-                effective_date: row.get(13)?,
-                expiry_date: row.get(14)?,
-                document_type: row.get(15)?,
-                is_superseded: row.get(16)?,
-                page: row.get(17)?,
-                block_type: row.get(18)?,
-                section_path_json: row.get(19)?,
-                block_index: row.get(20)?,
-                line_start: row.get(21)?,
-                line_end: row.get(22)?,
-                text: row.get(23)?,
-                normalized_text: row.get(24)?,
-                updated_at: row.get(25)?,
+                content_origin: row.get(10)?,
+                ocr_confidence: row.get(11)?,
+                jurisdiction: row.get(12)?,
+                authority: row.get(13)?,
+                authority_level: row.get(14)?,
+                effective_date: row.get(15)?,
+                expiry_date: row.get(16)?,
+                document_type: row.get(17)?,
+                is_superseded: row.get(18)?,
+                page: row.get(19)?,
+                block_type: row.get(20)?,
+                section_path_json: row.get(21)?,
+                block_index: row.get(22)?,
+                line_start: row.get(23)?,
+                line_end: row.get(24)?,
+                text: row.get(25)?,
+                normalized_text: row.get(26)?,
+                updated_at: row.get(27)?,
             })
         },
     )
@@ -509,6 +524,8 @@ fn build_blocks_for_file(
         parser_version: canonical.parser_info.parser_version.clone(),
         language: canonical.language.clone(),
         title: canonical.title.clone(),
+        content_origin: canonical.content_origin.clone(),
+        ocr_average_confidence: canonical.ocr_average_confidence,
         jurisdiction: canonical.legal_metadata.jurisdiction.clone(),
         authority: canonical.legal_metadata.authority.clone(),
         authority_level: canonical.legal_metadata.authority_level,
@@ -551,6 +568,8 @@ fn block_records_from_document(
             file_extension: Some(document.source_type.clone()),
             title: document.title.clone(),
             language: block.language.clone().or_else(|| document.language.clone()),
+            content_origin: block.content_origin.clone(),
+            ocr_confidence: block.ocr_confidence,
             jurisdiction: document.legal_metadata.jurisdiction.clone(),
             authority: document.legal_metadata.authority.clone(),
             authority_level: document.legal_metadata.authority_level,
@@ -701,6 +720,19 @@ fn legal_priority_score(metadata: &LegalMetadata, today: &str) -> f64 {
     score
 }
 
+fn confidence_score(content_origin: &str, ocr_confidence: Option<f64>) -> f64 {
+    if content_origin != "ocr" {
+        return 0.0;
+    }
+    match ocr_confidence {
+        Some(confidence) if confidence >= 0.9 => -0.5,
+        Some(confidence) if confidence >= 0.75 => -2.0,
+        Some(confidence) if confidence >= 0.6 => -5.0,
+        Some(_) => -10.0,
+        None => -8.0,
+    }
+}
+
 fn current_iso_date() -> String {
     OffsetDateTime::now_utc().date().to_string()
 }
@@ -720,6 +752,8 @@ fn row_to_search_tuple(
         Option<String>,
         Option<String>,
         Option<String>,
+        String,
+        Option<f64>,
         Option<String>,
         Option<String>,
         Option<i64>,
@@ -762,6 +796,8 @@ fn row_to_search_tuple(
         row.get(21)?,
         row.get(22)?,
         row.get(23)?,
+        row.get(24)?,
+        row.get(25)?,
     ))
 }
 
@@ -857,5 +893,11 @@ mod tests {
             legal_priority_score(&current, "2026-04-22")
                 > legal_priority_score(&superseded, "2026-04-22")
         );
+    }
+
+    #[test]
+    fn low_confidence_ocr_is_penalized() {
+        assert!(confidence_score("ocr", Some(0.52)) < confidence_score("ocr", Some(0.92)));
+        assert_eq!(confidence_score("native", None), 0.0);
     }
 }

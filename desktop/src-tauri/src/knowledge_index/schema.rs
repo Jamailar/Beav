@@ -96,6 +96,8 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             file_extension TEXT,
             title TEXT,
             language TEXT,
+            content_origin TEXT NOT NULL DEFAULT 'native',
+            ocr_confidence REAL,
             jurisdiction TEXT,
             authority TEXT,
             authority_level INTEGER,
@@ -153,6 +155,8 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             parser_version TEXT NOT NULL,
             language TEXT,
             title TEXT,
+            content_origin TEXT NOT NULL DEFAULT 'native',
+            ocr_average_confidence REAL,
             jurisdiction TEXT,
             authority TEXT,
             authority_level INTEGER,
@@ -192,6 +196,13 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         "section_path_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
+    ensure_column(
+        &conn,
+        "knowledge_document_blocks",
+        "content_origin",
+        "TEXT NOT NULL DEFAULT 'native'",
+    )?;
+    ensure_column(&conn, "knowledge_document_blocks", "ocr_confidence", "REAL")?;
     ensure_column(&conn, "knowledge_document_blocks", "jurisdiction", "TEXT")?;
     ensure_column(&conn, "knowledge_document_blocks", "authority", "TEXT")?;
     ensure_column(
@@ -208,6 +219,18 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         "knowledge_document_blocks",
         "is_superseded",
         "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &conn,
+        "knowledge_canonical_documents",
+        "content_origin",
+        "TEXT NOT NULL DEFAULT 'native'",
+    )?;
+    ensure_column(
+        &conn,
+        "knowledge_canonical_documents",
+        "ocr_average_confidence",
+        "REAL",
     )?;
     ensure_column(
         &conn,

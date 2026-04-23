@@ -177,6 +177,7 @@ pub fn execute_read(
             payload_string(arguments, "anchorId").filter(|value| !value.trim().is_empty())
         {
             if let Some(anchor) = citation_anchors::read_anchor(state, &anchor_id)? {
+                let block = document_blocks::read_block(state, &anchor.block_id)?;
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
                     "sourceId": anchor.source_id,
@@ -196,6 +197,8 @@ pub fn execute_read(
                     "charEnd": anchor.char_end,
                     "lineStart": anchor.line_start,
                     "lineEnd": anchor.line_end,
+                    "contentOrigin": block.as_ref().map(|item| item.content_origin.clone()),
+                    "ocrConfidence": block.as_ref().and_then(|item| item.ocr_confidence),
                     "content": truncate_chars(&anchor.quote_text, parse_usize(arguments, "maxChars", DEFAULT_READ_MAX_CHARS, 20_000))
                 }));
             }
@@ -219,6 +222,8 @@ pub fn execute_read(
                     "absolutePath": block.absolute_path,
                     "title": block.title,
                     "language": block.language,
+                    "contentOrigin": block.content_origin,
+                    "ocrConfidence": block.ocr_confidence,
                     "legalMetadata": {
                         "jurisdiction": block.jurisdiction,
                         "authority": block.authority,
@@ -547,6 +552,8 @@ fn execute_source_search(
                 "lineStart": index + 1,
                 "lineEnd": index + 1,
                 "lineNumber": index + 1,
+                "contentOrigin": Value::Null,
+                "ocrConfidence": Value::Null,
                 "legalMetadata": Value::Null,
                 "snippet": truncate_chars(line.trim(), snippet_chars),
             }));
@@ -592,6 +599,8 @@ fn build_hit_payloads_and_evidence_pack(
             "fileExtension": hit.file_extension,
             "title": hit.title,
             "language": hit.language,
+            "contentOrigin": hit.content_origin,
+            "ocrConfidence": hit.ocr_confidence,
             "legalMetadata": {
                 "jurisdiction": hit.jurisdiction,
                 "authority": hit.authority,
@@ -622,6 +631,8 @@ fn build_hit_payloads_and_evidence_pack(
             "page": hit.page,
             "blockType": hit.block_type,
             "sectionPath": hit.section_path,
+            "contentOrigin": hit.content_origin,
+            "ocrConfidence": hit.ocr_confidence,
             "legalMetadata": {
                 "jurisdiction": hit.jurisdiction,
                 "authority": hit.authority,

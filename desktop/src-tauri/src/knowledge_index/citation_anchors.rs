@@ -378,6 +378,8 @@ mod tests {
             file_extension: Some("txt".to_string()),
             title: Some("file".to_string()),
             language: Some("en".to_string()),
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
             jurisdiction: None,
             authority: None,
             authority_level: None,
