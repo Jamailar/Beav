@@ -13,6 +13,7 @@
 - `document_parse/legal_metadata.rs`: 法律元数据抽取与日期/法域识别
 - `document_parse/ocr.rs`: 扫描 PDF / 图片 OCR 解析
 - `hybrid.rs`: sparse expansion、dense lane、RRF 融合与离线评测
+- `evaluation.rs` (test-only): release gate fixture、grounding audit、发布阈值校验
 - `jobs.rs`: 异步任务和重建调度
 - `watcher.rs`: 目录监听
 - `fingerprint.rs`: 变更识别
@@ -30,6 +31,7 @@
 - 扫描 PDF 先走原生文本抽取；失败或为空时才回退到 OCR，避免把 native PDF 和 OCR PDF 混为一类
 - Stage 6 起 `knowledge.search` 默认走 hybrid，可通过 `retrievalMode=lexical` 关闭增强链路
 - hybrid 排序输出需要显式带 `retrievalLanes` 和 ranking breakdown，不能把 fusion / rerank 变成黑盒
+- Stage 7 起 release gate 依赖固定 fixture 测试；任一阈值不达标都应直接阻塞发布
 
 ## Verification
 
