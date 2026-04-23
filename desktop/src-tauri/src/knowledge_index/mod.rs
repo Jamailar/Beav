@@ -85,3 +85,17 @@ pub(crate) fn mark_indexed_now(state: &State<'_, AppState>) -> Result<(), String
     runtime.last_indexed_at = Some(now_iso());
     Ok(())
 }
+
+pub(crate) fn advisor_source_id(advisor_id: &str) -> String {
+    format!("advisor:{advisor_id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advisor_source_id_is_stable() {
+        assert_eq!(advisor_source_id("member-1"), "advisor:member-1");
+    }
+}

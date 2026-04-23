@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::{
     knowledge_index::{
+        advisor_source_id,
         canonical_store::replace_documents,
         catalog::{replace_catalog, KnowledgeCatalogSummary},
         citation_anchors::{build_anchors_for_blocks, replace_anchors},
@@ -328,6 +329,23 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
         let summary = summarize_document_source(source);
         files.extend(build_rows_for_doc_source(&summary)?);
         items.push(summary);
+    }
+    let advisors = crate::with_store(state, |store| Ok(store.advisors.clone()))?;
+    for advisor in advisors {
+        let root_path = crate::advisor_knowledge_dir(state, &advisor.id)?;
+        if !root_path.exists() {
+            continue;
+        }
+        let indexed = build_blocks_for_source(
+            state,
+            &advisor_source_id(&advisor.id),
+            &advisor.name,
+            &root_path,
+            &now_iso(),
+        )?;
+        anchors.extend(build_anchors_for_blocks(&indexed.blocks));
+        blocks.extend(indexed.blocks);
+        canonical_rows.extend(indexed.canonical_rows);
     }
 
     finalize_item_hash(&mut items, &files);

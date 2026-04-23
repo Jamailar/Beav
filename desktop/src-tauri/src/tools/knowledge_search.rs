@@ -6,7 +6,7 @@ use std::time::UNIX_EPOCH;
 use tauri::State;
 
 use crate::knowledge_index::{
-    citation_anchors, document_blocks,
+    advisor_source_id, citation_anchors, document_blocks,
     hybrid::RetrievalMode,
     query_profile::{self, QueryProfile},
 };
@@ -112,7 +112,7 @@ pub fn execute_grep(
     let query = payload_string(arguments, "query")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "redbox_fs(action=knowledge.search) requires query".to_string())?;
-    if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
+    if scope.source_id.is_some() {
         return execute_source_search(state, &scope, arguments, &query);
     }
     let pattern_text = search_pattern_for_scope(&scope, arguments)?;
@@ -176,7 +176,7 @@ pub fn execute_read(
     arguments: &Value,
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
-    if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
+    if scope.source_id.is_some() {
         if let Some(anchor_id) =
             payload_string(arguments, "anchorId").filter(|value| !value.trim().is_empty())
         {
@@ -317,9 +317,9 @@ fn resolve_scope(
         return Ok(KnowledgeScope {
             kind: KnowledgeScopeKind::Advisor,
             advisor_id: Some(advisor.0),
-            advisor_name: Some(advisor.1),
-            source_id: None,
-            source_name: None,
+            advisor_name: Some(advisor.1.clone()),
+            source_id: Some(advisor_source_id(&advisor_id)),
+            source_name: Some(advisor.1.clone()),
             root,
         });
     }
