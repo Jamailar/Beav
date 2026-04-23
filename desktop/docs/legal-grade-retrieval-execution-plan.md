@@ -1,8 +1,8 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-04-22
-execution_stage: stage3_completed
+last_updated: 2026-04-23
+execution_stage: stage4_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -326,6 +326,13 @@ Status: Current
 - 中英双语可用
 - 法律排序生效
 - 失效/现行状态进入检索逻辑
+
+### Progress Notes
+
+- 已补文档级法律元数据抽取：`jurisdiction / authority / authority_level / effective_date / expiry_date / document_type / is_superseded`
+- canonical document 与 block 索引已持久化法律元数据，并在 `knowledge.search/read` 返回 `legalMetadata`
+- 检索排序已升级为 `lexical score + legal score`，现行法规原文优先于评论解读，失效/废止文本默认降权并标记
+- 中英混合查询已切到统一归一化与 term-based candidate 检索
 
 ## Stage 5: OCR 与扫描件支持
 

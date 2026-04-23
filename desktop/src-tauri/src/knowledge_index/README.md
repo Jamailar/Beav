@@ -10,6 +10,7 @@
 - `citation_anchors.rs`: citation anchor 构建、读取和查询
 - `document_blocks.rs`: block 级索引构建与查询
 - `indexer.rs`: 索引构建
+- `document_parse/legal_metadata.rs`: 法律元数据抽取与日期/法域识别
 - `jobs.rs`: 异步任务和重建调度
 - `watcher.rs`: 目录监听
 - `fingerprint.rs`: 变更识别
@@ -21,6 +22,8 @@
 - index status 需要提供稳定的最小摘要，不返回大数据包
 - block 索引建立在 canonical document 层之上，不直接依赖原始文件扫描
 - 文件未变更时优先复用 canonical cache，避免重复解析
+- Stage 4 起 block 命中会附带 `legalMetadata`，并使用 `lexical score + legal score` 排序
+- 已失效/废止文档需要在结果里显式标记，不能只做隐藏降权
 
 ## Verification
 
