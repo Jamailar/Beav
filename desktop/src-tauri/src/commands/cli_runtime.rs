@@ -700,6 +700,7 @@ pub fn handle_cli_runtime_channel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli_runtime::CliInstallMethod;
 
     #[test]
     fn normalize_cli_runtime_input_accepts_kebab_case_scope() {

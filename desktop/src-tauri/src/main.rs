@@ -22,6 +22,7 @@ mod knowledge;
 mod knowledge_index;
 mod legacy_import;
 mod llm_transport;
+pub(crate) mod logging;
 mod manuscript_package;
 mod mcp;
 mod media_generation;
@@ -2082,7 +2083,15 @@ fn register_global_app_handle(app: AppHandle) {
 
 pub(crate) fn append_debug_trace_global(line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
-    eprintln!("{}", line);
+    logging::emit_legacy_line(
+        logging::event::LogSource::Host,
+        logging::event::LogLevel::Info,
+        "app.lifecycle",
+        "legacy.trace",
+        line.clone(),
+        Value::Null,
+        Some(line.clone()),
+    );
     if let Some(store) = GLOBAL_DEBUG_STORE.get() {
         write_debug_line_to_store(store, &line);
     }
@@ -2112,12 +2121,33 @@ fn build_chat_error_payload(error: &str, session_id: Option<String>) -> Value {
 
 pub(crate) fn append_debug_log_state(state: &State<'_, AppState>, line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
-    write_debug_line_to_store(&state.store, &line);
+    if let Ok(store) = state.store.lock() {
+        if !is_debug_log_enabled(&store) {
+            return;
+        }
+    }
+    logging::emit_legacy_line(
+        logging::event::LogSource::Host,
+        logging::event::LogLevel::Debug,
+        "app.lifecycle",
+        "legacy.debug",
+        line.clone(),
+        Value::Null,
+        Some(line),
+    );
 }
 
 pub(crate) fn append_debug_trace_state(state: &State<'_, AppState>, line: impl Into<String>) {
     let line = format!("{} | {}", now_iso(), line.into());
-    eprintln!("{}", line);
+    logging::emit_legacy_line(
+        logging::event::LogSource::Host,
+        logging::event::LogLevel::Info,
+        "app.lifecycle",
+        "legacy.trace",
+        line.clone(),
+        Value::Null,
+        Some(line.clone()),
+    );
     write_debug_line_to_store(&state.store, &line);
 }
 
@@ -2138,8 +2168,7 @@ fn log_timing_event(
         line.push_str(" | ");
         line.push_str(&extra_text);
     }
-    eprintln!("{}", line);
-    append_debug_log_state(state, line);
+    append_debug_trace_state(state, line);
 }
 
 fn redclaw_state_value(state: &RedclawStateRecord) -> Value {
@@ -7355,19 +7384,48 @@ fn main() {
     let store_path = build_store_path();
     let mut store = load_store(&store_path);
     if let Err(error) = normalize_workspace_dir_setting(&mut store) {
-        eprintln!("[RedBox workspace compatibility] {error}");
+        logging::emit_legacy_line(
+            logging::event::LogSource::Host,
+            logging::event::LogLevel::Warn,
+            "workspace",
+            "startup.workspace_compatibility_failed",
+            format!("[RedBox workspace compatibility] {error}"),
+            json!({ "error": error }),
+            None,
+        );
     }
     if let Err(error) = auth::migrate_legacy_auth_store(&store_path, &mut store) {
-        eprintln!("[RedBox auth migrate] {error}");
+        logging::emit_legacy_line(
+            logging::event::LogSource::Host,
+            logging::event::LogLevel::Warn,
+            "auth",
+            "startup.auth_migrate_failed",
+            format!("[RedBox auth migrate] {error}"),
+            json!({ "error": error }),
+            None,
+        );
     }
     let startup_migration_status = probe_startup_migration(&store, &store_path);
     sync_redclaw_job_definitions(&mut store);
     if let Err(error) = persist_store(&store_path, &store) {
-        eprintln!("[RedBox store persist] {error}");
+        logging::emit_legacy_line(
+            logging::event::LogSource::Host,
+            logging::event::LogLevel::Warn,
+            "app.lifecycle",
+            "startup.persist_store_failed",
+            format!("[RedBox store persist] {error}"),
+            json!({ "error": error }),
+            None,
+        );
     }
     let initial_workspace_root =
         workspace_root_from_snapshot(&store.settings, &store.active_space_id, &store_path)
             .unwrap_or_else(|_| preferred_workspace_dir());
+    let store_root = store_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let _ = logging::initialize_logging(store_root, &store.settings);
     let shared_store = Arc::new(Mutex::new(store));
     register_global_debug_store(Arc::clone(&shared_store));
 
@@ -7418,34 +7476,93 @@ fn main() {
             register_global_app_handle(app.handle().clone());
             let _ = app.emit("indexing:status", default_indexing_stats());
             let state = app.state::<AppState>();
+            if let Ok(Some(report)) = logging::create_startup_recovery_report_if_needed(&state) {
+                let _ = app.emit("diagnostics:report-pending", json!(report));
+            }
             if let Err(error) = knowledge_index::initialize(app.handle(), &state) {
-                eprintln!("[RedBox knowledge index init] {error}");
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "workspace",
+                    "startup.knowledge_index_init_failed",
+                    format!("[RedBox knowledge index init] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
             }
             if let Err(error) = auth::initialize_auth_runtime(app.handle(), &state) {
-                eprintln!("[RedBox auth init] {error}");
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "auth",
+                    "startup.auth_init_failed",
+                    format!("[RedBox auth init] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
             }
             if let Err(error) = ensure_redclaw_profile_files(&state) {
-                eprintln!("[RedBox redclaw profile init] {error}");
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "daemon",
+                    "startup.redclaw_profile_init_failed",
+                    format!("[RedBox redclaw profile init] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
             }
             if let Err(error) =
                 commands::redclaw::ensure_redclaw_runtime_running(app.handle(), &state)
             {
-                eprintln!("[RedBox redclaw runtime restore] {error}");
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "daemon",
+                    "startup.redclaw_runtime_restore_failed",
+                    format!("[RedBox redclaw runtime restore] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
             }
             if let Err(error) = commands::assistant_daemon::ensure_assistant_daemon_running(
                 app.handle(),
                 &state,
                 true,
             ) {
-                eprintln!("[RedBox assistant daemon restore] {error}");
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "daemon",
+                    "startup.assistant_daemon_restore_failed",
+                    format!("[RedBox assistant daemon restore] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
             }
             if let Err(error) = skills::refresh_skill_store_catalog(&state) {
-                eprintln!("[RedBox skill catalog refresh] {error}");
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "runtime.task",
+                    "startup.skill_catalog_refresh_failed",
+                    format!("[RedBox skill catalog refresh] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
             }
             if let Err(error) =
                 refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])
             {
-                eprintln!("[RedBox runtime warmup] {error}");
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "runtime.task",
+                    "startup.runtime_warmup_failed",
+                    format!("[RedBox runtime warmup] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
             }
             {
                 let auth_bootstrap_app = app.handle().clone();
@@ -7457,7 +7574,15 @@ fn main() {
                         "app-setup",
                     ) {
                         if error != "官方账号未登录" {
-                            eprintln!("[RedBox official auth bootstrap] {error}");
+                            logging::emit_legacy_line(
+                                logging::event::LogSource::Host,
+                                logging::event::LogLevel::Warn,
+                                "auth",
+                                "startup.official_auth_bootstrap_failed",
+                                format!("[RedBox official auth bootstrap] {error}"),
+                                json!({ "error": error }),
+                                None,
+                            );
                         }
                     }
                 });
@@ -7466,6 +7591,14 @@ fn main() {
             let _ = run_ytdlp_auto_updater(app.handle().clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run RedBox");
+        .build(tauri::generate_context!())
+        .expect("failed to build RedBox")
+        .run(|_, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
+                logging::mark_clean_shutdown_global();
+            }
+        });
 }

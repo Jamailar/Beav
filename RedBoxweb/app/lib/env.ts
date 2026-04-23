@@ -9,6 +9,10 @@ const syncRequiredEnvKeys = [
     'SYNC_AUTH_TOKEN',
 ] as const;
 
+export interface DiagnosticsEnv {
+    DIAGNOSTICS_STORAGE_DIR: string;
+}
+
 export interface PublicEnv {
     OSS_PUBLIC_BASE_URL: string;
 }
@@ -36,6 +40,7 @@ function readRawEnv() {
         OSS_ACCESS_KEY_SECRET: process.env.OSS_ACCESS_KEY_SECRET,
         OSS_PUBLIC_BASE_URL: process.env.OSS_PUBLIC_BASE_URL,
         SYNC_AUTH_TOKEN: process.env.SYNC_AUTH_TOKEN,
+        DIAGNOSTICS_STORAGE_DIR: process.env.DIAGNOSTICS_STORAGE_DIR,
     } satisfies Record<string, string | undefined>;
 }
 
@@ -112,4 +117,22 @@ export function getSyncEnv(): SyncEnv {
         OSS_PUBLIC_BASE_URL: values.OSS_PUBLIC_BASE_URL!,
         SYNC_AUTH_TOKEN: values.SYNC_AUTH_TOKEN!,
     };
+}
+
+export function getOptionalDiagnosticsEnv(): DiagnosticsEnv | null {
+    const storageDir = String(process.env.DIAGNOSTICS_STORAGE_DIR || '').trim();
+    if (!storageDir) {
+        return null;
+    }
+    return {
+        DIAGNOSTICS_STORAGE_DIR: storageDir,
+    };
+}
+
+export function getDiagnosticsEnv(): DiagnosticsEnv {
+    const env = getOptionalDiagnosticsEnv();
+    if (!env) {
+        throw new Error('Missing required environment variables: DIAGNOSTICS_STORAGE_DIR');
+    }
+    return env;
 }

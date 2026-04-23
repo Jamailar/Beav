@@ -6,7 +6,7 @@ use std::thread;
 
 use crate::{
     configure_background_command, decode_base64_bytes, normalize_base_url, payload_field,
-    payload_string, run_curl_bytes, run_curl_json, run_curl_json_response,
+    payload_string, run_curl_bytes, run_curl_json, run_curl_json_response, HTTP_STATUS_MARKER,
 };
 
 const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
@@ -524,6 +524,9 @@ fn run_curl_form_json(
             .arg("-F")
             .arg(format!("{name}=@{}", file_path.display()));
     }
+    command
+        .arg("-w")
+        .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"));
     let output_result = command.output().map_err(|error| error.to_string());
     for path in temp_field_paths {
         let _ = fs::remove_file(path);
@@ -537,11 +540,45 @@ fn run_curl_form_json(
             stderr
         });
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let (body_text, status_text) = stdout
+        .rsplit_once(HTTP_STATUS_MARKER)
+        .ok_or_else(|| "Invalid HTTP response trailer".to_string())?;
+    let status = status_text
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| format!("Invalid HTTP status code: {error}"))?;
+    let normalized_body = body_text.trim();
+    if normalized_body.is_empty() {
+        if !(200..300).contains(&status) {
+            let details = crate::http_error_details_from_text(status, "");
+            crate::append_debug_trace_global(crate::http_error_debug_line(
+                "http-form-json",
+                method,
+                url,
+                &details,
+            ));
+        }
         return Ok(json!({}));
     }
-    serde_json::from_str(&stdout).map_err(|error| format!("Invalid JSON response: {error}"))
+    let parsed = serde_json::from_str(normalized_body).map_err(|error| {
+        let message = format!("Invalid JSON response: {error}");
+        crate::append_debug_trace_global(format!(
+            "[http][curl-form-json] invalid_json method={} url={} status={} body={} error={}",
+            method, url, status, normalized_body, message
+        ));
+        message
+    })?;
+    if !(200..300).contains(&status) {
+        let details = crate::http_error_details_from_text(status, normalized_body);
+        crate::append_debug_trace_global(crate::http_error_debug_line(
+            "http-form-json",
+            method,
+            url,
+            &details,
+        ));
+    }
+    Ok(parsed)
 }
 
 fn extract_reference_images(payload: &Value, max_count: usize) -> Vec<String> {

@@ -280,6 +280,37 @@ function buildFallbackResponse(channel: string, error: unknown): any {
       }
     };
   }
+  if (channel === 'logs:get-status') {
+    return {
+      enabled: true,
+      logDirectory: '',
+      reportDirectory: '',
+      retentionDays: 7,
+      maxFileMb: 10,
+      recentPreviewLimit: 200,
+      uploadConfigured: false,
+      uploadEndpoint: null,
+      pendingCount: 0,
+      debugVerboseEnabled: false,
+      previousUncleanShutdown: false,
+    };
+  }
+  if (channel === 'logs:get-recent') {
+    return { lines: [] };
+  }
+  if (channel === 'logs:list-pending-reports') {
+    return [];
+  }
+  if (
+    channel === 'logs:open-dir'
+    || channel === 'logs:export-bundle'
+    || channel === 'logs:upload-report'
+    || channel === 'logs:dismiss-report'
+    || channel === 'logs:set-upload-consent'
+    || channel === 'logs:append-renderer'
+  ) {
+    return { success: false, error: `RedBox diagnostics action failed for "${channel}": ${message}` };
+  }
   if (
     channel.endsWith(':list')
     || channel.includes('get-sessions')
@@ -543,6 +574,17 @@ function createIpcRenderer() {
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
       getRuntimeSummary: () => invokeChannel('debug:get-runtime-summary'),
       openLogDir: () => invokeChannel('debug:open-log-dir')
+    },
+    logs: {
+      getStatus: () => invokeChannel('logs:get-status'),
+      getRecent: (limit?: number) => invokeChannel('logs:get-recent', { limit }),
+      openDir: () => invokeChannel('logs:open-dir'),
+      listPendingReports: () => invokeChannel('logs:list-pending-reports'),
+      exportBundle: (reportId?: string, payload?: { includeAdvancedContext?: boolean }) => invokeChannel('logs:export-bundle', { reportId, ...(payload || {}) }),
+      uploadReport: (reportId: string) => invokeChannel('logs:upload-report', { reportId }),
+      dismissReport: (reportId: string) => invokeChannel('logs:dismiss-report', { reportId }),
+      setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => invokeChannel('logs:set-upload-consent', payload),
+      appendRenderer: (payload: { level?: 'trace' | 'debug' | 'info' | 'warn' | 'error'; category?: string; event?: string; message?: string; fields?: unknown }) => invokeChannel('logs:append-renderer', payload),
     },
     startupMigration: {
       getStatus: <T = Record<string, unknown>>() => invokeChannelGuarded<T>(

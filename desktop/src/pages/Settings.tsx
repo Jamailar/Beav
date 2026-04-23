@@ -65,6 +65,8 @@ import type {
   CliRuntimeEnvironmentRecord,
   CliRuntimeEnvironmentScope,
   CliRuntimeToolRecord,
+  DiagnosticsLogStatus,
+  DiagnosticsPendingReport,
 } from '../types';
 import {
   REDBOX_OFFICIAL_VIDEO_BASE_URL,
@@ -403,7 +405,7 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
 
 export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
     model_name: '',
@@ -437,6 +439,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     chat_max_tokens_deepseek: String(DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
     wander_deep_think_enabled: false,
     debug_log_enabled: false,
+    diagnostics_upload_consent: 'prompt',
+    diagnostics_include_advanced_context: false,
+    diagnostics_auto_send_same_crash: false,
+    diagnostics_last_prompted_at: '',
+    release_log_retention_days: '7',
+    release_log_max_file_mb: '10',
     developer_mode_enabled: false,
     developer_mode_unlocked_at: '',
   });
@@ -463,6 +471,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [imageModelStatus, setImageModelStatus] = useState('');
   const [recentDebugLogs, setRecentDebugLogs] = useState<string[]>([]);
   const [isDebugLogsLoading, setIsDebugLogsLoading] = useState(false);
+  const [logStatus, setLogStatus] = useState<DiagnosticsLogStatus | null>(null);
+  const [pendingDiagnosticReports, setPendingDiagnosticReports] = useState<DiagnosticsPendingReport[]>([]);
+  const [diagnosticsActionBusy, setDiagnosticsActionBusy] = useState<string | null>(null);
   const [toolDiagnostics, setToolDiagnostics] = useState<ToolDiagnosticDescriptor[]>([]);
   const [toolDiagnosticResults, setToolDiagnosticResults] = useState<Record<string, ToolDiagnosticRunResult | undefined>>({});
   const [toolDiagnosticRunning, setToolDiagnosticRunning] = useState<Record<string, 'direct' | 'ai' | undefined>>({});
@@ -1833,7 +1844,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     const requestId = ++debugLogsLoadRequestRef.current;
     setIsDebugLogsLoading(true);
     try {
-      const result = await window.ipcRenderer.debug.getRecent(120);
+      const result = await window.ipcRenderer.logs.getRecent(120);
       if (requestId !== debugLogsLoadRequestRef.current) return;
       setRecentDebugLogs(Array.isArray(result?.lines) ? result.lines : []);
     } catch (e) {
@@ -1845,12 +1856,79 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
+  const loadLoggingStatus = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.logs.getStatus();
+      setLogStatus(result || null);
+    } catch (error) {
+      console.error('Failed to load logging status', error);
+    }
+  }, []);
+
+  const loadPendingDiagnosticReports = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.logs.listPendingReports();
+      setPendingDiagnosticReports(Array.isArray(result) ? result : []);
+    } catch (error) {
+      console.error('Failed to load pending diagnostic reports', error);
+    }
+  }, []);
+
   const openDebugLogDirectory = async () => {
-    const result = await window.ipcRenderer.debug.openLogDir();
+    const result = await window.ipcRenderer.logs.openDir();
     if (!result?.success && result?.error) {
       void appAlert(`打开日志目录失败：${result.error}`);
     }
   };
+
+  const handleExportDiagnosticBundle = useCallback(async (reportId?: string) => {
+    setDiagnosticsActionBusy(reportId || 'manual-export');
+    try {
+      const result = await window.ipcRenderer.logs.exportBundle(reportId, {
+        includeAdvancedContext: Boolean(formData.debug_log_enabled || formData.diagnostics_include_advanced_context),
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || '导出诊断包失败');
+      }
+      await appAlert(`诊断包已导出到：\n${result.path}`);
+      await Promise.all([loadLoggingStatus(), loadPendingDiagnosticReports()]);
+    } catch (error) {
+      void appAlert(`导出诊断包失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDiagnosticsActionBusy(null);
+    }
+  }, [formData.debug_log_enabled, formData.diagnostics_include_advanced_context, loadLoggingStatus, loadPendingDiagnosticReports]);
+
+  const handleUploadPendingReport = useCallback(async (reportId: string) => {
+    setDiagnosticsActionBusy(reportId);
+    try {
+      const result = await window.ipcRenderer.logs.uploadReport(reportId);
+      if (!result?.success) {
+        throw new Error(result?.error || '上传诊断报告失败');
+      }
+      await appAlert('诊断报告已上传。');
+      await Promise.all([loadLoggingStatus(), loadPendingDiagnosticReports()]);
+    } catch (error) {
+      void appAlert(`上传诊断报告失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDiagnosticsActionBusy(null);
+    }
+  }, [loadLoggingStatus, loadPendingDiagnosticReports]);
+
+  const handleDismissPendingReport = useCallback(async (reportId: string) => {
+    setDiagnosticsActionBusy(reportId);
+    try {
+      const result = await window.ipcRenderer.logs.dismissReport(reportId);
+      if (!result?.success) {
+        throw new Error(result?.error || '删除待发送报告失败');
+      }
+      await Promise.all([loadLoggingStatus(), loadPendingDiagnosticReports()]);
+    } catch (error) {
+      void appAlert(`删除待发送报告失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDiagnosticsActionBusy(null);
+    }
+  }, [loadLoggingStatus, loadPendingDiagnosticReports]);
 
   const loadToolDiagnostics = useCallback(async () => {
     try {
@@ -2787,6 +2865,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           chat_max_tokens_deepseek: sanitizeChatMaxTokensInput(String(settings.chat_max_tokens_deepseek || DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK), DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
           wander_deep_think_enabled: Boolean(settings.wander_deep_think_enabled),
           debug_log_enabled: Boolean(settings.debug_log_enabled),
+          diagnostics_upload_consent: settings.diagnostics_upload_consent === 'approved'
+            ? 'approved'
+            : settings.diagnostics_upload_consent === 'none'
+              ? 'none'
+              : 'prompt',
+          diagnostics_include_advanced_context: Boolean(settings.diagnostics_include_advanced_context),
+          diagnostics_auto_send_same_crash: Boolean(settings.diagnostics_auto_send_same_crash),
+          diagnostics_last_prompted_at: String(settings.diagnostics_last_prompted_at || ''),
+          release_log_retention_days: String(settings.release_log_retention_days || 7),
+          release_log_max_file_mb: String(settings.release_log_max_file_mb || 10),
           developer_mode_enabled: developerModeEnabled,
           developer_mode_unlocked_at: developerModeEnabled ? unlockedAt : '',
         });
@@ -3242,6 +3330,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
+          loadLoggingStatus(),
+          loadPendingDiagnosticReports(),
         ]);
       } else if (tab === 'tools') {
         await Promise.all([
@@ -3279,7 +3369,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
+    loadLoggingStatus,
     loadMcpRuntimeData,
+    loadPendingDiagnosticReports,
     loadRecentDebugLogs,
     loadRuntimeHooks,
     loadRuntimeRoles,
@@ -3339,6 +3431,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
     };
   }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
+
+  useEffect(() => {
+    const handleDiagnosticsReportPending = () => {
+      void Promise.all([
+        loadLoggingStatus(),
+        loadPendingDiagnosticReports(),
+      ]);
+    };
+    window.ipcRenderer.on('diagnostics:report-pending', handleDiagnosticsReportPending);
+    return () => {
+      window.ipcRenderer.off('diagnostics:report-pending', handleDiagnosticsReportPending);
+    };
+  }, [loadLoggingStatus, loadPendingDiagnosticReports]);
 
   useEffect(() => {
     if (!isActive) {
@@ -3560,6 +3665,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         formData.chat_max_tokens_deepseek,
         DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK,
       ));
+      const releaseLogRetentionDays = Math.max(1, Number(formData.release_log_retention_days || 7) || 7);
+      const releaseLogMaxFileMb = Math.max(1, Number(formData.release_log_max_file_mb || 10) || 10);
       if (formData.proxy_enabled && !String(formData.proxy_url || '').trim()) {
         throw new Error('启用代理时必须填写代理地址，例如 http://127.0.0.1:7890');
       }
@@ -3595,6 +3702,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         mcp_servers_json: JSON.stringify(mcpServers),
         redclaw_compact_target_tokens: compactTargetTokens,
         debug_log_enabled: Boolean(formData.debug_log_enabled),
+        diagnostics_upload_consent: formData.diagnostics_upload_consent,
+        diagnostics_include_advanced_context: Boolean(formData.diagnostics_include_advanced_context),
+        diagnostics_auto_send_same_crash: Boolean(formData.diagnostics_auto_send_same_crash),
+        diagnostics_last_prompted_at: formData.diagnostics_last_prompted_at || null,
+        release_log_retention_days: releaseLogRetentionDays,
+        release_log_max_file_mb: releaseLogMaxFileMb,
         developer_mode_enabled: Boolean(formData.developer_mode_enabled),
         developer_mode_unlocked_at: formData.developer_mode_enabled
           ? (formData.developer_mode_unlocked_at || new Date().toISOString())
@@ -3606,6 +3719,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (formData.debug_log_enabled) {
         await loadRecentDebugLogs();
       }
+      await Promise.all([
+        loadLoggingStatus(),
+        loadPendingDiagnosticReports(),
+      ]);
       setStatus('saved');
       setTimeout(() => setStatus('idle'), 2000);
     } catch (e) {
@@ -3664,6 +3781,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 isDebugLogsLoading={isDebugLogsLoading}
                 handleRefreshDebugLogs={loadRecentDebugLogs}
                 handleOpenDebugLogDir={openDebugLogDirectory}
+                logStatus={logStatus}
+                pendingReports={pendingDiagnosticReports}
+                diagnosticsActionBusy={diagnosticsActionBusy}
+                handleExportDiagnosticBundle={handleExportDiagnosticBundle}
+                handleUploadPendingReport={handleUploadPendingReport}
+                handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
               />
             )}

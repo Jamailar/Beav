@@ -46,7 +46,10 @@ mod tests {
     fn spawn_cli_terminal_rejects_empty_argv() {
         let env = BTreeMap::new();
         let cwd = std::env::temp_dir();
-        let error = spawn_cli_terminal(&[], &cwd, &env).expect_err("empty argv should fail");
+        let error = match spawn_cli_terminal(&[], &cwd, &env) {
+            Ok(_) => panic!("empty argv should fail"),
+            Err(error) => error,
+        };
         assert!(error.contains("argv[0]"));
     }
 }
