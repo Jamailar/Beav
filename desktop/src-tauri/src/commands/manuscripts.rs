@@ -1,3 +1,4 @@
+use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::manuscript_package::{
     animation_layers_from_remotion_scene, build_default_remotion_scene,
@@ -7290,20 +7291,38 @@ fn ffmpeg_output_path(
     )))
 }
 
-fn run_ffmpeg_args(args: &[String]) -> Result<(), String> {
-    let output = std::process::Command::new("ffmpeg")
-        .args(args)
-        .output()
-        .map_err(|error| format!("执行 ffmpeg 失败: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    Err(if stderr.is_empty() {
-        format!("ffmpeg 执行失败，退出码 {}", output.status)
-    } else {
-        stderr
-    })
+fn run_ffmpeg_args(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: &str,
+    cwd: &std::path::Path,
+    output_path: &std::path::Path,
+    args: &[String],
+) -> Result<(), String> {
+    let argv = std::iter::once("ffmpeg".to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>();
+    let _ = run_managed_cli_command(
+        app,
+        state,
+        CliExecuteRequest {
+            session_id: Some(session_id.to_string()),
+            runtime_id: Some("video-editor".to_string()),
+            tool_id: Some("ffmpeg".to_string()),
+            argv,
+            cwd: Some(cwd.to_string_lossy().to_string()),
+            verification_rules: vec![
+                CliVerifyRule::ExitCode { expected: Some(0) },
+                CliVerifyRule::FileExists {
+                    path: output_path.to_string_lossy().to_string(),
+                },
+            ],
+            ..CliExecuteRequest::default()
+        },
+        8_000,
+    )
+    .map_err(|error| format!("执行 ffmpeg 失败: {error}"))?;
+    Ok(())
 }
 
 fn ffmpeg_operation_input_path(
@@ -7370,6 +7389,9 @@ fn ffmpeg_recipe_duration_ms(operations: &[Value], fallback_duration_ms: i64) ->
 }
 
 fn execute_ffmpeg_edit_recipe(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session_id: &str,
     package_path: &std::path::Path,
     assets: &[Value],
     operations: &[Value],
@@ -7421,7 +7443,7 @@ fn execute_ffmpeg_edit_recipe(
                     "aac".to_string(),
                     output_path.display().to_string(),
                 ]);
-                run_ffmpeg_args(&args)?;
+                run_ffmpeg_args(app, state, session_id, package_path, &output_path, &args)?;
                 current_path = Some(output_path.clone());
                 segment_paths.push(output_path.clone());
                 artifacts.push(json!({
@@ -7485,7 +7507,7 @@ fn execute_ffmpeg_edit_recipe(
                     "libx264".to_string(),
                     output_path.display().to_string(),
                 ]);
-                run_ffmpeg_args(&args)?;
+                run_ffmpeg_args(app, state, session_id, package_path, &output_path, &args)?;
                 current_path = Some(output_path.clone());
                 segment_paths = vec![output_path.clone()];
                 artifacts.push(json!({
@@ -7536,7 +7558,7 @@ fn execute_ffmpeg_edit_recipe(
                     "aac".to_string(),
                     output_path.display().to_string(),
                 ];
-                run_ffmpeg_args(&args)?;
+                run_ffmpeg_args(app, state, session_id, package_path, &output_path, &args)?;
                 current_path = Some(output_path.clone());
                 artifacts.push(json!({
                     "type": op_name,
@@ -7567,7 +7589,7 @@ fn execute_ffmpeg_edit_recipe(
                     "libx264".to_string(),
                     output_path.display().to_string(),
                 ];
-                run_ffmpeg_args(&args)?;
+                run_ffmpeg_args(app, state, session_id, package_path, &output_path, &args)?;
                 current_path = Some(output_path.clone());
                 artifacts.push(json!({
                     "type": op_name,
@@ -7589,7 +7611,7 @@ fn execute_ffmpeg_edit_recipe(
                     "libx264".to_string(),
                     output_path.display().to_string(),
                 ];
-                run_ffmpeg_args(&args)?;
+                run_ffmpeg_args(app, state, session_id, package_path, &output_path, &args)?;
                 current_path = Some(output_path.clone());
                 artifacts.push(json!({
                     "type": op_name,
@@ -7626,7 +7648,7 @@ fn execute_ffmpeg_edit_recipe(
                     "-shortest".to_string(),
                     output_path.display().to_string(),
                 ];
-                run_ffmpeg_args(&args)?;
+                run_ffmpeg_args(app, state, session_id, package_path, &output_path, &args)?;
                 current_path = Some(output_path.clone());
                 artifacts.push(json!({
                     "type": op_name,
@@ -8873,8 +8895,15 @@ pub fn handle_manuscripts_channel(
                         &[],
                     )
                 });
-                let (output_path, artifacts) =
-                    execute_ffmpeg_edit_recipe(&full_path, &assets, &operations)?;
+                let session_id = format!("manuscript-video:{}", file_path.trim());
+                let (output_path, artifacts) = execute_ffmpeg_edit_recipe(
+                    app,
+                    state,
+                    &session_id,
+                    &full_path,
+                    &assets,
+                    &operations,
+                )?;
                 let fallback_duration_ms = remotion
                     .pointer("/baseMedia/durationMs")
                     .and_then(Value::as_i64)
@@ -11234,6 +11263,7 @@ Remotion 读取结果 JSON：{}\n\
                         export_dir.join(format!("{file_stem}-remotion-{}.{extension}", now_ms()))
                     });
                 let render_result = render_remotion_video(
+                    state,
                     &scene,
                     &output_path,
                     scale,

@@ -1,14 +1,16 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
-use std::process::Stdio;
 use std::thread;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
+    cli_runtime::{
+        execute_cli_command, load_cli_execution_snapshot, refresh_cli_execution, CliExecuteRequest,
+        CliExecutionStatus, CliVerifyRule,
+    },
     commands::manuscripts::{
         longform_layout_preset_catalog_value, longform_layout_preset_state_value,
         richpost_theme_catalog_value_for_manifest, richpost_theme_state_value,
@@ -2437,6 +2439,7 @@ fn emit_remotion_render_progress(
 }
 
 pub(crate) fn render_remotion_video(
+    state: &State<'_, AppState>,
     config: &Value,
     output_path: &Path,
     scale: Option<f64>,
@@ -2467,46 +2470,58 @@ pub(crate) fn render_remotion_video(
             None,
         );
     }
-    let mut command = std::process::Command::new("node");
-    command
-        .arg(&script_path)
-        .arg(&temp_config_path)
-        .arg(output_path);
+    let mut argv = vec![
+        "node".to_string(),
+        script_path.display().to_string(),
+        temp_config_path.display().to_string(),
+        output_path.display().to_string(),
+    ];
     if let Some(scale) = scale.filter(|value| value.is_finite() && *value > 0.0) {
-        command.arg(format!("{scale:.6}"));
+        argv.push(format!("{scale:.6}"));
     }
-    let mut child = command
-        .current_dir(&project_root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Remotion renderer stdout unavailable".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Remotion renderer stderr unavailable".to_string())?;
-    let stdout_reader = thread::spawn(move || -> Result<String, String> {
-        let mut content = String::new();
-        BufReader::new(stdout)
-            .read_to_string(&mut content)
-            .map_err(|error| error.to_string())?;
-        Ok(content)
-    });
-    let progress_app = app.cloned();
-    let progress_file_path = file_path.map(ToString::to_string);
-    let output_path_string = output_path.display().to_string();
-    let stderr_reader = thread::spawn(move || -> Result<String, String> {
-        let mut non_progress = Vec::new();
-        for line in BufReader::new(stderr).lines() {
-            let line = line.map_err(|error| error.to_string())?;
+    let session_id = file_path
+        .map(|value| format!("manuscript-video:{value}"))
+        .unwrap_or_else(|| "manuscript-video:remotion".to_string());
+    let execution = execute_cli_command(
+        app.ok_or_else(|| "Remotion render requires an app handle".to_string())?,
+        state,
+        CliExecuteRequest {
+            session_id: Some(session_id),
+            runtime_id: Some("video-editor".to_string()),
+            tool_id: Some("node".to_string()),
+            argv,
+            cwd: Some(project_root.display().to_string()),
+            use_pty: true,
+            verification_rules: vec![
+                CliVerifyRule::ExitCode { expected: Some(0) },
+                CliVerifyRule::FileExists {
+                    path: output_path.display().to_string(),
+                },
+            ],
+            ..CliExecuteRequest::default()
+        },
+    )?;
+
+    let mut stderr_len = 0usize;
+    let mut stderr_non_progress = Vec::<String>::new();
+    loop {
+        let _ = refresh_cli_execution(
+            app.ok_or_else(|| "Remotion render requires an app handle".to_string())?,
+            &execution.id,
+        )?;
+        let snapshot = load_cli_execution_snapshot(state, &execution.id, 256_000)?
+            .ok_or_else(|| format!("cli execution not found after launch: {}", execution.id))?;
+        let stderr_delta = if snapshot.stderr_tail.len() > stderr_len {
+            snapshot.stderr_tail[stderr_len..].to_string()
+        } else if snapshot.stderr_tail.len() < stderr_len {
+            snapshot.stderr_tail.clone()
+        } else {
+            String::new()
+        };
+        stderr_len = snapshot.stderr_tail.len();
+        for line in stderr_delta.lines() {
             if let Some(raw_payload) = line.strip_prefix(REMOTION_PROGRESS_PREFIX) {
-                if let (Some(app), Some(file_path)) =
-                    (progress_app.as_ref(), progress_file_path.as_deref())
-                {
+                if let (Some(app), Some(file_path)) = (app, file_path) {
                     if let Ok(payload) = serde_json::from_str::<Value>(raw_payload) {
                         emit_remotion_render_progress(
                             app,
@@ -2517,63 +2532,69 @@ pub(crate) fn render_remotion_video(
                                 .get("stitchStage")
                                 .and_then(Value::as_str)
                                 .unwrap_or("处理中"),
-                            Some(Path::new(&output_path_string)),
+                            Some(output_path),
                             None,
                         );
                     }
                 }
             } else if !line.trim().is_empty() {
-                non_progress.push(line);
+                stderr_non_progress.push(line.to_string());
             }
         }
-        Ok(non_progress.join("\n"))
-    });
-    let status = child.wait().map_err(|error| error.to_string())?;
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| "Failed to read Remotion renderer stdout".to_string())??;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| "Failed to read Remotion renderer stderr".to_string())??;
-    let _ = fs::remove_file(&temp_config_path);
-    if !status.success() {
-        if let (Some(app), Some(file_path)) = (app, file_path) {
-            emit_remotion_render_progress(
-                app,
-                file_path,
-                "error",
-                0,
-                "导出失败",
-                Some(output_path),
-                Some(&stderr),
-            );
+        if snapshot.execution.status != CliExecutionStatus::Running {
+            let _ = fs::remove_file(&temp_config_path);
+            if snapshot.execution.status != CliExecutionStatus::Completed
+                || snapshot.execution.verification_status
+                    == crate::cli_runtime::CliVerificationStatus::Failed
+            {
+                let stderr = if stderr_non_progress.is_empty() {
+                    snapshot.stderr_tail.trim().to_string()
+                } else {
+                    stderr_non_progress.join("\n")
+                };
+                if let (Some(app), Some(file_path)) = (app, file_path) {
+                    emit_remotion_render_progress(
+                        app,
+                        file_path,
+                        "error",
+                        0,
+                        "导出失败",
+                        Some(output_path),
+                        Some(&stderr),
+                    );
+                }
+                return Err(if stderr.is_empty() {
+                    format!(
+                        "Remotion render failed with status {:?}",
+                        snapshot.execution.status
+                    )
+                } else {
+                    stderr
+                });
+            }
+            let stdout = snapshot.stdout_tail.trim().to_string();
+            if let (Some(app), Some(file_path)) = (app, file_path) {
+                emit_remotion_render_progress(
+                    app,
+                    file_path,
+                    "done",
+                    100,
+                    "导出完成",
+                    Some(output_path),
+                    None,
+                );
+            }
+            if stdout.is_empty() {
+                return Ok(json!({
+                    "success": true,
+                    "outputLocation": output_path.display().to_string()
+                }));
+            }
+            return parse_json_value_from_text(&stdout)
+                .ok_or_else(|| "Remotion renderer returned invalid JSON".to_string());
         }
-        return Err(if stderr.is_empty() {
-            format!("Remotion render failed with status {}", status)
-        } else {
-            stderr
-        });
+        thread::sleep(Duration::from_millis(120));
     }
-    if let (Some(app), Some(file_path)) = (app, file_path) {
-        emit_remotion_render_progress(
-            app,
-            file_path,
-            "done",
-            100,
-            "导出完成",
-            Some(output_path),
-            None,
-        );
-    }
-    let stdout = stdout.trim().to_string();
-    if stdout.is_empty() {
-        return Ok(json!({
-            "success": true,
-            "outputLocation": output_path.display().to_string()
-        }));
-    }
-    parse_json_value_from_text(&stdout)
-        .ok_or_else(|| "Remotion renderer returned invalid JSON".to_string())
 }
 
 pub(crate) fn create_empty_otio_timeline(title: &str) -> Value {
