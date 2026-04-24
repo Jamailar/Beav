@@ -124,7 +124,8 @@ type VideoGenerationRequest = {
 
 type GenerationRequest = ImageGenerationRequest | VideoGenerationRequest;
 
-type FeedEntry = {
+type GenerationFeedEntry = {
+    kind: 'generation';
     id: string;
     createdAt: number;
     source: GenerationIntent['source'];
@@ -138,6 +139,19 @@ type FeedEntry = {
     error?: string;
     assets: GeneratedAsset[];
 };
+
+type AgentSessionFeedEntry = {
+    kind: 'agent-session';
+    id: string;
+    createdAt: number;
+    source: GenerationIntent['source'];
+    sourceTitle?: string;
+    sessionId: string;
+    contextId: string;
+    title: string;
+};
+
+type FeedEntry = GenerationFeedEntry | AgentSessionFeedEntry;
 
 interface GenerationStudioProps {
     isActive?: boolean;
@@ -382,15 +396,20 @@ function buildRequestSummary(request: GenerationRequest): string[] {
 
 function serializeFeedEntries(entries: FeedEntry[]): string {
     return JSON.stringify(
-        entries.map((entry) => ({
-            ...entry,
-            request: {
-                ...entry.request,
-                referenceItems: [],
-                firstClip: entry.request.type === 'video' ? null : undefined,
-                drivingAudio: entry.request.type === 'video' ? null : undefined,
-            },
-        })),
+        entries.map((entry) => {
+            if (!isGenerationFeedEntry(entry)) {
+                return entry;
+            }
+            return {
+                ...entry,
+                request: {
+                    ...entry.request,
+                    referenceItems: [],
+                    firstClip: entry.request.type === 'video' ? null : undefined,
+                    drivingAudio: entry.request.type === 'video' ? null : undefined,
+                },
+            };
+        }),
     );
 }
 
@@ -411,7 +430,34 @@ function readPersistedFeedEntries(): FeedEntry[] {
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
         return parsed
-            .filter((item) => item && typeof item === 'object' && typeof item.id === 'string')
+            .map((item) => {
+                if (!item || typeof item !== 'object' || typeof item.id !== 'string') {
+                    return null;
+                }
+                if (item.kind === 'agent-session') {
+                    if (typeof item.sessionId !== 'string' || typeof item.contextId !== 'string') {
+                        return null;
+                    }
+                    return {
+                        kind: 'agent-session',
+                        id: item.id,
+                        createdAt: Number(item.createdAt || Date.now()),
+                        source: item.source || 'standalone',
+                        sourceTitle: typeof item.sourceTitle === 'string' ? item.sourceTitle : undefined,
+                        sessionId: item.sessionId,
+                        contextId: item.contextId,
+                        title: typeof item.title === 'string' ? item.title : '套图制作',
+                    } satisfies AgentSessionFeedEntry;
+                }
+                if (!item.request || typeof item.request !== 'object') {
+                    return null;
+                }
+                return {
+                    ...item,
+                    kind: 'generation',
+                } satisfies GenerationFeedEntry;
+            })
+            .filter((item): item is FeedEntry => Boolean(item))
             .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
     } catch {
         return [];
@@ -438,6 +484,14 @@ function requestSupportText(request: GenerationRequest): string {
     if (request.generationMode === 'continuation') return '续写';
     if (request.generationMode === 'reference-guided') return '参考图';
     return `${request.durationSeconds} 秒`;
+}
+
+function isGenerationFeedEntry(entry: FeedEntry): entry is GenerationFeedEntry {
+    return entry.kind === 'generation';
+}
+
+function isAgentSessionFeedEntry(entry: FeedEntry): entry is AgentSessionFeedEntry {
+    return entry.kind === 'agent-session';
 }
 
 function normalizeAspectRatio(value: string | undefined, fallback: string): string {
@@ -481,6 +535,7 @@ function errorMessageFromJobProjection(job: MediaJobProjection): string {
 }
 
 function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobProjection | null | undefined): FeedEntry {
+    if (!isGenerationFeedEntry(entry)) return entry;
     if (!job || entry.jobId !== job.jobId) return entry;
     if (isMediaJobSuccessful(job.status)) {
         return {
@@ -918,9 +973,9 @@ function FeedEntryMessage({
     onPreviewAsset,
     onOpenAssetMenu,
 }: {
-    entry: FeedEntry;
-    onRegenerate: (entry: FeedEntry) => void;
-    onEdit: (entry: FeedEntry) => void;
+    entry: GenerationFeedEntry;
+    onRegenerate: (entry: GenerationFeedEntry) => void;
+    onEdit: (entry: GenerationFeedEntry) => void;
     onPreviewAsset: (asset: GeneratedAsset) => void;
     onOpenAssetMenu: (event: React.MouseEvent<HTMLElement>, asset: GeneratedAsset, entryId?: string) => void;
 }) {
@@ -1169,7 +1224,6 @@ export function GenerationStudio({
     const [agentSessionError, setAgentSessionError] = useState('');
     const [agentExecutionActive, setAgentExecutionActive] = useState(false);
     const [agentPendingMessage, setAgentPendingMessage] = useState<PendingChatMessage | null>(null);
-    const [agentConversationStarted, setAgentConversationStarted] = useState(false);
 
     const [videoPrompt, setVideoPrompt] = useState('');
     const [videoTitle, setVideoTitle] = useState('');
@@ -1205,7 +1259,10 @@ export function GenerationStudio({
         [contextIntent?.sourceTitle, imageProjectId],
     );
     const trackedJobIds = useMemo(
-        () => feedEntries.map((entry) => entry.jobId).filter((jobId): jobId is string => Boolean(jobId)),
+        () => feedEntries
+            .filter(isGenerationFeedEntry)
+            .map((entry) => entry.jobId)
+            .filter((jobId): jobId is string => Boolean(jobId)),
         [feedEntries],
     );
     const updateFeedEntries = useCallback(
@@ -1220,6 +1277,40 @@ export function GenerationStudio({
         },
         [],
     );
+    const ensureAgentFeedEntry = useCallback((sessionId: string, createdAt = Date.now()) => {
+        updateFeedEntries((prev) => {
+            const existingIndex = prev.findIndex((entry) => (
+                isAgentSessionFeedEntry(entry)
+                && (entry.sessionId === sessionId || entry.contextId === generationAgentContextId)
+            ));
+            const nextEntry: AgentSessionFeedEntry = {
+                kind: 'agent-session',
+                id: existingIndex >= 0 ? prev[existingIndex].id : `agent-feed:${generationAgentContextId}`,
+                createdAt: existingIndex >= 0 ? prev[existingIndex].createdAt : createdAt,
+                source: contextIntent?.source || 'standalone',
+                sourceTitle: contextIntent?.sourceTitle,
+                sessionId,
+                contextId: generationAgentContextId,
+                title: generationAgentTitle,
+            };
+            if (existingIndex < 0) {
+                return [...prev, nextEntry].sort((a, b) => a.createdAt - b.createdAt);
+            }
+            const existing = prev[existingIndex] as AgentSessionFeedEntry;
+            if (
+                existing.sessionId === nextEntry.sessionId
+                && existing.contextId === nextEntry.contextId
+                && existing.title === nextEntry.title
+                && existing.source === nextEntry.source
+                && existing.sourceTitle === nextEntry.sourceTitle
+            ) {
+                return prev;
+            }
+            const next = [...prev];
+            next[existingIndex] = nextEntry;
+            return next;
+        });
+    }, [contextIntent?.source, contextIntent?.sourceTitle, generationAgentContextId, generationAgentTitle, updateFeedEntries]);
 
     useMediaJobSubscription(trackedJobIds, {
         enabled: trackedJobIds.length > 0,
@@ -1262,8 +1353,8 @@ export function GenerationStudio({
     }, [onIntentConsumed, pendingIntent]);
 
     useEffect(() => {
-        onExecutionStateChange?.(isAgentMode ? agentExecutionActive : feedEntries.some((entry) => entry.status === 'running'));
-    }, [agentExecutionActive, feedEntries, isAgentMode, onExecutionStateChange]);
+        onExecutionStateChange?.(agentExecutionActive || feedEntries.some((entry) => isGenerationFeedEntry(entry) && entry.status === 'running'));
+    }, [agentExecutionActive, feedEntries, onExecutionStateChange]);
 
     useEffect(() => {
         if (!isAgentMode) {
@@ -1292,7 +1383,20 @@ export function GenerationStudio({
                 setAgentSessionId(session.id);
                 const existingMessages = await window.ipcRenderer.chat.getMessages(session.id);
                 if (requestId !== agentSessionRequestIdRef.current) return;
-                setAgentConversationStarted(Array.isArray(existingMessages) && existingMessages.length > 0);
+                const hasExistingMessages = Array.isArray(existingMessages) && existingMessages.length > 0;
+                if (hasExistingMessages) {
+                    const rawFirstTimestamp = existingMessages[0]?.createdAt
+                        || existingMessages[0]?.created_at
+                        || existingMessages[0]?.timestamp
+                        || Date.now();
+                    const numericTimestamp = typeof rawFirstTimestamp === 'number'
+                        ? rawFirstTimestamp
+                        : Number(rawFirstTimestamp);
+                    const firstTimestamp = Number.isFinite(numericTimestamp)
+                        ? numericTimestamp
+                        : Date.parse(String(rawFirstTimestamp));
+                    ensureAgentFeedEntry(session.id, Number.isFinite(firstTimestamp) ? firstTimestamp : Date.now());
+                }
             } catch (error) {
                 if (requestId !== agentSessionRequestIdRef.current) return;
                 console.error('Failed to initialize generation agent session:', error);
@@ -1303,13 +1407,16 @@ export function GenerationStudio({
                 }
             }
         })();
-    }, [generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode]);
+    }, [ensureAgentFeedEntry, generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode]);
 
     useEffect(() => {
         updateFeedEntries((prev) => {
             let changed = false;
             const next = prev.map((entry) => {
-                const patched = applyJobProjectionToFeedEntry(entry, entry.jobId ? trackedJobsById[entry.jobId] : null);
+                const patched = applyJobProjectionToFeedEntry(
+                    entry,
+                    isGenerationFeedEntry(entry) && entry.jobId ? trackedJobsById[entry.jobId] : null,
+                );
                 if (patched !== entry) {
                     changed = true;
                 }
@@ -1389,7 +1496,8 @@ export function GenerationStudio({
         return [{ value: imageModel, label: imageModelLabel }, ...baseOptions];
     }, [imageModel, imageModelLabel]);
 
-    const createFeedEntry = useCallback((request: GenerationRequest): FeedEntry => ({
+    const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => ({
+        kind: 'generation',
         id: makeId('generation'),
         createdAt: Date.now(),
         source: contextIntent?.source || 'standalone',
@@ -1619,7 +1727,7 @@ export function GenerationStudio({
         videoTitle,
     ]);
 
-    const handleRegenerate = useCallback((entry: FeedEntry) => {
+    const handleRegenerate = useCallback((entry: GenerationFeedEntry) => {
         if (entry.request.type === 'image') {
             runImageRequest(entry.request);
             return;
@@ -1627,7 +1735,7 @@ export function GenerationStudio({
         runVideoRequest(entry.request);
     }, [runImageRequest, runVideoRequest]);
 
-    const handleEditEntry = useCallback((entry: FeedEntry) => {
+    const handleEditEntry = useCallback((entry: GenerationFeedEntry) => {
         setStudioMode(entry.request.type);
         if (entry.request.type === 'image') {
             setImagePrompt(entry.request.prompt);
@@ -1864,7 +1972,6 @@ export function GenerationStudio({
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
     const currentHeaderHint = isAgentMode ? '套图制作 · 对话驱动' : currentConfigHint;
-    const showAgentTranscript = isAgentMode && agentConversationStarted && Boolean(agentSessionId);
     const canSendAgentMessage = isAgentMode
         && Boolean(agentSessionId)
         && !isAgentSessionLoading
@@ -1892,11 +1999,11 @@ export function GenerationStudio({
                 return;
             }
         }
-        setAgentConversationStarted(true);
+        ensureAgentFeedEntry(agentSessionId);
         setAgentPendingMessage({ content, attachment });
         setImagePrompt('');
         setImageError('');
-    }, [agentExecutionActive, agentSessionId, imagePrompt, imageReferences, isAgentSessionLoading]);
+    }, [agentExecutionActive, agentSessionId, ensureAgentFeedEntry, imagePrompt, imageReferences, isAgentSessionLoading]);
     const studioToolbar = (
         <div className="flex items-center gap-2.5">
             <button
@@ -1963,44 +2070,50 @@ export function GenerationStudio({
         <div className="h-full min-h-0 bg-background text-text-primary">
             <div className="mx-auto flex h-full min-h-0 max-w-[1180px] flex-col px-6">
                 <main ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto pt-6">
-                    {feedEntries.length === 0 && !showAgentTranscript ? (
+                    {feedEntries.length === 0 ? (
                         <div className="min-h-[280px]" />
                     ) : (
                         <div className="mx-auto max-w-[860px] space-y-7 pb-10">
                             {feedEntries.map((entry) => (
-                                <FeedEntryMessage
-                                    key={entry.id}
-                                    entry={entry}
-                                    onRegenerate={handleRegenerate}
-                                    onEdit={handleEditEntry}
-                                    onPreviewAsset={setPreviewAsset}
-                                    onOpenAssetMenu={handleOpenAssetMenu}
-                                />
+                                isGenerationFeedEntry(entry) ? (
+                                    <FeedEntryMessage
+                                        key={entry.id}
+                                        entry={entry}
+                                        onRegenerate={handleRegenerate}
+                                        onEdit={handleEditEntry}
+                                        onPreviewAsset={setPreviewAsset}
+                                        onOpenAssetMenu={handleOpenAssetMenu}
+                                    />
+                                ) : (
+                                    <Chat
+                                        key={entry.id}
+                                        fixedSessionId={entry.sessionId}
+                                        pendingMessage={entry.sessionId === agentSessionId ? agentPendingMessage : null}
+                                        onMessageConsumed={() => {
+                                            if (entry.sessionId === agentSessionId) {
+                                                setAgentPendingMessage(null);
+                                            }
+                                        }}
+                                        defaultCollapsed={true}
+                                        showClearButton={false}
+                                        showWelcomeShortcuts={false}
+                                        showComposerShortcuts={false}
+                                        showComposer={false}
+                                        showMessageAttachments={false}
+                                        showWelcomeHeader={false}
+                                        fixedSessionContextIndicatorMode="none"
+                                        welcomeTitle=""
+                                        welcomeSubtitle=""
+                                        contentLayout="wide"
+                                        allowFileUpload={false}
+                                        messageWorkflowPlacement="top"
+                                        messageWorkflowVariant="compact"
+                                        messageWorkflowEmphasis="thoughts-first"
+                                        messageWorkflowDisplayMode="thoughts-only"
+                                        onExecutionStateChange={entry.sessionId === agentSessionId ? setAgentExecutionActive : undefined}
+                                    />
+                                )
                             ))}
-                            {showAgentTranscript && agentSessionId && (
-                                <Chat
-                                    fixedSessionId={agentSessionId}
-                                    pendingMessage={agentPendingMessage}
-                                    onMessageConsumed={() => setAgentPendingMessage(null)}
-                                    defaultCollapsed={true}
-                                    showClearButton={false}
-                                    showWelcomeShortcuts={false}
-                                    showComposerShortcuts={false}
-                                    showComposer={false}
-                                    showMessageAttachments={false}
-                                    showWelcomeHeader={false}
-                                    fixedSessionContextIndicatorMode="none"
-                                    welcomeTitle=""
-                                    welcomeSubtitle=""
-                                    contentLayout="wide"
-                                    allowFileUpload={false}
-                                    messageWorkflowPlacement="top"
-                                    messageWorkflowVariant="compact"
-                                    messageWorkflowEmphasis="thoughts-first"
-                                    messageWorkflowDisplayMode="thoughts-only"
-                                    onExecutionStateChange={setAgentExecutionActive}
-                                />
-                            )}
                             <div ref={feedBottomRef} />
                         </div>
                     )}
