@@ -125,6 +125,8 @@ const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
   creatorProfile: '',
 };
 
+const DEFAULT_SPACE_ID = 'default';
+
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type CliRuntimeInstallMethodOption = 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
@@ -537,6 +539,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isRedclawProfileLoading, setIsRedclawProfileLoading] = useState(false);
   const [redclawProfileDirty, setRedclawProfileDirty] = useState(false);
   const [redclawProfileMessage, setRedclawProfileMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
+  const [currentSpaceId, setCurrentSpaceId] = useState(DEFAULT_SPACE_ID);
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
   const [assistantDaemonLogs, setAssistantDaemonLogs] = useState<string[]>([]);
@@ -612,19 +615,42 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setRedclawProfileDirty(next);
   }, []);
 
-  const loadRedclawProfileBundle = useCallback(async (options?: { preserveDraft?: boolean }) => {
+  const setCurrentSpaceState = useCallback((spaceId?: string | null) => {
+    const normalized = String(spaceId || '').trim() || DEFAULT_SPACE_ID;
+    currentSpaceIdRef.current = normalized;
+    setCurrentSpaceId(normalized);
+    return normalized;
+  }, []);
+
+  const resetRedclawProfileState = useCallback(() => {
+    redclawProfileLoadRequestRef.current += 1;
+    setRedclawProfileRoot('');
+    setSavedRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
+    setRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
+    setRedclawProfileDirtyState(false);
+    setRedclawProfileMessage(null);
+    setIsRedclawProfileLoading(false);
+  }, [setRedclawProfileDirtyState]);
+
+  const loadRedclawProfileBundle = useCallback(async (options?: { preserveDraft?: boolean; expectedSpaceId?: string }) => {
+    const expectedSpaceId = String(options?.expectedSpaceId || currentSpaceIdRef.current || DEFAULT_SPACE_ID).trim() || DEFAULT_SPACE_ID;
     const requestId = ++redclawProfileLoadRequestRef.current;
     setIsRedclawProfileLoading(true);
     try {
       const bundle = await window.ipcRenderer.redclawProfile.getBundle();
       if (requestId !== redclawProfileLoadRequestRef.current) return;
+      const responseSpaceId = String(bundle.activeSpaceId || expectedSpaceId).trim() || DEFAULT_SPACE_ID;
+      if (responseSpaceId !== expectedSpaceId || responseSpaceId !== currentSpaceIdRef.current) {
+        return;
+      }
       if (options?.preserveDraft && redclawProfileDirtyRef.current) {
         setRedclawProfileRoot(String(bundle.profileRoot || '').trim());
         return;
       }
+      const files = bundle.files || {};
       const nextDraft: RedclawProfileDraft = {
-        user: String(bundle.user || ''),
-        creatorProfile: String(bundle.creatorProfile || ''),
+        user: String(bundle.user || files.user || ''),
+        creatorProfile: String(bundle.creatorProfile || files.creatorProfile || ''),
       };
       setRedclawProfileRoot(String(bundle.profileRoot || '').trim());
       setSavedRedclawProfileDraft(nextDraft);
@@ -683,6 +709,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const baseSettingsInFlightRef = useRef(false);
   const aiSourceDraftDirtyRef = useRef(false);
   const redclawProfileDirtyRef = useRef(false);
+  const currentSpaceIdRef = useRef(DEFAULT_SPACE_ID);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
@@ -2875,6 +2902,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           && Number.isFinite(unlockedAtMs)
           && (Date.now() - unlockedAtMs) < DEVELOPER_MODE_TTL_MS;
 
+        setCurrentSpaceState(settings.active_space_id);
+
         setAiSources(sourceList);
         setDefaultAiSourceId(normalizedDefaultId);
         setActiveAiSourceId((prevActiveId) => {
@@ -2982,6 +3011,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         }
       } else {
         if (requestId !== settingsLoadRequestRef.current) return;
+        setCurrentSpaceState(DEFAULT_SPACE_ID);
         setAiSources([]);
         setDefaultAiSourceId('redbox_official_auto');
         setActiveAiSourceId((prevActiveId) => {
@@ -2999,7 +3029,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
+  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, persistDeveloperModeState, setCurrentSpaceState]);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
@@ -3664,6 +3694,22 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
     };
   }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const handleSpaceChanged = (payload?: { spaceId?: string; activeSpaceId?: string }) => {
+      const nextSpaceId = setCurrentSpaceState(payload?.activeSpaceId || payload?.spaceId);
+      tabWarmRef.current.profile = false;
+      resetRedclawProfileState();
+      if (activeTab === 'profile') {
+        void loadRedclawProfileBundle({ expectedSpaceId: nextSpaceId });
+      }
+    };
+    window.ipcRenderer.on('space:changed', handleSpaceChanged);
+    return () => {
+      window.ipcRenderer.off('space:changed', handleSpaceChanged);
+    };
+  }, [activeTab, isActive, loadRedclawProfileBundle, resetRedclawProfileState, setCurrentSpaceState]);
 
   useEffect(() => {
     const handleDiagnosticsReportPending = () => {
@@ -4876,12 +4922,25 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
             {activeTab === 'profile' && (
               <div className="space-y-6">
                 <section className="space-y-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
                       <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
-                      <p className="mt-1 text-sm text-text-tertiary">
-                        RedClaw 每次创作前都会优先读取这里的长期档案。你可以直接维护用户画像和创作定位，不再需要把这部分信息藏在系统内部。
-                      </p>
+                      <div className="mt-1 flex items-center gap-2 text-xs text-text-tertiary">
+                        <span
+                          className="rounded-full bg-surface-secondary px-2 py-1 font-mono"
+                          title={redclawProfileRoot || undefined}
+                        >
+                          空间：{currentSpaceId}
+                        </span>
+                        <span className={clsx(
+                          'rounded-full px-2 py-1',
+                          redclawProfileDirty
+                            ? 'bg-amber-500/10 text-amber-600'
+                            : 'bg-emerald-500/10 text-emerald-600'
+                        )}>
+                          {redclawProfileDirty ? '未保存' : '已同步'}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -4891,7 +4950,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
                       >
                         <RefreshCw className={clsx('h-3.5 w-3.5', isRedclawProfileLoading && 'animate-spin')} />
-                        {isRedclawProfileLoading ? '刷新中...' : '刷新档案'}
+                        {isRedclawProfileLoading ? '刷新中' : '刷新'}
                       </button>
                       <button
                         type="button"
@@ -4904,32 +4963,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         disabled={!redclawProfileDirty}
                         className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
                       >
-                        重置修改
+                        还原
                       </button>
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-border bg-surface-secondary/20 p-4">
-                    <div className="flex flex-col gap-2 text-xs text-text-secondary md:flex-row md:items-center md:justify-between">
-                      <div>
-                        存储位置：
-                        <span className="ml-1 font-mono text-text-primary">
-                          {redclawProfileRoot || 'redclaw/profile'}
-                        </span>
-                      </div>
-                      <span className={clsx(
-                        'inline-flex items-center rounded-full px-2 py-1 text-[11px]',
-                        redclawProfileDirty
-                          ? 'bg-amber-500/10 text-amber-600'
-                          : 'bg-emerald-500/10 text-emerald-600'
-                      )}>
-                        {redclawProfileDirty ? '有未保存修改' : '已与磁盘同步'}
-                      </span>
-                    </div>
-                    <p className="mt-3 text-xs leading-6 text-text-tertiary">
-                      建议只维护稳定长期信息，例如定位、目标用户、内容风格、商业目标、成功指标和禁区边界。一次性的临时任务不要写入长期档案。
-                    </p>
-                  </div>
 
                   {redclawProfileMessage && (
                     <div className={clsx(

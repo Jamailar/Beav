@@ -1346,6 +1346,7 @@ declare global {
       };
       redclawProfile: {
         getBundle: () => Promise<{
+          activeSpaceId?: string;
           profileRoot?: string;
           agent?: string;
           soul?: string;
@@ -1353,6 +1354,14 @@ declare global {
           user?: string;
           creatorProfile?: string;
           bootstrap?: string;
+          files?: {
+            agent?: string;
+            soul?: string;
+            identity?: string;
+            user?: string;
+            creatorProfile?: string;
+            bootstrap?: string;
+          };
           onboardingState?: Record<string, unknown>;
         }>;
         updateDoc: (payload: { docType: 'agent' | 'soul' | 'user' | 'creator_profile'; markdown: string; reason?: string }) => Promise<{
