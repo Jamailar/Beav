@@ -38,6 +38,17 @@ pub enum CliToolHealth {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum CliResolvedFrom {
+    #[default]
+    Unknown,
+    HostShellPath,
+    ExtraBinPath,
+    ManagedEnvironment,
+    ExplicitPath,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum CliEnvironmentScope {
     #[default]
     AppGlobal,
@@ -127,6 +138,7 @@ pub struct CliToolRecord {
     pub name: String,
     pub executable: String,
     pub resolved_path: Option<String>,
+    pub resolved_from: Option<CliResolvedFrom>,
     pub environment_id: Option<String>,
     pub source: CliToolSource,
     pub install_method: Option<CliInstallMethod>,
@@ -135,6 +147,9 @@ pub struct CliToolRecord {
     pub health: CliToolHealth,
     pub manifest_id: Option<String>,
     pub last_checked_at: Option<i64>,
+    pub effective_path_preview: Vec<String>,
+    pub searched_path_entries_count: Option<usize>,
+    pub is_in_default_detect_catalog: bool,
     pub metadata: Option<Value>,
 }
 
@@ -249,6 +264,15 @@ pub struct CliExecutionSnapshot {
 #[serde(default, rename_all = "camelCase")]
 pub struct CliDetectRequest {
     pub commands: Vec<String>,
+    pub session_id: Option<String>,
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CliDiscoverRequest {
+    pub query: Option<String>,
+    pub limit: Option<usize>,
     pub session_id: Option<String>,
     pub task_id: Option<String>,
 }
