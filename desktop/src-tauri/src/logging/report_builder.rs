@@ -9,6 +9,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
+const MIN_UPLOAD_LOG_SLICE_BYTES: usize = 16 * 1024;
+const UPLOAD_BUNDLE_RESERVED_BYTES: usize = 256 * 1024;
+const ADVANCED_CONTEXT_RESERVED_BYTES: usize = 256 * 1024;
+
 fn current_log_path(root: &Path, sink_name: &str) -> PathBuf {
     root.join("logs")
         .join("current")
@@ -93,6 +97,22 @@ fn redaction_manifest() -> Value {
     })
 }
 
+fn upload_log_slice_limit(config: &LoggingConfig, include_advanced_context: bool) -> usize {
+    let reserved_bytes = UPLOAD_BUNDLE_RESERVED_BYTES
+        + if include_advanced_context {
+            ADVANCED_CONTEXT_RESERVED_BYTES
+        } else {
+            0
+        };
+    let per_sink_budget = config
+        .report_upload_target_bytes
+        .saturating_sub(reserved_bytes)
+        / 2;
+    per_sink_budget
+        .max(MIN_UPLOAD_LOG_SLICE_BYTES)
+        .min(config.report_bundle_limit_bytes)
+}
+
 pub fn bundle_path(root: &Path, report_id: &str) -> PathBuf {
     export_dir(root).join(format!("{}.zip", crate::slug_from_relative_path(report_id)))
 }
@@ -111,22 +131,19 @@ pub fn build_report_bundle(
         zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     let runtime_summary = build_runtime_diagnostics_summary(state)?;
+    let upload_log_limit = upload_log_slice_limit(config, report.include_advanced_context);
     let upload_report = redact_json_for_upload(
         &json!({
             "report": report,
             "hostLogWindowMinutes": config.report_time_window_minutes,
+            "targetUploadBytes": config.report_upload_target_bytes,
         }),
         config.upload_raw_body_limit,
     );
 
-    let host_logs = redact_text_for_upload(
-        &log_slice(root, "host", config),
-        config.report_bundle_limit_bytes,
-    );
-    let renderer_logs = redact_text_for_upload(
-        &log_slice(root, "renderer", config),
-        config.report_bundle_limit_bytes,
-    );
+    let host_logs = redact_text_for_upload(&log_slice(root, "host", config), upload_log_limit);
+    let renderer_logs =
+        redact_text_for_upload(&log_slice(root, "renderer", config), upload_log_limit);
 
     zip.start_file("report.json", options)
         .map_err(|error| error.to_string())?;
@@ -184,6 +201,39 @@ pub fn build_report_bundle(
 
     zip.finish().map_err(|error| error.to_string())?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::upload_log_slice_limit;
+    use crate::logging::config::LoggingConfig;
+
+    #[test]
+    fn upload_target_caps_per_sink_log_budget() {
+        let config = LoggingConfig {
+            report_bundle_limit_bytes: 8 * 1024 * 1024,
+            report_upload_target_bytes: 2 * 1024 * 1024,
+            ..LoggingConfig::default()
+        };
+
+        let without_advanced = upload_log_slice_limit(&config, false);
+        let with_advanced = upload_log_slice_limit(&config, true);
+
+        assert_eq!(without_advanced, 917_504);
+        assert_eq!(with_advanced, 786_432);
+        assert!(with_advanced < without_advanced);
+    }
+
+    #[test]
+    fn report_bundle_limit_remains_the_hard_upper_bound() {
+        let config = LoggingConfig {
+            report_bundle_limit_bytes: 128 * 1024,
+            report_upload_target_bytes: 16 * 1024 * 1024,
+            ..LoggingConfig::default()
+        };
+
+        assert_eq!(upload_log_slice_limit(&config, false), 128 * 1024);
+    }
 }
 
 pub fn create_pending_report(

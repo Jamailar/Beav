@@ -213,6 +213,23 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };
   }
+  if (channel === 'audio:get-capture-capability') {
+    return {
+      success: true,
+      available: false,
+      activeRecording: false,
+      reason: 'host_unavailable',
+      message: `RedBox audio capture unavailable: ${message}`,
+    };
+  }
+  if (
+    channel === 'audio:start-recording'
+    || channel === 'audio:stop-recording'
+    || channel === 'audio:cancel-recording'
+    || channel === 'audio:open-microphone-settings'
+  ) {
+    return { success: false, error: `RedBox audio action failed for "${channel}": ${message}` };
+  }
   if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as') {
     return { success: false, error: `RedBox file action failed for "${channel}": ${message}` };
   }
@@ -758,6 +775,13 @@ function createIpcRenderer() {
     clipboardReadText: () => invokeChannel('clipboard:read-text'),
     openKnowledgeApiGuide: () => invokeChannel('app:open-knowledge-api-guide'),
     openRichpostThemeGuide: () => invokeChannel('app:open-richpost-theme-guide'),
+    audio: {
+      getCaptureCapability: () => invokeChannel('audio:get-capture-capability'),
+      startRecording: () => invokeChannel('audio:start-recording'),
+      stopRecording: () => invokeChannel('audio:stop-recording'),
+      cancelRecording: () => invokeChannel('audio:cancel-recording'),
+      openMicrophoneSettings: () => invokeChannel('audio:open-microphone-settings'),
+    },
     browserPlugin: {
       getStatus: () => invokeChannel('plugin:browser-extension-status'),
       prepare: () => invokeChannel('plugin:prepare-browser-extension'),

@@ -47,6 +47,8 @@ const isVideoAssetUrl = (value: string): boolean => {
   return ['.mp4', '.webm', '.mov', '.m4v'].some((ext) => normalized.includes(ext));
 };
 
+const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
+
 const INTERNAL_PROTOCOL_BLOCKS = [
   /<tool_call>[\s\S]*?<\/tool_call>/gi,
   /<activated_skill\b[\s\S]*?<\/activated_skill>/gi,
@@ -165,6 +167,7 @@ export interface Message {
     name: string;
     ext?: string;
     size?: number;
+    thumbnailDataUrl?: string;
     workspaceRelativePath?: string;
     absolutePath?: string;
     originalAbsolutePath?: string;
@@ -469,6 +472,32 @@ export const MessageItem = memo(({
     },
   }), [handleImageContextMenu, handleMediaContextMenu]);
 
+  const isUploadedImageAttachment = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const kind = String(attachment.kind || '').trim().toLowerCase();
+    const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+    const source = String(
+      attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || attachment.name
+        || '',
+    ).trim().toLowerCase();
+
+    return kind === 'image' || mimeType.startsWith('image/') || IMAGE_ATTACHMENT_EXT_RE.test(source);
+  }, []);
+
+  const resolveUploadedAttachmentSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const preferred = String(
+      attachment.thumbnailDataUrl
+        || attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || '',
+    ).trim();
+    if (!preferred) return '';
+    return preferred.startsWith('data:') ? preferred : resolveAssetUrl(preferred);
+  }, []);
+
   const renderYoutubeCard = (card: { title: string; thumbnailUrl?: string }) => (
     <div className="bg-white/10 rounded-lg overflow-hidden">
       <div className="flex items-center gap-3 p-2.5">
@@ -535,33 +564,51 @@ export const MessageItem = memo(({
     </div>
   );
 
-  const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => (
-    <div className="mt-2 w-full max-w-[520px] rounded-xl border border-border bg-surface-primary/90 p-3">
-      <div className="flex items-start gap-3">
-        <div className="h-10 w-10 rounded-lg bg-surface-secondary border border-border flex items-center justify-center text-sm">
-          📎
+  const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const imageSrc = isUploadedImageAttachment(attachment) ? resolveUploadedAttachmentSource(attachment) : '';
+    if (imageSrc) {
+      return (
+        <div className="mt-2">
+          <img
+            src={imageSrc}
+            alt={attachment.name}
+            className="h-24 w-24 cursor-zoom-in rounded-2xl border border-border bg-surface-secondary object-cover shadow-sm"
+            onClick={() => setPreviewImage({ src: imageSrc, alt: attachment.name })}
+            onContextMenu={(event) => handleImageContextMenu(event, imageSrc)}
+            title={attachment.name}
+          />
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs text-text-tertiary">上传文件</div>
-          <div className="mt-0.5 truncate text-sm font-medium text-text-primary" title={attachment.name}>
-            {attachment.name}
+      );
+    }
+
+    return (
+      <div className="mt-2 w-full max-w-[520px] rounded-xl border border-border bg-surface-primary/90 p-3">
+        <div className="flex items-start gap-3">
+          <div className="h-10 w-10 rounded-lg bg-surface-secondary border border-border flex items-center justify-center text-sm">
+            📎
           </div>
-          <div className="mt-1 text-[11px] text-text-tertiary flex flex-wrap gap-x-2 gap-y-1">
-            {attachment.kind && <span>类型: {attachment.kind}</span>}
-            {typeof attachment.size === 'number' && <span>大小: {Math.max(0, Math.round(attachment.size / 1024))} KB</span>}
-            {attachment.ext && <span>.{String(attachment.ext).replace(/^\./, '')}</span>}
-            {attachment.storageMode === 'staged' && <span>已暂存</span>}
-            {attachment.directUploadEligible && <span>可直传</span>}
-          </div>
-          {attachment.summary && (
-            <div className="mt-1.5 line-clamp-2 text-xs text-text-secondary">
-              {attachment.summary}
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-text-tertiary">上传文件</div>
+            <div className="mt-0.5 truncate text-sm font-medium text-text-primary" title={attachment.name}>
+              {attachment.name}
             </div>
-          )}
+            <div className="mt-1 text-[11px] text-text-tertiary flex flex-wrap gap-x-2 gap-y-1">
+              {attachment.kind && <span>类型: {attachment.kind}</span>}
+              {typeof attachment.size === 'number' && <span>大小: {Math.max(0, Math.round(attachment.size / 1024))} KB</span>}
+              {attachment.ext && <span>.{String(attachment.ext).replace(/^\./, '')}</span>}
+              {attachment.storageMode === 'staged' && <span>已暂存</span>}
+              {attachment.directUploadEligible && <span>可直传</span>}
+            </div>
+            {attachment.summary && (
+              <div className="mt-1.5 line-clamp-2 text-xs text-text-secondary">
+                {attachment.summary}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderThoughtText = (content: string) => (
     <div className="chat-ai-shell">

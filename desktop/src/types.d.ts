@@ -487,6 +487,41 @@ declare global {
 
   interface Window {
     ipcRenderer: {
+      audio: {
+        getCaptureCapability: () => Promise<{
+          success?: boolean;
+          available?: boolean;
+          activeRecording?: boolean;
+          platform?: string;
+          reason?: string | null;
+          message?: string;
+          error?: string;
+          deviceName?: string;
+          sampleRate?: number;
+          channels?: number;
+          sampleFormat?: string;
+        }>;
+        startRecording: () => Promise<{ success?: boolean; error?: string; reason?: string; message?: string }>;
+        stopRecording: () => Promise<{
+          success?: boolean;
+          error?: string;
+          reason?: string;
+          message?: string;
+          clip?: {
+            audioBase64: string;
+            mimeType: string;
+            fileName: string;
+            durationMs?: number;
+            byteLength?: number;
+            sampleRate?: number;
+            channels?: number;
+            deviceName?: string;
+            strategy?: string;
+          };
+        }>;
+        cancelRecording: () => Promise<{ success?: boolean; error?: string; reason?: string; durationMs?: number; discarded?: boolean }>;
+        openMicrophoneSettings: () => Promise<{ success?: boolean; error?: string; path?: string }>;
+      };
       saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number }) => Promise<unknown>;
       getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number } | undefined>;
       pickWorkspaceDir: () => Promise<{ success: boolean; canceled?: boolean; path?: string | null; error?: string }>;

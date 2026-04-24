@@ -206,6 +206,7 @@ pub fn status_value(state: &State<'_, AppState>) -> Result<Value, String> {
         "retentionDays": runtime.config().retention_days,
         "maxFileMb": runtime.config().max_file_mb,
         "recentPreviewLimit": runtime.config().recent_preview_limit,
+        "reportUploadTargetBytes": runtime.config().report_upload_target_bytes,
         "uploadConfigured": runtime.config().upload_endpoint.is_some(),
         "uploadEndpoint": runtime.config().upload_endpoint.clone(),
         "pendingCount": pending.len(),

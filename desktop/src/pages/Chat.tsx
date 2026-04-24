@@ -10,7 +10,6 @@ import {
 } from '../components/CliEscalationDialog';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
 import {
-  blobToBase64,
   buildChatModelOptions,
   ChatComposer,
   type ChatComposerHandle,
@@ -22,6 +21,8 @@ import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/Messa
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { type AudioRecordingClip } from '../features/audio-input/audioInput';
+import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
@@ -462,7 +463,6 @@ export function Chat({
     };
   }, [onExecutionStateChange]);
   const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
-  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -471,9 +471,6 @@ export function Chat({
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
   const composerRef = useRef<ChatComposerHandle>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaChunksRef = useRef<Blob[]>([]);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
   
   // Throttle buffer for streaming updates
   const pendingUpdateRef = useRef<{ content: string } | null>(null);
@@ -741,20 +738,6 @@ export function Chat({
     };
   }, [selectedChatModel]);
 
-  const cleanupAudioCapture = useCallback(() => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.ondataavailable = null;
-      mediaRecorderRef.current.onstop = null;
-      mediaRecorderRef.current.onerror = null;
-      mediaRecorderRef.current = null;
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-    mediaChunksRef.current = [];
-  }, []);
-
   const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
     if (fixedSessionId) return;
     const requestId = ++chatRoomsRequestIdRef.current;
@@ -798,12 +781,6 @@ export function Chat({
     if (!isActive) return;
     void loadChatModelOptions();
   }, [isActive, loadChatModelOptions]);
-
-  useEffect(() => {
-    return () => {
-      cleanupAudioCapture();
-    };
-  }, [cleanupAudioCapture]);
 
   useEffect(() => {
     if (!isActive || messages.length === 0) return;
@@ -2563,15 +2540,14 @@ export function Chat({
     };
   }, [selectedChatModel]);
 
-  const transcribeAudioBlob = useCallback(async (blob: Blob) => {
+  const transcribeAudioClip = useCallback(async (clip: AudioRecordingClip) => {
     setIsTranscribingAudio(true);
     setErrorNotice(null);
     try {
-      const audioBase64 = await blobToBase64(blob);
       const result = await window.ipcRenderer.chat.transcribeAudio({
-        audioBase64,
-        mimeType: blob.type || 'audio/webm',
-        fileName: `chat_audio_${Date.now()}.webm`,
+        audioBase64: clip.audioBase64,
+        mimeType: clip.mimeType || 'audio/wav',
+        fileName: clip.fileName || `chat_audio_${Date.now()}.wav`,
       });
       if (!result?.success || !String(result.text || '').trim()) {
         throw new Error(result?.error || '语音转文字失败');
@@ -2592,69 +2568,33 @@ export function Chat({
     }
   }, []);
 
-  const stopAudioRecording = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder) return;
-    if (recorder.state !== 'inactive') {
-      recorder.stop();
-    } else {
-      cleanupAudioCapture();
-      setIsRecordingAudio(false);
-    }
-  }, [cleanupAudioCapture]);
+  const audioRecording = useAudioRecording({
+    onCaptured: transcribeAudioClip,
+  });
+
+  useEffect(() => {
+    if (!audioRecording.error) return;
+    setErrorNotice(audioRecording.error);
+  }, [audioRecording.error]);
 
   const startAudioRecording = useCallback(async () => {
-    if (isProcessing || isTranscribingAudio) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setErrorNotice('当前环境不支持麦克风录音');
-      return;
-    }
+    if (isProcessing || isTranscribingAudio || audioRecording.isWorking) return;
+    setErrorNotice(null);
+    await audioRecording.startRecording();
+  }, [audioRecording, isProcessing, isTranscribingAudio]);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferredMimeType = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, preferredMimeType ? { mimeType: preferredMimeType } : undefined);
-      mediaStreamRef.current = stream;
-      mediaRecorderRef.current = recorder;
-      mediaChunksRef.current = [];
-
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          mediaChunksRef.current.push(event.data);
-        }
-      };
-      recorder.onerror = () => {
-        setErrorNotice('录音失败，请检查麦克风权限');
-        cleanupAudioCapture();
-        setIsRecordingAudio(false);
-      };
-      recorder.onstop = () => {
-        const chunks = [...mediaChunksRef.current];
-        cleanupAudioCapture();
-        setIsRecordingAudio(false);
-        if (!chunks.length) return;
-        void transcribeAudioBlob(new Blob(chunks, { type: recorder.mimeType || preferredMimeType || 'audio/webm' }));
-      };
-
-      recorder.start();
-      setIsRecordingAudio(true);
-      setErrorNotice(null);
-    } catch (error) {
-      cleanupAudioCapture();
-      setIsRecordingAudio(false);
-      setErrorNotice(error instanceof Error ? error.message : '无法访问麦克风');
-    }
-  }, [cleanupAudioCapture, isProcessing, isTranscribingAudio, transcribeAudioBlob]);
+  const stopAudioRecording = useCallback(() => {
+    if (audioRecording.isWorking) return;
+    void audioRecording.stopRecording();
+  }, [audioRecording]);
 
   const handleAudioInput = useCallback(() => {
-    if (isRecordingAudio) {
+    if (audioRecording.isRecording) {
       stopAudioRecording();
       return;
     }
     void startAudioRecording();
-  }, [isRecordingAudio, startAudioRecording, stopAudioRecording]);
+  }, [audioRecording.isRecording, startAudioRecording, stopAudioRecording]);
 
   const sendMessage = async (content: string, attachment?: UploadedFileAttachment) => {
     uiTraceInteraction('chat', 'send_message', {
@@ -2879,7 +2819,7 @@ export function Chat({
         selectedModelKey={selectedChatModelKey}
         onSelectedModelKeyChange={setSelectedChatModelKey}
         isBusy={isProcessing}
-        audioState={isTranscribingAudio ? 'transcribing' : isRecordingAudio ? 'recording' : 'idle'}
+        audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}
         onAudioAction={handleAudioInput}
         onCancel={handleCancel}
         showCancelWhenBusy={options?.showCancelWhenBusy}
