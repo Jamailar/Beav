@@ -413,6 +413,165 @@ function serializeFeedEntries(entries: FeedEntry[]): string {
     );
 }
 
+function normalizeReferenceItems(value: unknown): ReferenceItem[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const record = item as Record<string, unknown>;
+            const dataUrl = String(record.dataUrl || '').trim();
+            if (!dataUrl) return null;
+            return {
+                name: String(record.name || 'reference').trim() || 'reference',
+                dataUrl,
+            } satisfies ReferenceItem;
+        })
+        .filter((item): item is ReferenceItem => Boolean(item));
+}
+
+function normalizeReferenceItem(value: unknown): ReferenceItem | null {
+    const items = normalizeReferenceItems(Array.isArray(value) ? value.slice(0, 1) : [value]);
+    return items[0] || null;
+}
+
+function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
+    if (!value || typeof value !== 'object') return null;
+    const record = value as Record<string, unknown>;
+    const rawType = String(record.type || '').trim().toLowerCase();
+    const resolvedType = rawType === 'video'
+        ? 'video'
+        : rawType === 'image'
+            ? 'image'
+            : String(record.mode || '').trim().toLowerCase() === 'video'
+                ? 'video'
+                : 'image';
+    const prompt = String(record.prompt || record.userPrompt || '').trim();
+    if (!prompt) return null;
+
+    if (resolvedType === 'video') {
+        const aspectRatio = String(record.aspectRatio || '16:9').trim();
+        const resolution = String(record.resolution || '720p').trim() === '1080p' ? '1080p' : '720p';
+        const generationMode = (() => {
+            const rawMode = String(record.generationMode || record.videoMode || record.mode || '').trim();
+            if (rawMode === 'reference-guided' || rawMode === 'first-last-frame' || rawMode === 'continuation' || rawMode === 'text-to-video') {
+                return rawMode;
+            }
+            return 'text-to-video';
+        })();
+        return {
+            type: 'video',
+            prompt,
+            title: String(record.title || '').trim(),
+            projectId: String(record.projectId || '').trim(),
+            model: String(record.model || '').trim(),
+            aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9',
+            resolution,
+            durationSeconds: Math.max(1, Number(record.durationSeconds || 8) || 8),
+            generateAudio: Boolean(record.generateAudio),
+            generationMode,
+            referenceItems: normalizeReferenceItems(record.referenceItems),
+            firstClip: normalizeReferenceItem(record.firstClip),
+            drivingAudio: normalizeReferenceItem(record.drivingAudio),
+        } satisfies VideoGenerationRequest;
+    }
+
+    const imageMode = (() => {
+        const rawMode = String(record.generationMode || record.imageMode || record.mode || '').trim();
+        if (rawMode === 'reference-guided' || rawMode === 'image-to-image' || rawMode === 'text-to-image') {
+            return rawMode;
+        }
+        return 'text-to-image';
+    })();
+    return {
+        type: 'image',
+        prompt,
+        title: String(record.title || '').trim(),
+        projectId: String(record.projectId || '').trim(),
+        count: Math.max(1, Number(record.count || 1) || 1),
+        model: String(record.model || '').trim(),
+        aspectRatio: String(record.aspectRatio || '4:3').trim() || '4:3',
+        size: String(record.size || '').trim(),
+        quality: String(record.quality || 'auto').trim() || 'auto',
+        generationMode: imageMode,
+        referenceItems: normalizeReferenceItems(record.referenceItems),
+    } satisfies ImageGenerationRequest;
+}
+
+function normalizeGeneratedAssets(value: unknown): GeneratedAsset[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .map((item): GeneratedAsset | null => {
+            if (!item || typeof item !== 'object') return null;
+            const record = item as Record<string, unknown>;
+            const id = String(record.id || '').trim();
+            if (!id) return null;
+            return {
+                id,
+                title: typeof record.title === 'string' ? record.title : undefined,
+                prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
+                previewUrl: typeof record.previewUrl === 'string' ? record.previewUrl : undefined,
+                mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+                exists: typeof record.exists === 'boolean' ? record.exists : undefined,
+                projectId: typeof record.projectId === 'string' ? record.projectId : undefined,
+                provider: typeof record.provider === 'string' ? record.provider : undefined,
+                providerTemplate: typeof record.providerTemplate === 'string' ? record.providerTemplate : undefined,
+                model: typeof record.model === 'string' ? record.model : undefined,
+                aspectRatio: typeof record.aspectRatio === 'string' ? record.aspectRatio : undefined,
+                size: typeof record.size === 'string' ? record.size : undefined,
+                quality: typeof record.quality === 'string' ? record.quality : undefined,
+                relativePath: typeof record.relativePath === 'string' ? record.relativePath : undefined,
+                updatedAt: String(record.updatedAt || ''),
+            } satisfies GeneratedAsset;
+        })
+        .filter((item): item is GeneratedAsset => Boolean(item));
+}
+
+function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
+    if (!value || typeof value !== 'object') return null;
+    const record = value as Record<string, unknown>;
+    const id = String(record.id || '').trim();
+    if (!id) return null;
+
+    if (record.kind === 'agent-session') {
+        const sessionId = String(record.sessionId || '').trim();
+        const contextId = String(record.contextId || '').trim();
+        if (!sessionId || !contextId) return null;
+        return {
+            kind: 'agent-session',
+            id,
+            createdAt: Number(record.createdAt || Date.now()),
+            source: (String(record.source || 'standalone').trim() || 'standalone') as GenerationIntent['source'],
+            sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
+            sessionId,
+            contextId,
+            title: typeof record.title === 'string' ? record.title : '套图制作',
+        } satisfies AgentSessionFeedEntry;
+    }
+
+    const request = normalizeGenerationRequest(record.request || record);
+    if (!request) return null;
+
+    return {
+        kind: 'generation',
+        id,
+        createdAt: Number(record.createdAt || Date.now()),
+        source: (String(record.source || 'standalone').trim() || 'standalone') as GenerationIntent['source'],
+        sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
+        referencePreview: normalizeReferenceItem(record.referencePreview),
+        request,
+        status: String(record.status || 'success').trim() === 'running'
+            ? 'running'
+            : String(record.status || '').trim() === 'error'
+                ? 'error'
+                : 'success',
+        jobId: typeof record.jobId === 'string' ? record.jobId : undefined,
+        jobStatus: typeof record.jobStatus === 'string' ? record.jobStatus : undefined,
+        completedAt: typeof record.completedAt === 'string' ? record.completedAt : undefined,
+        error: typeof record.error === 'string' ? record.error : undefined,
+        assets: normalizeGeneratedAssets(record.assets),
+    } satisfies GenerationFeedEntry;
+}
+
 function persistFeedEntries(entries: FeedEntry[]): void {
     if (typeof window === 'undefined') return;
     try {
@@ -430,33 +589,7 @@ function readPersistedFeedEntries(): FeedEntry[] {
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
         return parsed
-            .map((item) => {
-                if (!item || typeof item !== 'object' || typeof item.id !== 'string') {
-                    return null;
-                }
-                if (item.kind === 'agent-session') {
-                    if (typeof item.sessionId !== 'string' || typeof item.contextId !== 'string') {
-                        return null;
-                    }
-                    return {
-                        kind: 'agent-session',
-                        id: item.id,
-                        createdAt: Number(item.createdAt || Date.now()),
-                        source: item.source || 'standalone',
-                        sourceTitle: typeof item.sourceTitle === 'string' ? item.sourceTitle : undefined,
-                        sessionId: item.sessionId,
-                        contextId: item.contextId,
-                        title: typeof item.title === 'string' ? item.title : '套图制作',
-                    } satisfies AgentSessionFeedEntry;
-                }
-                if (!item.request || typeof item.request !== 'object') {
-                    return null;
-                }
-                return {
-                    ...item,
-                    kind: 'generation',
-                } satisfies GenerationFeedEntry;
-            })
+            .map(normalizeFeedEntryRecord)
             .filter((item): item is FeedEntry => Boolean(item))
             .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
     } catch {
