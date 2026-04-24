@@ -4084,8 +4084,9 @@ fn load_runtime_history_messages(
         return Ok(Vec::new());
     };
     let bundle_messages = runtime::load_session_bundle_messages(state, session_id)?;
-    if !bundle_messages.is_empty() {
-        return Ok(bundle_messages);
+    let sanitized_bundle_messages = runtime::sanitize_runtime_history_messages(&bundle_messages);
+    if !sanitized_bundle_messages.is_empty() {
+        return Ok(sanitized_bundle_messages);
     }
     with_store(state, |store| {
         Ok(runtime::chat_messages_for_session(&store, session_id)

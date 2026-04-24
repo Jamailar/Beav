@@ -949,9 +949,10 @@ pub fn runtime_context_messages_for_session(
     let initial_context_prompt = session_initial_context_prompt(store, session_id);
     if let Some(state) = state {
         if let Ok(bundle_messages) = load_session_bundle_messages(state, session_id) {
-            if !bundle_messages.is_empty() {
+            let sanitized_messages = sanitize_runtime_history_messages(&bundle_messages);
+            if !sanitized_messages.is_empty() {
                 let mut result = bundle_messages_for_runtime(
-                    &bundle_messages,
+                    &sanitized_messages,
                     session_resume_summary_prompt(store, session_id),
                     limit,
                 );
@@ -1064,6 +1065,65 @@ pub fn bundle_messages_for_runtime(
     }
     result.extend(messages[start..].iter().cloned());
     result
+}
+
+pub fn sanitize_runtime_history_messages(messages: &[Value]) -> Vec<Value> {
+    messages
+        .iter()
+        .filter_map(sanitize_runtime_history_message)
+        .collect()
+}
+
+fn sanitize_runtime_history_message(message: &Value) -> Option<Value> {
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match role {
+        "tool" => None,
+        "assistant" => {
+            let content = message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if content.is_empty() {
+                None
+            } else {
+                Some(json!({
+                    "role": "assistant",
+                    "content": content
+                }))
+            }
+        }
+        "user" => {
+            let content = message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if content.is_empty() || is_internal_runtime_history_user_message(&content) {
+                None
+            } else {
+                Some(json!({
+                    "role": "user",
+                    "content": content
+                }))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_internal_runtime_history_user_message(content: &str) -> bool {
+    content == "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。"
+        || content.starts_with("系统状态更新：以下技能已激活并写入当前会话：")
+        || content.starts_with("当前写稿工程已创建并绑定为 `")
+        || content.starts_with("你刚才发送了空的 `app_cli` 调用。当前写稿工程已经绑定为 `")
+        || content.starts_with("当前任务是执行型创作任务，不要先输出计划、承诺或阶段说明。")
+        || content.starts_with("当前任务还没有完成这些必需动作：")
 }
 
 fn build_session_context_summary(messages: &[ChatMessageRecord]) -> String {
@@ -2147,6 +2207,80 @@ mod tests {
                 .map(|item| item.starts_with("message 6 ")),
             Some(true)
         );
+    }
+
+    #[test]
+    fn sanitize_runtime_history_messages_strips_tool_protocol_messages() {
+        let messages = vec![
+            json!({ "role": "user", "content": "原始用户需求" }),
+            json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-old-1",
+                    "type": "function",
+                    "function": {
+                        "name": "redbox_fs",
+                        "arguments": "{\"action\":\"workspace.read\",\"path\":\"knowledge/a.md\"}"
+                    }
+                }]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call-old-1",
+                "content": "{\"ok\":true}",
+                "tool_name": "redbox_fs"
+            }),
+            json!({
+                "role": "user",
+                "content": "系统状态更新：以下技能已激活并写入当前会话：writing-style。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。"
+            }),
+            json!({
+                "role": "assistant",
+                "content": "这是最终答复"
+            }),
+        ];
+
+        let sanitized = sanitize_runtime_history_messages(&messages);
+
+        assert_eq!(sanitized.len(), 2);
+        assert_eq!(
+            sanitized[0].get("role").and_then(Value::as_str),
+            Some("user")
+        );
+        assert_eq!(
+            sanitized[0].get("content").and_then(Value::as_str),
+            Some("原始用户需求")
+        );
+        assert_eq!(
+            sanitized[1].get("content").and_then(Value::as_str),
+            Some("这是最终答复")
+        );
+    }
+
+    #[test]
+    fn sanitize_runtime_history_messages_keeps_assistant_text_but_drops_tool_calls() {
+        let messages = vec![json!({
+            "role": "assistant",
+            "content": "先记录一个中间说明",
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "app_cli",
+                    "arguments": "{\"action\":\"skills.invoke\",\"payload\":{\"name\":\"writing-style\"}}"
+                }
+            }]
+        })];
+
+        let sanitized = sanitize_runtime_history_messages(&messages);
+
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(
+            sanitized[0].get("content").and_then(Value::as_str),
+            Some("先记录一个中间说明")
+        );
+        assert!(sanitized[0].get("tool_calls").is_none());
     }
 
     #[test]
