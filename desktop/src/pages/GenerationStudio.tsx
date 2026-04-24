@@ -51,6 +51,27 @@ type ReferenceItem = {
     dataUrl: string;
 };
 
+type GenerationAgentSessionMetadata = {
+    contextType: typeof GENERATION_AGENT_CONTEXT_TYPE;
+    intent: 'image_creation';
+    preferredRole: 'image-director';
+    generationTarget: 'image-suite';
+    suiteMode: true;
+    requiresHumanApproval: true;
+    projectId?: string;
+    source: 'generation-studio';
+    sourceTitle?: string;
+    suiteState: {
+        status: 'draft';
+        approvedPlanVersion: number;
+        sharedStyleGuide: string;
+        cards: Array<{
+            id: string;
+            status: 'draft';
+        }>;
+    };
+};
+
 type GeneratedAsset = {
     id: string;
     title?: string;
@@ -242,6 +263,29 @@ function buildGenerationAgentInitialContext(projectId: string, sourceTitle?: str
         sourceTitle ? `当前来源: ${sourceTitle}` : '',
         projectId ? `当前项目ID: ${projectId}` : '',
     ].filter(Boolean).join('\n');
+}
+
+function buildGenerationAgentSessionMetadata(
+    projectId: string,
+    sourceTitle?: string,
+): GenerationAgentSessionMetadata {
+    return {
+        contextType: GENERATION_AGENT_CONTEXT_TYPE,
+        intent: 'image_creation',
+        preferredRole: 'image-director',
+        generationTarget: 'image-suite',
+        suiteMode: true,
+        requiresHumanApproval: true,
+        projectId: projectId || undefined,
+        source: 'generation-studio',
+        sourceTitle: sourceTitle || undefined,
+        suiteState: {
+            status: 'draft',
+            approvedPlanVersion: 0,
+            sharedStyleGuide: '',
+            cards: [],
+        },
+    };
 }
 
 function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
@@ -1152,6 +1196,10 @@ export function GenerationStudio({
         () => buildGenerationAgentInitialContext(imageProjectId, contextIntent?.sourceTitle),
         [contextIntent?.sourceTitle, imageProjectId],
     );
+    const generationAgentSessionMetadata = useMemo(
+        () => buildGenerationAgentSessionMetadata(imageProjectId, contextIntent?.sourceTitle),
+        [contextIntent?.sourceTitle, imageProjectId],
+    );
     const trackedJobIds = useMemo(
         () => feedEntries.map((entry) => entry.jobId).filter((jobId): jobId is string => Boolean(jobId)),
         [feedEntries],
@@ -1233,6 +1281,7 @@ export function GenerationStudio({
                     contextType: GENERATION_AGENT_CONTEXT_TYPE,
                     title: generationAgentTitle,
                     initialContext: generationAgentInitialContext,
+                    metadata: generationAgentSessionMetadata,
                 });
                 if (requestId !== agentSessionRequestIdRef.current) return;
                 setAgentSessionId(session.id);
@@ -1246,7 +1295,7 @@ export function GenerationStudio({
                 }
             }
         })();
-    }, [generationAgentContextId, generationAgentInitialContext, generationAgentTitle, isAgentMode]);
+    }, [generationAgentContextId, generationAgentInitialContext, generationAgentSessionMetadata, generationAgentTitle, isAgentMode]);
 
     useEffect(() => {
         updateFeedEntries((prev) => {
