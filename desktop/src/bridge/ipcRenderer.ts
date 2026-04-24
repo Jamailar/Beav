@@ -213,7 +213,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };
   }
-  if (channel === 'file:show-in-folder' || channel === 'file:copy-image') {
+  if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as') {
     return { success: false, error: `RedBox file action failed for "${channel}": ${message}` };
   }
   if (channel === 'youtube:check-ytdlp') {
@@ -259,6 +259,15 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   }
   if (channel === 'manuscripts:get-layout') {
     return {};
+  }
+  if (channel === 'generation:list-jobs') {
+    return { success: true, items: [] };
+  }
+  if (channel === 'generation:get-runtime-status') {
+    return { success: true, runtimeReady: false, runtimeRunning: false };
+  }
+  if (channel === 'generation:get-job') {
+    return null;
   }
   if (channel === 'wechat-official:get-status') {
     return { success: true, activeBinding: null, bindings: [] };
@@ -564,6 +573,7 @@ function createIpcRenderer() {
     files: {
       showInFolder: (payload: { source: string }) => invokeChannel('file:show-in-folder', payload),
       copyImage: (payload: { source: string }) => invokeChannel('file:copy-image', payload),
+      saveAs: (payload: { source: string; defaultName?: string }) => invokeChannel('file:save-as', payload),
     },
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
@@ -785,6 +795,20 @@ function createIpcRenderer() {
       confirmPackageScript: (payload: { filePath: string }) =>
         invokeChannel('manuscripts:confirm-package-script', payload),
     },
+    generation: {
+      submitImage: (payload: Record<string, unknown>) => invokeChannel('generation:submit-image', payload),
+      submitVideo: (payload: Record<string, unknown>) => invokeChannel('generation:submit-video', payload),
+      listJobs: (payload?: Record<string, unknown>) => invokeChannel('generation:list-jobs', payload || {}),
+      getJob: (jobId: string) => invokeChannel('generation:get-job', { jobId }),
+      awaitJob: (payload: { jobId: string; timeoutMs?: number }) => invokeChannel('generation:await-job', payload),
+      cancelJob: (jobId: string) => invokeChannel('generation:cancel-job', { jobId }),
+      retryJob: (jobId: string) => invokeChannel('generation:retry-job', { jobId }),
+      getRuntimeStatus: () => invokeChannel('generation:get-runtime-status'),
+      onJobUpdated: (listener: Listener) => on('generation:job-updated', listener),
+      offJobUpdated: (listener: Listener) => off('generation:job-updated', listener),
+      onJobLog: (listener: Listener) => on('generation:job-log', listener),
+      offJobLog: (listener: Listener) => off('generation:job-log', listener),
+    },
     redclawRunner: {
       getStatus: () => invokeCommandGuarded('redclaw_runner_status', undefined, {
         timeoutMs: 2800,
@@ -804,7 +828,14 @@ function createIpcRenderer() {
       addLongCycle: (payload: Record<string, unknown>) => invokeChannel('redclaw:runner-add-long-cycle', payload),
       removeLongCycle: (payload: { taskId: string }) => invokeChannel('redclaw:runner-remove-long-cycle', payload),
       setLongCycleEnabled: (payload: { taskId: string; enabled: boolean }) => invokeChannel('redclaw:runner-set-long-cycle-enabled', payload),
-      runLongCycleNow: (payload: { taskId: string }) => invokeChannel('redclaw:runner-run-long-cycle-now', payload)
+      runLongCycleNow: (payload: { taskId: string }) => invokeChannel('redclaw:runner-run-long-cycle-now', payload),
+      taskPreview: (payload: Record<string, unknown>) => invokeChannel('redclaw:task-preview', payload),
+      taskCreate: (payload: Record<string, unknown>) => invokeChannel('redclaw:task-create', payload),
+      taskConfirm: (payload: { draftId: string; confirm: boolean }) => invokeChannel('redclaw:task-confirm', payload),
+      taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => invokeChannel('redclaw:task-update', payload),
+      taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => invokeChannel('redclaw:task-cancel', payload),
+      taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => invokeChannel('redclaw:task-list', payload || {}),
+      taskStats: () => invokeChannel('redclaw:task-stats'),
     },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),

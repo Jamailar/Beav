@@ -277,6 +277,61 @@ fn build_knowledge_ingest_summary(
     })
 }
 
+fn build_redclaw_task_summary(
+    definitions: &[crate::RedclawJobDefinitionRecord],
+    executions: &[crate::RedclawJobExecutionRecord],
+) -> Value {
+    let draft_count = definitions
+        .iter()
+        .filter(|item| item.requires_confirmation)
+        .count();
+    let active_count = definitions
+        .iter()
+        .filter(|item| !item.requires_confirmation && item.enabled)
+        .count();
+    let paused_count = definitions
+        .iter()
+        .filter(|item| !item.requires_confirmation && !item.enabled)
+        .count();
+    let recent_executions = executions
+        .iter()
+        .filter(|item| item.archived_at.is_none())
+        .take(12)
+        .map(|item| {
+            json!({
+                "executionId": item.id,
+                "runId": item.run_id,
+                "definitionId": item.definition_id,
+                "status": item.status,
+                "scheduledForAt": item.scheduled_for_at,
+                "attemptNo": item.attempt_no,
+                "retryBucket": item.retry_bucket,
+                "trigger": item.trigger,
+                "lastHeartbeatAt": item.last_heartbeat_at,
+                "lastError": item.last_error,
+                "checkpoints": item.checkpoints,
+                "updatedAt": item.updated_at,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({
+        "definitions": {
+            "total": definitions.len(),
+            "drafts": draft_count,
+            "active": active_count,
+            "paused": paused_count,
+        },
+        "executions": {
+            "total": executions.len(),
+            "running": executions.iter().filter(|item| matches!(item.status.as_str(), "queued" | "leased" | "running" | "retrying")).count(),
+            "failed": executions.iter().filter(|item| matches!(item.status.as_str(), "failed" | "dead_lettered")).count(),
+            "succeeded": executions.iter().filter(|item| matches!(item.status.as_str(), "succeeded" | "completed")).count(),
+            "recent": recent_executions,
+        }
+    })
+}
+
 fn build_runtime_query_summary(
     metrics: &[RuntimeQueryMetric],
     advisor_names: &HashMap<String, String>,
@@ -492,25 +547,35 @@ fn build_tool_call_summary(
 }
 
 pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<Value, String> {
-    let (advisor_names, session_advisors, recent_tool_results) = with_store(state, |store| {
-        let advisor_names = store
-            .advisors
-            .iter()
-            .map(|advisor| (advisor.id.clone(), advisor.name.clone()))
-            .collect::<HashMap<_, _>>();
-        let session_advisors = store
-            .chat_sessions
-            .iter()
-            .filter_map(|session| {
-                session_advisor_id_from_metadata(session.metadata.as_ref())
-                    .map(|advisor_id| (session.id.clone(), advisor_id))
-            })
-            .collect::<HashMap<_, _>>();
-        let mut tool_results = store.session_tool_results.clone();
-        tool_results.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-        tool_results.truncate(DIAGNOSTIC_HISTORY_LIMIT);
-        Ok((advisor_names, session_advisors, tool_results))
-    })?;
+    let (advisor_names, session_advisors, recent_tool_results, redclaw_task_summary) =
+        with_store(state, |store| {
+            let advisor_names = store
+                .advisors
+                .iter()
+                .map(|advisor| (advisor.id.clone(), advisor.name.clone()))
+                .collect::<HashMap<_, _>>();
+            let session_advisors = store
+                .chat_sessions
+                .iter()
+                .filter_map(|session| {
+                    session_advisor_id_from_metadata(session.metadata.as_ref())
+                        .map(|advisor_id| (session.id.clone(), advisor_id))
+                })
+                .collect::<HashMap<_, _>>();
+            let mut tool_results = store.session_tool_results.clone();
+            tool_results.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+            tool_results.truncate(DIAGNOSTIC_HISTORY_LIMIT);
+            let redclaw_task_summary = build_redclaw_task_summary(
+                &store.redclaw_job_definitions,
+                &store.redclaw_job_executions,
+            );
+            Ok((
+                advisor_names,
+                session_advisors,
+                tool_results,
+                redclaw_task_summary,
+            ))
+        })?;
 
     let diagnostics = state
         .diagnostics
@@ -539,6 +604,7 @@ pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<
             "runtimeQueries": build_runtime_query_summary(&diagnostics.runtime_queries, &advisor_names),
             "skillInvocations": build_skill_invocation_summary(&diagnostics.skill_invocations),
             "toolCalls": build_tool_call_summary(&recent_tool_results, &advisor_names, &session_advisors),
+            "redclawTasks": redclaw_task_summary,
         }
     }))
 }

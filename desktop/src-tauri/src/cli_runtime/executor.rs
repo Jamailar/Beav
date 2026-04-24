@@ -781,6 +781,7 @@ mod tests {
                 assistant_runtime: Mutex::new(None),
                 assistant_sidecar: Mutex::new(None),
                 redclaw_runtime: Mutex::new(None),
+                media_generation_runtime: Mutex::new(None),
                 runtime_warm: Mutex::new(crate::RuntimeWarmState::default()),
                 approval_runtime: Mutex::new(crate::ApprovalRuntimeState::default()),
                 skill_watch: Mutex::new(crate::skills::SkillWatcherSnapshot::default()),

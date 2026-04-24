@@ -13,6 +13,8 @@ tauri-build = { version = "2.0.0", features = [] }
 arboard = "3.4.1"
 base64 = "0.22.1"
 calamine = "0.24.0"
+chrono = { version = "0.4.44", features = ["clock", "serde"] }
+chrono-tz = "0.10.4"
 dirs = "5.0.1"
 futures-util = "0.3.31"
 glob = "0.3.1"

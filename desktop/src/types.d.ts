@@ -1336,6 +1336,13 @@ declare global {
         removeLongCycle: (payload: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
         setLongCycleEnabled: (payload: { taskId: string; enabled: boolean }) => Promise<{ success: boolean; error?: string }>;
         runLongCycleNow: (payload: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
+        taskPreview: (payload: Record<string, unknown>) => Promise<unknown>;
+        taskCreate: (payload: Record<string, unknown>) => Promise<unknown>;
+        taskConfirm: (payload: { draftId: string; confirm: boolean }) => Promise<unknown>;
+        taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => Promise<unknown>;
+        taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => Promise<unknown>;
+        taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => Promise<unknown>;
+        taskStats: () => Promise<unknown>;
       };
       redclawProfile: {
         getBundle: () => Promise<{

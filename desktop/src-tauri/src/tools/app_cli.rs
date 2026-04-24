@@ -34,7 +34,7 @@ pub struct AppCliExecutor<'a> {
     tool_call_id: Option<&'a str>,
 }
 
-const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
+const IMAGE_DIRECTOR_SKILL_NAME: &str = "redbox-image-director";
 
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
@@ -48,6 +48,13 @@ struct VideoStoryboardShot {
     picture: String,
     sound: String,
     shot: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ImageGenerationPlanItem {
+    title: String,
+    prompt: String,
+    copy: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1440,6 +1447,76 @@ impl<'a> AppCliExecutor<'a> {
                 "redclaw:runner-set-config",
                 merge_payload(&args.options, payload),
             ),
+            "task-preview" => self.call_channel(
+                "redclaw:task-preview",
+                if payload.is_object() {
+                    payload.clone()
+                } else {
+                    merge_payload(&args.options, payload)
+                },
+            ),
+            "task-create" => self.call_channel(
+                "redclaw:task-create",
+                if payload.is_object() {
+                    payload.clone()
+                } else {
+                    merge_payload(&args.options, payload)
+                },
+            ),
+            "task-confirm" => self.call_channel(
+                "redclaw:task-confirm",
+                json!({
+                    "draftId": args
+                        .string(&["draft-id", "draftId"])
+                        .or_else(|| payload_string(payload, "draftId"))
+                        .ok_or_else(|| "redclaw task-confirm requires --draft-id".to_string())?,
+                    "confirm": args
+                        .string(&["confirm"])
+                        .and_then(|value| value.parse::<bool>().ok())
+                        .or_else(|| payload_field(payload, "confirm").and_then(Value::as_bool))
+                        .unwrap_or(true),
+                }),
+            ),
+            "task-update" => self.call_channel(
+                "redclaw:task-update",
+                json!({
+                    "jobDefinitionId": args
+                        .string(&["job-definition-id", "jobDefinitionId"])
+                        .or_else(|| payload_string(payload, "jobDefinitionId"))
+                        .ok_or_else(|| "redclaw task-update requires --job-definition-id".to_string())?,
+                    "reason": args
+                        .string(&["reason"])
+                        .or_else(|| payload_string(payload, "reason"))
+                        .ok_or_else(|| "redclaw task-update requires --reason".to_string())?,
+                    "patch": payload_field(payload, "patch").cloned().unwrap_or_else(|| json!({})),
+                }),
+            ),
+            "task-cancel" => self.call_channel(
+                "redclaw:task-cancel",
+                json!({
+                    "jobDefinitionId": args
+                        .string(&["job-definition-id", "jobDefinitionId"])
+                        .or_else(|| payload_string(payload, "jobDefinitionId"))
+                        .ok_or_else(|| "redclaw task-cancel requires --job-definition-id".to_string())?,
+                    "reason": args
+                        .string(&["reason"])
+                        .or_else(|| payload_string(payload, "reason")),
+                }),
+            ),
+            "task-list" => self.call_channel(
+                "redclaw:task-list",
+                json!({
+                    "ownerScope": args
+                        .string(&["owner-scope", "ownerScope"])
+                        .or_else(|| payload_string(payload, "ownerScope")),
+                    "includeDrafts": args
+                        .string(&["include-drafts", "includeDrafts"])
+                        .and_then(|value| value.parse::<bool>().ok())
+                        .or_else(|| payload_field(payload, "includeDrafts").and_then(Value::as_bool))
+                        .unwrap_or(true),
+                }),
+            ),
+            "task-stats" => self.call_channel("redclaw:task-stats", json!({})),
             "profile-bundle" => self.call_channel("redclaw:profile:get-bundle", json!({})),
             "profile-read" => {
                 let doc_type = args
@@ -2325,6 +2402,55 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         let mut reference_images = value_string_list(merged.get("referenceImages"), 4);
         reference_images.extend(subject_reference_images);
         dedupe_string_list(&mut reference_images, 4);
+        let image_plan_items = extract_image_plan_items(merged.get("imagePlanItems"));
+        let requested_count = requested_image_generation_count(&merged, image_plan_items.len());
+        let multi_image_agent_turn = requested_count > 1 && self.session_id.is_some();
+        let plan_confirmed = payload_bool(&merged, &["planConfirmed"]).unwrap_or(false);
+        let shared_style_guide =
+            payload_string(&merged, "sharedStyleGuide").filter(|item| !item.trim().is_empty());
+        let base_prompt = payload_string(&merged, "prompt").unwrap_or_default();
+
+        if multi_image_agent_turn {
+            self.run_preflight_multi_image_skill_activation();
+            if image_plan_items.is_empty() {
+                return Err(app_cli_error_json(
+                    Some("image.generate"),
+                    "IMAGE_PLAN_REQUIRED",
+                    "multi-image generation requires an approved image plan before execution",
+                    false,
+                    Some(json!({
+                        "required": ["planConfirmed", "sharedStyleGuide", "imagePlanItems"],
+                        "count": requested_count,
+                        "hint": "先输出多图顺序表、统一风格锚点，并等待用户确认；确认后再调用 image.generate。"
+                    })),
+                ));
+            }
+            if shared_style_guide.is_none() {
+                return Err(app_cli_error_json(
+                    Some("image.generate"),
+                    "IMAGE_STYLE_GUIDE_REQUIRED",
+                    "multi-image generation requires a sharedStyleGuide",
+                    false,
+                    Some(json!({
+                        "count": image_plan_items.len(),
+                        "hint": "为整组图片补一份统一风格锚点，再继续生成。"
+                    })),
+                ));
+            }
+            if !plan_confirmed {
+                return Err(app_cli_error_json(
+                    Some("image.generate"),
+                    "IMAGE_PLAN_CONFIRMATION_REQUIRED",
+                    "multi-image generation requires explicit user confirmation",
+                    false,
+                    Some(json!({
+                        "count": image_plan_items.len(),
+                        "hint": "先向用户展示多图方案并等待确认；确认后传入 planConfirmed=true。"
+                    })),
+                ));
+            }
+        }
+
         if let Some(object) = merged.as_object_mut() {
             if !reference_images.is_empty() {
                 object.insert("referenceImages".to_string(), json!(reference_images));
@@ -2338,12 +2464,48 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     object.insert("generationMode".to_string(), json!("reference-guided"));
                 }
             }
+            if requested_count > 1 {
+                object.insert("count".to_string(), json!(requested_count));
+            }
+            if !image_plan_items.is_empty() {
+                let compiled_items = image_plan_items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        if item.prompt.trim().is_empty() {
+                            return Err(app_cli_error_json(
+                                Some("image.generate"),
+                                "IMAGE_PLAN_ITEM_PROMPT_REQUIRED",
+                                "each imagePlanItems entry must include a prompt",
+                                false,
+                                Some(json!({
+                                    "index": index,
+                                    "title": item.title,
+                                })),
+                            ));
+                        }
+                        Ok(json!({
+                            "title": item.title,
+                            "prompt": item.prompt,
+                            "copy": item.copy,
+                            "compiledPrompt": compile_image_batch_prompt(
+                                &base_prompt,
+                                shared_style_guide.as_deref(),
+                                item,
+                                index,
+                                image_plan_items.len(),
+                            ),
+                        }))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                object.insert("count".to_string(), json!(compiled_items.len()));
+                object.insert("imagePlanItems".to_string(), json!(compiled_items));
+            }
         }
-        self.run_preflight_image_skill_activation();
         self.call_channel("image-gen:generate", merged)
     }
 
-    fn run_preflight_image_skill_activation(&self) {
+    fn run_preflight_multi_image_skill_activation(&self) {
         let Some(session_id) = self.session_id else {
             return;
         };
@@ -2351,7 +2513,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             Ok(preflight_skill_activation_item(
                 &store.skills,
                 self.runtime_mode,
-                IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
+                IMAGE_DIRECTOR_SKILL_NAME,
             ))
         })
         .ok()
@@ -2369,7 +2531,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 "action": "skills.invoke",
                 "payload": { "name": name },
             }),
-            Some("Preflight skill activation before image generation"),
+            Some("Preflight skill activation before multi-image generation"),
         );
         let invoke_result = self.call_channel(
             "skills:invoke",
@@ -2403,7 +2565,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     "ACTION_FAILED",
                     &error,
                     false,
-                    Some(json!({ "activationSource": "host.image-generate-preflight" })),
+                    Some(json!({ "activationSource": "host.multi-image-preflight" })),
                 );
                 emit_runtime_tool_result(
                     self.app,
@@ -2426,7 +2588,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 "name": name,
                 "description": description,
                 "runtimeMode": self.runtime_mode,
-                "activationSource": "host.image-generate-preflight",
+                "activationSource": "host.multi-image-preflight",
             })),
         );
     }
@@ -3571,6 +3733,89 @@ fn dedupe_string_list(items: &mut Vec<String>, limit: usize) {
     *items = deduped;
 }
 
+fn image_plan_item_field(value: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|key| value.get(*key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
+fn extract_image_plan_items(value: Option<&Value>) -> Vec<ImageGenerationPlanItem> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.is_object())
+                .map(|item| ImageGenerationPlanItem {
+                    title: image_plan_item_field(item, &["title", "name", "label"]),
+                    prompt: image_plan_item_field(
+                        item,
+                        &["prompt", "visual", "description", "picture", "goal"],
+                    ),
+                    copy: image_plan_item_field(
+                        item,
+                        &["copy", "caption", "overlayText", "textDetail"],
+                    ),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn requested_image_generation_count(payload: &Value, image_plan_len: usize) -> usize {
+    if image_plan_len > 0 {
+        return image_plan_len.clamp(1, 4);
+    }
+    payload_field(payload, "count")
+        .and_then(Value::as_i64)
+        .unwrap_or(1)
+        .clamp(1, 4) as usize
+}
+
+fn compile_image_batch_prompt(
+    base_prompt: &str,
+    shared_style_guide: Option<&str>,
+    item: &ImageGenerationPlanItem,
+    index: usize,
+    total: usize,
+) -> String {
+    let mut sections = Vec::<String>::new();
+    let trimmed_brief = compact_whitespace(base_prompt);
+    if !trimmed_brief.is_empty() {
+        sections.push(format!("整组创意任务：{trimmed_brief}"));
+    }
+    sections.push(format!(
+        "这是同一组连续视觉中的第 {}/{} 张图片。",
+        index + 1,
+        total
+    ));
+    if !item.title.trim().is_empty() {
+        sections.push(format!("本张标题：{}", compact_whitespace(&item.title)));
+    }
+    sections.push(format!(
+        "本张画面目标：{}",
+        compact_whitespace(&item.prompt)
+    ));
+    if !item.copy.trim().is_empty() {
+        sections.push(format!("本张文案细节：{}", compact_whitespace(&item.copy)));
+    }
+    if let Some(shared_style_guide) = shared_style_guide
+        .map(compact_whitespace)
+        .filter(|item| !item.is_empty())
+    {
+        sections.push(format!("全组统一风格锚点：{shared_style_guide}"));
+    }
+    sections.push(
+        "跨图一致性要求：保持同一主体身份、服装与材质逻辑、色彩系统、光线方向、镜头语言和画面完成度，不要把这一张单独做成另一套风格。"
+            .to_string(),
+    );
+    sections.join("\n")
+}
+
 fn compact_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -4123,7 +4368,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "knowledge list|search",
             "work list|ready|get|update",
             "memory list|search|add|delete",
-            "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|profile-bundle|profile-read|profile-update|profile-onboarding",
+            "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
             "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
             "skills list|invoke|create|save|enable|disable|market-install",
@@ -4224,6 +4469,13 @@ fn help_response(namespace: Option<&str>) -> Value {
             "redclaw runner-start [--interval-minutes 15]",
             "redclaw runner-stop",
             "redclaw runner-set-config [payload]",
+            "redclaw task-preview [payload.intent/name/cron/actionType/ownerScope]",
+            "redclaw task-create [payload.previewToken + payload.intent]",
+            "redclaw task-confirm --draft-id <draftId> [--confirm true]",
+            "redclaw task-update --job-definition-id <jobDefinitionId> --reason <reason> [payload.patch]",
+            "redclaw task-cancel --job-definition-id <jobDefinitionId> [--reason <reason>]",
+            "redclaw task-list [--owner-scope <ownerScope>]",
+            "redclaw task-stats",
             "redclaw profile-bundle",
             "redclaw profile-read --doc-type user",
             "redclaw profile-update --doc-type user [payload.markdown]",
@@ -4537,6 +4789,49 @@ mod tests {
             payload_string(&merged, "aspectRatio"),
             Some("9:16".to_string())
         );
+    }
+
+    #[test]
+    fn extract_image_plan_items_reads_common_alias_fields() {
+        let items = extract_image_plan_items(Some(&json!([
+            {
+                "name": "封面",
+                "visual": "少女在咖啡店窗边看向镜头",
+                "caption": "主标题放在左上角"
+            },
+            {
+                "label": "细节页",
+                "description": "咖啡杯与桌面甜点特写",
+                "overlayText": "副标题强调春日限定"
+            }
+        ])));
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "封面");
+        assert_eq!(items[0].prompt, "少女在咖啡店窗边看向镜头");
+        assert_eq!(items[0].copy, "主标题放在左上角");
+        assert_eq!(items[1].title, "细节页");
+        assert_eq!(items[1].copy, "副标题强调春日限定");
+    }
+
+    #[test]
+    fn compile_image_batch_prompt_includes_order_and_shared_style() {
+        let prompt = compile_image_batch_prompt(
+            "为春季咖啡品牌做一组 3 张小红书配图",
+            Some("胶片感、奶油白主色、逆光边缘、统一浅景深"),
+            &ImageGenerationPlanItem {
+                title: "第 2 张 产品特写".to_string(),
+                prompt: "桌面咖啡杯、甜点与花瓣的近景构图".to_string(),
+                copy: "杯套上留出品牌标题区域".to_string(),
+            },
+            1,
+            3,
+        );
+
+        assert!(prompt.contains("整组创意任务：为春季咖啡品牌做一组 3 张小红书配图"));
+        assert!(prompt.contains("这是同一组连续视觉中的第 2/3 张图片。"));
+        assert!(prompt.contains("全组统一风格锚点：胶片感、奶油白主色、逆光边缘、统一浅景深"));
+        assert!(prompt.contains("跨图一致性要求：保持同一主体身份"));
     }
 
     #[test]
