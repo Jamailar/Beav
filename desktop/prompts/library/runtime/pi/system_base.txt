@@ -56,7 +56,9 @@ Guidelines:
 - 对长正文落盘，优先使用结构化 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "..." })`；不要把超长正文硬塞进命令行字符串。
 - 当用户要求“创建/修改 RedClaw 自动化设置（心跳、后台轮询参数）”时，必须先用 `app_cli(action="redclaw.runner.status")` 查询当前状态，再执行对应 runner action。
 - 当用户明确要求生成配图、封面图、插图、海报时，应优先直接出图，而不是只给提示词建议。
-- 当任务要求一次生成多张图片、组图、轮播图、连续海报或同风格多卡片时，在首次调用 `app_cli(action="image.generate", payload={ ... })` 前，若 `skills_section` 里可见 `redbox-image-director`，必须先调用 `app_cli(action="skills.invoke", payload={ "name": "redbox-image-director" })` 加载该技能，先输出多图顺序表、每张图的画面目标、文案细节和统一风格锚点，等待用户确认后，再一次性调用 `image.generate`，并传入 `planConfirmed`、`sharedStyleGuide` 与 `imagePlanItems`。
+- 当任务要求一次生成多张图片、组图、轮播图、连续海报或同风格多卡片时，在首次调用 `app_cli(action="image.generate", payload={ ... })` 前，若 `skills_section` 里可见 `redbox-image-director`，必须先调用 `app_cli(action="skills.invoke", payload={ "name": "redbox-image-director" })` 加载该技能，先完成多图顺序、每张图的画面目标、文案细节和统一风格锚点编排，再一次性调用 `image.generate`。
+- 默认多图流程仍需用户确认，并传入 `planConfirmed`、`sharedStyleGuide` 与 `imagePlanItems`。
+- 但如果当前 runtime 是 `redclaw`，且用户明确要做“知识卡片 / 图文卡片 / 小红书文字卡片”这类成套卡片图，不要停在二次确认；完成 `redbox-image-director` 编排后，在同一轮直接调用 `image.generate`，并传入 `planExecutionMode="redclaw_auto_execute"`、`setType`、`sequenceGoal`、`sharedStyleGuide` 与 `imagePlanItems`。
 - 当任务存在参考图、主体图、商品图、人物图、模板图时，生图必须优先走参考图模式，不要退回纯文生图。
 - 当任务是“在现有图片上加字、改标题、补元素、替换局部、局部修图”这类改图请求时，必须优先使用 `image-to-image` 模式，并先确认原图路径，再把该图片作为 `referenceImages` 传入。
 - 在 `image-to-image` 模式下，提示词只描述“要改什么”；不要重新详细描述整张图的风格、构图、氛围和主体，否则容易过拟合并偏离原图。

@@ -36,6 +36,8 @@ pub struct AppCliExecutor<'a> {
 
 const IMAGE_DIRECTOR_SKILL_NAME: &str = "redbox-image-director";
 const MAX_IMAGE_BATCH_ITEMS: usize = 6;
+const IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED: &str = "user_confirmed";
+const IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE: &str = "redclaw_auto_execute";
 
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
@@ -2472,6 +2474,13 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         let requested_count = requested_image_generation_count(&merged, image_plan_items.len());
         let multi_image_agent_turn = requested_count > 1 && self.session_id.is_some();
         let plan_confirmed = payload_bool(&merged, &["planConfirmed"]).unwrap_or(false);
+        let plan_execution_mode = image_plan_execution_mode(&merged);
+        let redclaw_auto_execute = validate_redclaw_auto_image_plan_execution(
+            self.runtime_mode,
+            &merged,
+            requested_count,
+            &plan_execution_mode,
+        )?;
         let shared_style_guide =
             payload_string(&merged, "sharedStyleGuide").filter(|item| !item.trim().is_empty());
         let base_prompt = payload_string(&merged, "prompt").unwrap_or_default();
@@ -2504,16 +2513,20 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 ));
             }
             if !plan_confirmed {
-                return Err(app_cli_error_json(
-                    Some("image.generate"),
-                    "IMAGE_PLAN_CONFIRMATION_REQUIRED",
-                    "multi-image generation requires explicit user confirmation",
-                    false,
-                    Some(json!({
-                        "count": image_plan_items.len(),
-                        "hint": "先向用户展示多图方案并等待确认；确认后传入 planConfirmed=true。"
-                    })),
-                ));
+                if redclaw_auto_execute {
+                    // RedClaw card-set automation is allowed to plan and submit in one turn.
+                } else {
+                    return Err(app_cli_error_json(
+                        Some("image.generate"),
+                        "IMAGE_PLAN_CONFIRMATION_REQUIRED",
+                        "multi-image generation requires explicit user confirmation",
+                        false,
+                        Some(json!({
+                            "count": image_plan_items.len(),
+                            "hint": "先向用户展示多图方案并等待确认；确认后传入 planConfirmed=true。RedClaw 卡片套图自动执行时可改用 planExecutionMode=redclaw_auto_execute。"
+                        })),
+                    ));
+                }
             }
         }
 
@@ -3953,6 +3966,104 @@ fn requested_image_generation_count(payload: &Value, image_plan_len: usize) -> u
         .clamp(1, MAX_IMAGE_BATCH_ITEMS as i64) as usize
 }
 
+fn image_plan_execution_mode(payload: &Value) -> String {
+    payload_string(payload, "planExecutionMode")
+        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED.to_string())
+}
+
+fn normalize_image_set_type(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .replace(' ', "_")
+}
+
+fn redclaw_auto_batch_set_type_allowed(set_type: &str) -> bool {
+    matches!(
+        normalize_image_set_type(set_type).as_str(),
+        "knowledge_card_set"
+            | "knowledge_cards"
+            | "image_card_set"
+            | "image_cards"
+            | "xiaohongshu_text_cards"
+            | "xiaohongshu_text_card_set"
+            | "xhs_text_cards"
+    ) || matches!(
+        set_type.trim(),
+        "知识卡片" | "知识卡片套图" | "图文卡片" | "小红书文字卡片"
+    )
+}
+
+fn validate_redclaw_auto_image_plan_execution(
+    runtime_mode: &str,
+    payload: &Value,
+    requested_count: usize,
+    plan_execution_mode: &str,
+) -> Result<bool, String> {
+    if plan_execution_mode == IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED {
+        return Ok(false);
+    }
+    if plan_execution_mode != IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE {
+        return Err(app_cli_error_json(
+            Some("image.generate"),
+            "IMAGE_PLAN_EXECUTION_MODE_INVALID",
+            "unsupported planExecutionMode",
+            false,
+            Some(json!({
+                "received": plan_execution_mode,
+                "supported": [
+                    IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED,
+                    IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE
+                ]
+            })),
+        ));
+    }
+    if runtime_mode != "redclaw" {
+        return Err(app_cli_error_json(
+            Some("image.generate"),
+            "IMAGE_PLAN_EXECUTION_MODE_NOT_ALLOWED",
+            "redclaw_auto_execute is only allowed in RedClaw runtime",
+            false,
+            Some(json!({
+                "runtimeMode": runtime_mode,
+                "requiredRuntimeMode": "redclaw"
+            })),
+        ));
+    }
+    if requested_count <= 1 {
+        return Err(app_cli_error_json(
+            Some("image.generate"),
+            "IMAGE_PLAN_EXECUTION_MODE_BATCH_ONLY",
+            "redclaw_auto_execute only applies to coordinated multi-image batches",
+            false,
+            Some(json!({
+                "count": requested_count
+            })),
+        ));
+    }
+    let set_type = payload_string(payload, "setType").unwrap_or_default();
+    if !redclaw_auto_batch_set_type_allowed(&set_type) {
+        return Err(app_cli_error_json(
+            Some("image.generate"),
+            "IMAGE_PLAN_SET_TYPE_REQUIRED",
+            "redclaw_auto_execute requires a supported card-set type",
+            false,
+            Some(json!({
+                "receivedSetType": set_type,
+                "supportedSetTypes": [
+                    "knowledge_card_set",
+                    "image_card_set",
+                    "xiaohongshu_text_cards"
+                ]
+            })),
+        ));
+    }
+    Ok(true)
+}
+
 fn image_generation_delivery_mode(
     session_id: Option<&str>,
     payload: &Value,
@@ -5067,6 +5178,60 @@ mod tests {
         assert!(prompt.contains("这是同一组连续视觉中的第 2/3 张图片。"));
         assert!(prompt.contains("全组统一风格锚点：胶片感、奶油白主色、逆光边缘、统一浅景深"));
         assert!(prompt.contains("跨图一致性要求：保持同一主体身份"));
+    }
+
+    #[test]
+    fn image_plan_execution_mode_defaults_to_user_confirmed() {
+        assert_eq!(
+            image_plan_execution_mode(&json!({})),
+            IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED
+        );
+        assert_eq!(
+            image_plan_execution_mode(&json!({ "planExecutionMode": "redclaw-auto-execute" })),
+            IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE
+        );
+    }
+
+    #[test]
+    fn validate_redclaw_auto_image_plan_execution_accepts_supported_card_sets() {
+        assert_eq!(
+            validate_redclaw_auto_image_plan_execution(
+                "redclaw",
+                &json!({ "setType": "knowledge_card_set" }),
+                5,
+                IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
+            )
+            .expect("should allow redclaw card set"),
+            true
+        );
+        assert_eq!(
+            validate_redclaw_auto_image_plan_execution(
+                "redclaw",
+                &json!({ "setType": "图文卡片" }),
+                4,
+                IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
+            )
+            .expect("should allow localized card set"),
+            true
+        );
+    }
+
+    #[test]
+    fn validate_redclaw_auto_image_plan_execution_rejects_other_runtimes_and_set_types() {
+        assert!(validate_redclaw_auto_image_plan_execution(
+            "chatroom",
+            &json!({ "setType": "knowledge_card_set" }),
+            5,
+            IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
+        )
+        .is_err());
+        assert!(validate_redclaw_auto_image_plan_execution(
+            "redclaw",
+            &json!({ "setType": "ecommerce_gallery" }),
+            5,
+            IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
+        )
+        .is_err());
     }
 
     #[test]
