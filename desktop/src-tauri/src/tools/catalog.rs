@@ -281,30 +281,47 @@ fn redclaw_runner_mutation_input_schema() -> Value {
 fn redclaw_task_preview_input_schema() -> Value {
     object_schema(
         &[
-            ("kind", string_schema("Task kind: scheduled or long_cycle.")),
+            (
+                "kind",
+                string_schema(
+                    "Task kind: scheduled or long_cycle. Omit to infer scheduled unless objective/stepPrompt are present.",
+                ),
+            ),
             ("intent", string_schema("Stable agent intent ref.")),
             ("name", string_schema("Task title.")),
             (
                 "cron",
-                string_schema("5-field cron, @every Xm/Xh/Xd, or @once RFC3339."),
+                string_schema(
+                    "5-field cron, @every Xm/Xh/Xd, or @once RFC3339. For scheduled tasks, prefer explicit 5-field cron like `50 21 * * *`.",
+                ),
             ),
-            ("goal", string_schema("Optional user-facing task goal.")),
+            (
+                "goal",
+                string_schema(
+                    "Optional user-facing task goal. Scheduled tasks require prompt or goal.",
+                ),
+            ),
             (
                 "actionType",
-                string_schema("Typed action id for policy evaluation."),
+                string_schema("Typed action id for policy evaluation, such as greeting."),
             ),
             (
                 "ownerScope",
-                string_schema("Conversation or owner scope for dedupe."),
+                string_schema("Conversation or owner scope for dedupe, such as manual:redclaw."),
             ),
-            ("prompt", string_schema("Prompt for scheduled tasks.")),
+            (
+                "prompt",
+                string_schema(
+                    "Prompt for scheduled tasks. Scheduled tasks require prompt or goal.",
+                ),
+            ),
             (
                 "objective",
-                string_schema("Objective for long-cycle tasks."),
+                string_schema("Objective for long-cycle tasks. Required for long_cycle."),
             ),
             (
                 "stepPrompt",
-                string_schema("Per-round instruction for long-cycle tasks."),
+                string_schema("Per-round instruction for long-cycle tasks. Required for long_cycle."),
             ),
             (
                 "metadata",
@@ -1223,7 +1240,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.preview",
         namespace: "redclaw.task",
-        description: "Preview a RedClaw task definition, run policy checks, and detect conflicts before creation.",
+        description: "Preview a RedClaw business task definition before creation. Use this for scheduled or long-cycle user tasks, not internal runtime.tasks.*. Scheduled tasks should include cron plus prompt or goal.",
         input_schema: redclaw_task_preview_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -1234,7 +1251,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.create",
         namespace: "redclaw.task",
-        description: "Create a pending RedClaw task draft from a validated preview token.",
+        description: "Create a pending RedClaw task draft from a validated preview token returned by redclaw.task.preview.",
         input_schema: redclaw_task_create_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -1245,7 +1262,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.confirm",
         namespace: "redclaw.task",
-        description: "Confirm or discard a pending RedClaw task draft.",
+        description: "Confirm or discard a pending RedClaw task draft. Use after redclaw.task.create.",
         input_schema: redclaw_task_confirm_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
