@@ -56,6 +56,7 @@ const REDBOX_EDITOR_DESCRIPTION: &str =
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "chatroom",
     "default",
+    "image-generation",
     "knowledge",
     "redclaw",
     "background-maintenance",
@@ -67,6 +68,7 @@ const ALL_EDITOR_RUNTIME_MODES: &[&str] = &["video-editor", "audio-editor", "dia
 const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
     "wander",
     "chatroom",
+    "image-generation",
     "knowledge",
     "redclaw",
     "video-editor",

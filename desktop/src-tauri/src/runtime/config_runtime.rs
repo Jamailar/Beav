@@ -35,6 +35,7 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
     match normalized.as_str() {
         "wander" => "wander",
         "redclaw" => "redclaw",
+        "generation-agent" | "image-generation" | "image_generation" => "image-generation",
         "video-editor" | "video_editor" | "video-draft" | "redvideo" => "video-editor",
         "audio-editor" | "audio_editor" | "audio-draft" | "redaudio" => "audio-editor",
         "diagnostics" | "debug" | "debugger" => "diagnostics",

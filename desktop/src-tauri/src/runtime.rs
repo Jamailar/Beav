@@ -367,6 +367,10 @@ mod tests {
             "wander"
         );
         assert_eq!(
+            resolve_runtime_mode_from_context_type(Some("generation-agent")),
+            "image-generation"
+        );
+        assert_eq!(
             resolve_runtime_mode_from_context_type(Some("wechat-article")),
             "knowledge"
         );
