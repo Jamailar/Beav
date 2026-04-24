@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "RedBox Capture",
   "description": "将网页、链接、选中文字、图片、小红书和 YouTube 内容直接保存到 RedBox 知识库或素材库。",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
