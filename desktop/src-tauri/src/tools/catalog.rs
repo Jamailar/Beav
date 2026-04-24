@@ -746,12 +746,13 @@ fn skills_list_input_schema() -> Value {
 }
 
 fn image_generate_input_schema() -> Value {
+    let max_batch_items = 6;
     object_schema(
         &[
             ("prompt", string_schema("Image generation prompt.")),
             (
                 "count",
-                integer_schema("Number of images to generate.", 1, 4),
+                integer_schema("Number of images to generate.", 1, max_batch_items),
             ),
             (
                 "planConfirmed",
@@ -773,7 +774,7 @@ fn image_generate_input_schema() -> Value {
                 "imagePlanItems",
                 json!({
                     "type": "array",
-                    "maxItems": 4,
+                    "maxItems": max_batch_items,
                     "items": {
                         "type": "object",
                         "properties": {

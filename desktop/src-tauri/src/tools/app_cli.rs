@@ -35,6 +35,7 @@ pub struct AppCliExecutor<'a> {
 }
 
 const IMAGE_DIRECTOR_SKILL_NAME: &str = "redbox-image-director";
+const MAX_IMAGE_BATCH_ITEMS: usize = 6;
 
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
@@ -2891,6 +2892,11 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         {
             return result;
         }
+        if let Some(result) =
+            commands::media_jobs::handle_media_jobs_channel(self.app, self.state, channel, &payload)
+        {
+            return result;
+        }
         if let Some(result) = commands::workspace_data::handle_workspace_data_channel(
             self.app, self.state, channel, &payload,
         ) {
@@ -3786,12 +3792,12 @@ fn extract_image_plan_items(value: Option<&Value>) -> Vec<ImageGenerationPlanIte
 
 fn requested_image_generation_count(payload: &Value, image_plan_len: usize) -> usize {
     if image_plan_len > 0 {
-        return image_plan_len.clamp(1, 4);
+        return image_plan_len.clamp(1, MAX_IMAGE_BATCH_ITEMS);
     }
     payload_field(payload, "count")
         .and_then(Value::as_i64)
         .unwrap_or(1)
-        .clamp(1, 4) as usize
+        .clamp(1, MAX_IMAGE_BATCH_ITEMS as i64) as usize
 }
 
 fn compile_image_batch_prompt(
@@ -4843,6 +4849,28 @@ mod tests {
         assert_eq!(items[0].copy, "主标题放在左上角");
         assert_eq!(items[1].title, "细节页");
         assert_eq!(items[1].copy, "副标题强调春日限定");
+    }
+
+    #[test]
+    fn requested_image_generation_count_allows_six_planned_images() {
+        assert_eq!(
+            requested_image_generation_count(
+                &json!({
+                    "count": 6
+                }),
+                6,
+            ),
+            6
+        );
+        assert_eq!(
+            requested_image_generation_count(
+                &json!({
+                    "count": 9
+                }),
+                9,
+            ),
+            6
+        );
     }
 
     #[test]

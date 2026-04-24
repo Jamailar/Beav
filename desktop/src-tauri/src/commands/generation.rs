@@ -9,6 +9,7 @@ use std::thread;
 use tauri::{AppHandle, State};
 
 const REDBOX_OFFICIAL_VIDEO_ENDPOINT: &str = "https://api.ziz.hk/redbox/v1";
+const MAX_IMAGE_BATCH_ITEMS: usize = 6;
 
 #[derive(Debug, Clone, Default)]
 struct RuntimeToolLogContext {
@@ -60,7 +61,7 @@ fn extract_planned_image_generation_items(payload: &Value) -> Vec<PlannedImageGe
         .map(|items| {
             items
                 .iter()
-                .take(4)
+                .take(MAX_IMAGE_BATCH_ITEMS)
                 .filter(|item| item.is_object())
                 .filter_map(|item| {
                     let prompt = planned_image_string_field(
@@ -1000,6 +1001,24 @@ mod tests {
         assert_eq!(items[0].prompt, "最终执行提示词");
         assert_eq!(items[1].title.as_deref(), Some("第二张"));
         assert_eq!(items[1].prompt, "细节补图");
+    }
+
+    #[test]
+    fn extract_planned_image_generation_items_keeps_six_entries() {
+        let items = extract_planned_image_generation_items(&json!({
+            "imagePlanItems": [
+                { "title": "1", "prompt": "p1" },
+                { "title": "2", "prompt": "p2" },
+                { "title": "3", "prompt": "p3" },
+                { "title": "4", "prompt": "p4" },
+                { "title": "5", "prompt": "p5" },
+                { "title": "6", "prompt": "p6" }
+            ]
+        }));
+
+        assert_eq!(items.len(), 6);
+        assert_eq!(items[5].title.as_deref(), Some("6"));
+        assert_eq!(items[5].prompt, "p6");
     }
 
     #[test]
