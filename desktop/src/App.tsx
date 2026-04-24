@@ -7,6 +7,7 @@ import { StartupMigrationModal } from './components/StartupMigrationModal';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import { NotificationsHost } from './notifications/NotificationsHost';
 import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
+import { RedClawOnboardingFlowHost } from './pages/redclaw/RedClawOnboardingFlowHost';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -254,6 +255,8 @@ function App() {
 
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
+  const [redclawOnboardingOpen, setRedclawOnboardingOpen] = useState(false);
+  const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
@@ -379,6 +382,10 @@ function App() {
   const clearPendingMessage = () => {
     setPendingChatMessage(null);
   };
+
+  const openRedClawOnboarding = useCallback(() => {
+    setRedclawOnboardingOpen(true);
+  }, []);
 
   const navigateToRedClaw = (message: PendingChatMessage) => {
     uiTraceInteraction('app', 'nav_to_redclaw', { to: 'redclaw' });
@@ -643,7 +650,11 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'settings') && (
           <div className={currentView === 'settings' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'settings' ? <ViewLoadingFallback /> : null}>
-              <SettingsPage isActive={currentView === 'settings'} />
+              <SettingsPage
+                isActive={currentView === 'settings'}
+                onOpenRedClawOnboarding={openRedClawOnboarding}
+                redclawOnboardingVersion={redclawOnboardingVersion}
+              />
             </Suspense>
           </div>
         )}
@@ -688,6 +699,8 @@ function App() {
                 onPendingMessageConsumed={clearPendingRedClawMessage}
                 isActive={currentView === 'redclaw' || persistentViews.has('redclaw')}
                 onExecutionStateChange={(active) => setViewPersistent('redclaw', active)}
+                onOpenRedClawOnboarding={openRedClawOnboarding}
+                redclawOnboardingVersion={redclawOnboardingVersion}
               />
             </Suspense>
           </div>
@@ -789,6 +802,14 @@ function App() {
         busy={startupMigrationBusy}
         onStart={() => void handleStartStartupMigration()}
         onClose={handleCloseStartupMigration}
+      />
+      <RedClawOnboardingFlowHost
+        open={redclawOnboardingOpen}
+        onClose={() => setRedclawOnboardingOpen(false)}
+        onCompleted={() => {
+          setRedclawOnboardingOpen(false);
+          setRedclawOnboardingVersion((value) => value + 1);
+        }}
       />
       <FirstRunTour currentView={currentView} onNavigate={setCurrentView} />
       <NotificationsHost currentView={currentView} />

@@ -310,8 +310,7 @@ export function RedClawOnboardingFlow({
   const [submitting, setSubmitting] = useState(false);
   const [submissionStageIndex, setSubmissionStageIndex] = useState(0);
   const [submissionError, setSubmissionError] = useState('');
-  const [isCheckingModelConfig, setIsCheckingModelConfig] = useState(false);
-  const [hasDefaultModelConfigured, setHasDefaultModelConfigured] = useState(false);
+  const [hasDefaultModelConfigured, setHasDefaultModelConfigured] = useState(true);
   const [modelConfigMessage, setModelConfigMessage] = useState('');
 
   useEffect(() => {
@@ -321,8 +320,6 @@ export function RedClawOnboardingFlow({
     setSubmitting(false);
     setSubmissionStageIndex(0);
     setSubmissionError('');
-    setIsCheckingModelConfig(true);
-    setHasDefaultModelConfigured(false);
     setModelConfigMessage('');
   }, [initialAnswers, initialStepIndex, open]);
 
@@ -330,7 +327,6 @@ export function RedClawOnboardingFlow({
     if (!open) return;
     let cancelled = false;
     const loadModelConfig = async () => {
-      setIsCheckingModelConfig(true);
       try {
         const settings = await window.ipcRenderer.getSettings();
         if (cancelled) return;
@@ -347,10 +343,6 @@ export function RedClawOnboardingFlow({
         console.error('Failed to load settings for RedClaw onboarding:', error);
         setHasDefaultModelConfigured(false);
         setModelConfigMessage('当前无法读取模型配置，请先在“设置 -> AI 模型”确认默认模型已设置，再重新打开风格初始化。');
-      } finally {
-        if (!cancelled) {
-          setIsCheckingModelConfig(false);
-        }
       }
     };
     void loadModelConfig();
@@ -371,7 +363,7 @@ export function RedClawOnboardingFlow({
 
   const currentQuestion = REDCLAW_ONBOARDING_MVP_QUESTIONS[currentStepIndex];
   const isLastStep = currentStepIndex >= REDCLAW_ONBOARDING_MVP_QUESTIONS.length - 1;
-  const blockProgression = isCheckingModelConfig || !hasDefaultModelConfigured;
+  const blockProgression = !hasDefaultModelConfigured;
   const updateAnswer = (
     key: keyof RedClawOnboardingAnswers,
     nextValue: number | string,
@@ -465,15 +457,9 @@ export function RedClawOnboardingFlow({
               <div className="space-y-6">
                 {blockProgression ? (
                   <div className="flex items-start gap-3 rounded-2xl border border-amber-300/70 bg-amber-50/90 px-4 py-3 text-sm leading-6 text-amber-900">
-                    {isCheckingModelConfig ? (
-                      <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-amber-700" />
-                    ) : (
-                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-                    )}
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
                     <div>
-                      {isCheckingModelConfig
-                        ? '正在检查默认模型配置...'
-                        : modelConfigMessage}
+                      {modelConfigMessage || '请先在“设置 -> AI 模型”里设置默认模型，再继续风格初始化。'}
                     </div>
                   </div>
                 ) : null}

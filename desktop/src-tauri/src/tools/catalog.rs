@@ -563,7 +563,10 @@ fn cli_runtime_detect_input_schema() -> Value {
 fn cli_runtime_discover_input_schema() -> Value {
     object_schema(
         &[
-            ("query", string_schema("Optional CLI name substring to search in PATH.")),
+            (
+                "query",
+                string_schema("Optional CLI name substring to search in PATH."),
+            ),
             (
                 "limit",
                 integer_schema("Maximum number of discovered commands to return.", 1, 500),

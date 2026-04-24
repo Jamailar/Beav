@@ -184,7 +184,11 @@ fn resolve_executable(
             if path.is_file() {
                 return CliExecutableResolution {
                     resolved_path: Some(path),
-                    resolved_from: Some(path_entry_origin(root, &extra_paths, managed_path_entries)),
+                    resolved_from: Some(path_entry_origin(
+                        root,
+                        &extra_paths,
+                        managed_path_entries,
+                    )),
                     effective_path_preview,
                     searched_path_entries_count: path_entries.len(),
                 };

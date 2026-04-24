@@ -3,7 +3,6 @@ import { Loader2, MessageSquarePlus, Heart, Sparkles, SlidersHorizontal, X } fro
 import { Chat } from './Chat';
 import type { PendingChatMessage } from '../App';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
-import { toast } from 'sonner';
 import {
     HEARTBEAT_INTERVAL_OPTIONS,
     LONG_TEMPLATES,
@@ -28,12 +27,10 @@ import {
     sortContextSessionItems,
 } from './redclaw/helpers';
 import { RedClawHistoryDrawer } from './redclaw/RedClawHistoryDrawer';
-import { RedClawOnboardingFlow } from './redclaw/RedClawOnboardingFlow';
-import { RedClawSidebar } from './redclaw/RedClawSidebar';
 import {
-    normalizeOnboardingAnswers,
-    type RedClawOnboardingAnswers,
-} from './redclaw/onboardingMvp';
+    isRedClawOnboardingCompleted,
+} from './redclaw/onboardingState';
+import { RedClawSidebar } from './redclaw/RedClawSidebar';
 import type {
     LongDraft,
     RunnerLongCycleTask,
@@ -48,6 +45,8 @@ interface RedClawProps {
     onPendingMessageConsumed?: () => void;
     isActive?: boolean;
     onExecutionStateChange?: (active: boolean) => void;
+    onOpenRedClawOnboarding?: () => void;
+    redclawOnboardingVersion?: number;
 }
 
 interface RedClawSpaceListPayload {
@@ -91,36 +90,13 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     return sessionId || null;
 }
 
-function isRedClawOnboardingCompleted(state: Record<string, unknown> | null | undefined): boolean {
-    const completedAt = String(state?.completedAt || '').trim();
-    return completedAt.length > 0;
-}
-
-function readRedClawOnboardingDraft(state: Record<string, unknown> | null | undefined): {
-    stepIndex: number;
-    answers: RedClawOnboardingAnswers;
-} {
-    const uiFlow = (state?.uiFlow && typeof state.uiFlow === 'object')
-        ? state.uiFlow as Record<string, unknown>
-        : null;
-    const draft = (uiFlow?.draft && typeof uiFlow.draft === 'object')
-        ? uiFlow.draft as Record<string, unknown>
-        : null;
-    const rawAnswers = (draft?.answers && typeof draft.answers === 'object')
-        ? draft.answers as Record<string, unknown>
-        : null;
-    const stepIndex = Number(draft?.stepIndex);
-    return {
-        stepIndex: Number.isFinite(stepIndex) ? Math.max(0, Math.round(stepIndex)) : 0,
-        answers: normalizeOnboardingAnswers(rawAnswers),
-    };
-}
-
 export function RedClaw({
     pendingMessage,
     onPendingMessageConsumed,
     isActive = true,
     onExecutionStateChange,
+    onOpenRedClawOnboarding,
+    redclawOnboardingVersion = 0,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -150,7 +126,6 @@ export function RedClaw({
     const [automationLoading, setAutomationLoading] = useState(false);
     const [automationMessage, setAutomationMessage] = useState('');
     const [onboardingState, setOnboardingState] = useState<Record<string, unknown> | null>(null);
-    const [onboardingFlowOpen, setOnboardingFlowOpen] = useState(false);
     const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
 
     const [runnerIntervalMinutes, setRunnerIntervalMinutes] = useState<number>(20);
@@ -432,6 +407,14 @@ export function RedClaw({
         if (!isActive || !activeSessionId) return;
         void loadOnboardingBundle();
     }, [activeSessionId, isActive, loadOnboardingBundle]);
+
+    useEffect(() => {
+        if (!redclawOnboardingVersion) return;
+        void loadOnboardingBundle();
+        void loadSkills();
+        setHideOnboardingPrompt(true);
+        setChatActionMessage('已完成这个空间的风格定义');
+    }, [loadOnboardingBundle, loadSkills, redclawOnboardingVersion]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -995,34 +978,6 @@ export function RedClaw({
         }
     }, [loadRunnerStatus]);
 
-    const saveOnboardingProgress = useCallback(async (payload: {
-        stepIndex: number;
-        answers: RedClawOnboardingAnswers;
-    }) => {
-        const result = await window.ipcRenderer.redclawProfile.saveInitializationProgress({
-            stepIndex: payload.stepIndex,
-            answers: { ...payload.answers },
-        });
-        if (result?.state && typeof result.state === 'object') {
-            setOnboardingState(result.state);
-        }
-    }, []);
-
-    const completeOnboarding = useCallback(async (answers: RedClawOnboardingAnswers) => {
-        const result = await window.ipcRenderer.redclawProfile.completeInitialization({ answers: { ...answers } });
-        if (!result?.success) {
-            throw new Error('初始化保存失败');
-        }
-        setOnboardingState(result.onboardingState || null);
-        setSkillsMessage('当前空间的写作风格指导已同步更新');
-        await loadSkills();
-        setOnboardingFlowOpen(false);
-        setHideOnboardingPrompt(true);
-        setChatActionMessage('已完成这个空间的风格定义');
-        toast.success('已完成这个空间的风格定义');
-    }, [loadSkills]);
-
-    const onboardingDraft = useMemo(() => readRedClawOnboardingDraft(onboardingState), [onboardingState]);
     const onboardingCompleted = useMemo(() => isRedClawOnboardingCompleted(onboardingState), [onboardingState]);
 
     const welcomeActions = useMemo(() => {
@@ -1030,14 +985,14 @@ export function RedClaw({
         if (!onboardingCompleted) {
             actions.push({
                 label: '定义这个空间',
-                onClick: () => setOnboardingFlowOpen(true),
+                onClick: () => onOpenRedClawOnboarding?.(),
                 icon: <Sparkles className="w-5 h-5" />,
                 color: 'text-amber-500',
             });
         } else {
             actions.push({
                 label: '重新定义空间风格',
-                onClick: () => setOnboardingFlowOpen(true),
+                onClick: () => onOpenRedClawOnboarding?.(),
                 icon: <SlidersHorizontal className="w-5 h-5" />,
                 color: 'text-stone-700',
             });
@@ -1056,7 +1011,7 @@ export function RedClaw({
             }
         );
         return actions;
-    }, [onboardingCompleted]);
+    }, [onOpenRedClawOnboarding, onboardingCompleted]);
 
 
     return (
@@ -1072,7 +1027,7 @@ export function RedClaw({
                 ) : activeSessionId ? (
                     <div className="h-full min-h-0 flex flex-col">
                         <div className="relative min-h-0 flex-1 overflow-hidden">
-                            {!onboardingCompleted && !hideOnboardingPrompt && !onboardingFlowOpen && (
+                            {!onboardingCompleted && !hideOnboardingPrompt && (
                                 <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center px-4">
                                     <div className="pointer-events-auto w-full max-w-2xl rounded-[28px] border border-amber-300/20 bg-[linear-gradient(135deg,rgba(24,18,14,0.96),rgba(17,13,15,0.94))] p-5 text-white shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl">
                                         <div className="flex items-start justify-between gap-4">
@@ -1089,7 +1044,7 @@ export function RedClaw({
                                                 </div>
                                                 <button
                                                     type="button"
-                                                    onClick={() => setOnboardingFlowOpen(true)}
+                                                    onClick={() => onOpenRedClawOnboarding?.()}
                                                     className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:scale-[0.99]"
                                                 >
                                                     <SlidersHorizontal className="h-4 w-4" />
@@ -1134,15 +1089,6 @@ export function RedClaw({
                                 messageWorkflowPlacement="bottom"
                                 messageWorkflowVariant="compact"
                                 messageWorkflowEmphasis="default"
-                            />
-                            <RedClawOnboardingFlow
-                                open={onboardingFlowOpen}
-                                activeSpaceName={activeSpaceName}
-                                initialStepIndex={onboardingDraft.stepIndex}
-                                initialAnswers={{ ...onboardingDraft.answers }}
-                                onClose={() => setOnboardingFlowOpen(false)}
-                                onSaveProgress={saveOnboardingProgress}
-                                onComplete={completeOnboarding}
                             />
                             <RedClawHistoryDrawer
                                 open={historyDrawerOpen}
