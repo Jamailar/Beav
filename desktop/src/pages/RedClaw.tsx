@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { Loader2, Sparkles, MessageSquarePlus, Heart } from 'lucide-react';
-import { clsx } from 'clsx';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, MessageSquarePlus, Heart } from 'lucide-react';
 import { Chat } from './Chat';
 import type { PendingChatMessage } from '../App';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
@@ -9,9 +8,6 @@ import {
     LONG_TEMPLATES,
     REDCLAW_CONTEXT_TYPE,
     REDCLAW_SHORTCUTS,
-    REDCLAW_SIDEBAR_DEFAULT_WIDTH,
-    REDCLAW_SIDEBAR_MAX_WIDTH,
-    REDCLAW_SIDEBAR_MIN_WIDTH,
     REDCLAW_WELCOME_ICON_SRC,
     REDCLAW_WELCOME_SHORTCUTS,
     RUNNER_INTERVAL_OPTIONS,
@@ -112,13 +108,6 @@ export function RedClaw({
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
     const [sidebarTab, setSidebarTab] = useState<SidebarTab>('skills');
-    const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-        if (typeof window === 'undefined') return REDCLAW_SIDEBAR_DEFAULT_WIDTH;
-        const raw = Number(localStorage.getItem('redclaw:sidebarWidth') || REDCLAW_SIDEBAR_DEFAULT_WIDTH);
-        if (!Number.isFinite(raw)) return REDCLAW_SIDEBAR_DEFAULT_WIDTH;
-        return Math.min(REDCLAW_SIDEBAR_MAX_WIDTH, Math.max(REDCLAW_SIDEBAR_MIN_WIDTH, raw));
-    });
-    const [isSidebarResizing, setIsSidebarResizing] = useState(false);
 
     const [skills, setSkills] = useState<SkillDefinition[]>([]);
     const [isSkillsLoading, setIsSkillsLoading] = useState(false);
@@ -459,10 +448,6 @@ export function RedClaw({
         const timer = window.setTimeout(() => setChatActionMessage(''), 2600);
         return () => window.clearTimeout(timer);
     }, [chatActionMessage]);
-
-    useEffect(() => {
-        localStorage.setItem('redclaw:sidebarWidth', String(Math.round(sidebarWidth)));
-    }, [sidebarWidth]);
 
     useEffect(() => {
         if (!automationMessage) return;
@@ -949,32 +934,6 @@ export function RedClaw({
         }
     }, [loadRunnerStatus]);
 
-    const startSidebarResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setIsSidebarResizing(true);
-        const startX = event.clientX;
-        const startWidth = sidebarWidth;
-
-        const handleMouseMove = (moveEvent: MouseEvent) => {
-            const delta = startX - moveEvent.clientX;
-            const next = Math.min(
-                REDCLAW_SIDEBAR_MAX_WIDTH,
-                Math.max(REDCLAW_SIDEBAR_MIN_WIDTH, startWidth + delta)
-            );
-            setSidebarWidth(next);
-        };
-
-        const handleMouseUp = () => {
-            setIsSidebarResizing(false);
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
-    }, [sidebarWidth]);
-
     const welcomeActions = useMemo(() => [
         {
             label: '想吐槽或提建议?',
@@ -1015,7 +974,7 @@ export function RedClaw({
                                 fixedSessionBannerText=""
                                 showWelcomeShortcuts={false}
                                 showComposerShortcuts={false}
-                                fixedSessionContextIndicatorMode={sidebarCollapsed ? 'corner-ring' : 'none'}
+                                fixedSessionContextIndicatorMode="corner-ring"
                                 shortcuts={REDCLAW_SHORTCUTS}
                                 welcomeShortcuts={REDCLAW_WELCOME_SHORTCUTS}
                                 embeddedTheme="auto"
@@ -1023,7 +982,7 @@ export function RedClaw({
                                 welcomeSubtitle=""
                                 welcomeIconSrc={REDCLAW_WELCOME_ICON_SRC}
                                 welcomeActions={welcomeActions}
-                                contentLayout={sidebarCollapsed ? 'wide' : 'default'}
+                                contentLayout="wide"
                                 contentWidthPreset="narrow"
                                 allowFileUpload={true}
                                 messageWorkflowPlacement="bottom"
@@ -1042,23 +1001,21 @@ export function RedClaw({
                                 onSwitchSession={switchSession}
                                 onDeleteSession={(sessionId) => void deleteHistorySession(sessionId)}
                             />
-                            <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                                    className={clsx(
-                                        'flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium shadow-sm backdrop-blur-md transition-all active:scale-95',
-                                        !sidebarCollapsed
-                                            ? 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary'
-                                            : 'border-border bg-surface-primary/80 text-text-secondary hover:border-accent-primary/30 hover:bg-surface-primary hover:text-text-primary'
-                                    )}
-                                    title={sidebarCollapsed ? "展开技能面板" : "收起技能面板"}
-                                    aria-label="切换技能面板"
-                                >
-                                    <Sparkles className="w-4 h-4" />
-                                    <span className="hidden sm:inline">技能</span>
-                                </button>
-                            </div>
+                            <RedClawSidebar
+                                open={!sidebarCollapsed}
+                                chatActionMessage={chatActionMessage}
+                                skills={skills}
+                                isSkillsLoading={isSkillsLoading}
+                                skillsMessage={skillsMessage}
+                                enabledSkillCount={enabledSkillCount}
+                                installSource={installSource}
+                                isInstallingSkill={isInstallingSkill}
+                                onToggleOpen={() => setSidebarCollapsed((value) => !value)}
+                                onCollapse={() => setSidebarCollapsed(true)}
+                                onInstallSourceChange={setInstallSource}
+                                onInstallSkill={() => void installSkill()}
+                                onToggleSkill={(skill) => void toggleSkill(skill)}
+                            />
                         </div>
                     </div>
                 ) : (
@@ -1067,28 +1024,6 @@ export function RedClaw({
                     </div>
                 )}
             </div>
-            <RedClawSidebar
-                collapsed={sidebarCollapsed}
-                sidebarWidth={sidebarWidth}
-                isSidebarResizing={isSidebarResizing}
-                activeSpaceName={activeSpaceName}
-                sidebarTab={sidebarTab}
-                chatActionLoading={chatActionLoading}
-                chatActionMessage={chatActionMessage}
-                skills={skills}
-                isSkillsLoading={isSkillsLoading}
-                skillsMessage={skillsMessage}
-                enabledSkillCount={enabledSkillCount}
-                installSource={installSource}
-                isInstallingSkill={isInstallingSkill}
-                onSidebarResizeStart={startSidebarResize}
-                onCollapse={() => setSidebarCollapsed(true)}
-                onSelectTab={setSidebarTab}
-                onCompactContext={() => void compactRedClawContext()}
-                onInstallSourceChange={setInstallSource}
-                onInstallSkill={() => void installSkill()}
-                onToggleSkill={(skill) => void toggleSkill(skill)}
-            />
         </div>
     );
 }
