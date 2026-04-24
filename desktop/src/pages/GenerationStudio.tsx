@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ChevronDown,
     Clapperboard,
+    Copy,
+    Download,
+    FolderOpen,
     Image as ImageIcon,
     ImagePlus,
     PencilLine,
@@ -14,7 +17,11 @@ import {
 import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import type { GenerationIntent } from '../App';
+import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
+import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { appAlert } from '../utils/appDialogs';
 
 type StudioMode = 'image' | 'video';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
@@ -99,6 +106,9 @@ type FeedEntry = {
     referencePreview?: ReferenceItem | null;
     request: GenerationRequest;
     status: 'running' | 'success' | 'error';
+    jobId?: string;
+    jobStatus?: string;
+    completedAt?: string;
     error?: string;
     assets: GeneratedAsset[];
 };
@@ -162,8 +172,11 @@ const VIDEO_RESOLUTION_OPTIONS = [
 const VIDEO_DURATION_OPTIONS = [
     { value: '5', label: '5 秒' },
     { value: '6', label: '6 秒' },
+    { value: '7', label: '7 秒' },
     { value: '8', label: '8 秒' },
+    { value: '9', label: '9 秒' },
     { value: '10', label: '10 秒' },
+    { value: '11', label: '11 秒' },
     { value: '12', label: '12 秒' },
 ] as const;
 
@@ -179,11 +192,25 @@ const SOURCE_LABELS: Record<GenerationIntent['source'], string> = {
     'cover-studio': '封面',
 };
 
+type AssetContextMenuState = {
+    asset: GeneratedAsset;
+    entryId?: string;
+    x: number;
+    y: number;
+};
+
 const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
     reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
     reader.readAsDataURL(file);
+});
+
+const readBlobAsDataUrl = (blob: Blob): Promise<string> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+    reader.readAsDataURL(blob);
 });
 
 function makeId(prefix: string): string {
@@ -194,6 +221,25 @@ function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): bool
     const mimeType = String(asset.mimeType || '').toLowerCase();
     if (mimeType.startsWith('video/')) return true;
     return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
+}
+
+function inferAssetExtension(asset: GeneratedAsset, source: string): string {
+    const mimeType = String(asset.mimeType || '').trim().toLowerCase();
+    if (mimeType.startsWith('image/')) {
+        const subtype = mimeType.slice('image/'.length).split(/[+;]/)[0];
+        if (subtype === 'jpeg') return 'jpg';
+        if (subtype) return subtype;
+    }
+    if (mimeType.startsWith('video/')) {
+        const subtype = mimeType.slice('video/'.length).split(/[+;]/)[0];
+        if (subtype === 'quicktime') return 'mov';
+        if (subtype) return subtype;
+    }
+
+    const match = String(source || '').match(/\.([a-zA-Z0-9]+)(?:[?#].*)?$/);
+    const inferred = String(match?.[1] || '').trim().toLowerCase();
+    if (inferred) return inferred;
+    return isVideoAsset(asset) ? 'mp4' : 'png';
 }
 
 function formatRelativeTime(timestampMs: number): string {
@@ -275,6 +321,15 @@ function serializeFeedEntries(entries: FeedEntry[]): string {
     );
 }
 
+function persistFeedEntries(entries: FeedEntry[]): void {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(FEED_STORAGE_KEY, serializeFeedEntries(entries));
+    } catch {
+        // ignore persistence errors
+    }
+}
+
 function readPersistedFeedEntries(): FeedEntry[] {
     if (typeof window === 'undefined') return [];
     try {
@@ -330,9 +385,54 @@ function parseAspectRatio(value: string | undefined, fallback: string): { width:
 }
 
 function estimateGenerationProgress(request: GenerationRequest, elapsedMs: number): number {
-    const expectedDurationMs = request.type === 'image' ? 28_000 : 95_000;
+    const expectedDurationMs = request.type === 'image'
+        ? 28_000
+        : request.generationMode === 'reference-guided'
+            ? 180_000
+            : 150_000;
     const ratio = Math.min(1, elapsedMs / expectedDurationMs);
     return Math.min(94, Math.max(6, Math.round(ratio * 100)));
+}
+
+function assetsFromJobProjection(job: MediaJobProjection): GeneratedAsset[] {
+    return (job.artifacts || [])
+        .map((artifact) => artifact.metadata)
+        .filter((item): item is GeneratedAsset => Boolean(item && typeof item === 'object' && typeof (item as GeneratedAsset).id === 'string'));
+}
+
+function errorMessageFromJobProjection(job: MediaJobProjection): string {
+    const attemptError = typeof job.attempt?.lastError === 'string' ? job.attempt.lastError : '';
+    const resultError = typeof job.result?.error === 'string' ? job.result.error : '';
+    const cancelReason = typeof job.cancelReason === 'string' ? job.cancelReason : '';
+    return attemptError || resultError || cancelReason || '生成失败';
+}
+
+function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobProjection | null | undefined): FeedEntry {
+    if (!job || entry.jobId !== job.jobId) return entry;
+    if (isMediaJobSuccessful(job.status)) {
+        return {
+            ...entry,
+            jobStatus: job.status,
+            completedAt: job.completedAt || entry.completedAt,
+            status: 'success',
+            error: undefined,
+            assets: assetsFromJobProjection(job),
+        };
+    }
+    if (isMediaJobTerminal(job.status)) {
+        return {
+            ...entry,
+            jobStatus: job.status,
+            completedAt: job.completedAt || entry.completedAt,
+            status: 'error',
+            error: errorMessageFromJobProjection(job),
+        };
+    }
+    return {
+        ...entry,
+        jobStatus: job.status,
+        status: 'running',
+    };
 }
 
 function placeholderCountForRequest(request: GenerationRequest): number {
@@ -341,13 +441,13 @@ function placeholderCountForRequest(request: GenerationRequest): number {
 
 function placeholderAspectRatioForRequest(request: GenerationRequest): string {
     return request.type === 'image'
-        ? normalizeAspectRatio(request.aspectRatio, '3 / 4')
+        ? normalizeAspectRatio(request.aspectRatio, '4 / 3')
         : normalizeAspectRatio(request.aspectRatio, '16 / 9');
 }
 
 function isPortraitRequest(request: GenerationRequest): boolean {
     const ratio = request.type === 'image'
-        ? parseAspectRatio(request.aspectRatio, '3:4')
+        ? parseAspectRatio(request.aspectRatio, '4:3')
         : parseAspectRatio(request.aspectRatio, '16:9');
     return ratio.height > ratio.width;
 }
@@ -423,13 +523,13 @@ function PopoverSelect({
                 type="button"
                 onClick={() => setOpen((prev) => !prev)}
                 className={clsx(
-                    'inline-flex h-9 min-w-[104px] items-center gap-2 rounded-full border border-[#dfd5c7] bg-white px-3 shadow-[0_1px_2px_rgba(118,97,58,0.06),inset_0_1px_0_rgba(255,255,255,0.9)] transition-colors hover:border-[#d1c5b2]',
-                    open && 'border-[#cf7f68] ring-1 ring-[#f0c9bb]',
+                    'inline-flex h-9 min-w-[104px] items-center gap-2 rounded-full border border-border bg-surface-primary px-3 shadow-[var(--ui-shadow-1)] transition-colors hover:border-border/70',
+                    open && 'border-brand-red/50 ring-1 ring-brand-red/20',
                     className,
                 )}
             >
-                <span className="truncate text-[12px] font-medium text-[#3b342a]">{active?.label || value}</span>
-                <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-[#f4efe6] text-[#8d8374]">
+                <span className="truncate text-[12px] font-medium text-text-primary">{active?.label || value}</span>
+                <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-accent-muted text-text-tertiary">
                     <ChevronDown className="h-3 w-3" />
                 </span>
             </button>
@@ -437,11 +537,11 @@ function PopoverSelect({
             {open && (
                 <div
                     className={clsx(
-                        'absolute bottom-[calc(100%+10px)] left-0 z-20 min-w-[220px] max-w-[340px] rounded-[20px] border border-[#d8cfbf] bg-[#f7f3eb] p-3 shadow-[0_18px_40px_rgba(80,66,35,0.16)]',
+                        'absolute bottom-[calc(100%+10px)] left-0 z-20 min-w-[220px] max-w-[340px] rounded-[20px] border border-border bg-surface-secondary p-3 shadow-[var(--ui-shadow-2)]',
                         panelClassName,
                     )}
                 >
-                    {title && <div className="mb-3 text-[13px] font-semibold text-[#534b3f]">{title}</div>}
+                    {title && <div className="mb-3 text-[13px] font-semibold text-text-secondary">{title}</div>}
                     <div className={clsx(
                         layout === 'column' ? 'flex flex-col gap-2' : 'flex flex-wrap gap-2',
                     )}>
@@ -459,8 +559,8 @@ function PopoverSelect({
                                         'rounded-[14px] border px-3 py-2.5 text-[12px] font-semibold transition-colors',
                                         layout === 'column' ? 'w-full text-left' : 'min-w-[92px] flex-1',
                                         selected
-                                            ? 'border-[#cf7f68] bg-[#5c2f2b] text-[#fff1ea]'
-                                            : 'border-transparent bg-[#ece6da] text-[#5f584d] hover:bg-[#e4dccd]',
+                                            ? 'border-brand-red/50 bg-brand-red text-white'
+                                            : 'border-transparent bg-surface-tertiary text-text-secondary hover:bg-accent-muted',
                                     )}
                                 >
                                     {option.label}
@@ -509,20 +609,20 @@ function ImageAspectRatioPicker({
                 type="button"
                 onClick={() => setOpen((prev) => !prev)}
                 className={clsx(
-                    'inline-flex h-9 min-w-[84px] items-center gap-2 rounded-full border border-[#dfd5c7] bg-white px-3 shadow-[0_1px_2px_rgba(118,97,58,0.06),inset_0_1px_0_rgba(255,255,255,0.9)] transition-colors hover:border-[#d1c5b2]',
-                    open && 'border-[#cf7f68] ring-1 ring-[#f0c9bb]',
+                    'inline-flex h-9 min-w-[84px] items-center gap-2 rounded-full border border-border bg-surface-primary px-3 shadow-[var(--ui-shadow-1)] transition-colors hover:border-border/70',
+                    open && 'border-brand-red/50 ring-1 ring-brand-red/20',
                 )}
             >
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#f4efe6] text-[#7f7566]">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent-muted text-text-secondary">
                     <span className={clsx('rounded-[3px] border border-current', frameClassName(active.value))} />
                 </span>
-                <span className="text-[12px] font-medium text-[#3b342a]">{active.label}</span>
-                <ChevronDown className="ml-auto h-3 w-3 text-[#8d8374]" />
+                <span className="text-[12px] font-medium text-text-primary">{active.label}</span>
+                <ChevronDown className="ml-auto h-3 w-3 text-text-tertiary" />
             </button>
 
             {open && (
-                <div className="absolute bottom-[calc(100%+10px)] left-0 z-20 w-[372px] rounded-[20px] border border-[#d8cfbf] bg-[#f7f3eb] p-4 shadow-[0_18px_40px_rgba(80,66,35,0.16)]">
-                    <div className="mb-3 text-[13px] font-semibold text-[#534b3f]">图片比例</div>
+                <div className="absolute bottom-[calc(100%+10px)] left-0 z-20 w-[372px] rounded-[20px] border border-border bg-surface-secondary p-4 shadow-[var(--ui-shadow-2)]">
+                    <div className="mb-3 text-[13px] font-semibold text-text-secondary">图片比例</div>
                     <div className="grid grid-cols-3 gap-2.5">
                         {IMAGE_ASPECT_RATIO_OPTIONS.map((option) => {
                             const selected = option.value === active.value;
@@ -537,13 +637,13 @@ function ImageAspectRatioPicker({
                                     className={clsx(
                                         'flex h-[84px] flex-col items-center justify-center rounded-[16px] border text-center transition-colors',
                                         selected
-                                            ? 'border-[#cf7f68] bg-[#5c2f2b] text-[#fff1ea]'
-                                            : 'border-transparent bg-[#ece6da] text-[#6f685b] hover:bg-[#e4dccd]',
+                                            ? 'border-brand-red/50 bg-brand-red text-white'
+                                            : 'border-transparent bg-surface-tertiary text-text-secondary hover:bg-accent-muted',
                                     )}
                                 >
                                     <span className={clsx(
                                         'mb-3 rounded-[4px] border',
-                                        selected ? 'border-current' : 'border-[#8f887a]',
+                                        selected ? 'border-current' : 'border-text-tertiary',
                                         frameClassName(option.value),
                                     )} />
                                     <span className="text-[12px] font-semibold">{option.label}</span>
@@ -581,8 +681,8 @@ function UploadPreviewCard({
             <label className={clsx(
                 'relative flex h-[88px] w-[88px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[18px] border transition-colors',
                 hasItems
-                    ? 'border-[#d5ccb8] bg-[#e8dfd1] hover:border-[#c9bea8]'
-                    : 'border-[#ddd3c4] bg-[#eeeadf] text-[#777062] hover:bg-[#e7e1d5]',
+                    ? 'border-border bg-surface-tertiary hover:border-border/70'
+                    : 'border-border bg-surface-secondary text-text-secondary hover:bg-surface-tertiary',
             )}
             >
                 <input
@@ -597,24 +697,24 @@ function UploadPreviewCard({
                     <>
                         {items.length === 1 ? (
                             leadIsVideo ? (
-                                <div className="absolute inset-0 flex items-center justify-center bg-[#302d29] text-[#ebe3d3]">
+                                <div className="absolute inset-0 flex items-center justify-center bg-surface-elevated text-text-primary">
                                     <Clapperboard className="h-7 w-7" />
                                 </div>
                             ) : (
                                 <img src={lead?.dataUrl} alt={lead?.name || label} className="absolute inset-0 h-full w-full object-cover" />
                             )
                         ) : (
-                            <div className="absolute inset-0 flex items-center justify-center bg-[#ede6da]">
+                            <div className="absolute inset-0 flex items-center justify-center bg-surface-secondary">
                                 {items.slice(0, 3).reverse().map((item, index) => (
                                     <div
                                         key={`${item.name}-${index}`}
-                                        className="absolute h-[48px] w-[38px] overflow-hidden rounded-[10px] border border-white/85 bg-[#d9d2c4] shadow-[0_6px_14px_rgba(57,44,23,0.18)]"
+                                        className="absolute h-[48px] w-[38px] overflow-hidden rounded-[10px] border border-white/40 bg-surface-tertiary shadow-[var(--ui-shadow-1)]"
                                         style={{
                                             transform: `translate(${index * 10 - 10}px, ${index * -4}px) rotate(${index === 1 ? -4 : index === 2 ? 5 : 0}deg)`,
                                         }}
                                     >
                                         {isVideoReference(item) ? (
-                                            <div className="flex h-full w-full items-center justify-center bg-[#302d29] text-[#ebe3d3]">
+                                            <div className="flex h-full w-full items-center justify-center bg-surface-elevated text-text-primary">
                                                 <Clapperboard className="h-4 w-4" />
                                             </div>
                                         ) : (
@@ -625,7 +725,7 @@ function UploadPreviewCard({
                             </div>
                         )}
 
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#1f1b15]/70 via-[#1f1b15]/20 to-transparent px-2 pb-2 pt-4 text-center">
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent px-2 pb-2 pt-4 text-center">
                             <div className="truncate text-[11px] font-semibold text-white">{label}</div>
                             {items.length > 1 && (
                                 <div className="mt-0.5 text-[10px] text-white/90">{items.length} 张</div>
@@ -644,7 +744,7 @@ function UploadPreviewCard({
                 <button
                     type="button"
                     onClick={onClear}
-                    className="absolute -right-1.5 -top-1.5 hidden h-6 w-6 items-center justify-center rounded-full bg-[#201d18] text-white shadow-[0_6px_16px_rgba(32,29,24,0.28)] group-hover:flex"
+                    className="absolute -right-1.5 -top-1.5 hidden h-6 w-6 items-center justify-center rounded-full bg-black/75 text-white shadow-[0_6px_16px_rgba(0,0,0,0.28)] group-hover:flex"
                 >
                     <X className="h-3.5 w-3.5" />
                 </button>
@@ -667,7 +767,7 @@ function AssetPreview({
     if (!asset.previewUrl || !asset.exists) {
         return (
             <div
-                className={clsx('flex items-center justify-center rounded-[16px] bg-[#ebe5d9] text-xs text-[#8c8373]', className)}
+                className={clsx('flex items-center justify-center rounded-[16px] bg-surface-secondary text-xs text-text-tertiary', className)}
                 style={style}
             >
                 无法预览
@@ -681,7 +781,7 @@ function AssetPreview({
                 src={src}
                 controls
                 preload="metadata"
-                className={clsx('w-full rounded-[16px] bg-[#181614] object-cover', interactive && 'pointer-events-none', className)}
+                className={clsx('w-full rounded-[16px] bg-black object-cover', interactive && 'pointer-events-none', className)}
                 style={style}
             />
         );
@@ -706,13 +806,13 @@ function ReferenceStack({
     const lead = preview || requestLeadingReference(request);
     if (!lead) {
         return (
-            <div className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-[#ece6da] text-[#8f8779]">
+            <div className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-surface-secondary text-text-tertiary">
                 {request.type === 'image' ? <ImageIcon className="h-3.5 w-3.5" /> : <Clapperboard className="h-3.5 w-3.5" />}
             </div>
         );
     }
     return (
-        <div className="h-10 w-10 overflow-hidden rounded-[12px] bg-[#e8e0d1]">
+        <div className="h-10 w-10 overflow-hidden rounded-[12px] bg-surface-tertiary">
             <img src={lead.dataUrl} alt={lead.name} className="h-full w-full object-cover" />
         </div>
     );
@@ -722,16 +822,16 @@ function MetaRow({ request }: { request: GenerationRequest }) {
     const summary = buildRequestSummary(request);
     return (
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="inline-flex h-7 items-center rounded-[9px] bg-[#f7e3dc] px-2.5 text-[12px] font-semibold text-[#b25546]">
+            <span className="inline-flex h-7 items-center rounded-[9px] bg-accent-muted px-2.5 text-[12px] font-semibold text-brand-red">
                 {requestModeLabel(request)}
             </span>
-            <div className="inline-flex min-w-0 flex-wrap items-center gap-2.5 rounded-[9px] bg-[#f1ebe1] px-3 py-1.5 text-[12px] text-[#655d52]">
-                <span className="max-w-[240px] truncate font-medium text-[#2f2a24]">{summary[0]}</span>
-                <span className="text-[#948a78]">|</span>
+            <div className="inline-flex min-w-0 flex-wrap items-center gap-2.5 rounded-[9px] bg-surface-secondary px-3 py-1.5 text-[12px] text-text-secondary">
+                <span className="max-w-[240px] truncate font-medium text-text-primary">{summary[0]}</span>
+                <span className="text-text-tertiary">|</span>
                 <span>{summary[1]}</span>
-                <span className="text-[#948a78]">|</span>
+                <span className="text-text-tertiary">|</span>
                 <span>{summary[2]}</span>
-                <span className="text-[#948a78]">|</span>
+                <span className="text-text-tertiary">|</span>
                 <span>{requestSupportText(request)}</span>
             </div>
         </div>
@@ -743,11 +843,13 @@ function FeedEntryMessage({
     onRegenerate,
     onEdit,
     onPreviewAsset,
+    onOpenAssetMenu,
 }: {
     entry: FeedEntry;
     onRegenerate: (entry: FeedEntry) => void;
     onEdit: (entry: FeedEntry) => void;
     onPreviewAsset: (asset: GeneratedAsset) => void;
+    onOpenAssetMenu: (event: React.MouseEvent<HTMLElement>, asset: GeneratedAsset, entryId?: string) => void;
 }) {
     const [now, setNow] = useState(() => Date.now());
     const isRunning = entry.status === 'running';
@@ -771,7 +873,7 @@ function FeedEntryMessage({
                 <ReferenceStack request={entry.request} preview={entry.referencePreview} />
                 <div className="min-w-0 flex-1 space-y-2">
                     <MetaRow request={entry.request} />
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#8c8373]">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
                         <span>{formatRelativeTime(entry.createdAt)}</span>
                         <span>·</span>
                         <span>{SOURCE_LABELS[entry.source]}</span>
@@ -785,23 +887,23 @@ function FeedEntryMessage({
                 </div>
             </div>
 
-            <div className="max-w-[680px] text-[13px] leading-6 text-[#2d2923]">
+            <div className="max-w-[680px] text-[13px] leading-6 text-text-primary">
                 {entry.request.prompt}
             </div>
 
             {isRunning && (
-                <div className="max-w-[760px] rounded-[16px] border border-[#e7decf] bg-[#f7f2e9] px-4 py-3">
+                <div className="max-w-[760px] rounded-[16px] border border-border bg-surface-secondary px-4 py-3">
                     <div className="mb-2.5 flex items-center justify-between gap-4">
-                        <div className="text-[12px] font-medium text-[#756c5f]">
+                        <div className="text-[12px] font-medium text-text-secondary">
                             任务创作中 {progress}%...
                         </div>
-                        <div className="text-[11px] text-[#9a907f]">
+                        <div className="text-[11px] text-text-tertiary">
                             {entry.request.type === 'image' ? '正在生成图片' : '正在生成视频'}
                         </div>
                     </div>
-                    <div className="h-2.5 overflow-hidden rounded-full bg-[#e4ddd1]">
+                    <div className="h-2.5 overflow-hidden rounded-full bg-surface-tertiary">
                         <div
-                            className="h-full rounded-full bg-[linear-gradient(90deg,#c85a4d_0%,#f0a17d_100%)] transition-[width] duration-700 ease-out"
+                            className="h-full rounded-full bg-[linear-gradient(90deg,rgb(var(--color-brand-red)/1)_0%,rgb(var(--color-accent-primary)/1)_100%)] transition-[width] duration-700 ease-out"
                             style={{ width: `${progress}%` }}
                         />
                     </div>
@@ -809,7 +911,7 @@ function FeedEntryMessage({
             )}
 
             {entry.status === 'error' && (
-                <div className="max-w-[620px] rounded-[14px] bg-[#f4ddd8] px-4 py-3 text-sm text-[#9d4534]">
+                <div className="max-w-[620px] rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                     {entry.error || '生成失败'}
                 </div>
             )}
@@ -820,25 +922,33 @@ function FeedEntryMessage({
                         <div
                             key={`${entry.id}-placeholder-${index}`}
                             className={clsx(
-                                'relative overflow-hidden rounded-[16px] border border-[#e5dccf] bg-[#efe8dc]',
+                                'relative overflow-hidden rounded-[16px] border border-border bg-surface-secondary',
                                 mediaHeightClass,
                             )}
                             style={{ aspectRatio: placeholderAspectRatio }}
                         >
-                            <div className="absolute inset-0 bg-[linear-gradient(180deg,#f7f5f1_0%,#f2efea_100%)]" />
                             <div
-                                className="absolute -left-[12%] top-[-16%] h-[52%] w-[58%] rounded-full bg-[radial-gradient(circle,rgba(226,129,102,0.3)_0%,rgba(226,129,102,0.14)_30%,rgba(226,129,102,0)_72%)] blur-[28px] animate-[pulse_2.1s_ease-in-out_infinite]"
+                                className="absolute inset-0"
+                                style={{
+                                    background: 'linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.92) 0%, rgb(var(--color-surface-secondary) / 0.98) 100%)',
+                                }}
                             />
                             <div
-                                className="absolute right-[-10%] top-[8%] h-[42%] w-[46%] rounded-full bg-[radial-gradient(circle,rgba(240,161,125,0.24)_0%,rgba(240,161,125,0.1)_36%,rgba(240,161,125,0)_74%)] blur-[24px] animate-[pulse_1.7s_ease-in-out_infinite]"
+                                className="absolute -left-[12%] top-[-16%] h-[52%] w-[58%] rounded-full blur-[28px] animate-[pulse_2.1s_ease-in-out_infinite]"
+                                style={{ background: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.3) 0%, rgb(var(--color-brand-red) / 0.14) 30%, rgb(var(--color-brand-red) / 0) 72%)' }}
                             />
                             <div
-                                className="absolute bottom-[-12%] left-[18%] h-[44%] w-[50%] rounded-full bg-[radial-gradient(circle,rgba(191,92,81,0.2)_0%,rgba(191,92,81,0.08)_34%,rgba(191,92,81,0)_76%)] blur-[26px] animate-[pulse_2.4s_ease-in-out_infinite]"
+                                className="absolute right-[-10%] top-[8%] h-[42%] w-[46%] rounded-full blur-[24px] animate-[pulse_1.7s_ease-in-out_infinite]"
+                                style={{ background: 'radial-gradient(circle, rgb(var(--color-accent-primary) / 0.24) 0%, rgb(var(--color-accent-primary) / 0.1) 36%, rgb(var(--color-accent-primary) / 0) 74%)' }}
+                            />
+                            <div
+                                className="absolute bottom-[-12%] left-[18%] h-[44%] w-[50%] rounded-full blur-[26px] animate-[pulse_2.4s_ease-in-out_infinite]"
+                                style={{ background: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.2) 0%, rgb(var(--color-brand-red) / 0.08) 34%, rgb(var(--color-brand-red) / 0) 76%)' }}
                             />
                             <div
                                 className="absolute inset-0 opacity-90 animate-[pulse_1.35s_linear_infinite]"
                                 style={{
-                                    backgroundImage: 'radial-gradient(circle, rgba(183,95,84,0.32) 1.15px, transparent 1.55px)',
+                                    backgroundImage: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.32) 1.15px, transparent 1.55px)',
                                     backgroundSize: '20px 20px',
                                     backgroundPosition: '0 0',
                                     maskImage: 'linear-gradient(180deg, transparent 2%, rgba(0,0,0,0.86) 24%, rgba(0,0,0,0.94) 62%, transparent 98%)',
@@ -848,7 +958,7 @@ function FeedEntryMessage({
                             <div
                                 className="absolute inset-0 opacity-85 animate-[pulse_1.1s_ease-in-out_infinite]"
                                 style={{
-                                    backgroundImage: 'radial-gradient(circle, rgba(240,161,125,0.42) 1.2px, transparent 1.7px)',
+                                    backgroundImage: 'radial-gradient(circle, rgb(var(--color-accent-primary) / 0.42) 1.2px, transparent 1.7px)',
                                     backgroundSize: '18px 18px',
                                     backgroundPosition: '9px 6px',
                                     maskImage: 'radial-gradient(circle at 80% 22%, rgba(0,0,0,0.98) 0%, rgba(0,0,0,0.88) 15%, rgba(0,0,0,0.6) 29%, transparent 54%)',
@@ -858,7 +968,7 @@ function FeedEntryMessage({
                             <div
                                 className="absolute inset-0 opacity-85 animate-[pulse_0.95s_ease-in-out_infinite]"
                                 style={{
-                                    backgroundImage: 'radial-gradient(circle, rgba(206,98,82,0.36) 1.1px, transparent 1.6px)',
+                                    backgroundImage: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.36) 1.1px, transparent 1.6px)',
                                     backgroundSize: '17px 17px',
                                     backgroundPosition: '4px 10px',
                                     maskImage: 'radial-gradient(circle at 18% 80%, rgba(0,0,0,0.98) 0%, rgba(0,0,0,0.88) 16%, rgba(0,0,0,0.58) 31%, transparent 56%)',
@@ -868,7 +978,7 @@ function FeedEntryMessage({
                             <div
                                 className="absolute inset-0 opacity-65 animate-[pulse_1.45s_ease-in-out_infinite]"
                                 style={{
-                                    backgroundImage: 'radial-gradient(circle, rgba(214,119,95,0.22) 0.95px, transparent 1.45px)',
+                                    backgroundImage: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.22) 0.95px, transparent 1.45px)',
                                     backgroundSize: '14px 14px',
                                     backgroundPosition: '2px 3px',
                                     maskImage: 'linear-gradient(135deg, transparent 0%, rgba(0,0,0,0.94) 18%, rgba(0,0,0,0.94) 46%, transparent 68%)',
@@ -878,12 +988,12 @@ function FeedEntryMessage({
                             <div
                                 className="absolute inset-0 opacity-55 animate-[pulse_0.8s_linear_infinite]"
                                 style={{
-                                    background: 'linear-gradient(110deg, transparent 12%, rgba(255,242,233,0.24) 34%, rgba(226,129,102,0.18) 50%, rgba(255,242,233,0.18) 63%, transparent 82%)',
+                                    background: 'linear-gradient(110deg, transparent 12%, rgb(var(--color-surface-primary) / 0.24) 34%, rgb(var(--color-brand-red) / 0.18) 50%, rgb(var(--color-surface-primary) / 0.18) 63%, transparent 82%)',
                                     transform: 'translateX(-18%)',
                                     mixBlendMode: 'screen',
                                 }}
                             />
-                            <div className="absolute left-5 top-5 text-[12px] font-semibold text-[#696155]">
+                            <div className="absolute left-5 top-5 text-[12px] font-semibold text-text-secondary">
                                 {entry.request.type === 'image' ? '正在创建图片' : '正在创建视频'}
                             </div>
                         </div>
@@ -898,6 +1008,7 @@ function FeedEntryMessage({
                             key={asset.id}
                             type="button"
                             onClick={() => onPreviewAsset(asset)}
+                            onContextMenu={(event) => onOpenAssetMenu(event, asset, entry.id)}
                             disabled={!asset.previewUrl || !asset.exists}
                             className={clsx(
                                 'group relative overflow-hidden rounded-[16px] text-left transition-transform',
@@ -930,7 +1041,7 @@ function FeedEntryMessage({
                     <button
                         type="button"
                         onClick={() => onRegenerate(entry)}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-[#e5dccf] bg-[#f4efe6] px-3 text-[12px] font-medium text-[#696154] transition-colors hover:bg-[#eee7dc]"
+                        className="inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-border bg-surface-secondary px-3 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-tertiary"
                     >
                         <RotateCcw className="h-3.5 w-3.5" />
                         再次生成
@@ -938,7 +1049,7 @@ function FeedEntryMessage({
                     <button
                         type="button"
                         onClick={() => onEdit(entry)}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-[#e5dccf] bg-[#f4efe6] px-3 text-[12px] font-medium text-[#696154] transition-colors hover:bg-[#eee7dc]"
+                        className="inline-flex h-9 items-center gap-1.5 rounded-[10px] border border-border bg-surface-secondary px-3 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-tertiary"
                     >
                         <PencilLine className="h-3.5 w-3.5" />
                         重新编辑
@@ -961,19 +1072,22 @@ export function GenerationStudio({
     const [, setBindTarget] = useState('');
     const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => readPersistedFeedEntries());
     const [previewAsset, setPreviewAsset] = useState<GeneratedAsset | null>(null);
+    const [assetContextMenu, setAssetContextMenu] = useState<AssetContextMenuState | null>(null);
+    const feedScrollRef = useRef<HTMLElement | null>(null);
+    const feedBottomRef = useRef<HTMLDivElement | null>(null);
+    const lastFeedCountRef = useRef(feedEntries.length);
 
     const [imagePrompt, setImagePrompt] = useState('');
     const [imageTitle, setImageTitle] = useState('');
     const [imageProjectId, setImageProjectId] = useState('');
     const [imageCount, setImageCount] = useState(1);
     const [imageModel, setImageModel] = useState('');
-    const [imageAspectRatio, setImageAspectRatio] = useState('3:4');
+    const [imageAspectRatio, setImageAspectRatio] = useState('4:3');
     const [imageSize, setImageSize] = useState('');
     const [imageQuality, setImageQuality] = useState('auto');
     const [imageMode, setImageMode] = useState<ImageGenerationMode>('text-to-image');
     const [imageReferences, setImageReferences] = useState<ReferenceItem[]>([]);
     const [isReadingImageRefs, setIsReadingImageRefs] = useState(false);
-    const [activeImageJobs, setActiveImageJobs] = useState(0);
     const [imageError, setImageError] = useState('');
 
     const [videoPrompt, setVideoPrompt] = useState('');
@@ -990,8 +1104,28 @@ export function GenerationStudio({
     const [videoDurationSeconds, setVideoDurationSeconds] = useState(8);
     const [videoGenerateAudio, setVideoGenerateAudio] = useState(false);
     const [isReadingVideoRefs, setIsReadingVideoRefs] = useState(false);
-    const [activeVideoJobs, setActiveVideoJobs] = useState(0);
     const [videoError, setVideoError] = useState('');
+    const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
+    const trackedJobIds = useMemo(
+        () => feedEntries.map((entry) => entry.jobId).filter((jobId): jobId is string => Boolean(jobId)),
+        [feedEntries],
+    );
+    const updateFeedEntries = useCallback(
+        (updater: FeedEntry[] | ((prev: FeedEntry[]) => FeedEntry[])) => {
+            setFeedEntries((prev) => {
+                const next = typeof updater === 'function'
+                    ? (updater as (prev: FeedEntry[]) => FeedEntry[])(prev)
+                    : updater;
+                persistFeedEntries(next);
+                return next;
+            });
+        },
+        [],
+    );
+
+    useMediaJobSubscription(trackedJobIds, {
+        enabled: trackedJobIds.length > 0,
+    });
 
     const loadContext = useCallback(async (overwriteDraftDefaults = false) => {
         try {
@@ -1001,7 +1135,7 @@ export function GenerationStudio({
             setSettings(normalizedSettings);
 
             setImageModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || 'gpt-image-1') : prev));
-            setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '3:4') : prev));
+            setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
             setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality || 'auto') : prev));
         } catch (error) {
@@ -1030,8 +1164,22 @@ export function GenerationStudio({
     }, [onIntentConsumed, pendingIntent]);
 
     useEffect(() => {
-        onExecutionStateChange?.(activeImageJobs > 0 || activeVideoJobs > 0);
-    }, [activeImageJobs, activeVideoJobs, onExecutionStateChange]);
+        onExecutionStateChange?.(feedEntries.some((entry) => entry.status === 'running'));
+    }, [feedEntries, onExecutionStateChange]);
+
+    useEffect(() => {
+        updateFeedEntries((prev) => {
+            let changed = false;
+            const next = prev.map((entry) => {
+                const patched = applyJobProjectionToFeedEntry(entry, entry.jobId ? trackedJobsById[entry.jobId] : null);
+                if (patched !== entry) {
+                    changed = true;
+                }
+                return patched;
+            });
+            return changed ? next : prev;
+        });
+    }, [trackedJobsById, updateFeedEntries]);
 
     useEffect(() => {
         if (!previewAsset) return;
@@ -1043,13 +1191,38 @@ export function GenerationStudio({
     }, [previewAsset]);
 
     useEffect(() => {
-        if (typeof window === 'undefined') return;
-        try {
-            window.localStorage.setItem(FEED_STORAGE_KEY, serializeFeedEntries(feedEntries));
-        } catch {
-            // ignore persistence errors
-        }
-    }, [feedEntries]);
+        if (!assetContextMenu) return;
+        const handlePointerDown = () => setAssetContextMenu(null);
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setAssetContextMenu(null);
+        };
+        window.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.removeEventListener('mousedown', handlePointerDown);
+            window.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [assetContextMenu]);
+
+    useEffect(() => {
+        if (!isActive || feedEntries.length === 0) return;
+        const frame = window.requestAnimationFrame(() => {
+            feedBottomRef.current?.scrollIntoView({ block: 'end' });
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [isActive]);
+
+    useEffect(() => {
+        const previousCount = lastFeedCountRef.current;
+        lastFeedCountRef.current = feedEntries.length;
+        if (feedEntries.length === 0 || feedEntries.length <= previousCount) return;
+        const frame = window.requestAnimationFrame(() => {
+            const container = feedScrollRef.current;
+            if (!container) return;
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+        });
+        return () => window.cancelAnimationFrame(frame);
+    }, [feedEntries.length]);
 
     const resolvedImageEndpoint = (settings.image_endpoint || settings.api_endpoint || '').trim();
     const resolvedImageApiKey = (settings.image_api_key || settings.api_key || '').trim();
@@ -1057,9 +1230,12 @@ export function GenerationStudio({
     const resolvedVideoEndpoint = (settings.video_endpoint || REDBOX_OFFICIAL_VIDEO_BASE_URL).trim();
     const resolvedVideoApiKey = (settings.video_api_key || settings.api_key || '').trim();
     const hasVideoConfig = Boolean(resolvedVideoEndpoint) && Boolean(resolvedVideoApiKey);
+    const effectiveVideoModel = resolvedVideoEndpoint === REDBOX_OFFICIAL_VIDEO_BASE_URL
+        ? getRedBoxOfficialVideoModel(videoMode)
+        : (settings.video_model || getRedBoxOfficialVideoModel(videoMode)).trim();
 
     const imageModelLabel = imageModel.trim() || settings.image_model || 'GPT Image';
-    const videoModelLabel = (settings.video_model || getRedBoxOfficialVideoModel(videoMode)).trim();
+    const videoModelLabel = effectiveVideoModel;
     const currentConfigHint = studioMode === 'image'
         ? `${imageModelLabel} · ${imageAspectRatio || 'Auto'} · ${imageSize || '自动'}`
         : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
@@ -1101,13 +1277,12 @@ export function GenerationStudio({
         }
 
         const entry = createFeedEntry(request);
-        setFeedEntries((prev) => [...prev, entry]);
-        setActiveImageJobs((prev) => prev + 1);
+        updateFeedEntries((prev) => [...prev, entry]);
         setImageError('');
 
         void (async () => {
             try {
-                const result = await window.ipcRenderer.invoke('image-gen:generate', {
+                const result = await window.ipcRenderer.generation.submitImage({
                     prompt: request.prompt.trim(),
                     bypassPromptOptimizer: true,
                     projectId: request.projectId.trim() || undefined,
@@ -1121,72 +1296,74 @@ export function GenerationStudio({
                     aspectRatio: request.aspectRatio.trim() || undefined,
                     size: request.size.trim() || undefined,
                     quality: request.quality.trim() || undefined,
-                }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
+                    source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
+                }) as { success?: boolean; error?: string; jobId?: string };
 
-                if (!result?.success) {
+                if (!result?.success || !result?.jobId) {
                     throw new Error(result?.error || '生图失败');
                 }
 
-                const nextAssets = Array.isArray(result.assets) ? result.assets : [];
-                setFeedEntries((prev) => prev.map((item) => (
+                updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
-                        ? { ...item, status: 'success', assets: nextAssets }
+                        ? { ...item, jobId: result.jobId, jobStatus: 'queued', status: 'running', error: undefined }
                         : item
                 )));
             } catch (error) {
                 const message = error instanceof Error ? error.message : '生图失败';
                 setImageError(message);
-                setFeedEntries((prev) => prev.map((item) => (
+                updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
                         ? { ...item, status: 'error', error: message }
                         : item
                 )));
-            } finally {
-                setActiveImageJobs((prev) => Math.max(0, prev - 1));
             }
         })();
         return true;
     }, [
         createFeedEntry,
         hasImageConfig,
+        contextIntent?.source,
         settings.image_provider,
         settings.image_provider_template,
+        updateFeedEntries,
     ]);
 
-    const runVideoRequest = useCallback((request: VideoGenerationRequest) => {
+    const runVideoRequest = useCallback((request: VideoGenerationRequest): boolean => {
         if (!request.prompt.trim()) {
             setVideoError('请先输入提示词');
-            return;
+            return false;
         }
+        const effectiveVideoMode = request.generationMode === 'text-to-video' && request.referenceItems.length > 0
+            ? 'reference-guided'
+            : request.generationMode;
         if (!hasVideoConfig) {
             setVideoError('未检测到生视频配置，请先在设置中补齐');
-            return;
+            return false;
         }
-        if (request.generationMode === 'reference-guided' && request.referenceItems.length === 0) {
+        if (effectiveVideoMode === 'reference-guided' && request.referenceItems.length === 0) {
             setVideoError('参考图视频模式至少需要 1 张参考图');
-            return;
+            return false;
         }
-        if (request.generationMode === 'first-last-frame' && request.referenceItems.length < 2) {
+        if (effectiveVideoMode === 'first-last-frame' && request.referenceItems.length < 2) {
             setVideoError('首尾帧模式需要首帧和尾帧两张图片');
-            return;
+            return false;
         }
-        if (request.generationMode === 'continuation' && !request.firstClip?.dataUrl) {
+        if (effectiveVideoMode === 'continuation' && !request.firstClip?.dataUrl) {
             setVideoError('视频续写模式需要上传起始视频');
-            return;
+            return false;
         }
 
         const entry = createFeedEntry(request);
-        setFeedEntries((prev) => [...prev, entry]);
-        setActiveVideoJobs((prev) => prev + 1);
+        updateFeedEntries((prev) => [...prev, entry]);
         setVideoError('');
 
         void (async () => {
             try {
-                const result = await window.ipcRenderer.invoke('video-gen:generate', {
+                const result = await window.ipcRenderer.generation.submitVideo({
                     prompt: request.prompt.trim(),
                     projectId: request.projectId.trim() || undefined,
                     title: request.title.trim() || undefined,
-                    generationMode: request.generationMode,
+                    generationMode: effectiveVideoMode,
                     referenceImages: request.referenceItems.map((item) => item.dataUrl),
                     firstClip: request.firstClip?.dataUrl || undefined,
                     drivingAudio: request.drivingAudio?.dataUrl || undefined,
@@ -1195,33 +1372,35 @@ export function GenerationStudio({
                     durationSeconds: request.durationSeconds,
                     model: request.model,
                     generateAudio: request.generateAudio,
-                }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
+                    source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
+                }) as { success?: boolean; error?: string; jobId?: string };
 
-                if (!result?.success) {
+                if (!result?.success || !result?.jobId) {
                     throw new Error(result?.error || '生视频失败');
                 }
 
-                const nextAssets = Array.isArray(result.assets) ? result.assets : [];
-                setFeedEntries((prev) => prev.map((item) => (
+                updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
-                        ? { ...item, status: 'success', assets: nextAssets }
+                        ? { ...item, jobId: result.jobId, jobStatus: 'queued', status: 'running', error: undefined }
                         : item
                 )));
             } catch (error) {
                 const message = error instanceof Error ? error.message : '生视频失败';
                 setVideoError(message);
-                setFeedEntries((prev) => prev.map((item) => (
+                updateFeedEntries((prev) => prev.map((item) => (
                     item.id === entry.id
                         ? { ...item, status: 'error', error: message }
                         : item
                 )));
-            } finally {
-                setActiveVideoJobs((prev) => Math.max(0, prev - 1));
             }
         })();
-    }, [createFeedEntry, hasVideoConfig]);
+        return true;
+    }, [contextIntent?.source, createFeedEntry, hasVideoConfig, updateFeedEntries]);
 
     const handleGenerateImage = useCallback(() => {
+        const effectiveImageMode: ImageGenerationMode = imageReferences.length > 0
+            ? (imageMode === 'text-to-image' ? 'reference-guided' : imageMode)
+            : 'text-to-image';
         const accepted = runImageRequest({
             type: 'image',
             prompt: imagePrompt,
@@ -1232,7 +1411,7 @@ export function GenerationStudio({
             aspectRatio: imageAspectRatio,
             size: imageSize,
             quality: imageQuality,
-            generationMode: imageReferences.length > 0 ? imageMode : 'text-to-image',
+            generationMode: effectiveImageMode,
             referenceItems: imageReferences,
         });
         if (!accepted) return;
@@ -1258,22 +1437,32 @@ export function GenerationStudio({
             : videoMode === 'first-last-frame'
                 ? [videoFirstFrame, videoLastFrame].filter(Boolean) as ReferenceItem[]
                 : [];
+        const effectiveVideoMode = effectiveReferences.length > 0 && videoMode === 'text-to-video'
+            ? 'reference-guided'
+            : videoMode;
 
-        runVideoRequest({
+        const accepted = runVideoRequest({
             type: 'video',
             prompt: videoPrompt,
             title: videoTitle,
             projectId: videoProjectId,
-            model: videoModelLabel,
+            model: effectiveVideoModel,
             aspectRatio: videoAspectRatio,
             resolution: videoResolution,
             durationSeconds: videoDurationSeconds,
             generateAudio: videoGenerateAudio,
-            generationMode: videoMode,
+            generationMode: effectiveVideoMode,
             referenceItems: effectiveReferences,
             firstClip: videoFirstClip,
             drivingAudio: videoDrivingAudio,
         });
+        if (!accepted) return;
+        setVideoPrompt('');
+        setVideoReferences([]);
+        setVideoFirstFrame(null);
+        setVideoLastFrame(null);
+        setVideoFirstClip(null);
+        setVideoDrivingAudio(null);
     }, [
         runVideoRequest,
         videoAspectRatio,
@@ -1283,8 +1472,8 @@ export function GenerationStudio({
         videoFirstFrame,
         videoGenerateAudio,
         videoLastFrame,
+        effectiveVideoModel,
         videoMode,
-        videoModelLabel,
         videoProjectId,
         videoPrompt,
         videoReferences,
@@ -1330,6 +1519,118 @@ export function GenerationStudio({
         setVideoDrivingAudio(entry.request.drivingAudio || null);
     }, []);
 
+    const handleDeleteEntry = useCallback((entryId: string) => {
+        updateFeedEntries((prev) => prev.filter((entry) => entry.id !== entryId));
+        setAssetContextMenu((current) => (current?.entryId === entryId ? null : current));
+    }, []);
+
+    const resolveAssetSource = useCallback((asset: GeneratedAsset) => (
+        asset.previewUrl || asset.relativePath || ''
+    ), []);
+
+    const handleCopyAsset = useCallback(async (asset: GeneratedAsset) => {
+        const source = resolveAssetSource(asset);
+        if (!source) return;
+        try {
+            const result = await window.ipcRenderer.files.copyImage({ source }) as {
+                success?: boolean;
+                error?: string;
+            };
+            if (!result?.success) {
+                throw new Error(result?.error || '复制失败');
+            }
+        } catch (error) {
+            console.error('Failed to copy generated asset:', error);
+            void appAlert(error instanceof Error ? error.message : '复制失败');
+        }
+    }, [resolveAssetSource]);
+
+    const handleSaveAsset = useCallback(async (asset: GeneratedAsset) => {
+        const source = resolveAssetSource(asset);
+        if (!source) return;
+        try {
+            const extension = inferAssetExtension(asset, source);
+            const result = await window.ipcRenderer.files.saveAs({
+                source,
+                defaultName: `${Date.now()}.${extension}`,
+            }) as {
+                success?: boolean;
+                error?: string;
+                canceled?: boolean;
+            };
+            if (!result?.success && !result?.canceled) {
+                throw new Error(result?.error || '保存失败');
+            }
+        } catch (error) {
+            console.error('Failed to save generated asset:', error);
+            void appAlert(error instanceof Error ? error.message : '保存失败');
+        }
+    }, [resolveAssetSource]);
+
+    const handleShowAssetInFolder = useCallback(async (asset: GeneratedAsset) => {
+        const source = resolveAssetSource(asset);
+        if (!source) return;
+        try {
+            const result = await window.ipcRenderer.files.showInFolder({ source }) as {
+                success?: boolean;
+                error?: string;
+            };
+            if (!result?.success) {
+                throw new Error(result?.error || '打开文件夹失败');
+            }
+        } catch (error) {
+            console.error('Failed to reveal generated asset:', error);
+            void appAlert(error instanceof Error ? error.message : '打开文件夹失败');
+        }
+    }, [resolveAssetSource]);
+
+    const handleEditAsset = useCallback(async (asset: GeneratedAsset) => {
+        if (isVideoAsset(asset)) {
+            void appAlert('当前仅支持把图片加入参考图');
+            return;
+        }
+        const source = resolveAssetSource(asset);
+        if (!source) return;
+        try {
+            const assetUrl = resolveAssetUrl(source);
+            if (!assetUrl) {
+                throw new Error('素材地址无效');
+            }
+            const response = await fetch(assetUrl);
+            if (!response.ok) {
+                throw new Error(`读取素材失败 (${response.status})`);
+            }
+            const blob = await response.blob();
+            const dataUrl = await readBlobAsDataUrl(blob);
+            const extension = inferAssetExtension(asset, source);
+            const name = `${asset.title || `reference-${Date.now()}`}.${extension}`;
+            setStudioMode('image');
+            setImageMode((prev) => (prev === 'text-to-image' ? 'reference-guided' : prev));
+            setImageReferences((prev) => [
+                { name, dataUrl },
+                ...prev,
+            ].slice(0, 4));
+            setImageError('');
+        } catch (error) {
+            console.error('Failed to reuse generated asset as reference:', error);
+            void appAlert(error instanceof Error ? error.message : '添加参考图失败');
+        }
+    }, [resolveAssetSource]);
+
+    const handleOpenAssetMenu = useCallback((
+        event: React.MouseEvent<HTMLButtonElement>,
+        asset: GeneratedAsset,
+        entryId: string,
+    ) => {
+        event.preventDefault();
+        setAssetContextMenu({
+            asset,
+            entryId,
+            x: event.clientX,
+            y: event.clientY,
+        });
+    }, []);
+
     const handleImageReferenceFiles = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(event.target.files || []);
         if (!files.length) return;
@@ -1367,6 +1668,9 @@ export function GenerationStudio({
                     next[target] = item;
                     return next.slice(0, 5);
                 });
+                if (videoMode === 'text-to-video') {
+                    setVideoMode('reference-guided');
+                }
             } else if (target === 'first') {
                 setVideoFirstFrame(item);
             } else if (target === 'last') {
@@ -1383,7 +1687,7 @@ export function GenerationStudio({
             setIsReadingVideoRefs(false);
             event.target.value = '';
         }
-    }, []);
+    }, [videoMode]);
 
     const handleVideoReferenceFiles = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(event.target.files || []);
@@ -1395,6 +1699,9 @@ export function GenerationStudio({
                 dataUrl: await readFileAsDataUrl(file),
             })));
             setVideoReferences((prev) => [...prev.filter(Boolean), ...nextItems].slice(0, 5));
+            if (videoMode === 'text-to-video' && nextItems.length > 0) {
+                setVideoMode('reference-guided');
+            }
         } catch (error) {
             console.error('Failed to read video references:', error);
             setVideoError('参考素材读取失败，请重试');
@@ -1402,7 +1709,7 @@ export function GenerationStudio({
             setIsReadingVideoRefs(false);
             event.target.value = '';
         }
-    }, []);
+    }, [videoMode]);
 
     const uploadedVideoRefs = useMemo(() => {
         if (videoMode === 'reference-guided') {
@@ -1420,9 +1727,9 @@ export function GenerationStudio({
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
 
     return (
-        <div className="h-full min-h-0 bg-[#f6f2ea] text-[#221f19]">
+        <div className="h-full min-h-0 bg-background text-text-primary">
             <div className="mx-auto flex h-full min-h-0 max-w-[1180px] flex-col px-6">
-                <main className="flex-1 min-h-0 overflow-y-auto pt-6">
+                <main ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto pt-6">
                     {feedEntries.length === 0 ? (
                         <div className="min-h-[280px]" />
                     ) : (
@@ -1434,15 +1741,17 @@ export function GenerationStudio({
                                     onRegenerate={handleRegenerate}
                                     onEdit={handleEditEntry}
                                     onPreviewAsset={setPreviewAsset}
+                                    onOpenAssetMenu={handleOpenAssetMenu}
                                 />
                             ))}
+                            <div ref={feedBottomRef} />
                         </div>
                     )}
                 </main>
 
-                <footer className="border-t border-[#e6dece] bg-[#f6f2ea] pb-5 pt-4">
+                <footer className="bg-background pb-5 pt-4">
                     <div className={composerWidthClass}>
-                        <div className="rounded-[24px] border border-[#dfd5c6] bg-[#f8f5ee] px-5 py-3 shadow-[0_12px_24px_rgba(110,92,52,0.05)]">
+                        <div className="rounded-[24px] border border-border bg-surface-secondary px-5 py-3 shadow-[var(--ui-shadow-1)]">
                             <div className="flex items-center gap-2.5">
                                 <button
                                     type="button"
@@ -1450,8 +1759,8 @@ export function GenerationStudio({
                                     className={clsx(
                                         'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
                                         studioMode === 'image'
-                                            ? 'border-[#d69884] bg-[#5c2f2b] text-[#fff1ea]'
-                                            : 'border-[#ded3c4] bg-white text-[#6e685b]',
+                                            ? 'border-brand-red/50 bg-brand-red text-white'
+                                            : 'border-border bg-surface-primary text-text-secondary',
                                     )}
                                 >
                                     <ImagePlus className="h-4 w-4" />
@@ -1463,17 +1772,17 @@ export function GenerationStudio({
                                     className={clsx(
                                         'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
                                         studioMode === 'video'
-                                            ? 'border-[#d69884] bg-[#5c2f2b] text-[#fff1ea]'
-                                            : 'border-[#ded3c4] bg-white text-[#6e685b]',
+                                            ? 'border-brand-red/50 bg-brand-red text-white'
+                                            : 'border-border bg-surface-primary text-text-secondary',
                                     )}
                                 >
                                     <Clapperboard className="h-4 w-4" />
                                     视频创作
                                 </button>
-                                <div className="ml-auto hidden text-[12px] text-[#8e8576] md:block">{currentConfigHint}</div>
+                                <div className="ml-auto hidden text-[12px] text-text-tertiary md:block">{currentConfigHint}</div>
                             </div>
 
-                            <div className="mt-3 rounded-[20px] border border-[#e2d9cb] bg-white p-4">
+                            <div className="mt-3 rounded-[20px] border border-border bg-surface-primary p-4">
                                 <div className={composerGridClass}>
                                     <div className="space-y-3">
                                         {studioMode === 'image' ? (
@@ -1532,7 +1841,7 @@ export function GenerationStudio({
                                             )}
                                             rows={2}
                                             placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : '描述您想生成的视频场景、镜头、动作...'}
-                                            className="min-h-[54px] w-full resize-none bg-transparent text-[14px] leading-6 text-[#28241e] outline-none placeholder:text-[#9a907f]"
+                                            className="min-h-[54px] w-full resize-none bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
                                         />
 
                                         <div className="flex flex-wrap items-center gap-2">
@@ -1571,7 +1880,7 @@ export function GenerationStudio({
                                                         type="button"
                                                         onClick={handleGenerateImage}
                                                         disabled={!hasImageConfig}
-                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#c66150] text-white shadow-[0_10px_18px_rgba(198,97,80,0.22)] hover:bg-[#b75647] disabled:opacity-45"
+                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
                                                     >
                                                         <Sparkles className="h-5 w-5" />
                                                     </button>
@@ -1608,7 +1917,8 @@ export function GenerationStudio({
                                                         options={VIDEO_DURATION_OPTIONS}
                                                         className="min-w-[96px]"
                                                         title="视频时长"
-                                                        panelClassName="w-[252px]"
+                                                        panelClassName="w-[188px]"
+                                                        layout="column"
                                                     />
                                                     <PopoverSelect
                                                         value={videoGenerateAudio ? 'on' : 'off'}
@@ -1622,7 +1932,7 @@ export function GenerationStudio({
                                                         type="button"
                                                         onClick={handleGenerateVideo}
                                                         disabled={!hasVideoConfig}
-                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#c66150] text-white shadow-[0_10px_18px_rgba(198,97,80,0.22)] hover:bg-[#b75647] disabled:opacity-45"
+                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
                                                     >
                                                         <Sparkles className="h-5 w-5" />
                                                     </button>
@@ -1631,32 +1941,32 @@ export function GenerationStudio({
                                         </div>
 
                                         {studioMode === 'image' && isReadingImageRefs && (
-                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-[#8b816f]">
+                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
                                                 <span>正在读取参考图...</span>
                                             </div>
                                         )}
 
                                         {studioMode === 'video' && (
-                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-[#8b816f]">
+                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
                                                 {videoDrivingAudio && <span>已附带驱动音频</span>}
                                                 {isReadingVideoRefs && <span>正在读取素材...</span>}
                                             </div>
                                         )}
 
                                         {activeError && (
-                                            <div className="rounded-[14px] bg-[#f4ddd8] px-4 py-3 text-sm text-[#9d4534]">
+                                            <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 {activeError}
                                             </div>
                                         )}
 
                                         {studioMode === 'image' && !hasImageConfig && (
-                                            <div className="rounded-[14px] bg-[#f4ddd8] px-4 py-3 text-sm text-[#9d4534]">
+                                            <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 未检测到生图配置。请先到“设置 → AI 模型”填写图片生成的 Endpoint、API Key 和模型。
                                             </div>
                                         )}
 
                                         {studioMode === 'video' && !hasVideoConfig && (
-                                            <div className="rounded-[14px] bg-[#f4ddd8] px-4 py-3 text-sm text-[#9d4534]">
+                                            <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 未检测到生视频配置。请先完成官方视频登录或填写视频生成所需的 API Key。
                                             </div>
                                         )}
@@ -1700,6 +2010,70 @@ export function GenerationStudio({
                             />
                         )}
                     </div>
+                </div>
+            )}
+
+            {assetContextMenu && (
+                <div
+                    className="fixed z-[1250] min-w-[148px] overflow-hidden rounded-[16px] border border-border bg-surface-elevated p-1.5 text-text-primary shadow-[var(--ui-shadow-2)]"
+                    style={{
+                        left: Math.min(assetContextMenu.x, window.innerWidth - 172),
+                        top: Math.min(assetContextMenu.y, window.innerHeight - 244),
+                    }}
+                    onMouseDown={(event) => event.stopPropagation()}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            void handleCopyAsset(assetContextMenu.asset);
+                            setAssetContextMenu(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
+                    >
+                        <Copy className="h-3.5 w-3.5" />
+                        复制
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            void handleSaveAsset(assetContextMenu.asset);
+                            setAssetContextMenu(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
+                    >
+                        <Download className="h-3.5 w-3.5" />
+                        保存
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            void handleShowAssetInFolder(assetContextMenu.asset);
+                            setAssetContextMenu(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
+                    >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        打开文件夹
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            void handleEditAsset(assetContextMenu.asset);
+                            setAssetContextMenu(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-secondary"
+                    >
+                        <PencilLine className="h-3.5 w-3.5" />
+                        编辑
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => assetContextMenu.entryId && handleDeleteEntry(assetContextMenu.entryId)}
+                        className="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[13px] font-medium text-brand-red transition-colors hover:bg-brand-red/10"
+                    >
+                        <X className="h-3.5 w-3.5" />
+                        删除
+                    </button>
                 </div>
             )}
         </div>

@@ -32,7 +32,15 @@ pub(crate) fn resolve_image_generation_settings(
 pub(crate) fn resolve_video_generation_settings(
     settings: &Value,
 ) -> Option<(String, Option<String>, String)> {
-    let endpoint = payload_string(settings, "video_endpoint")?;
+    let endpoint = payload_string(settings, "video_endpoint").map(|endpoint| {
+        let normalized = normalize_base_url(&endpoint);
+        let normalized_lower = normalized.to_lowercase();
+        if normalized_lower.contains("api.ziz.hk") && !normalized_lower.contains("/redbox/v1") {
+            "https://api.ziz.hk/redbox/v1".to_string()
+        } else {
+            normalized
+        }
+    })?;
     let api_key =
         payload_string(settings, "video_api_key").or_else(|| payload_string(settings, "api_key"));
     let model = payload_string(settings, "video_model")?;
@@ -78,6 +86,27 @@ fn ensure_successful_image_response(
     if (200..300).contains(&response.status) {
         return Ok(response.body);
     }
+    let raw_body =
+        serde_json::to_string(&response.body).unwrap_or_else(|_| response.body.to_string());
+    let raw_body_head = raw_body.chars().take(3000).collect::<String>();
+    let raw_body_log = if raw_body.chars().count() > 3000 {
+        format!(
+            "{}...<truncated:{}>",
+            raw_body_head,
+            raw_body.chars().count() - 3000
+        )
+    } else {
+        raw_body
+    };
+    let upstream_preview = format!(
+        "[image-http] upstream_error_body_preview operation={} status={} url={} body={} ",
+        operation,
+        response.status,
+        url,
+        raw_body_log.replace('\n', "\\n").replace('\r', "\\r")
+    );
+    eprintln!("{upstream_preview}");
+    crate::append_debug_trace_global(upstream_preview);
     let details = http_error_details_from_value(response.status, &response.body);
     let line = format!(
         "{} operation={} url={}",
@@ -87,7 +116,44 @@ fn ensure_successful_image_response(
     );
     eprintln!("{line}");
     crate::append_debug_trace_global(line);
+    if operation == "openai-images.edit" && response.status == 404 {
+        return Err(format!(
+            "当前图片源不支持参考图生图：{url} 返回 404。请切换到支持 /images/edits 的图片服务，或关闭参考图模式。"
+        ));
+    }
     Err(format_http_error_message("Image generation", &details))
+}
+
+fn log_image_http_body_preview(
+    attempt: &str,
+    operation: &str,
+    method: &str,
+    url: &str,
+    status: u16,
+    body: &Value,
+) {
+    let raw_body = serde_json::to_string(body).unwrap_or_else(|_| body.to_string());
+    let raw_body_head = raw_body.chars().take(3000).collect::<String>();
+    let raw_body_log = if raw_body.chars().count() > 3000 {
+        format!(
+            "{}...<truncated:{}>",
+            raw_body_head,
+            raw_body.chars().count() - 3000
+        )
+    } else {
+        raw_body
+    };
+    let line = format!(
+        "[image-http] upstream_body_preview attempt={} operation={} method={} status={} url={} body={}",
+        attempt,
+        operation,
+        method,
+        status,
+        url,
+        raw_body_log.replace('\n', "\\n").replace('\r', "\\r")
+    );
+    eprintln!("{line}");
+    crate::append_debug_trace_global(line);
 }
 
 fn is_official_gemini_endpoint(endpoint: &str) -> bool {
@@ -280,6 +346,61 @@ fn map_aspect_ratio_to_image_size(aspect_ratio: Option<&str>, size: Option<&str>
         "16:9" => "2048x1152".to_string(),
         _ => "1024x1024".to_string(),
     }
+}
+
+fn is_openai_gpt_image_model(model: &str) -> bool {
+    model.trim().to_ascii_lowercase().starts_with("gpt-image-")
+}
+
+fn resolve_openai_official_image_size(aspect_ratio: Option<&str>, size: Option<&str>) -> String {
+    if let Some(size) = size.map(str::trim).filter(|item| !item.is_empty()) {
+        match size {
+            "1024x1024" | "1536x1024" | "1024x1536" | "auto" => return size.to_string(),
+            _ => {}
+        }
+    }
+    match aspect_ratio.unwrap_or("1:1").trim() {
+        "4:3" | "16:9" => "1536x1024".to_string(),
+        "3:4" | "9:16" => "1024x1536".to_string(),
+        _ => "1024x1024".to_string(),
+    }
+}
+
+fn openai_supports_response_format(model: &str, is_edit: bool) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    if is_openai_gpt_image_model(&normalized) {
+        return false;
+    }
+    if is_edit {
+        normalized == "dall-e-2"
+    } else {
+        normalized == "dall-e-2" || normalized == "dall-e-3"
+    }
+}
+
+fn map_quality_to_strict_openai(
+    model: &str,
+    quality: Option<&str>,
+    is_edit: bool,
+) -> Option<String> {
+    let normalized_model = model.trim().to_ascii_lowercase();
+    let normalized_quality = quality.map(str::trim).unwrap_or_default();
+    if is_openai_gpt_image_model(&normalized_model) {
+        return match normalized_quality {
+            "high" | "hd" => Some("high".to_string()),
+            "medium" => Some("medium".to_string()),
+            "low" => Some("low".to_string()),
+            _ => None,
+        };
+    }
+    if normalized_model == "dall-e-3" && !is_edit {
+        return match normalized_quality {
+            "high" | "hd" => Some("hd".to_string()),
+            "standard" => Some("standard".to_string()),
+            _ => None,
+        };
+    }
+    None
 }
 
 fn map_aspect_ratio_to_gemini(aspect_ratio: Option<&str>, size: Option<&str>) -> Option<String> {
@@ -514,7 +635,7 @@ fn run_curl_form_json(
     extra_headers: &[(&str, String)],
     fields: &[(String, String)],
     file_fields: &[(String, PathBuf)],
-) -> Result<Value, String> {
+) -> Result<crate::HttpJsonResponse, String> {
     let temp_field_paths = fields
         .iter()
         .enumerate()
@@ -582,13 +703,39 @@ fn run_curl_form_json(
                 &details,
             ));
         }
-        return Ok(json!({}));
+        return Ok(crate::HttpJsonResponse {
+            status,
+            body: json!({}),
+        });
     }
     let parsed = serde_json::from_str(normalized_body).map_err(|error| {
+        let body_head = normalized_body.chars().take(3000).collect::<String>();
+        let raw_body_log = if normalized_body.chars().count() > 3000 {
+            format!("{}...<truncated:{}>", body_head, normalized_body.len() - 3000)
+        } else {
+            body_head
+        };
+        let line = format!(
+            "[http][curl-form-json] invalid_json method={} url={} status={} raw_body={} error={}",
+            method,
+            url,
+            status,
+            raw_body_log.replace('\n', "\\n").replace('\r', "\\r"),
+            error
+        );
+        eprintln!("{line}");
+        crate::append_debug_trace_global(format!(
+            "[image-http] invalid_json_for_response_body method={} url={} status={} raw_body={} error={}",
+            method,
+            url,
+            status,
+            raw_body_log.replace('\n', "\\n").replace('\r', "\\r"),
+            error
+        ));
         let message = format!("Invalid JSON response: {error}");
         crate::append_debug_trace_global(format!(
-            "[http][curl-form-json] invalid_json method={} url={} status={} body={} error={}",
-            method, url, status, normalized_body, message
+            "[http][curl-form-json] invalid_json_message method={} url={} status={} body={} error={}",
+            method, url, status, raw_body_log, message
         ));
         message
     })?;
@@ -601,7 +748,10 @@ fn run_curl_form_json(
             &details,
         ));
     }
-    Ok(parsed)
+    Ok(crate::HttpJsonResponse {
+        status,
+        body: parsed,
+    })
 }
 
 fn extract_reference_images(payload: &Value, max_count: usize) -> Vec<String> {
@@ -653,66 +803,127 @@ fn run_openai_image_request(
     payload: &Value,
 ) -> Result<Value, String> {
     let prompt = payload_string(payload, "prompt").unwrap_or_default();
+    let request_model = model.trim().to_string();
     let count = payload_field(payload, "count")
         .and_then(Value::as_i64)
         .unwrap_or(1)
         .clamp(1, 4);
     let aspect_ratio = payload_string(payload, "aspectRatio");
     let size = payload_string(payload, "size");
-    let quality = map_quality_to_openai(payload_string(payload, "quality").as_deref());
     let generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string());
     let refs = extract_reference_images(payload, 4);
     let should_use_edit_api = !refs.is_empty()
         && (generation_mode == "image-to-image" || generation_mode == "reference-guided");
     if should_use_edit_api {
-        let files = refs
+        let materialized_images = refs
             .iter()
-            .enumerate()
-            .map(|(index, item)| {
+            .map(|item| materialize_transport_value_to_temp_file(item, "image-ref"))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let primary_files = materialized_images
+            .iter()
+            .map(|path| {
                 let field_name = if refs.len() == 1 {
                     "image".to_string()
                 } else {
-                    format!("image[{index}]")
+                    "image[]".to_string()
                 };
-                materialize_transport_value_to_temp_file(item, "image-ref")
-                    .map(|path| (field_name, path))
+                (field_name, path.clone())
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut fields = vec![
-            ("model".to_string(), model.to_string()),
-            ("prompt".to_string(), prompt),
-        ];
-        let resolved_size =
-            map_aspect_ratio_to_image_size(aspect_ratio.as_deref(), size.as_deref());
-        fields.push(("size".to_string(), resolved_size));
-        if let Some(quality) = quality.clone() {
-            fields.push(("quality".to_string(), quality));
-        }
-        fields.push(("n".to_string(), count.to_string()));
-        let result = run_curl_form_json(
+            .collect::<Vec<_>>();
+
+        let fallback_files = materialized_images
+            .iter()
+            .map(|path| ("image".to_string(), path.clone()))
+            .collect::<Vec<_>>();
+
+        let primary_fields = build_openai_edit_form_fields(
+            &request_model,
+            &prompt,
+            count,
+            aspect_ratio.as_deref(),
+            size.as_deref(),
+            payload_string(payload, "quality").as_deref(),
+        );
+        let fallback_fields = build_rootflow_edit_form_fields(
+            &request_model,
+            &prompt,
+            count,
+            aspect_ratio.as_deref(),
+            size.as_deref(),
+            payload_string(payload, "quality").as_deref(),
+        );
+        let request_url = normalize_image_edit_url(endpoint);
+
+        let primary_response = run_curl_form_json(
             "POST",
-            &normalize_image_edit_url(endpoint),
+            &request_url,
             api_key,
             &[],
-            &fields,
-            &files,
-        );
-        for (_, path) in files {
+            &primary_fields,
+            &primary_files,
+        )?;
+
+        let final_response = if (500..600).contains(&primary_response.status) {
+            log_image_http_body_preview(
+                "reference-fallback-primary",
+                "openai-images.edit",
+                "POST",
+                &request_url,
+                primary_response.status,
+                &primary_response.body,
+            );
+            let fallback_response = run_curl_form_json(
+                "POST",
+                &request_url,
+                api_key,
+                &[],
+                &fallback_fields,
+                &fallback_files,
+            )?;
+            log_image_http_body_preview(
+                "reference-fallback-secondary",
+                "openai-images.edit",
+                "POST",
+                &request_url,
+                fallback_response.status,
+                &fallback_response.body,
+            );
+            fallback_response
+        } else {
+            primary_response
+        };
+
+        for path in materialized_images {
             let _ = fs::remove_file(path);
         }
+
+        let result = ensure_successful_image_response(
+            "openai-images.edit",
+            "POST",
+            &request_url,
+            final_response,
+        );
+
         return result;
     }
     let request_url = normalize_image_generation_url(endpoint);
     let mut body = json!({
-        "model": model,
+        "model": request_model,
         "prompt": prompt,
         "n": count,
-        "size": map_aspect_ratio_to_image_size(aspect_ratio.as_deref(), size.as_deref()),
-        "response_format": "b64_json"
+        "size": resolve_openai_official_image_size(aspect_ratio.as_deref(), size.as_deref())
     });
-    if let Some(quality) = quality {
-        if let Some(body_object) = body.as_object_mut() {
+    if let Some(body_object) = body.as_object_mut() {
+        if openai_supports_response_format(&request_model, false) {
+            body_object.insert("response_format".to_string(), json!("b64_json"));
+        }
+        if let Some(quality) = map_quality_to_strict_openai(
+            &request_model,
+            payload_string(payload, "quality").as_deref(),
+            false,
+        ) {
             body_object.insert("quality".to_string(), json!(quality));
         }
     }
@@ -722,6 +933,55 @@ fn run_openai_image_request(
         &request_url,
         run_curl_json_response("POST", &request_url, api_key, &[], Some(body), None)?,
     )
+}
+
+fn build_openai_edit_form_fields(
+    model: &str,
+    prompt: &str,
+    count: i64,
+    aspect_ratio: Option<&str>,
+    size: Option<&str>,
+    quality: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut fields = vec![
+        ("model".to_string(), model.to_string()),
+        ("prompt".to_string(), prompt.to_string()),
+        (
+            "size".to_string(),
+            resolve_openai_official_image_size(aspect_ratio, size),
+        ),
+        ("n".to_string(), count.to_string()),
+    ];
+    if openai_supports_response_format(model, true) {
+        fields.push(("response_format".to_string(), "b64_json".to_string()));
+    }
+    if let Some(quality) = map_quality_to_strict_openai(model, quality, true) {
+        fields.push(("quality".to_string(), quality));
+    }
+    fields
+}
+
+fn build_rootflow_edit_form_fields(
+    model: &str,
+    prompt: &str,
+    count: i64,
+    aspect_ratio: Option<&str>,
+    size: Option<&str>,
+    quality: Option<&str>,
+) -> Vec<(String, String)> {
+    let mut fields = vec![
+        ("model".to_string(), model.to_string()),
+        ("prompt".to_string(), prompt.to_string()),
+        (
+            "size".to_string(),
+            resolve_openai_official_image_size(aspect_ratio, size),
+        ),
+        ("n".to_string(), count.to_string()),
+    ];
+    if let Some(quality) = map_quality_to_strict_openai(model, quality, true) {
+        fields.push(("quality".to_string(), quality));
+    }
+    fields
 }
 
 fn run_gemini_generate_content_request(
@@ -1317,35 +1577,13 @@ pub(crate) fn extract_status_url(value: &Value) -> Option<String> {
     visit(value)
 }
 
-fn is_redbox_compatible_endpoint(endpoint: &str) -> bool {
+pub(crate) fn is_redbox_compatible_endpoint(endpoint: &str) -> bool {
     let normalized = normalize_base_url(endpoint).to_lowercase();
     normalized.contains("api.ziz.hk") && normalized.contains("/v1")
 }
 
-fn build_compatible_video_route_urls(endpoint: &str, suffix: &str) -> Vec<String> {
-    let base = normalize_base_url(endpoint);
-    let primary = normalize_endpoint(&base, suffix);
-    if !is_redbox_compatible_endpoint(endpoint) {
-        return vec![primary];
-    }
-    match url::Url::parse(&base) {
-        Ok(parsed) => {
-            let origin = format!(
-                "{}://{}",
-                parsed.scheme(),
-                parsed.host_str().unwrap_or_default()
-            );
-            let mut urls = vec![
-                primary,
-                format!("{origin}/api/v1{suffix}"),
-                format!("{origin}/v1{suffix}"),
-            ];
-            urls.retain(|item| !item.trim().is_empty());
-            urls.dedup();
-            urls
-        }
-        Err(_) => vec![primary],
-    }
+pub(crate) fn build_compatible_video_route_urls(endpoint: &str, suffix: &str) -> Vec<String> {
+    vec![normalize_endpoint(&normalize_base_url(endpoint), suffix)]
 }
 
 fn map_openai_video_size(aspect_ratio: &str, resolution: &str) -> &'static str {
@@ -1369,7 +1607,7 @@ fn map_openai_video_seconds(duration_seconds: i64) -> &'static str {
 
 fn build_video_request_body(endpoint: &str, model: &str, payload: &Value) -> Result<Value, String> {
     let prompt = payload_string(payload, "prompt").unwrap_or_default();
-    let generation_mode =
+    let mut generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-video".to_string());
     let reference_images = extract_reference_images(payload, 5)
         .into_iter()
@@ -1398,6 +1636,10 @@ fn build_video_request_body(endpoint: &str, model: &str, payload: &Value) -> Res
     let generate_audio = payload_field(payload, "generateAudio")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+
+    if generation_mode == "text-to-video" && !reference_images.is_empty() {
+        generation_mode = "reference-guided".to_string();
+    }
 
     let mut body = json!({
         "model": model,
@@ -1522,7 +1764,7 @@ pub(crate) fn video_poll_url(endpoint: &str, task_id: &str, status_url: Option<S
     }
 }
 
-fn extract_video_generation_status(value: &Value) -> String {
+pub(crate) fn extract_video_generation_status(value: &Value) -> String {
     value
         .get("task_status")
         .or_else(|| value.get("status"))
@@ -1556,7 +1798,7 @@ pub(crate) fn extract_video_generation_status_details(
     })
 }
 
-fn extract_video_generation_failure_message(value: &Value) -> Option<String> {
+pub(crate) fn extract_video_generation_failure_message(value: &Value) -> Option<String> {
     [
         value.get("message"),
         value.get("error"),
@@ -1575,7 +1817,7 @@ fn extract_video_generation_failure_message(value: &Value) -> Option<String> {
     .map(ToString::to_string)
 }
 
-fn summarize_json_body(value: &Value) -> String {
+pub(crate) fn summarize_json_body(value: &Value) -> String {
     let raw = match value {
         Value::String(text) => text.trim().to_string(),
         _ => serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
@@ -1965,5 +2207,22 @@ mod tests {
             Some("data:image/jpeg;base64,AAA=")
         );
         assert!(generic.get("media").is_none());
+    }
+
+    #[test]
+    fn build_openai_edit_form_fields_uses_official_openai_shape_for_gpt_models() {
+        let fields = build_openai_edit_form_fields(
+            "gpt-image-1",
+            "test",
+            2,
+            Some("4:3"),
+            None,
+            Some("auto"),
+        );
+
+        assert!(!fields.iter().any(|(key, _value)| key == "response_format"));
+        assert!(fields
+            .iter()
+            .any(|(key, value)| key == "size" && value == "1536x1024"));
     }
 }

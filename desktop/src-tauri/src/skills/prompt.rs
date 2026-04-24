@@ -59,10 +59,10 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
         .collect::<Vec<_>>();
     if available_names
         .iter()
-        .any(|name| name.eq_ignore_ascii_case("image-prompt-optimizer"))
+        .any(|name| name.eq_ignore_ascii_case("redbox-image-director"))
     {
         preflight_rules.push(
-            "Before any `app_cli(action=\"image.generate\", payload={ ... })`, you must first call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"image-prompt-optimizer\" })` in the same turn, then use that skill's instructions to prepare the final image prompt.",
+            "Before any multi-image `app_cli(action=\"image.generate\", payload={ \"count\": N, ... })` call where `N > 1`, you must first call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"redbox-image-director\" })`, produce the ordered image plan plus shared style guide, wait for user confirmation, and only then call `image.generate` with `planConfirmed`, `sharedStyleGuide`, and `imagePlanItems`.",
         );
     }
     if available_names

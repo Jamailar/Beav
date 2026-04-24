@@ -15,6 +15,7 @@ pub fn resolve_chat_exchange_response_stage(
     context: &ChatExchangeContext,
     message: &str,
     model_config: Option<&Value>,
+    attachment: Option<&Value>,
     onboarding_response: Option<(String, bool)>,
 ) -> Result<ChatExchangeResponseStage, String> {
     if let Some((local_response, _completed)) = onboarding_response {
@@ -37,6 +38,7 @@ pub fn resolve_chat_exchange_response_stage(
             Some(context.working_session_id.as_str()),
             &config,
             message,
+            attachment,
             &context.runtime_mode,
         ),
         "anthropic" => run_anthropic_interactive_chat_runtime(
@@ -45,6 +47,7 @@ pub fn resolve_chat_exchange_response_stage(
             Some(context.working_session_id.as_str()),
             &config,
             message,
+            attachment,
             &context.runtime_mode,
         ),
         "gemini" => run_gemini_interactive_chat_runtime(
@@ -53,6 +56,7 @@ pub fn resolve_chat_exchange_response_stage(
             Some(context.working_session_id.as_str()),
             &config,
             message,
+            attachment,
             &context.runtime_mode,
         ),
         _ => unreachable!(),

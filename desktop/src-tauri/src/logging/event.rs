@@ -20,16 +20,6 @@ impl LogSource {
             Self::UploadQueue => "upload-queue",
         }
     }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Host => "host",
-            Self::Renderer => "renderer",
-            Self::Daemon => "daemon",
-            Self::Crash => "crash",
-            Self::UploadQueue => "upload_queue",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,18 +37,6 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
-}
-
-impl LogLevel {
-    pub fn as_tracing_level(&self) -> tracing::Level {
-        match self {
-            Self::Trace => tracing::Level::TRACE,
-            Self::Debug => tracing::Level::DEBUG,
-            Self::Info => tracing::Level::INFO,
-            Self::Warn => tracing::Level::WARN,
-            Self::Error => tracing::Level::ERROR,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -1,5 +1,3 @@
-use std::thread;
-
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
@@ -59,7 +57,7 @@ fn finish_build(state: &State<'_, AppState>, result: Result<(), String>) -> Resu
 }
 
 fn spawn_rebuild(app: AppHandle) {
-    thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         match begin_build(&state) {
             Ok(true) => {}

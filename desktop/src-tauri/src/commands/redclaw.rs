@@ -84,7 +84,8 @@ pub fn handle_redclaw_channel(
         "redclaw:list-projects" => Ok(json!([])),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
-            let active_space_id = crate::with_store(state, |store| Ok(store.active_space_id.clone()))?;
+            let active_space_id =
+                crate::with_store(state, |store| Ok(store.active_space_id.clone()))?;
             Ok(json!({
                 "success": true,
                 "activeSpaceId": active_space_id,

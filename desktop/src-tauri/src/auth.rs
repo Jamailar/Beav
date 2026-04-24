@@ -404,7 +404,7 @@ fn persist_auth_cache(store_path: &Path, cache: &AuthCacheRecord) -> Result<(), 
 }
 
 fn schedule_auth_cache_persist(store_path: PathBuf, cache: AuthCacheRecord) {
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = persist_auth_cache(&store_path, &cache) {
             eprintln!("[RedBox auth cache persist] {error}");
         }

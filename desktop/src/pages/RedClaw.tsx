@@ -970,7 +970,7 @@ export function RedClaw({
                                 pendingMessage={pendingMessage}
                                 onMessageConsumed={onPendingMessageConsumed}
                                 defaultCollapsed={true}
-                                showClearButton={true}
+                                showClearButton={false}
                                 fixedSessionBannerText=""
                                 showWelcomeShortcuts={false}
                                 showComposerShortcuts={false}

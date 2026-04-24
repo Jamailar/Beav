@@ -1,6 +1,8 @@
-use arboard::Clipboard;
+use arboard::{Clipboard, ImageData};
+use image::ImageReader;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
@@ -9,8 +11,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{
-    configure_background_command, file_url_for_path, normalize_base_url, now_iso, now_ms,
-    payload_string, run_curl_bytes, AdvisorVideoRecord,
+    configure_background_command, normalize_base_url, now_iso, now_ms, payload_string,
+    run_curl_bytes, AdvisorVideoRecord,
 };
 
 #[cfg(unix)]
@@ -1114,6 +1116,26 @@ pub(crate) fn download_ytdlp_audio(
 }
 
 pub(crate) fn copy_image_to_clipboard(path: &Path) -> Result<(), String> {
+    if let Ok(reader) = ImageReader::open(path) {
+        if let Ok(decoded) = reader.decode() {
+            let rgba = decoded.to_rgba8();
+            let width = usize::try_from(rgba.width())
+                .map_err(|_| "image width is too large for clipboard".to_string())?;
+            let height = usize::try_from(rgba.height())
+                .map_err(|_| "image height is too large for clipboard".to_string())?;
+            Clipboard::new()
+                .and_then(|mut clipboard| {
+                    clipboard.set_image(ImageData {
+                        width,
+                        height,
+                        bytes: Cow::Owned(rgba.into_raw()),
+                    })
+                })
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+    }
+
     let ext = path
         .extension()
         .and_then(|value| value.to_str())
@@ -1142,7 +1164,10 @@ pub(crate) fn copy_image_to_clipboard(path: &Path) -> Result<(), String> {
             return Ok(());
         }
     }
-    Clipboard::new()
-        .and_then(|mut clipboard| clipboard.set_text(file_url_for_path(path)))
-        .map_err(|error| error.to_string())
+    Err(format!(
+        "无法将图片复制到剪贴板：暂不支持该图片格式 ({})",
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("unknown")
+    ))
 }

@@ -1,124 +1,20 @@
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::events::emit_runtime_tool_partial;
-use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
-use crate::skills::{
-    load_skill_bundle_sections_from_root, load_skill_bundle_sections_from_sources,
-    split_skill_body, SkillBundleSections,
-};
+use crate::persistence::{with_store, with_store_mut};
 use crate::*;
 use serde_json::{json, Value};
 use std::fs;
-use tauri::{AppHandle, Manager, State};
+use std::path::Path;
+use std::thread;
+use tauri::{AppHandle, State};
 
-const IMAGE_PROMPT_OPTIMIZER_SKILL_NAME: &str = "image-prompt-optimizer";
-const DEFAULT_IMAGE_PROMPT_MAX_CHARS: usize = 2200;
+const REDBOX_OFFICIAL_VIDEO_ENDPOINT: &str = "https://api.ziz.hk/redbox/v1";
 
 #[derive(Debug, Clone, Default)]
 struct RuntimeToolLogContext {
     session_id: Option<String>,
     tool_call_id: Option<String>,
     tool_name: String,
-}
-
-fn load_image_prompt_optimizer_bundle(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-) -> SkillBundleSections {
-    let workspace = workspace_root(state).ok();
-    let direct_bundle = load_skill_bundle_sections_from_sources(
-        IMAGE_PROMPT_OPTIMIZER_SKILL_NAME,
-        workspace.as_deref(),
-    );
-    if !direct_bundle.body.trim().is_empty() {
-        return direct_bundle;
-    }
-    let Ok(resource_dir) = app.path().resource_dir() else {
-        return direct_bundle;
-    };
-    let bundled_root = resource_dir
-        .join("builtin-skills")
-        .join(IMAGE_PROMPT_OPTIMIZER_SKILL_NAME);
-    let bundled =
-        load_skill_bundle_sections_from_root(IMAGE_PROMPT_OPTIMIZER_SKILL_NAME, &bundled_root);
-    if !bundled.body.trim().is_empty() {
-        return bundled;
-    }
-    direct_bundle
-}
-
-fn build_image_prompt_optimizer_system_prompt(bundle: &SkillBundleSections) -> (String, usize) {
-    let (metadata, skill_body) = split_skill_body(&bundle.body);
-    let max_chars = metadata
-        .max_prompt_chars
-        .unwrap_or(DEFAULT_IMAGE_PROMPT_MAX_CHARS);
-    let mut sections = vec![
-        "你是 RedBox 内置的 image-prompt-optimizer。你的任务是把用户原始需求整理成一段可直接发送给图片模型的最终提示词。".to_string(),
-        "输出必须是严格 JSON，格式为 {\"optimizedPrompt\":\"...\"}。不要输出 Markdown，不要解释，不要附加多余字段。".to_string(),
-    ];
-    if !skill_body.trim().is_empty() {
-        sections.push(format!("## Loaded skill\n{}", skill_body.trim()));
-    }
-    for (rule_name, rule_body) in &bundle.rules {
-        let (_, content) = split_skill_body(rule_body);
-        if content.trim().is_empty() {
-            continue;
-        }
-        sections.push(format!("## Loaded rule: {rule_name}\n{}", content.trim()));
-    }
-    (sections.join("\n\n"), max_chars)
-}
-
-fn build_image_prompt_optimizer_user_prompt(
-    raw_prompt: &str,
-    title: Option<&str>,
-    generation_mode: &str,
-    reference_role_notes: &[String],
-    aspect_ratio: Option<&str>,
-    size: Option<&str>,
-    quality: Option<&str>,
-) -> String {
-    let reference_count = reference_role_notes.len();
-    let mut lines = vec![
-        format!("原始提示词：{}", raw_prompt.trim()),
-        format!("标题：{}", title.unwrap_or("(无标题)")),
-        format!("生成模式：{}", generation_mode),
-        format!("参考图数量：{}", reference_count),
-        format!("画幅比例：{}", aspect_ratio.unwrap_or("未指定")),
-        format!("尺寸：{}", size.unwrap_or("未指定")),
-        format!("质量：{}", quality.unwrap_or("未指定")),
-    ];
-    if reference_role_notes.is_empty() {
-        lines.push("参考图角色说明：无".to_string());
-    } else {
-        lines.push("参考图角色说明：".to_string());
-        lines.extend(reference_role_notes.iter().map(|item| format!("- {item}")));
-    }
-    lines.extend([
-        "请按已加载 skill 和 rules，把上面的原始需求整理成一段最终生图提示词。".to_string(),
-        "要求：保留用户主体意图；参考图模式优先保留主体身份、构图重心与色彩关系；默认补足构图、镜头、光线、材质、环境和完成度；不要把提示词原文、布局标签、水印或 AI 标签直接画进图里；不要输出负向提示词字段，不要输出解释。".to_string(),
-        "如果存在参考图，最终提示词里必须逐张写出“参考图1/参考图2/...”各自的作用，明确哪张图负责主体身份，哪张图负责构图、风格、材质或环境线索；不要只写笼统的“参考图约束生效”。".to_string(),
-    ]);
-    lines.join("\n")
-}
-
-fn extract_optimized_prompt(raw_response: &str) -> Option<String> {
-    let parsed = parse_json_value_from_text(raw_response)?;
-    for key in [
-        "optimizedPrompt",
-        "effectivePrompt",
-        "finalPrompt",
-        "prompt",
-    ] {
-        let value = parsed
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if let Some(value) = value {
-            return Some(value.to_string());
-        }
-    }
-    None
 }
 
 fn summarize_json_for_log(value: &Value) -> String {
@@ -135,228 +31,281 @@ fn summarize_json_for_log(value: &Value) -> String {
     }
 }
 
-fn build_fallback_optimized_image_prompt(
-    raw_prompt: &str,
-    title: Option<&str>,
-    generation_mode: &str,
-    reference_role_notes: &[String],
-    aspect_ratio: Option<&str>,
-    size: Option<&str>,
-    quality: Option<&str>,
-) -> String {
-    let trimmed = raw_prompt.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let mut parts = Vec::<String>::new();
-    if let Some(title) = title.map(str::trim).filter(|value| !value.is_empty()) {
-        parts.push(format!("主题：{title}"));
-    }
-    parts.push(trimmed.to_string());
+fn official_video_model_for_mode(generation_mode: &str, default_model: &str) -> String {
     match generation_mode {
-        "reference-guided" => {
-            parts.push("保持参考图主体身份、核心轮廓、构图重心与主色调一致".to_string());
-            parts.push("在不跑偏换主体的前提下补足场景、光线、材质与完成度".to_string());
-        }
-        "image-to-image" => {
-            parts.push("保留原图主体、姿态和核心轮廓，只做受控风格增强".to_string());
-            parts.push("重点优化光线、背景、材质细节与画面完成度".to_string());
-        }
-        _ => {
-            parts.push("主体清晰，构图稳定，镜头明确，光线自然，材质细节可读".to_string());
-        }
+        "reference-guided" => "wan2.7-r2v-video".to_string(),
+        "first-last-frame" | "continuation" => "wan2.7-i2v-video".to_string(),
+        _ => default_model.to_string(),
     }
-    if !reference_role_notes.is_empty() {
-        parts.push(reference_role_notes.join("；"));
-    }
-    if let Some(aspect_ratio) = aspect_ratio
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        parts.push(format!("画幅比例 {aspect_ratio}"));
-    }
-    if let Some(size) = size.map(str::trim).filter(|value| !value.is_empty()) {
-        parts.push(format!("输出尺寸倾向 {size}"));
-    }
-    parts.push("画面中不要出现提示词原文、布局标注、水印或 AI 标签".to_string());
-    match quality.map(str::trim).unwrap_or_default() {
-        "high" | "hd" => parts.push("高完成度，边缘干净，细节密度高".to_string()),
-        "standard" => parts.push("细节清楚，视觉中心明确，背景不过载".to_string()),
-        _ => {}
-    }
-    truncate_chars(&parts.join("，"), 900)
 }
 
-fn payload_string_list(payload: &Value, key: &str, limit: usize) -> Vec<String> {
-    payload
-        .get(key)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PlannedImageGenerationItem {
+    title: Option<String>,
+    prompt: String,
+}
+
+fn planned_image_string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn extract_planned_image_generation_items(payload: &Value) -> Vec<PlannedImageGenerationItem> {
+    payload_field(payload, "imagePlanItems")
         .and_then(Value::as_array)
         .map(|items| {
             items
                 .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .take(limit)
-                .map(ToString::to_string)
+                .take(4)
+                .filter(|item| item.is_object())
+                .filter_map(|item| {
+                    let prompt = planned_image_string_field(
+                        item,
+                        &[
+                            "compiledPrompt",
+                            "prompt",
+                            "visual",
+                            "description",
+                            "picture",
+                        ],
+                    )?;
+                    Some(PlannedImageGenerationItem {
+                        title: planned_image_string_field(item, &["title", "name", "label"]),
+                        prompt,
+                    })
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
 }
 
-fn normalize_reference_image_key(path: &str) -> String {
-    path.trim().trim_start_matches("file://").to_string()
+fn build_generated_image_title(
+    batch_title: Option<&str>,
+    item_title: Option<&str>,
+    prompt: &str,
+    index: usize,
+    total: usize,
+) -> Option<String> {
+    if let Some(item_title) = item_title.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(item_title.to_string());
+    }
+    if let Some(batch_title) = batch_title.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(if total > 1 {
+            format!("{batch_title} {}", index + 1)
+        } else {
+            batch_title.to_string()
+        });
+    }
+    let excerpt = prompt.trim().chars().take(24).collect::<String>();
+    if excerpt.is_empty() {
+        None
+    } else {
+        Some(excerpt)
+    }
 }
 
-fn build_reference_image_role_notes(state: &State<'_, AppState>, payload: &Value) -> Vec<String> {
-    let reference_images = payload_string_list(payload, "referenceImages", 4);
-    if reference_images.is_empty() {
-        return Vec::new();
+fn generate_planned_image_batch(
+    payload: &Value,
+    media_root_path: &Path,
+    planned_items: &[PlannedImageGenerationItem],
+    real_image_config: Option<(String, Option<String>, String, String, String)>,
+    provider: Option<String>,
+    provider_template: Option<String>,
+    model: Option<String>,
+    title: Option<String>,
+    project_id: Option<String>,
+    aspect_ratio: Option<String>,
+    size: Option<String>,
+    quality: Option<String>,
+    placeholder_fallback_allowed: bool,
+) -> Result<(Vec<MediaAssetRecord>, bool), String> {
+    if planned_items.is_empty() {
+        return Ok((Vec::new(), real_image_config.is_some()));
     }
-    let _ = ensure_store_hydrated_for_subjects(state);
-    let subject_ids = payload_string_list(payload, "subjectIds", 8);
-    let subject_images = with_store(state, |store| {
-        Ok(subject_ids
+
+    let total = planned_items.len();
+    let batch_stamp = now_ms();
+    let mime_type = Some("image/png".to_string());
+
+    if let Some((endpoint, api_key, default_model, default_provider, default_template)) =
+        real_image_config
+    {
+        let effective_model = model.unwrap_or(default_model);
+        let effective_provider = provider.unwrap_or(default_provider);
+        let effective_template = provider_template.unwrap_or(default_template);
+        let handles = planned_items
             .iter()
-            .filter_map(|subject_id| store.subjects.iter().find(|item| item.id == *subject_id))
-            .flat_map(|subject| {
-                subject.absolute_image_paths.iter().map(move |path| {
-                    (
-                        normalize_reference_image_key(path),
-                        subject.name.trim().to_string(),
-                    )
+            .enumerate()
+            .map(|(index, item)| {
+                let mut request_payload = payload.clone();
+                let request_prompt = item.prompt.clone();
+                let request_title = build_generated_image_title(
+                    title.as_deref(),
+                    item.title.as_deref(),
+                    request_prompt.as_str(),
+                    index,
+                    total,
+                );
+                if let Some(object) = request_payload.as_object_mut() {
+                    object.insert("prompt".to_string(), json!(request_prompt.clone()));
+                    object.insert("count".to_string(), json!(1));
+                    if let Some(request_title) = request_title.clone() {
+                        object.insert("title".to_string(), json!(request_title));
+                    }
+                    object.remove("imagePlanItems");
+                    object.remove("planConfirmed");
+                    object.remove("sharedStyleGuide");
+                }
+                let relative_path = format!("generated/media-{}-{}.png", batch_stamp, index + 1);
+                let absolute_path = media_root_path.join(&relative_path);
+                let endpoint = endpoint.clone();
+                let api_key = api_key.clone();
+                let effective_model = effective_model.clone();
+                let effective_provider = effective_provider.clone();
+                let effective_template = effective_template.clone();
+                let project_id = project_id.clone();
+                let aspect_ratio = aspect_ratio.clone();
+                let size = size.clone();
+                let quality = quality.clone();
+                let mime_type = mime_type.clone();
+                let placeholder_fallback_allowed = placeholder_fallback_allowed;
+                thread::spawn(move || -> Result<MediaAssetRecord, String> {
+                    let response = match run_image_generation_request(
+                        endpoint.as_str(),
+                        api_key.as_deref(),
+                        effective_model.as_str(),
+                        effective_provider.as_str(),
+                        effective_template.as_str(),
+                        &request_payload,
+                    ) {
+                        Ok(response) => Some(response),
+                        Err(error) => {
+                            if placeholder_fallback_allowed {
+                                write_placeholder_svg(
+                                    &absolute_path,
+                                    request_title.as_deref().unwrap_or("RedBox Image"),
+                                    &request_prompt.chars().take(48).collect::<String>(),
+                                    "#E76F51",
+                                )?;
+                                None
+                            } else {
+                                return Err(format!("图片 {} 生成请求失败：{error}", index + 1));
+                            }
+                        }
+                    };
+
+                    if let Some(response) = response {
+                        if let Some(item) = extract_first_media_result(&response) {
+                            write_generated_image_asset(&absolute_path, item).map_err(|error| {
+                                format!("图片 {} 生成结果写入失败：{error}", index + 1)
+                            })?;
+                        } else if placeholder_fallback_allowed {
+                            write_placeholder_svg(
+                                &absolute_path,
+                                request_title.as_deref().unwrap_or("RedBox Image"),
+                                &request_prompt.chars().take(48).collect::<String>(),
+                                "#E76F51",
+                            )?;
+                        } else {
+                            return Err(format!(
+                                "图片 {} 生成请求已发出，但 provider 返回里没有可用图片结果。",
+                                index + 1
+                            ));
+                        }
+                    }
+
+                    Ok(MediaAssetRecord {
+                        id: make_id("media"),
+                        source: "generated".to_string(),
+                        source_domain: None,
+                        source_link: None,
+                        project_id,
+                        title: request_title,
+                        prompt: Some(request_prompt),
+                        provider: Some(effective_provider),
+                        provider_template: Some(effective_template),
+                        model: Some(effective_model),
+                        aspect_ratio,
+                        size,
+                        quality,
+                        mime_type,
+                        relative_path: Some(relative_path),
+                        bound_manuscript_path: None,
+                        created_at: now_rfc3339(),
+                        updated_at: now_rfc3339(),
+                        absolute_path: Some(absolute_path.display().to_string()),
+                        preview_url: Some(file_url_for_path(&absolute_path)),
+                        exists: true,
+                    })
                 })
             })
-            .collect::<Vec<(String, String)>>())
-    })
-    .unwrap_or_default();
-    let multiple_refs = reference_images.len() > 1;
-    reference_images
+            .collect::<Vec<_>>();
+
+        let mut created = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let asset = handle
+                .join()
+                .map_err(|_| "image generation batch worker panicked".to_string())??;
+            created.push(asset);
+        }
+        created.sort_by_key(|asset| asset.relative_path.clone().unwrap_or_default());
+        return Ok((created, true));
+    }
+
+    if !placeholder_fallback_allowed {
+        return Err("图片生成未执行：请先在设置中配置生图 Endpoint、API Key 和模型。".to_string());
+    }
+
+    let created = planned_items
         .iter()
         .enumerate()
-        .map(|(index, path)| {
-            let label = format!("参考图{}", index + 1);
-            let normalized = normalize_reference_image_key(path);
-            if let Some((_, subject_name)) = subject_images
-                .iter()
-                .find(|(subject_path, _)| *subject_path == normalized)
-            {
-                return format!(
-                    "{label}：用于锁定主体 {subject_name} 的身份、面部特征、发型/体态和整体气质，不要替换主体。"
-                );
-            }
-            if index == 0 {
-                if multiple_refs {
-                    format!(
-                        "{label}：作为主要辅助参考图，用于继承整体构图、镜头关系、主色调和场景气质，不要用它替换主体身份。"
-                    )
-                } else {
-                    format!(
-                        "{label}：用于继承主体身份、构图重心、主色关系和主要材质特征，不要偏离参考图的核心视觉锚点。"
-                    )
-                }
-            } else {
-                format!(
-                    "{label}：作为补充参考图，用于补充服装、材质、道具、光线或环境细节；除非用户明确要求，不要用它替换主体身份。"
-                )
-            }
-        })
-        .collect()
-}
-
-fn append_missing_reference_role_notes(prompt: &str, reference_role_notes: &[String]) -> String {
-    if reference_role_notes.is_empty() {
-        return prompt.trim().to_string();
-    }
-    let trimmed = prompt.trim();
-    let missing = reference_role_notes
-        .iter()
-        .filter(|item| {
-            item.split('：')
-                .next()
-                .map(|label| !trimmed.contains(label))
-                .unwrap_or(true)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if missing.is_empty() {
-        return trimmed.to_string();
-    }
-    if trimmed.is_empty() {
-        return missing.join("；");
-    }
-    format!("{trimmed}，{}", missing.join("；"))
-}
-
-fn optimize_image_generation_prompt(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    settings_snapshot: &Value,
-    payload: &Value,
-    raw_prompt: &str,
-    title: Option<&str>,
-    aspect_ratio: Option<&str>,
-    size: Option<&str>,
-    quality: Option<&str>,
-) -> String {
-    let generation_mode =
-        payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-image".to_string());
-    let reference_role_notes = build_reference_image_role_notes(state, payload);
-    let fallback = build_fallback_optimized_image_prompt(
-        raw_prompt,
-        title,
-        &generation_mode,
-        &reference_role_notes,
-        aspect_ratio,
-        size,
-        quality,
-    );
-    let bundle = load_image_prompt_optimizer_bundle(app, state);
-    if bundle.body.trim().is_empty() {
-        return if fallback.trim().is_empty() {
-            raw_prompt.trim().to_string()
-        } else {
-            fallback
-        };
-    }
-    let (system_prompt, max_chars) = build_image_prompt_optimizer_system_prompt(&bundle);
-    let user_prompt = build_image_prompt_optimizer_user_prompt(
-        raw_prompt,
-        title,
-        &generation_mode,
-        &reference_role_notes,
-        aspect_ratio,
-        size,
-        quality,
-    );
-    if let Ok(raw_response) = run_model_structured_task_with_settings(
-        settings_snapshot,
-        None,
-        &system_prompt,
-        &user_prompt,
-        true,
-    ) {
-        if let Some(optimized) = extract_optimized_prompt(&raw_response) {
-            let normalized = truncate_chars(
-                &append_missing_reference_role_notes(&optimized, &reference_role_notes),
-                max_chars,
+        .map(|(index, item)| {
+            let asset_title = build_generated_image_title(
+                title.as_deref(),
+                item.title.as_deref(),
+                item.prompt.as_str(),
+                index,
+                total,
             );
-            if !normalized.trim().is_empty() {
-                return normalized;
-            }
-        }
-    }
-    if fallback.trim().is_empty() {
-        truncate_chars(
-            &append_missing_reference_role_notes(raw_prompt, &reference_role_notes),
-            max_chars,
-        )
-    } else {
-        truncate_chars(
-            &append_missing_reference_role_notes(&fallback, &reference_role_notes),
-            max_chars,
-        )
-    }
+            let relative_path = format!("generated/media-{}-{}.png", batch_stamp, index + 1);
+            let absolute_path = media_root_path.join(&relative_path);
+            write_placeholder_svg(
+                &absolute_path,
+                asset_title.as_deref().unwrap_or("RedBox Image"),
+                &item.prompt.chars().take(48).collect::<String>(),
+                "#E76F51",
+            )?;
+            Ok(MediaAssetRecord {
+                id: make_id("media"),
+                source: "generated".to_string(),
+                source_domain: None,
+                source_link: None,
+                project_id: project_id.clone(),
+                title: asset_title,
+                prompt: Some(item.prompt.clone()),
+                provider: provider.clone(),
+                provider_template: provider_template.clone(),
+                model: model.clone(),
+                aspect_ratio: aspect_ratio.clone(),
+                size: size.clone(),
+                quality: quality.clone(),
+                mime_type: mime_type.clone(),
+                relative_path: Some(relative_path),
+                bound_manuscript_path: None,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+                absolute_path: Some(absolute_path.display().to_string()),
+                preview_url: Some(file_url_for_path(&absolute_path)),
+                exists: true,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok((created, false))
 }
 
 fn runtime_tool_log_context_from_payload(payload: &Value) -> RuntimeToolLogContext {
@@ -424,12 +373,37 @@ pub fn handle_generation_channel(
         return None;
     }
 
+    let runtime_bypass = payload_field(payload, "runtimeBypass")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !runtime_bypass {
+        return Some(crate::media_runtime::compat_generate_and_wait(
+            app, state, channel, payload,
+        ));
+    }
+
     Some((|| -> Result<Value, String> {
-        let count = payload_field(payload, "count")
-            .and_then(|value| value.as_i64())
-            .unwrap_or(1)
-            .clamp(1, 4);
-        let prompt = normalize_optional_string(payload_string(payload, "prompt"));
+        let planned_image_items = if channel == "image-gen:generate" {
+            extract_planned_image_generation_items(payload)
+        } else {
+            Vec::new()
+        };
+        let count = if channel == "image-gen:generate" && !planned_image_items.is_empty() {
+            planned_image_items.len() as i64
+        } else {
+            payload_field(payload, "count")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(1)
+                .clamp(1, 4)
+        };
+        let prompt = if channel == "image-gen:generate" {
+            normalize_optional_string(
+                payload_string(payload, "compiledPrompt")
+                    .or_else(|| payload_string(payload, "prompt")),
+            )
+        } else {
+            normalize_optional_string(payload_string(payload, "prompt"))
+        };
         let project_id = normalize_optional_string(payload_string(payload, "projectId"));
         let title = normalize_optional_string(payload_string(payload, "title"));
         let provider = normalize_optional_string(payload_string(payload, "provider"));
@@ -463,26 +437,7 @@ pub fn handle_generation_channel(
             None
         };
         let effective_image_prompt = if channel == "image-gen:generate" {
-            let bypass_prompt_optimizer = payload_field(payload, "bypassPromptOptimizer")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if bypass_prompt_optimizer {
-                prompt.clone()
-            } else {
-                prompt.clone().map(|raw| {
-                    optimize_image_generation_prompt(
-                        app,
-                        state,
-                        &settings_snapshot,
-                        payload,
-                        &raw,
-                        title.as_deref(),
-                        aspect_ratio.as_deref(),
-                        size.as_deref(),
-                        quality.as_deref(),
-                    )
-                })
-            }
+            prompt.clone()
         } else {
             None
         };
@@ -499,6 +454,68 @@ pub fn handle_generation_channel(
         };
         let placeholder_fallback_allowed = allow_placeholder_fallback(payload);
         let media_root_path = media_root(state)?;
+        if channel == "image-gen:generate" && planned_image_items.len() > 1 {
+            emit_image_generation_log(
+                state,
+                format!(
+                    "[image-gen] batch:start count={} mode={} refs={}",
+                    planned_image_items.len(),
+                    payload_string(payload, "generationMode")
+                        .unwrap_or_else(|| "text-to-image".to_string()),
+                    payload_field(payload, "referenceImages")
+                        .and_then(Value::as_array)
+                        .map(|items| items.len())
+                        .unwrap_or(0),
+                ),
+            );
+            let (created, used_configured_endpoint) = generate_planned_image_batch(
+                payload,
+                media_root_path.as_path(),
+                &planned_image_items,
+                real_image_config.clone(),
+                provider.clone(),
+                provider_template.clone(),
+                model.clone(),
+                title.clone(),
+                project_id.clone(),
+                aspect_ratio.clone(),
+                size.clone(),
+                quality.clone(),
+                placeholder_fallback_allowed,
+            )?;
+            with_store_mut(state, |store| {
+                for asset in &created {
+                    store.media_assets.push(asset.clone());
+                }
+                store.work_items.push(create_work_item(
+                    "image-generation",
+                    title.clone().unwrap_or_else(|| "图片生成".to_string()),
+                    normalize_optional_string(Some(if used_configured_endpoint {
+                        "RedBox 已通过已配置 endpoint 并发执行多图生成。".to_string()
+                    } else {
+                        "RedBox 已保存多图生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。"
+                            .to_string()
+                    })),
+                    prompt.clone(),
+                    project_id.clone().map(|value| {
+                        json!({
+                            "projectId": value,
+                            "generationChannel": channel,
+                            "usedConfiguredEndpoint": used_configured_endpoint,
+                            "batchCount": created.len()
+                        })
+                    }),
+                    2,
+                ));
+                Ok(())
+            })?;
+            persist_media_workspace_catalog(state)?;
+            return Ok(json!({
+                "success": true,
+                "kind": "generated-images",
+                "assets": created
+            }));
+        }
         let mut created = Vec::new();
         for index in 0..count {
             let effective_mime_type = mime_type.clone();
@@ -513,21 +530,18 @@ pub fn handle_generation_channel(
                 let Some((endpoint, api_key, default_model)) = &real_video_config else {
                     return Err("video generation requires a configured video provider".to_string());
                 };
-                let effective_video_model = model.clone().unwrap_or_else(|| {
-                    match payload_field(payload, "generationMode")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or("text-to-video")
-                    {
-                        "reference-guided" => "wan2.7-r2v-video".to_string(),
-                        "first-last-frame" | "continuation" => "wan2.7-i2v-video".to_string(),
-                        _ => default_model.clone(),
-                    }
-                });
+                let generation_mode = payload_field(payload, "generationMode")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("text-to-video");
+                let effective_video_model = if endpoint.trim() == REDBOX_OFFICIAL_VIDEO_ENDPOINT {
+                    official_video_model_for_mode(generation_mode, default_model)
+                } else {
+                    model.clone().unwrap_or_else(|| {
+                        official_video_model_for_mode(generation_mode, default_model)
+                    })
+                };
                 let asset_label = video_generation_asset_label(index, count);
                 if let Some(context) = video_log_context.as_ref() {
-                    let generation_mode = payload_field(payload, "generationMode")
-                        .and_then(Value::as_str)
-                        .unwrap_or("text-to-video");
                     let duration_seconds = payload_field(payload, "durationSeconds")
                         .and_then(Value::as_i64)
                         .unwrap_or(5);
@@ -962,4 +976,47 @@ pub fn handle_generation_channel(
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_planned_image_generation_items_prefers_compiled_prompt() {
+        let items = extract_planned_image_generation_items(&json!({
+            "imagePlanItems": [
+                {
+                    "title": "封面",
+                    "prompt": "原始描述",
+                    "compiledPrompt": "最终执行提示词"
+                },
+                {
+                    "label": "第二张",
+                    "description": "细节补图"
+                }
+            ]
+        }));
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title.as_deref(), Some("封面"));
+        assert_eq!(items[0].prompt, "最终执行提示词");
+        assert_eq!(items[1].title.as_deref(), Some("第二张"));
+        assert_eq!(items[1].prompt, "细节补图");
+    }
+
+    #[test]
+    fn build_generated_image_title_prefers_item_title_then_batch_title() {
+        assert_eq!(
+            build_generated_image_title(
+                Some("春日咖啡海报"),
+                Some("第 2 张 细节页"),
+                "咖啡杯特写",
+                1,
+                3,
+            ),
+            Some("第 2 张 细节页".to_string())
+        );
+        assert_eq!(
+            build_generated_image_title(Some("春日咖啡海报"), None, "咖啡杯特写", 1, 3),
+            Some("春日咖啡海报 2".to_string())
+        );
+    }
+}

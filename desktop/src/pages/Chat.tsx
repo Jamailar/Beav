@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
+import { supportsAttachmentKindDirectInput } from '../../shared/modelCapabilities';
 import {
   CliEscalationDialog,
   type CliEscalationRequestModel,
@@ -121,6 +122,29 @@ interface StructuredChatErrorNotice {
   hint?: string;
   detail?: string;
   metaParts?: string[];
+}
+
+function stripTransientAttachmentPreview(
+  attachment?: UploadedFileAttachment,
+): UploadedFileAttachment | undefined {
+  if (!attachment) return undefined;
+  const { thumbnailDataUrl: _thumbnailDataUrl, ...persisted } = attachment;
+  return persisted;
+}
+
+function applyAttachmentDeliveryMode(
+  attachment: UploadedFileAttachment | undefined,
+  modelName?: string,
+): UploadedFileAttachment | undefined {
+  if (!attachment) return undefined;
+  const directInput = Boolean(
+    modelName
+    && supportsAttachmentKindDirectInput(modelName, String(attachment.kind || '').trim().toLowerCase()),
+  );
+  return {
+    ...attachment,
+    deliveryMode: directInput ? 'direct-input' : 'tool-read',
+  };
 }
 
 type FixedSessionWarmSnapshot = {
@@ -2665,12 +2689,16 @@ export function Chat({
       console.error('Failed to resolve chat model config:', error);
       resolvedModelConfig = undefined;
     }
+    const resolvedAttachment = applyAttachmentDeliveryMode(
+      attachment,
+      resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
+    );
 
     dispatchChatSend({
       sessionId: currentSessionId || undefined,
       message: normalizedContent || displayText,
       displayContent: displayText,
-      attachment,
+      attachment: stripTransientAttachmentPreview(resolvedAttachment),
       modelConfig: resolvedModelConfig || getChatModelConfig(),
       taskHints: undefined,
     });

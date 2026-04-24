@@ -800,6 +800,7 @@ function createIpcRenderer() {
       submitVideo: (payload: Record<string, unknown>) => invokeChannel('generation:submit-video', payload),
       listJobs: (payload?: Record<string, unknown>) => invokeChannel('generation:list-jobs', payload || {}),
       getJob: (jobId: string) => invokeChannel('generation:get-job', { jobId }),
+      getJobArtifacts: (jobId: string) => invokeChannel('generation:get-job-artifacts', { jobId }),
       awaitJob: (payload: { jobId: string; timeoutMs?: number }) => invokeChannel('generation:await-job', payload),
       cancelJob: (jobId: string) => invokeChannel('generation:cancel-job', { jobId }),
       retryJob: (jobId: string) => invokeChannel('generation:retry-job', { jobId }),

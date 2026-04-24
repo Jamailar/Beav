@@ -13,6 +13,7 @@ use crate::session_manager::{
 };
 use crate::skills::{merge_requested_skills_into_session, SkillActivationSource};
 use crate::*;
+use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -21,6 +22,75 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
+const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+fn inline_image_thumbnail_data_url(path: &Path, mime_type: &str, file_size: u64) -> Option<String> {
+    if !mime_type.starts_with("image/")
+        || file_size == 0
+        || file_size > CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES
+    {
+        return None;
+    }
+    let bytes = fs::read(path).ok()?;
+    Some(format!(
+        "data:{mime_type};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+fn sanitize_chat_attachment_name(name: &str) -> String {
+    let sanitized = name
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => ch,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if sanitized.is_empty() {
+        "attachment".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn stage_chat_attachment_for_workspace(
+    state: &State<'_, AppState>,
+    original_path: &Path,
+    file_size: u64,
+) -> Option<(PathBuf, String)> {
+    if file_size == 0 || file_size > CHAT_ATTACHMENT_STAGE_MAX_BYTES {
+        return None;
+    }
+    let workspace = workspace_root(state).ok()?;
+    if let Ok(relative) = original_path.strip_prefix(&workspace) {
+        let normalized = relative.display().to_string().replace('\\', "/");
+        if !normalized.trim().is_empty() {
+            return Some((original_path.to_path_buf(), normalized));
+        }
+    }
+
+    let stage_root = workspace.join(".redbox").join("chat-attachments");
+    fs::create_dir_all(&stage_root).ok()?;
+    let file_name = original_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(sanitize_chat_attachment_name)
+        .unwrap_or_else(|| "attachment".to_string());
+    let staged_name = format!("{}-{}", now_ms(), file_name);
+    let staged_path = stage_root.join(staged_name);
+    fs::copy(original_path, &staged_path).ok()?;
+    let relative = staged_path
+        .strip_prefix(&workspace)
+        .ok()?
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    Some((staged_path, relative))
+}
 
 fn xorshift64(mut seed: u64) -> u64 {
     if seed == 0 {
@@ -1711,17 +1781,30 @@ pub fn handle_chat_sessions_wander_channel(
                 let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
                 let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(&path);
                 let requires_multimodal = kind == "image" || kind == "audio" || kind == "video";
+                let staged = stage_chat_attachment_for_workspace(state, &path, metadata.len());
+                let effective_path = staged
+                    .as_ref()
+                    .map(|(absolute, _)| absolute.as_path())
+                    .unwrap_or(path.as_path());
+                let workspace_relative_path = staged.as_ref().map(|(_, relative)| relative.clone());
+                let thumbnail_data_url = if kind == "image" {
+                    inline_image_thumbnail_data_url(effective_path, &mime_type, metadata.len())
+                } else {
+                    None
+                };
                 let attachment = json!({
                     "type": "uploaded-file",
                     "name": path.file_name().and_then(|value| value.to_str()).unwrap_or("attachment"),
                     "ext": path.extension().and_then(|value| value.to_str()).unwrap_or(""),
                     "size": metadata.len(),
-                    "absolutePath": path.display().to_string(),
+                    "thumbnailDataUrl": thumbnail_data_url,
+                    "workspaceRelativePath": workspace_relative_path,
+                    "absolutePath": effective_path.display().to_string(),
                     "originalAbsolutePath": path.display().to_string(),
-                    "localUrl": file_url_for_path(&path),
+                    "localUrl": file_url_for_path(effective_path),
                     "kind": kind,
                     "mimeType": mime_type,
-                    "storageMode": "absolute",
+                    "storageMode": if staged.is_some() { "staged" } else { "absolute" },
                     "directUploadEligible": direct_upload_eligible,
                     "processingStrategy": if direct_upload_eligible { "direct" } else { "path-reference" },
                     "summary": path.display().to_string(),

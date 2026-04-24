@@ -63,6 +63,7 @@ pub fn execute_session_agent_turn(
         &context,
         &message,
         model_config,
+        attachment.as_ref(),
         onboarding_response,
     )?;
     let response = response_stage.response;
