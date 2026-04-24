@@ -201,6 +201,7 @@ interface MessageItemProps {
   workflowPlacement?: 'top' | 'bottom';
   workflowVariant?: 'default' | 'compact';
   workflowEmphasis?: 'default' | 'thoughts-first';
+  workflowDisplayMode?: 'all' | 'thoughts-only';
 }
 
 interface ImageContextMenuState {
@@ -325,6 +326,7 @@ export const MessageItem = memo(({
   workflowPlacement = 'top',
   workflowVariant = 'default',
   workflowEmphasis = 'default',
+  workflowDisplayMode = 'all',
 }: MessageItemProps) => {
   const isUser = msg.role === 'user';
   const isThinkingMessage = !isUser && msg.messageType === 'thinking';
@@ -339,6 +341,13 @@ export const MessageItem = memo(({
     y: 0,
     src: '',
   });
+  const filteredTimeline = useMemo(
+    () => workflowDisplayMode === 'thoughts-only'
+      ? (msg.timeline || []).filter((item) => item.type === 'thought')
+      : (msg.timeline || []),
+    [msg.timeline, workflowDisplayMode],
+  );
+  const showWorkflowDetails = workflowDisplayMode !== 'thoughts-only';
   const hasAssistantResponseContent = !isUser && Boolean(sanitizedAssistantContent);
   const showPendingThinkingIndicator = !isUser
     && !isThinkingMessage
@@ -348,11 +357,11 @@ export const MessageItem = memo(({
   const hasRenderableMessageContent = isUser
     ? Boolean(msg.displayContent || msg.content || (msg.isStreaming && !msg.thinking))
     : hasAssistantResponseContent || showPendingThinkingIndicator;
-  const showTimeline = !isUser && !isThinkingMessage && msg.timeline && msg.timeline.length > 0;
+  const showTimeline = !isUser && !isThinkingMessage && filteredTimeline.length > 0;
   const showLegacyWorkflow = !isUser
     && !isThinkingMessage
-    && (!msg.timeline || msg.timeline.length === 0)
-    && (msg.thinking || msg.tools.length > 0 || msg.activatedSkill);
+    && filteredTimeline.length === 0
+    && (msg.thinking || (showWorkflowDetails && (msg.tools.length > 0 || msg.activatedSkill)));
   const showWorkflowOnTop = workflowPlacement === 'top';
   const latestTimelineThought = !isUser
     ? [...(msg.timeline || [])]
@@ -575,7 +584,7 @@ export const MessageItem = memo(({
       )}
 
       {showWorkflowOnTop && showTimeline && (
-        <ProcessTimeline items={msg.timeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
+        <ProcessTimeline items={filteredTimeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
       )}
 
       {/* AI 工作流可视化 (兼容旧版：思考、工具、技能) - 仅当 timeline 为空时显示 */}
@@ -587,7 +596,7 @@ export const MessageItem = memo(({
           )}
 
           {/* Activated Skill */}
-          {msg.activatedSkill && (
+          {showWorkflowDetails && msg.activatedSkill && (
             <SkillActivatedBadge
               name={msg.activatedSkill.name}
               description={msg.activatedSkill.description}
@@ -595,7 +604,7 @@ export const MessageItem = memo(({
           )}
 
           {/* Tool Calls */}
-          {msg.tools.length > 0 && (
+          {showWorkflowDetails && msg.tools.length > 0 && (
             <div className="rounded-lg border border-border/70 bg-surface-primary/60 px-3 py-2 text-xs text-text-tertiary">
               查看工具调用 ({msg.tools.length})
             </div>
@@ -706,7 +715,7 @@ export const MessageItem = memo(({
 
       {/* AI 工作流可视化 (底部渲染) */}
       {!showWorkflowOnTop && showTimeline && (
-        <ProcessTimeline items={msg.timeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
+        <ProcessTimeline items={filteredTimeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
       )}
 
       {!showWorkflowOnTop && showLegacyWorkflow && (
@@ -714,13 +723,13 @@ export const MessageItem = memo(({
           {msg.thinking && (
             renderThoughtText(stripInternalProtocolMarkup(msg.thinking))
           )}
-          {msg.activatedSkill && (
+          {showWorkflowDetails && msg.activatedSkill && (
             <SkillActivatedBadge
               name={msg.activatedSkill.name}
               description={msg.activatedSkill.description}
             />
           )}
-          {msg.tools.length > 0 && (
+          {showWorkflowDetails && msg.tools.length > 0 && (
             <div className="rounded-lg border border-border/70 bg-surface-primary/60 px-3 py-2 text-xs text-text-tertiary">
               查看工具调用 ({msg.tools.length})
             </div>
@@ -798,7 +807,8 @@ export const MessageItem = memo(({
   const workflowStyleChanged =
     prevProps.workflowPlacement !== nextProps.workflowPlacement ||
     prevProps.workflowVariant !== nextProps.workflowVariant ||
-    prevProps.workflowEmphasis !== nextProps.workflowEmphasis;
+    prevProps.workflowEmphasis !== nextProps.workflowEmphasis ||
+    prevProps.workflowDisplayMode !== nextProps.workflowDisplayMode;
 
   return !msgChanged && !copyStatusChanged && !workflowStyleChanged;
 });

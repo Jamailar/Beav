@@ -18,7 +18,8 @@ fn find_existing_file_candidate(raw_path: &Path, roots: &[PathBuf]) -> Option<Pa
     if raw_path.is_absolute() {
         return None;
     }
-    roots.iter()
+    roots
+        .iter()
         .map(|root| root.join(raw_path))
         .find(|candidate| candidate.exists())
 }
@@ -73,10 +74,8 @@ mod tests {
         let target = media_root.join("generated/example.png");
         fs::write(&target, b"ok").expect("write media file");
 
-        let resolved = find_existing_file_candidate(
-            Path::new("generated/example.png"),
-            &[media_root.clone()],
-        );
+        let resolved =
+            find_existing_file_candidate(Path::new("generated/example.png"), &[media_root.clone()]);
 
         assert_eq!(resolved, Some(target));
         let _ = fs::remove_dir_all(root);

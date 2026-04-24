@@ -1950,7 +1950,7 @@ impl<'a> AppCliExecutor<'a> {
         }
     }
 
-    fn handle_skills(&self, tokens: &[String], _payload: &Value) -> Result<Value, String> {
+    fn handle_skills(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("skills")));
         };
@@ -1960,9 +1960,7 @@ impl<'a> AppCliExecutor<'a> {
             "invoke" => self.call_channel(
                 "skills:invoke",
                 json!({
-                    "name": args
-                        .string(&["name"])
-                        .or_else(|| args.positionals.first().cloned())
+                    "name": skill_name_from_args_or_payload(&args, payload)
                         .ok_or_else(|| "skills invoke requires --name".to_string())?,
                     "sessionId": self.session_id,
                     "runtimeMode": self.runtime_mode,
@@ -1971,18 +1969,14 @@ impl<'a> AppCliExecutor<'a> {
             "enable" => self.call_channel(
                 "skills:enable",
                 json!({
-                    "name": args
-                        .string(&["name"])
-                        .or_else(|| args.positionals.first().cloned())
+                    "name": skill_name_from_args_or_payload(&args, payload)
                         .ok_or_else(|| "skills enable requires --name".to_string())?
                 }),
             ),
             "create" => self.call_channel(
                 "skills:create",
                 json!({
-                    "name": args
-                        .string(&["name"])
-                        .or_else(|| args.positionals.first().cloned())
+                    "name": skill_name_from_args_or_payload(&args, payload)
                         .ok_or_else(|| "skills create requires --name".to_string())?
                 }),
             ),
@@ -1991,18 +1985,18 @@ impl<'a> AppCliExecutor<'a> {
                 json!({
                     "location": args
                         .string(&["location"])
+                        .or_else(|| payload_string_alias(payload, &["location"]))
                         .ok_or_else(|| "skills save requires --location".to_string())?,
                     "content": args
                         .string(&["content"])
+                        .or_else(|| payload_string_alias(payload, &["content"]))
                         .unwrap_or_default(),
                 }),
             ),
             "disable" => self.call_channel(
                 "skills:disable",
                 json!({
-                    "name": args
-                        .string(&["name"])
-                        .or_else(|| args.positionals.first().cloned())
+                    "name": skill_name_from_args_or_payload(&args, payload)
                         .ok_or_else(|| "skills disable requires --name".to_string())?
                 }),
             ),
@@ -3856,6 +3850,19 @@ fn normalize_storyboard_cell(text: &str) -> String {
     .to_string()
 }
 
+fn payload_string_alias(payload: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| payload_string(payload, key))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn skill_name_from_args_or_payload(args: &CliArgs, payload: &Value) -> Option<String> {
+    args.string(&["name"])
+        .or_else(|| payload_string_alias(payload, &["name", "skillName"]))
+        .or_else(|| args.positionals.first().cloned())
+}
+
 fn storyboard_header_kind(header: &str) -> Option<&'static str> {
     let normalized = header.trim().to_ascii_lowercase();
     if normalized.contains("time") || header.contains("时间") {
@@ -4856,6 +4863,24 @@ mod tests {
         assert!(prompt.contains("这是同一组连续视觉中的第 2/3 张图片。"));
         assert!(prompt.contains("全组统一风格锚点：胶片感、奶油白主色、逆光边缘、统一浅景深"));
         assert!(prompt.contains("跨图一致性要求：保持同一主体身份"));
+    }
+
+    #[test]
+    fn skill_name_from_args_or_payload_accepts_structured_payload_name() {
+        assert_eq!(
+            skill_name_from_args_or_payload(
+                &CliArgs::default(),
+                &json!({ "name": "redbox-image-director" })
+            ),
+            Some("redbox-image-director".to_string())
+        );
+        assert_eq!(
+            skill_name_from_args_or_payload(
+                &CliArgs::default(),
+                &json!({ "skillName": "redbox-image-director" })
+            ),
+            Some("redbox-image-director".to_string())
+        );
     }
 
     #[test]
