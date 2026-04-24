@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    ArrowUp,
     ChevronDown,
     Clapperboard,
     Copy,
@@ -17,7 +18,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
-import type { GenerationIntent } from '../App';
+import type { GenerationIntent, PendingChatMessage } from '../App';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
@@ -1166,6 +1167,7 @@ export function GenerationStudio({
     const [isAgentSessionLoading, setIsAgentSessionLoading] = useState(false);
     const [agentSessionError, setAgentSessionError] = useState('');
     const [agentExecutionActive, setAgentExecutionActive] = useState(false);
+    const [agentPendingMessage, setAgentPendingMessage] = useState<PendingChatMessage | null>(null);
 
     const [videoPrompt, setVideoPrompt] = useState('');
     const [videoTitle, setVideoTitle] = useState('');
@@ -1266,6 +1268,7 @@ export function GenerationStudio({
             agentSessionRequestIdRef.current += 1;
             setAgentExecutionActive(false);
             setAgentSessionError('');
+            setAgentPendingMessage(null);
             setIsAgentSessionLoading(false);
             return;
         }
@@ -1856,6 +1859,18 @@ export function GenerationStudio({
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
     const currentHeaderHint = isAgentMode ? '套图制作 · 对话驱动' : currentConfigHint;
+    const canSendAgentMessage = isAgentMode
+        && Boolean(agentSessionId)
+        && !isAgentSessionLoading
+        && !agentExecutionActive
+        && imagePrompt.trim().length > 0;
+    const handleSendAgentMessage = useCallback(() => {
+        const content = imagePrompt.trim();
+        if (!content || !agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
+        setAgentPendingMessage({ content });
+        setImagePrompt('');
+        setImageError('');
+    }, [agentExecutionActive, agentSessionId, imagePrompt, isAgentSessionLoading]);
     const studioToolbar = (
         <div className="flex items-center gap-2.5">
             <button
@@ -1906,273 +1921,304 @@ export function GenerationStudio({
     return (
         <div className="h-full min-h-0 bg-background text-text-primary">
             <div className="mx-auto flex h-full min-h-0 max-w-[1180px] flex-col px-6">
-                {isAgentMode ? (
-                    <main className="flex-1 min-h-0 pt-6 pb-6">
-                        <div className="mx-auto flex h-full w-full max-w-[960px] flex-col overflow-hidden rounded-[24px] border border-border bg-surface-secondary shadow-[var(--ui-shadow-1)]">
-                            <div className="border-b border-border px-5 py-3">
-                                {studioToolbar}
-                            </div>
-                            <div className="min-h-0 flex-1 overflow-hidden bg-background">
-                                {isAgentSessionLoading ? (
-                                    <div className="flex h-full items-center justify-center text-text-tertiary">
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                        正在连接套图制作会话...
+                <main
+                    ref={isAgentMode ? undefined : feedScrollRef}
+                    className={clsx('flex-1 min-h-0 pt-6', isAgentMode ? 'overflow-hidden pb-3' : 'overflow-y-auto')}
+                >
+                    {isAgentMode ? (
+                        <div className="mx-auto h-full max-w-[900px] overflow-hidden rounded-[24px] border border-border bg-surface-secondary shadow-[var(--ui-shadow-1)]">
+                            {isAgentSessionLoading ? (
+                                <div className="flex h-full items-center justify-center text-text-tertiary">
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    正在连接套图制作会话...
+                                </div>
+                            ) : agentSessionError ? (
+                                <div className="flex h-full items-center justify-center px-6">
+                                    <div className="max-w-[520px] rounded-[18px] border border-brand-red/20 bg-brand-red/8 px-5 py-4 text-sm text-brand-red">
+                                        {agentSessionError}
                                     </div>
-                                ) : agentSessionError ? (
-                                    <div className="flex h-full items-center justify-center px-6">
-                                        <div className="max-w-[520px] rounded-[18px] border border-brand-red/20 bg-brand-red/8 px-5 py-4 text-sm text-brand-red">
-                                            {agentSessionError}
+                                </div>
+                            ) : agentSessionId ? (
+                                <Chat
+                                    fixedSessionId={agentSessionId}
+                                    pendingMessage={agentPendingMessage}
+                                    onMessageConsumed={() => setAgentPendingMessage(null)}
+                                    defaultCollapsed={true}
+                                    showClearButton={false}
+                                    showWelcomeShortcuts={false}
+                                    showComposerShortcuts={false}
+                                    showComposer={false}
+                                    fixedSessionContextIndicatorMode="none"
+                                    welcomeTitle="套图制作"
+                                    welcomeSubtitle="直接告诉 agent 你的成套图片目标、风格和修改意见。图片相关工具调用由它负责。"
+                                    contentLayout="wide"
+                                    allowFileUpload={false}
+                                    messageWorkflowPlacement="top"
+                                    messageWorkflowVariant="compact"
+                                    messageWorkflowEmphasis="thoughts-first"
+                                    messageWorkflowDisplayMode="thoughts-only"
+                                    onExecutionStateChange={setAgentExecutionActive}
+                                />
+                            ) : (
+                                <div className="flex h-full items-center justify-center text-text-tertiary">
+                                    套图制作会话尚未就绪
+                                </div>
+                            )}
+                        </div>
+                    ) : feedEntries.length === 0 ? (
+                        <div className="min-h-[280px]" />
+                    ) : (
+                        <div className="mx-auto max-w-[860px] space-y-7 pb-10">
+                            {feedEntries.map((entry) => (
+                                <FeedEntryMessage
+                                    key={entry.id}
+                                    entry={entry}
+                                    onRegenerate={handleRegenerate}
+                                    onEdit={handleEditEntry}
+                                    onPreviewAsset={setPreviewAsset}
+                                    onOpenAssetMenu={handleOpenAssetMenu}
+                                />
+                            ))}
+                            <div ref={feedBottomRef} />
+                        </div>
+                    )}
+                </main>
+
+                <footer className="bg-background pb-5 pt-4">
+                    <div className={composerWidthClass}>
+                        <div className="rounded-[24px] border border-border bg-surface-secondary px-5 py-3 shadow-[var(--ui-shadow-1)]">
+                            {studioToolbar}
+
+                            <div className="mt-3 rounded-[20px] border border-border bg-surface-primary p-4">
+                                {isAgentMode ? (
+                                    <div className="space-y-3">
+                                        <textarea
+                                            value={imagePrompt}
+                                            onChange={(event) => setImagePrompt(event.target.value)}
+                                            rows={2}
+                                            placeholder="直接告诉 agent 你要做几张图、风格、重点和修改要求..."
+                                            className="min-h-[54px] w-full resize-none bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
+                                        />
+
+                                        <div className="flex items-center gap-2">
+                                            <div className="text-[12px] text-text-tertiary">
+                                                发送文本给 agent，由它决定图片规划和生成调用。
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleSendAgentMessage}
+                                                disabled={!canSendAgentMessage}
+                                                className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
+                                            >
+                                                {agentExecutionActive ? (
+                                                    <Loader2 className="h-5 w-5 animate-spin" />
+                                                ) : (
+                                                    <ArrowUp className="h-5 w-5" />
+                                                )}
+                                            </button>
                                         </div>
+
+                                        {(agentSessionError || imageError) && (
+                                            <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
+                                                {agentSessionError || imageError}
+                                            </div>
+                                        )}
                                     </div>
-                                ) : agentSessionId ? (
-                                    <Chat
-                                        fixedSessionId={agentSessionId}
-                                        defaultCollapsed={true}
-                                        showClearButton={false}
-                                        showWelcomeShortcuts={false}
-                                        showComposerShortcuts={false}
-                                        fixedSessionContextIndicatorMode="none"
-                                        welcomeTitle="套图制作"
-                                        welcomeSubtitle="直接告诉 agent 你的成套图片目标、风格和修改意见。图片相关工具调用由它负责。"
-                                        contentLayout="wide"
-                                        allowFileUpload={false}
-                                        messageWorkflowPlacement="top"
-                                        messageWorkflowVariant="compact"
-                                        messageWorkflowEmphasis="thoughts-first"
-                                        messageWorkflowDisplayMode="thoughts-only"
-                                        onExecutionStateChange={setAgentExecutionActive}
-                                    />
                                 ) : (
-                                    <div className="flex h-full items-center justify-center text-text-tertiary">
-                                        套图制作会话尚未就绪
+                                    <div className={composerGridClass}>
+                                        <div className="space-y-3">
+                                            {studioMode === 'image' ? (
+                                                <UploadPreviewCard
+                                                    label={isReadingImageRefs ? '读取中' : '图片'}
+                                                    accept="image/*"
+                                                    multiple
+                                                    items={imageReferences}
+                                                    onChange={handleImageReferenceFiles}
+                                                    onClear={() => setImageReferences([])}
+                                                />
+                                            ) : videoMode === 'first-last-frame' ? (
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <UploadPreviewCard
+                                                        label={isReadingVideoRefs ? '读取中' : '首帧'}
+                                                        accept="image/*"
+                                                        items={videoFirstFrame ? [videoFirstFrame] : []}
+                                                        onChange={(event) => void handleVideoReferenceFile(event, 'first')}
+                                                        onClear={() => setVideoFirstFrame(null)}
+                                                    />
+                                                    <UploadPreviewCard
+                                                        label={isReadingVideoRefs ? '读取中' : '尾帧'}
+                                                        accept="image/*"
+                                                        items={videoLastFrame ? [videoLastFrame] : []}
+                                                        onChange={(event) => void handleVideoReferenceFile(event, 'last')}
+                                                        onClear={() => setVideoLastFrame(null)}
+                                                    />
+                                                </div>
+                                            ) : videoMode === 'continuation' ? (
+                                                <UploadPreviewCard
+                                                    label={isReadingVideoRefs ? '读取中' : '视频'}
+                                                    accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                                                    items={videoFirstClip ? [videoFirstClip] : []}
+                                                    onChange={(event) => void handleVideoReferenceFile(event, 'firstClip')}
+                                                    onClear={() => setVideoFirstClip(null)}
+                                                />
+                                            ) : (
+                                                <UploadPreviewCard
+                                                    label={isReadingVideoRefs ? '读取中' : '图片'}
+                                                    accept="image/*"
+                                                    multiple
+                                                    items={uploadedVideoRefs}
+                                                    onChange={handleVideoReferenceFiles}
+                                                    onClear={() => setVideoReferences([])}
+                                                />
+                                            )}
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <textarea
+                                                value={studioMode === 'image' ? imagePrompt : videoPrompt}
+                                                onChange={(event) => (
+                                                    studioMode === 'image'
+                                                        ? setImagePrompt(event.target.value)
+                                                        : setVideoPrompt(event.target.value)
+                                                )}
+                                                rows={2}
+                                                placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : '描述您想生成的视频场景、镜头、动作...'}
+                                                className="min-h-[54px] w-full resize-none bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
+                                            />
+
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                {studioMode === 'image' ? (
+                                                    <>
+                                                        <PopoverSelect
+                                                            value={imageModel}
+                                                            onChange={setImageModel}
+                                                            options={imageModelOptions}
+                                                            className="min-w-[156px]"
+                                                            title="图片模型"
+                                                            panelClassName="w-[240px]"
+                                                            layout="column"
+                                                        />
+                                                        <ImageAspectRatioPicker
+                                                            value={imageAspectRatio}
+                                                            onChange={setImageAspectRatio}
+                                                        />
+                                                        <PopoverSelect
+                                                            value={imageSize}
+                                                            onChange={setImageSize}
+                                                            options={IMAGE_SIZE_OPTIONS}
+                                                            className="min-w-[82px]"
+                                                            title="图片尺寸"
+                                                            panelClassName="w-[248px]"
+                                                        />
+                                                        <PopoverSelect
+                                                            value={String(imageCount)}
+                                                            onChange={(value) => setImageCount(Number(value) || 1)}
+                                                            options={IMAGE_COUNT_OPTIONS}
+                                                            className="min-w-[78px]"
+                                                            title="生成数量"
+                                                            panelClassName="w-[220px]"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleGenerateImage}
+                                                            disabled={!hasImageConfig}
+                                                            className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
+                                                        >
+                                                            <Sparkles className="h-5 w-5" />
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <PopoverSelect
+                                                            value={videoMode}
+                                                            onChange={(value) => setVideoMode(value as VideoGenerationMode)}
+                                                            options={VIDEO_MODE_OPTIONS}
+                                                            className="min-w-[150px]"
+                                                            title="视频模式"
+                                                            panelClassName="w-[280px]"
+                                                        />
+                                                        <PopoverSelect
+                                                            value={videoAspectRatio}
+                                                            onChange={(value) => setVideoAspectRatio(value as '16:9' | '9:16')}
+                                                            options={VIDEO_ASPECT_RATIO_OPTIONS}
+                                                            className="min-w-[96px]"
+                                                            title="视频比例"
+                                                            panelClassName="w-[220px]"
+                                                        />
+                                                        <PopoverSelect
+                                                            value={videoResolution}
+                                                            onChange={(value) => setVideoResolution(value as '720p' | '1080p')}
+                                                            options={VIDEO_RESOLUTION_OPTIONS}
+                                                            className="min-w-[96px]"
+                                                            title="视频清晰度"
+                                                            panelClassName="w-[220px]"
+                                                        />
+                                                        <PopoverSelect
+                                                            value={String(videoDurationSeconds)}
+                                                            onChange={(value) => setVideoDurationSeconds(Number(value) || 8)}
+                                                            options={VIDEO_DURATION_OPTIONS}
+                                                            className="min-w-[96px]"
+                                                            title="视频时长"
+                                                            panelClassName="w-[188px]"
+                                                            layout="column"
+                                                        />
+                                                        <PopoverSelect
+                                                            value={videoGenerateAudio ? 'on' : 'off'}
+                                                            onChange={(value) => setVideoGenerateAudio(value === 'on')}
+                                                            options={VIDEO_AUDIO_OPTIONS}
+                                                            className="min-w-[92px]"
+                                                            title="音频"
+                                                            panelClassName="w-[220px]"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleGenerateVideo}
+                                                            disabled={!hasVideoConfig}
+                                                            className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
+                                                        >
+                                                            <Sparkles className="h-5 w-5" />
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
+
+                                            {studioMode === 'image' && isReadingImageRefs && (
+                                                <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
+                                                    <span>正在读取参考图...</span>
+                                                </div>
+                                            )}
+
+                                            {studioMode === 'video' && (
+                                                <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
+                                                    {videoDrivingAudio && <span>已附带驱动音频</span>}
+                                                    {isReadingVideoRefs && <span>正在读取素材...</span>}
+                                                </div>
+                                            )}
+
+                                            {activeError && (
+                                                <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
+                                                    {activeError}
+                                                </div>
+                                            )}
+
+                                            {studioMode === 'image' && !hasImageConfig && (
+                                                <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
+                                                    未检测到生图配置。请先到“设置 → AI 模型”填写图片生成的 Endpoint、API Key 和模型。
+                                                </div>
+                                            )}
+
+                                            {studioMode === 'video' && !hasVideoConfig && (
+                                                <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
+                                                    未检测到生视频配置。请先完成官方视频登录或填写视频生成所需的 API Key。
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                             </div>
                         </div>
-                    </main>
-                ) : (
-                    <>
-                        <main ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto pt-6">
-                            {feedEntries.length === 0 ? (
-                                <div className="min-h-[280px]" />
-                            ) : (
-                                <div className="mx-auto max-w-[860px] space-y-7 pb-10">
-                                    {feedEntries.map((entry) => (
-                                        <FeedEntryMessage
-                                            key={entry.id}
-                                            entry={entry}
-                                            onRegenerate={handleRegenerate}
-                                            onEdit={handleEditEntry}
-                                            onPreviewAsset={setPreviewAsset}
-                                            onOpenAssetMenu={handleOpenAssetMenu}
-                                        />
-                                    ))}
-                                    <div ref={feedBottomRef} />
-                                </div>
-                            )}
-                        </main>
-
-                        <footer className="bg-background pb-5 pt-4">
-                            <div className={composerWidthClass}>
-                                <div className="rounded-[24px] border border-border bg-surface-secondary px-5 py-3 shadow-[var(--ui-shadow-1)]">
-                                    {studioToolbar}
-
-                                    <div className="mt-3 rounded-[20px] border border-border bg-surface-primary p-4">
-                                        <div className={composerGridClass}>
-                                            <div className="space-y-3">
-                                                {studioMode === 'image' ? (
-                                                    <UploadPreviewCard
-                                                        label={isReadingImageRefs ? '读取中' : '图片'}
-                                                        accept="image/*"
-                                                        multiple
-                                                        items={imageReferences}
-                                                        onChange={handleImageReferenceFiles}
-                                                        onClear={() => setImageReferences([])}
-                                                    />
-                                                ) : videoMode === 'first-last-frame' ? (
-                                                    <div className="grid grid-cols-2 gap-3">
-                                                        <UploadPreviewCard
-                                                            label={isReadingVideoRefs ? '读取中' : '首帧'}
-                                                            accept="image/*"
-                                                            items={videoFirstFrame ? [videoFirstFrame] : []}
-                                                            onChange={(event) => void handleVideoReferenceFile(event, 'first')}
-                                                            onClear={() => setVideoFirstFrame(null)}
-                                                        />
-                                                        <UploadPreviewCard
-                                                            label={isReadingVideoRefs ? '读取中' : '尾帧'}
-                                                            accept="image/*"
-                                                            items={videoLastFrame ? [videoLastFrame] : []}
-                                                            onChange={(event) => void handleVideoReferenceFile(event, 'last')}
-                                                            onClear={() => setVideoLastFrame(null)}
-                                                        />
-                                                    </div>
-                                                ) : videoMode === 'continuation' ? (
-                                                    <UploadPreviewCard
-                                                        label={isReadingVideoRefs ? '读取中' : '视频'}
-                                                        accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-                                                        items={videoFirstClip ? [videoFirstClip] : []}
-                                                        onChange={(event) => void handleVideoReferenceFile(event, 'firstClip')}
-                                                        onClear={() => setVideoFirstClip(null)}
-                                                    />
-                                                ) : (
-                                                    <UploadPreviewCard
-                                                        label={isReadingVideoRefs ? '读取中' : '图片'}
-                                                        accept="image/*"
-                                                        multiple
-                                                        items={uploadedVideoRefs}
-                                                        onChange={handleVideoReferenceFiles}
-                                                        onClear={() => setVideoReferences([])}
-                                                    />
-                                                )}
-                                            </div>
-
-                                            <div className="space-y-3">
-                                                <textarea
-                                                    value={studioMode === 'image' ? imagePrompt : videoPrompt}
-                                                    onChange={(event) => (
-                                                        studioMode === 'image'
-                                                            ? setImagePrompt(event.target.value)
-                                                            : setVideoPrompt(event.target.value)
-                                                    )}
-                                                    rows={2}
-                                                    placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : '描述您想生成的视频场景、镜头、动作...'}
-                                                    className="min-h-[54px] w-full resize-none bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
-                                                />
-
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    {studioMode === 'image' ? (
-                                                        <>
-                                                            <PopoverSelect
-                                                                value={imageModel}
-                                                                onChange={setImageModel}
-                                                                options={imageModelOptions}
-                                                                className="min-w-[156px]"
-                                                                title="图片模型"
-                                                                panelClassName="w-[240px]"
-                                                                layout="column"
-                                                            />
-                                                            <ImageAspectRatioPicker
-                                                                value={imageAspectRatio}
-                                                                onChange={setImageAspectRatio}
-                                                            />
-                                                            <PopoverSelect
-                                                                value={imageSize}
-                                                                onChange={setImageSize}
-                                                                options={IMAGE_SIZE_OPTIONS}
-                                                                className="min-w-[82px]"
-                                                                title="图片尺寸"
-                                                                panelClassName="w-[248px]"
-                                                            />
-                                                            <PopoverSelect
-                                                                value={String(imageCount)}
-                                                                onChange={(value) => setImageCount(Number(value) || 1)}
-                                                                options={IMAGE_COUNT_OPTIONS}
-                                                                className="min-w-[78px]"
-                                                                title="生成数量"
-                                                                panelClassName="w-[220px]"
-                                                            />
-                                                            <button
-                                                                type="button"
-                                                                onClick={handleGenerateImage}
-                                                                disabled={!hasImageConfig}
-                                                                className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
-                                                            >
-                                                                <Sparkles className="h-5 w-5" />
-                                                            </button>
-                                                        </>
-                                                    ) : (
-                                                        <>
-                                                            <PopoverSelect
-                                                                value={videoMode}
-                                                                onChange={(value) => setVideoMode(value as VideoGenerationMode)}
-                                                                options={VIDEO_MODE_OPTIONS}
-                                                                className="min-w-[150px]"
-                                                                title="视频模式"
-                                                                panelClassName="w-[280px]"
-                                                            />
-                                                            <PopoverSelect
-                                                                value={videoAspectRatio}
-                                                                onChange={(value) => setVideoAspectRatio(value as '16:9' | '9:16')}
-                                                                options={VIDEO_ASPECT_RATIO_OPTIONS}
-                                                                className="min-w-[96px]"
-                                                                title="视频比例"
-                                                                panelClassName="w-[220px]"
-                                                            />
-                                                            <PopoverSelect
-                                                                value={videoResolution}
-                                                                onChange={(value) => setVideoResolution(value as '720p' | '1080p')}
-                                                                options={VIDEO_RESOLUTION_OPTIONS}
-                                                                className="min-w-[96px]"
-                                                                title="视频清晰度"
-                                                                panelClassName="w-[220px]"
-                                                            />
-                                                            <PopoverSelect
-                                                                value={String(videoDurationSeconds)}
-                                                                onChange={(value) => setVideoDurationSeconds(Number(value) || 8)}
-                                                                options={VIDEO_DURATION_OPTIONS}
-                                                                className="min-w-[96px]"
-                                                                title="视频时长"
-                                                                panelClassName="w-[188px]"
-                                                                layout="column"
-                                                            />
-                                                            <PopoverSelect
-                                                                value={videoGenerateAudio ? 'on' : 'off'}
-                                                                onChange={(value) => setVideoGenerateAudio(value === 'on')}
-                                                                options={VIDEO_AUDIO_OPTIONS}
-                                                                className="min-w-[92px]"
-                                                                title="音频"
-                                                                panelClassName="w-[220px]"
-                                                            />
-                                                            <button
-                                                                type="button"
-                                                                onClick={handleGenerateVideo}
-                                                                disabled={!hasVideoConfig}
-                                                                className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
-                                                            >
-                                                                <Sparkles className="h-5 w-5" />
-                                                            </button>
-                                                        </>
-                                                    )}
-                                                </div>
-
-                                                {studioMode === 'image' && isReadingImageRefs && (
-                                                    <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
-                                                        <span>正在读取参考图...</span>
-                                                    </div>
-                                                )}
-
-                                                {studioMode === 'video' && (
-                                                    <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
-                                                        {videoDrivingAudio && <span>已附带驱动音频</span>}
-                                                        {isReadingVideoRefs && <span>正在读取素材...</span>}
-                                                    </div>
-                                                )}
-
-                                                {activeError && (
-                                                    <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
-                                                        {activeError}
-                                                    </div>
-                                                )}
-
-                                                {studioMode === 'image' && !hasImageConfig && (
-                                                    <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
-                                                        未检测到生图配置。请先到“设置 → AI 模型”填写图片生成的 Endpoint、API Key 和模型。
-                                                    </div>
-                                                )}
-
-                                                {studioMode === 'video' && !hasVideoConfig && (
-                                                    <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
-                                                        未检测到生视频配置。请先完成官方视频登录或填写视频生成所需的 API Key。
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </footer>
-                    </>
-                )}
+                    </div>
+                </footer>
             </div>
 
             {previewAsset && (
