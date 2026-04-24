@@ -457,7 +457,31 @@ pub fn handle_task_stats(state: &State<'_, AppState>) -> Result<Value, String> {
 }
 
 fn parse_task_intent(payload: &Value) -> Result<TaskIntentSchema, String> {
-    let root = payload_field(payload, "intent").unwrap_or(payload).clone();
+    let mut root = payload_field(payload, "intent").unwrap_or(payload).clone();
+    if let Some(object) = root.as_object_mut() {
+        if object.get("cron").is_none() {
+            if let Some(value) = object.get("schedule").cloned() {
+                object.insert("cron".to_string(), value);
+            }
+        }
+        if object.get("goal").is_none() {
+            if let Some(value) = object.get("description").cloned() {
+                object.insert("goal".to_string(), value);
+            }
+        }
+        if object.get("prompt").is_none() {
+            if let Some(value) = object.get("message").cloned() {
+                object.insert("prompt".to_string(), value);
+            } else if let Some(value) = object.get("description").cloned() {
+                object.insert("prompt".to_string(), value);
+            }
+        }
+        if object.get("actionType").is_none() {
+            if let Some(value) = object.get("type").cloned() {
+                object.insert("actionType".to_string(), value);
+            }
+        }
+    }
     let mut intent: TaskIntentSchema =
         serde_json::from_value(root).map_err(|error| format!("invalid task intent: {error}"))?;
     if intent.kind.trim().is_empty() {
@@ -514,6 +538,36 @@ fn parse_task_intent(payload: &Value) -> Result<TaskIntentSchema, String> {
         return Err("scheduled 任务至少需要 prompt 或 goal".to_string());
     }
     Ok(intent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_task_intent;
+    use serde_json::json;
+
+    #[test]
+    fn parse_task_intent_accepts_common_preview_aliases() {
+        let intent = parse_task_intent(&json!({
+            "name": "晚间问候",
+            "schedule": "45 21 * * *",
+            "description": "每天晚上 9:45 向用户发送问候消息",
+            "type": "greeting",
+            "ownerScope": "manual:redclaw",
+        }))
+        .expect("aliases should normalize into a valid scheduled task intent");
+
+        assert_eq!(intent.kind, "scheduled");
+        assert_eq!(intent.cron.as_deref(), Some("45 21 * * *"));
+        assert_eq!(
+            intent.goal.as_deref(),
+            Some("每天晚上 9:45 向用户发送问候消息")
+        );
+        assert_eq!(
+            intent.prompt.as_deref(),
+            Some("每天晚上 9:45 向用户发送问候消息")
+        );
+        assert_eq!(intent.action_type, "greeting");
+    }
 }
 
 fn build_draft_definition(
