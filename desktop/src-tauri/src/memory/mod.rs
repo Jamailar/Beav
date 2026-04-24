@@ -45,10 +45,10 @@ pub(crate) fn handle_memory_channel(
 
     Some((|| -> Result<Value, String> {
         match channel {
-            "memory:list" => with_store(state, |store| {
+            "memory:list" => {
                 let started_at = now_ms();
                 let request_id = format!("memory:list:{}", started_at);
-                let items = list_active_memories(&store);
+                let items = with_store(state, |store| Ok(list_active_memories(&store)))?;
                 log_timing_event(
                     state,
                     "settings",
@@ -58,11 +58,11 @@ pub(crate) fn handle_memory_channel(
                     Some(format!("items={}", items.len())),
                 );
                 Ok(json!(items))
-            }),
-            "memory:archived" => with_store(state, |store| {
+            }
+            "memory:archived" => {
                 let started_at = now_ms();
                 let request_id = format!("memory:archived:{}", started_at);
-                let items = list_archived_memories(&store);
+                let items = with_store(state, |store| Ok(list_archived_memories(&store)))?;
                 log_timing_event(
                     state,
                     "settings",
@@ -72,11 +72,11 @@ pub(crate) fn handle_memory_channel(
                     Some(format!("items={}", items.len())),
                 );
                 Ok(json!(items))
-            }),
-            "memory:history" => with_store(state, |store| {
+            }
+            "memory:history" => {
                 let started_at = now_ms();
                 let request_id = format!("memory:history:{}", started_at);
-                let items = list_memory_history(&store);
+                let items = with_store(state, |store| Ok(list_memory_history(&store)))?;
                 log_timing_event(
                     state,
                     "settings",
@@ -86,7 +86,7 @@ pub(crate) fn handle_memory_channel(
                     Some(format!("items={}", items.len())),
                 );
                 Ok(json!(items))
-            }),
+            }
             "memory:maintenance-status" => {
                 let started_at = now_ms();
                 let request_id = format!("memory:maintenance-status:{}", started_at);
@@ -198,4 +198,183 @@ pub(crate) fn handle_memory_channel(
             _ => unreachable!(),
         }
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        startup_migration, AppStore, ApprovalRuntimeState, AuthRuntimeState, DiagnosticsState,
+        RuntimeWarmState,
+    };
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::{Arc, Mutex};
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri::Manager;
+
+    fn unique_test_dir(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "redbox-memory-tests-{label}-{}-{}",
+            std::process::id(),
+            now_i64()
+        ));
+        fs::create_dir_all(&root).expect("test dir should be created");
+        root
+    }
+
+    fn build_test_app(
+        store: AppStore,
+        workspace_root: PathBuf,
+    ) -> tauri::App<tauri::test::MockRuntime> {
+        let store_root = workspace_root.join(".test-store");
+        fs::create_dir_all(&store_root).expect("store root should be created");
+        let store_path = store_root.join("redbox-state.json");
+        let shared_store = Arc::new(Mutex::new(store));
+        mock_builder()
+            .manage(AppState {
+                store_path,
+                store: shared_store,
+                workspace_root_cache: Mutex::new(workspace_root),
+                startup_migration: Mutex::new(startup_migration::StartupMigrationStatus::default()),
+                store_persist_version: Arc::new(AtomicU64::new(0)),
+                store_persist_scheduled: Arc::new(AtomicBool::new(false)),
+                auth_runtime: Mutex::new(AuthRuntimeState::default()),
+                official_auth_refresh_lock: Mutex::new(()),
+                official_wechat_status_lock: Mutex::new(()),
+                official_cache_refresh_inflight: AtomicBool::new(false),
+                mcp_manager: crate::mcp::McpManager::default(),
+                chat_runtime_states: Mutex::new(HashMap::new()),
+                editor_runtime_states: Mutex::new(HashMap::new()),
+                active_chat_requests: Mutex::new(HashMap::new()),
+                creative_chat_cancellations: Mutex::new(HashSet::new()),
+                assistant_runtime: Mutex::new(None),
+                assistant_sidecar: Mutex::new(None),
+                redclaw_runtime: Mutex::new(None),
+                media_generation_runtime: Mutex::new(None),
+                runtime_warm: Mutex::new(RuntimeWarmState::default()),
+                approval_runtime: Mutex::new(ApprovalRuntimeState::default()),
+                skill_watch: Mutex::new(crate::skills::SkillWatcherSnapshot::default()),
+                diagnostics: Mutex::new(DiagnosticsState::default()),
+                knowledge_index_state: Mutex::new(
+                    crate::knowledge_index::KnowledgeIndexRuntimeState::default(),
+                ),
+            })
+            .build(mock_context(noop_assets()))
+            .expect("mock tauri app should build")
+    }
+
+    fn empty_store_for_workspace(workspace_root: &PathBuf) -> AppStore {
+        let mut store = AppStore::default();
+        store.settings = json!({
+            "workspace_dir": workspace_root.display().to_string()
+        });
+        store.active_space_id = "default".to_string();
+        store
+    }
+
+    fn sample_memory(
+        id: &str,
+        content: &str,
+        memory_type: &str,
+        tags: &[&str],
+        status: Option<&str>,
+    ) -> UserMemoryRecord {
+        let now = now_i64();
+        UserMemoryRecord {
+            id: id.to_string(),
+            content: content.to_string(),
+            r#type: memory_type.to_string(),
+            tags: tags.iter().map(|item| item.to_string()).collect(),
+            created_at: now,
+            updated_at: Some(now),
+            last_accessed: None,
+            status: status.map(ToString::to_string),
+            archived_at: None,
+            archive_reason: None,
+            origin_id: None,
+            canonical_key: None,
+            revision: Some(1),
+            last_conflict_at: None,
+        }
+    }
+
+    #[test]
+    fn memory_list_channel_returns_empty_array_without_hanging() {
+        let workspace_root = unique_test_dir("list-empty");
+        let store = empty_store_for_workspace(&workspace_root);
+        let app = build_test_app(store, workspace_root);
+        let state = app.state::<AppState>();
+
+        let response = handle_memory_channel(&state, "memory:list", &json!({}))
+            .expect("memory:list should be handled")
+            .expect("memory:list should succeed");
+        let items = response
+            .as_array()
+            .expect("memory:list should return an array");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn memory_search_channel_matches_content_and_tags() {
+        let workspace_root = unique_test_dir("search");
+        let mut store = empty_store_for_workspace(&workspace_root);
+        store.memories = vec![
+            sample_memory(
+                "memory-1",
+                "用户长期偏好实操、复盘和可复制方法",
+                "preference",
+                &["复盘", "方法论"],
+                Some("active"),
+            ),
+            sample_memory(
+                "memory-2",
+                "普通背景资料",
+                "fact",
+                &["其他"],
+                Some("active"),
+            ),
+        ];
+        let app = build_test_app(store, workspace_root);
+        let state = app.state::<AppState>();
+
+        let response = handle_memory_channel(&state, "memory:search", &json!({ "query": "复盘" }))
+            .expect("memory:search should be handled")
+            .expect("memory:search should succeed");
+        let items = response
+            .as_array()
+            .expect("memory:search should return an array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].get("id"), Some(&json!("memory-1")));
+    }
+
+    #[test]
+    fn memory_add_channel_persists_workspace_files() {
+        let workspace_root = unique_test_dir("add");
+        let store = empty_store_for_workspace(&workspace_root);
+        let app = build_test_app(store, workspace_root.clone());
+        let state = app.state::<AppState>();
+
+        let response = handle_memory_channel(
+            &state,
+            "memory:add",
+            &json!({
+                "content": "用户偏好简洁、可执行的技术方案",
+                "type": "preference",
+                "tags": ["style", "execution"]
+            }),
+        )
+        .expect("memory:add should be handled")
+        .expect("memory:add should succeed");
+
+        assert_eq!(
+            response.get("content"),
+            Some(&json!("用户偏好简洁、可执行的技术方案"))
+        );
+        assert!(workspace_root.join("memory").join("catalog.json").exists());
+        assert!(workspace_root.join("memory").join("history.json").exists());
+        assert!(workspace_root.join("memory").join("MEMORY.md").exists());
+    }
 }
