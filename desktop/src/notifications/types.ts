@@ -42,6 +42,7 @@ export interface NotificationEnvelope {
   sticky: boolean;
   createdAt: number;
   actions: NotificationAction[];
+  showInCenter?: boolean;
   meta?: Record<string, unknown>;
 }
 
@@ -198,4 +199,3 @@ export function parseNotificationSettings(value: unknown): NotificationSettings 
     },
   };
 }
-
