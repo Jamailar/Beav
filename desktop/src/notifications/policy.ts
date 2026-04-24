@@ -140,6 +140,7 @@ export function mapRuntimeDoneToNotification(
     sound: 'none',
     sticky: false,
     createdAt,
+    showInCenter: false,
     actions: [
       {
         id: 'open-runtime',
@@ -400,6 +401,7 @@ export function mapRedclawTaskEventToNotification(
     sound: 'none',
     sticky: level !== 'success',
     createdAt,
+    showInCenter: !isCompleted,
     actions: [
       {
         id: 'open-redclaw',

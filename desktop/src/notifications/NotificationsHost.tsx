@@ -90,7 +90,9 @@ export function NotificationsHost({ currentView, children = null }: Notification
       }
       fingerprintsRef.current.set(fingerprint, now);
 
-      push(notification);
+      if (notification.showInCenter !== false) {
+        push(notification);
+      }
       showNotificationToast(notification, settings, openCenter);
       await playNotificationSound(notification.sound, settings, {
         assetUrl: resolveNotificationSoundAsset(notification),
