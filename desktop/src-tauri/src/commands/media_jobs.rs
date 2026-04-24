@@ -16,6 +16,9 @@ pub fn handle_media_jobs_channel(
         "generation:submit-video" => Some(media_runtime::submit_media_job(
             app, state, "video", payload,
         )),
+        "generation:list-job-summaries" => {
+            Some(media_runtime::list_media_job_summaries(state, payload))
+        }
         "generation:list-jobs" => Some(media_runtime::list_media_jobs(state, payload)),
         "generation:get-job" => Some(
             payload_string(payload, "jobId")

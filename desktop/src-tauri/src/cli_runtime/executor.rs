@@ -769,6 +769,7 @@ mod tests {
                     crate::startup_migration::StartupMigrationStatus::default(),
                 ),
                 store_persist_version: Arc::new(AtomicU64::new(0)),
+                store_persist_scheduled: Arc::new(AtomicBool::new(false)),
                 auth_runtime: Mutex::new(crate::AuthRuntimeState::default()),
                 official_auth_refresh_lock: Mutex::new(()),
                 official_wechat_status_lock: Mutex::new(()),

@@ -515,6 +515,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskItem[]>([]);
   const [backgroundWorkerPool, setBackgroundWorkerPool] = useState<BackgroundWorkerPoolState>({ json: [], runtime: [] });
   const [selectedBackgroundTaskId, setSelectedBackgroundTaskId] = useState('');
+  const [selectedBackgroundTaskDetail, setSelectedBackgroundTaskDetail] = useState<BackgroundTaskItem | null>(null);
   const [runtimeDraftInput, setRuntimeDraftInput] = useState('');
   const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
   const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
@@ -1264,6 +1265,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return next.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 200);
       });
       setSelectedBackgroundTaskId((prev) => prev || task.id);
+      setSelectedBackgroundTaskDetail((prev) => (prev?.id === task.id ? { ...prev, ...task } : prev));
     };
     window.ipcRenderer.on('background:task-updated', onBackgroundTaskUpdated);
     return () => {
@@ -1282,6 +1284,23 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     if (!selectedRuntimeSessionId || !hasSelectedRuntimeSession) return;
     void loadRuntimeSessionDetails(selectedRuntimeSessionId);
   }, [activeTab, formData.developer_mode_enabled, hasSelectedRuntimeSession, selectedRuntimeSessionId]);
+
+  useEffect(() => {
+    if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    if (!selectedBackgroundTaskId) {
+      setSelectedBackgroundTaskDetail(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const detail = await window.ipcRenderer.backgroundTasks.get(selectedBackgroundTaskId);
+      if (cancelled) return;
+      setSelectedBackgroundTaskDetail(detail && typeof detail === 'object' ? detail as BackgroundTaskItem : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, formData.developer_mode_enabled, selectedBackgroundTaskId]);
 
   useEffect(() => {
     setTestStatus('idle');
@@ -2406,6 +2425,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         }
         return taskList[0]?.id || '';
       });
+      setSelectedBackgroundTaskDetail((prev) => (
+        prev && taskList.some((task) => task.id === prev.id) ? prev : null
+      ));
     } catch (e) {
       console.error('Failed to load background tasks', e);
       if (!preserveSelection) {
@@ -5135,6 +5157,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 setSelectedRuntimeSessionId={setSelectedRuntimeSessionId}
                 selectedBackgroundTaskId={selectedBackgroundTaskId}
                 setSelectedBackgroundTaskId={setSelectedBackgroundTaskId}
+                selectedBackgroundTask={selectedBackgroundTaskDetail}
                 runtimeTaskTraces={runtimeTaskTraces}
                 runtimeSessionTranscript={runtimeSessionTranscript}
                 runtimeSessionCheckpoints={runtimeSessionCheckpoints}

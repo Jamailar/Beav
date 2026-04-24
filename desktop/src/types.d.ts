@@ -1173,6 +1173,7 @@ declare global {
       generation: {
         submitImage: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
         submitVideo: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        listJobSummaries: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         listJobs: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
         getJob: (jobId: string) => Promise<Record<string, unknown> | null>;
         getJobArtifacts: (jobId: string) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;

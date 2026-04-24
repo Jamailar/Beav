@@ -263,6 +263,9 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'generation:list-jobs') {
     return { success: true, items: [] };
   }
+  if (channel === 'generation:list-job-summaries') {
+    return { success: true, items: [] };
+  }
   if (channel === 'generation:get-runtime-status') {
     return { success: true, runtimeReady: false, runtimeRunning: false };
   }
@@ -801,6 +804,7 @@ function createIpcRenderer() {
     generation: {
       submitImage: (payload: Record<string, unknown>) => invokeChannel('generation:submit-image', payload),
       submitVideo: (payload: Record<string, unknown>) => invokeChannel('generation:submit-video', payload),
+      listJobSummaries: (payload?: Record<string, unknown>) => invokeChannel('generation:list-job-summaries', payload || {}),
       listJobs: (payload?: Record<string, unknown>) => invokeChannel('generation:list-jobs', payload || {}),
       getJob: (jobId: string) => invokeChannel('generation:get-job', { jobId }),
       getJobArtifacts: (jobId: string) => invokeChannel('generation:get-job-artifacts', { jobId }),

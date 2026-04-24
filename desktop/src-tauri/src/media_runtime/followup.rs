@@ -1,8 +1,5 @@
-use std::thread;
-use std::time::{Duration, Instant};
-
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use super::get_media_job_projection;
 use crate::agent::{
@@ -14,11 +11,17 @@ use crate::runtime::{
     set_runtime_graph_node, store_runtime_task, RuntimeArtifact, RuntimeCheckpointRecord,
     RuntimeTaskRecord,
 };
-use crate::scheduler::derived_background_tasks;
 use crate::{now_i64, AppState};
 
-const MEDIA_FOLLOWUP_POLL_INTERVAL_MS: u64 = 1_000;
 const MEDIA_FOLLOWUP_TIMEOUT_MS: u64 = 60 * 60 * 1000;
+
+#[derive(Clone)]
+struct MediaFollowupCandidate {
+    task_id: String,
+    session_id: String,
+    job_id: String,
+    created_at: i64,
+}
 
 pub(crate) fn spawn_media_job_followup(
     app: &AppHandle,
@@ -29,17 +32,6 @@ pub(crate) fn spawn_media_job_followup(
 ) -> Result<Value, String> {
     let state = app.state::<AppState>();
     let task = create_media_followup_task(&state, runtime_mode, session_id, job_id, image_count)?;
-    emit_background_task_updated(app, &state, &task.id);
-
-    let app_handle = app.clone();
-    let task_id = task.id.clone();
-    let job_id = job_id.to_string();
-    let worker_job_id = job_id.clone();
-    let session_id = session_id.to_string();
-    thread::spawn(move || {
-        run_media_followup_worker(app_handle, task_id, session_id, worker_job_id)
-    });
-
     Ok(json!({
         "success": true,
         "taskId": task.id,
@@ -48,6 +40,146 @@ pub(crate) fn spawn_media_job_followup(
         "imageCount": image_count,
         "taskType": "media-followup",
     }))
+}
+
+pub(crate) fn tick_media_followups(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let candidates = with_store(state, |store| {
+        Ok(store
+            .runtime_tasks
+            .iter()
+            .filter(|task| {
+                task.task_type == "media-followup"
+                    && matches!(task.status.as_str(), "pending" | "running")
+            })
+            .filter_map(|task| {
+                let metadata = task.metadata.as_ref()?;
+                Some(MediaFollowupCandidate {
+                    task_id: task.id.clone(),
+                    session_id: metadata.get("sessionId")?.as_str()?.to_string(),
+                    job_id: metadata.get("jobId")?.as_str()?.to_string(),
+                    created_at: task.created_at,
+                })
+            })
+            .collect::<Vec<_>>())
+    })?;
+
+    for candidate in candidates {
+        let projection = match get_media_job_projection(state, &candidate.job_id) {
+            Ok(value) => value,
+            Err(error) => {
+                if mark_media_followup_notifying(
+                    state,
+                    &candidate.task_id,
+                    "读取图片任务状态失败，准备回传结果。",
+                )? {
+                    let bridge_message = build_failure_bridge_message(
+                        &candidate.job_id,
+                        &format!("读取图片任务状态失败：{error}"),
+                    );
+                    dispatch_media_followup_notification(
+                        app,
+                        candidate,
+                        bridge_message,
+                        Some(error),
+                        None,
+                    );
+                }
+                continue;
+            }
+        };
+
+        let status = projection
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        if status == "completed" {
+            let artifacts = projection
+                .get("artifacts")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if artifacts.is_empty() {
+                if mark_media_followup_notifying(
+                    state,
+                    &candidate.task_id,
+                    "图片任务已结束，但没有可展示产物，准备回传失败结果。",
+                )? {
+                    let error = "图片任务完成，但没有产出可展示的图片。".to_string();
+                    let bridge_message = build_failure_bridge_message(&candidate.job_id, &error);
+                    dispatch_media_followup_notification(
+                        app,
+                        candidate,
+                        bridge_message,
+                        Some(error),
+                        Some(projection),
+                    );
+                }
+                continue;
+            }
+            if mark_media_followup_notifying(
+                state,
+                &candidate.task_id,
+                "图片已生成完成，准备回传聊天。",
+            )? {
+                let bridge_message = build_success_bridge_message(&candidate.job_id, &artifacts);
+                dispatch_media_followup_notification(
+                    app,
+                    candidate,
+                    bridge_message,
+                    None,
+                    Some(projection),
+                );
+            }
+            continue;
+        }
+
+        if matches!(status, "failed" | "cancelled" | "dead_lettered") {
+            if mark_media_followup_notifying(
+                state,
+                &candidate.task_id,
+                "图片任务已结束，准备回传失败结果。",
+            )? {
+                let error = projection_terminal_error(&projection);
+                let bridge_message = build_failure_bridge_message(&candidate.job_id, &error);
+                dispatch_media_followup_notification(
+                    app,
+                    candidate,
+                    bridge_message,
+                    Some(error),
+                    Some(projection),
+                );
+            }
+            continue;
+        }
+
+        let elapsed_ms = now_i64().saturating_sub(candidate.created_at) as u64;
+        if elapsed_ms >= MEDIA_FOLLOWUP_TIMEOUT_MS
+            && mark_media_followup_notifying(
+                state,
+                &candidate.task_id,
+                "图片生成等待超时，准备回传失败结果。",
+            )?
+        {
+            let error = format!(
+                "等待图片生成超时（{} 分钟）",
+                MEDIA_FOLLOWUP_TIMEOUT_MS / 60_000
+            );
+            let bridge_message = build_failure_bridge_message(&candidate.job_id, &error);
+            dispatch_media_followup_notification(
+                app,
+                candidate,
+                bridge_message,
+                Some(error),
+                Some(projection),
+            );
+        }
+    }
+
+    Ok(())
 }
 
 fn create_media_followup_task(
@@ -65,6 +197,7 @@ fn create_media_followup_task(
         "title": title,
         "kind": "image",
         "jobId": job_id,
+        "sessionId": session_id,
         "imageCount": image_count,
         "deliveryPolicy": "background_followup",
         "latestText": "等待图片生成完成",
@@ -117,129 +250,75 @@ fn create_media_followup_task(
     })
 }
 
-fn run_media_followup_worker(app: AppHandle, task_id: String, session_id: String, job_id: String) {
-    let state = app.state::<AppState>();
-    let started = Instant::now();
-    loop {
-        if is_media_followup_cancelled(&state, &task_id) {
-            emit_background_task_updated(&app, &state, &task_id);
-            return;
-        }
-
-        let projection = match get_media_job_projection(&state, &job_id) {
-            Ok(value) => value,
-            Err(error) => {
-                let summary = format!("读取图片任务状态失败：{error}");
-                finish_media_followup_task(&state, &task_id, "failed", &summary, Some(error), None);
-                emit_background_task_updated(&app, &state, &task_id);
-                return;
-            }
+fn mark_media_followup_notifying(
+    state: &tauri::State<'_, AppState>,
+    task_id: &str,
+    latest_text: &str,
+) -> Result<bool, String> {
+    with_store_mut(state, |store| {
+        let Some(task) = store
+            .runtime_tasks
+            .iter_mut()
+            .find(|item| item.id == task_id)
+        else {
+            return Ok(false);
         };
-
-        let status = projection
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        match status {
-            "completed" => {
-                let artifacts = projection
-                    .get("artifacts")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                if artifacts.is_empty() {
-                    let error = "图片任务完成，但没有产出可展示的图片。".to_string();
-                    let _ = notify_session_with_media_result(
-                        &app,
-                        &state,
-                        &session_id,
-                        &build_failure_bridge_message(&job_id, &error),
-                    );
-                    finish_media_followup_task(
-                        &state,
-                        &task_id,
-                        "failed",
-                        &error,
-                        Some(error.clone()),
-                        Some(&projection),
-                    );
-                    emit_background_task_updated(&app, &state, &task_id);
-                    return;
-                }
-                let notify_result = notify_session_with_media_result(
-                    &app,
-                    &state,
-                    &session_id,
-                    &build_success_bridge_message(&job_id, &artifacts),
-                );
-                match notify_result {
-                    Ok(()) => finish_media_followup_task(
-                        &state,
-                        &task_id,
-                        "completed",
-                        "图片生成完成，结果已回传到聊天。",
-                        None,
-                        Some(&projection),
-                    ),
-                    Err(error) => finish_media_followup_task(
-                        &state,
-                        &task_id,
-                        "failed",
-                        "图片已生成完成，但回传聊天失败。",
-                        Some(error),
-                        Some(&projection),
-                    ),
-                }
-                emit_background_task_updated(&app, &state, &task_id);
-                return;
-            }
-            "failed" | "cancelled" | "dead_lettered" => {
-                let error = projection_terminal_error(&projection);
-                let _ = notify_session_with_media_result(
-                    &app,
-                    &state,
-                    &session_id,
-                    &build_failure_bridge_message(&job_id, &error),
-                );
-                finish_media_followup_task(
-                    &state,
-                    &task_id,
-                    "failed",
-                    "图片生成未完成，已回传失败结果。",
-                    Some(error),
-                    Some(&projection),
-                );
-                emit_background_task_updated(&app, &state, &task_id);
-                return;
-            }
-            _ => {}
+        if !matches!(task.status.as_str(), "pending" | "running") {
+            return Ok(false);
         }
+        task.status = "notifying".to_string();
+        task.updated_at = now_i64();
+        task.current_node = Some("respond".to_string());
+        if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
+            metadata.insert("latestText".to_string(), json!(latest_text));
+            metadata.insert("notificationStatus".to_string(), json!("sending"));
+        }
+        set_runtime_graph_node(
+            &mut task.graph,
+            "execute_tools",
+            "completed",
+            Some("media job reached terminal state".to_string()),
+            None,
+        );
+        Ok(true)
+    })
+}
 
-        if started.elapsed().as_millis() as u64 >= MEDIA_FOLLOWUP_TIMEOUT_MS {
-            let error = format!(
-                "等待图片生成超时（{} 分钟）",
-                MEDIA_FOLLOWUP_TIMEOUT_MS / 60_000
-            );
-            let _ = notify_session_with_media_result(
-                &app,
+fn dispatch_media_followup_notification(
+    app: &AppHandle,
+    candidate: MediaFollowupCandidate,
+    bridge_message: String,
+    terminal_error: Option<String>,
+    projection: Option<Value>,
+) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let notify_result = notify_session_with_media_result(
+            &app_handle,
+            &state,
+            &candidate.session_id,
+            &bridge_message,
+        );
+        match notify_result {
+            Ok(()) => finish_media_followup_task(
                 &state,
-                &session_id,
-                &build_failure_bridge_message(&job_id, &error),
-            );
-            finish_media_followup_task(
-                &state,
-                &task_id,
-                "failed",
-                "图片生成等待超时。",
-                Some(error),
+                &candidate.task_id,
+                "completed",
+                "图片生成完成，结果已回传到聊天。",
                 None,
-            );
-            emit_background_task_updated(&app, &state, &task_id);
-            return;
+                projection.as_ref(),
+            ),
+            Err(error) => finish_media_followup_task(
+                &state,
+                &candidate.task_id,
+                "failed",
+                "图片任务已结束，但回传聊天失败。",
+                Some(terminal_error.unwrap_or(error)),
+                projection.as_ref(),
+            ),
         }
-
-        thread::sleep(Duration::from_millis(MEDIA_FOLLOWUP_POLL_INTERVAL_MS));
-    }
+    });
 }
 
 fn notify_session_with_media_result(
@@ -279,7 +358,7 @@ fn finish_media_followup_task(
         task.current_node = Some(if status == "completed" {
             "save_artifact".to_string()
         } else {
-            "execute_tools".to_string()
+            "respond".to_string()
         });
         if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
             metadata.insert("latestText".to_string(), json!(summary));
@@ -294,7 +373,7 @@ fn finish_media_followup_task(
         }
         set_runtime_graph_node(
             &mut task.graph,
-            "execute_tools",
+            "respond",
             if status == "completed" {
                 "completed"
             } else {
@@ -318,6 +397,17 @@ fn finish_media_followup_task(
                 );
             }
         }
+        let payload = projection.map(|value| {
+            json!({
+                "jobId": value.get("jobId").cloned().unwrap_or(Value::Null),
+                "status": value.get("status").cloned().unwrap_or(Value::Null),
+                "artifactCount": value
+                    .get("artifacts")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len())
+                    .unwrap_or(0),
+            })
+        });
         task.checkpoints.push(RuntimeCheckpointRecord::new(
             if status == "completed" {
                 "media-followup.completed"
@@ -326,9 +416,9 @@ fn finish_media_followup_task(
             },
             task.current_node
                 .clone()
-                .unwrap_or_else(|| "execute_tools".to_string()),
+                .unwrap_or_else(|| "respond".to_string()),
             summary.to_string(),
-            projection.cloned(),
+            payload.clone(),
         ));
         append_runtime_task_trace(
             store,
@@ -341,23 +431,11 @@ fn finish_media_followup_task(
             Some(json!({
                 "summary": summary,
                 "error": error,
-                "projection": projection.cloned(),
+                "projection": payload,
             })),
         );
         Ok(())
     });
-}
-
-fn is_media_followup_cancelled(state: &tauri::State<'_, AppState>, task_id: &str) -> bool {
-    with_store(state, |store| {
-        Ok(store
-            .runtime_tasks
-            .iter()
-            .find(|item| item.id == task_id)
-            .map(|item| item.status == "cancelled")
-            .unwrap_or(true))
-    })
-    .unwrap_or(true)
 }
 
 fn runtime_artifacts_from_projection(projection: &Value) -> Vec<RuntimeArtifact> {
@@ -444,23 +522,4 @@ fn projection_terminal_error(projection: &Value) -> String {
 
 fn sanitize_markdown_label(label: &str) -> String {
     label.replace('[', " ").replace(']', " ")
-}
-
-fn emit_background_task_updated(
-    app: &AppHandle,
-    state: &tauri::State<'_, AppState>,
-    task_id: &str,
-) {
-    let task = with_store(state, |store| {
-        Ok(derived_background_tasks(&store).into_iter().find(|item| {
-            item.get("id").and_then(Value::as_str) == Some(task_id)
-                || item.get("executionId").and_then(Value::as_str) == Some(task_id)
-                || item.get("sourceTaskId").and_then(Value::as_str) == Some(task_id)
-        }))
-    })
-    .ok()
-    .flatten();
-    if let Some(task) = task {
-        let _ = app.emit("background:task-updated", task);
-    }
 }

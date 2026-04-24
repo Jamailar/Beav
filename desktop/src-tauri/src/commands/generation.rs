@@ -5,7 +5,6 @@ use crate::*;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
-use std::thread;
 use tauri::{AppHandle, State};
 
 const REDBOX_OFFICIAL_VIDEO_ENDPOINT: &str = "https://api.ziz.hk/redbox/v1";
@@ -138,120 +137,95 @@ fn generate_planned_image_batch(
         let effective_model = model.unwrap_or(default_model);
         let effective_provider = provider.unwrap_or(default_provider);
         let effective_template = provider_template.unwrap_or(default_template);
-        let handles = planned_items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let mut request_payload = payload.clone();
-                let request_prompt = item.prompt.clone();
-                let request_title = build_generated_image_title(
-                    title.as_deref(),
-                    item.title.as_deref(),
-                    request_prompt.as_str(),
-                    index,
-                    total,
-                );
-                if let Some(object) = request_payload.as_object_mut() {
-                    object.insert("prompt".to_string(), json!(request_prompt.clone()));
-                    object.insert("count".to_string(), json!(1));
-                    if let Some(request_title) = request_title.clone() {
-                        object.insert("title".to_string(), json!(request_title));
-                    }
-                    object.remove("imagePlanItems");
-                    object.remove("planConfirmed");
-                    object.remove("sharedStyleGuide");
+        let mut created = Vec::with_capacity(planned_items.len());
+        for (index, item) in planned_items.iter().enumerate() {
+            let mut request_payload = payload.clone();
+            let request_prompt = item.prompt.clone();
+            let request_title = build_generated_image_title(
+                title.as_deref(),
+                item.title.as_deref(),
+                request_prompt.as_str(),
+                index,
+                total,
+            );
+            if let Some(object) = request_payload.as_object_mut() {
+                object.insert("prompt".to_string(), json!(request_prompt.clone()));
+                object.insert("count".to_string(), json!(1));
+                if let Some(request_title) = request_title.clone() {
+                    object.insert("title".to_string(), json!(request_title));
                 }
-                let relative_path = format!("generated/media-{}-{}.png", batch_stamp, index + 1);
-                let absolute_path = media_root_path.join(&relative_path);
-                let endpoint = endpoint.clone();
-                let api_key = api_key.clone();
-                let effective_model = effective_model.clone();
-                let effective_provider = effective_provider.clone();
-                let effective_template = effective_template.clone();
-                let project_id = project_id.clone();
-                let aspect_ratio = aspect_ratio.clone();
-                let size = size.clone();
-                let quality = quality.clone();
-                let mime_type = mime_type.clone();
-                let placeholder_fallback_allowed = placeholder_fallback_allowed;
-                thread::spawn(move || -> Result<MediaAssetRecord, String> {
-                    let response = match run_image_generation_request(
-                        endpoint.as_str(),
-                        api_key.as_deref(),
-                        effective_model.as_str(),
-                        effective_provider.as_str(),
-                        effective_template.as_str(),
-                        &request_payload,
-                    ) {
-                        Ok(response) => Some(response),
-                        Err(error) => {
-                            if placeholder_fallback_allowed {
-                                write_placeholder_svg(
-                                    &absolute_path,
-                                    request_title.as_deref().unwrap_or("RedBox Image"),
-                                    &request_prompt.chars().take(48).collect::<String>(),
-                                    "#E76F51",
-                                )?;
-                                None
-                            } else {
-                                return Err(format!("图片 {} 生成请求失败：{error}", index + 1));
-                            }
-                        }
-                    };
-
-                    if let Some(response) = response {
-                        if let Some(item) = extract_first_media_result(&response) {
-                            write_generated_image_asset(&absolute_path, item).map_err(|error| {
-                                format!("图片 {} 生成结果写入失败：{error}", index + 1)
-                            })?;
-                        } else if placeholder_fallback_allowed {
-                            write_placeholder_svg(
-                                &absolute_path,
-                                request_title.as_deref().unwrap_or("RedBox Image"),
-                                &request_prompt.chars().take(48).collect::<String>(),
-                                "#E76F51",
-                            )?;
-                        } else {
-                            return Err(format!(
-                                "图片 {} 生成请求已发出，但 provider 返回里没有可用图片结果。",
-                                index + 1
-                            ));
-                        }
+                object.remove("imagePlanItems");
+                object.remove("planConfirmed");
+                object.remove("sharedStyleGuide");
+            }
+            let relative_path = format!("generated/media-{}-{}.png", batch_stamp, index + 1);
+            let absolute_path = media_root_path.join(&relative_path);
+            let response = match run_image_generation_request(
+                endpoint.as_str(),
+                api_key.as_deref(),
+                effective_model.as_str(),
+                effective_provider.as_str(),
+                effective_template.as_str(),
+                &request_payload,
+            ) {
+                Ok(response) => Some(response),
+                Err(error) => {
+                    if placeholder_fallback_allowed {
+                        write_placeholder_svg(
+                            &absolute_path,
+                            request_title.as_deref().unwrap_or("RedBox Image"),
+                            &request_prompt.chars().take(48).collect::<String>(),
+                            "#E76F51",
+                        )?;
+                        None
+                    } else {
+                        return Err(format!("图片 {} 生成请求失败：{error}", index + 1));
                     }
+                }
+            };
 
-                    Ok(MediaAssetRecord {
-                        id: make_id("media"),
-                        source: "generated".to_string(),
-                        source_domain: None,
-                        source_link: None,
-                        project_id,
-                        title: request_title,
-                        prompt: Some(request_prompt),
-                        provider: Some(effective_provider),
-                        provider_template: Some(effective_template),
-                        model: Some(effective_model),
-                        aspect_ratio,
-                        size,
-                        quality,
-                        mime_type,
-                        relative_path: Some(relative_path),
-                        bound_manuscript_path: None,
-                        created_at: now_rfc3339(),
-                        updated_at: now_rfc3339(),
-                        absolute_path: Some(absolute_path.display().to_string()),
-                        preview_url: Some(file_url_for_path(&absolute_path)),
-                        exists: true,
-                    })
-                })
-            })
-            .collect::<Vec<_>>();
+            if let Some(response) = response {
+                if let Some(item) = extract_first_media_result(&response) {
+                    write_generated_image_asset(&absolute_path, item)
+                        .map_err(|error| format!("图片 {} 生成结果写入失败：{error}", index + 1))?;
+                } else if placeholder_fallback_allowed {
+                    write_placeholder_svg(
+                        &absolute_path,
+                        request_title.as_deref().unwrap_or("RedBox Image"),
+                        &request_prompt.chars().take(48).collect::<String>(),
+                        "#E76F51",
+                    )?;
+                } else {
+                    return Err(format!(
+                        "图片 {} 生成请求已发出，但 provider 返回里没有可用图片结果。",
+                        index + 1
+                    ));
+                }
+            }
 
-        let mut created = Vec::with_capacity(handles.len());
-        for handle in handles {
-            let asset = handle
-                .join()
-                .map_err(|_| "image generation batch worker panicked".to_string())??;
-            created.push(asset);
+            created.push(MediaAssetRecord {
+                id: make_id("media"),
+                source: "generated".to_string(),
+                source_domain: None,
+                source_link: None,
+                project_id: project_id.clone(),
+                title: request_title,
+                prompt: Some(request_prompt),
+                provider: Some(effective_provider.clone()),
+                provider_template: Some(effective_template.clone()),
+                model: Some(effective_model.clone()),
+                aspect_ratio: aspect_ratio.clone(),
+                size: size.clone(),
+                quality: quality.clone(),
+                mime_type: mime_type.clone(),
+                relative_path: Some(relative_path),
+                bound_manuscript_path: None,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+                absolute_path: Some(absolute_path.display().to_string()),
+                preview_url: Some(file_url_for_path(&absolute_path)),
+                exists: true,
+            });
         }
         created.sort_by_key(|asset| asset.relative_path.clone().unwrap_or_default());
         return Ok((created, true));
