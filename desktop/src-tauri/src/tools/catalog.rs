@@ -581,7 +581,12 @@ fn cli_runtime_environment_create_input_schema() -> Value {
 fn cli_runtime_install_input_schema() -> Value {
     object_schema(
         &[
-            ("environmentId", string_schema("Target CLI environment id.")),
+            (
+                "environmentId",
+                string_schema(
+                    "Optional target CLI environment id. Defaults to app-global when omitted.",
+                ),
+            ),
             (
                 "installMethod",
                 json!({
@@ -607,7 +612,7 @@ fn cli_runtime_install_input_schema() -> Value {
                 string_schema("Optional runtime id for lineage."),
             ),
         ],
-        &["environmentId", "installMethod", "spec"],
+        &["installMethod", "spec"],
         None,
     )
 }

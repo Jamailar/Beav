@@ -876,7 +876,10 @@ fn make_id(prefix: &str) -> String {
     format!("{prefix}-{}", now_ms())
 }
 
-fn refresh_runtime_warm_state(state: &State<'_, AppState>, modes: &[&str]) -> Result<(), String> {
+pub(crate) fn refresh_runtime_warm_state(
+    state: &State<'_, AppState>,
+    modes: &[&str],
+) -> Result<(), String> {
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let workspace_root_value = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
     let fingerprint = runtime_warm_settings_fingerprint(&settings_snapshot, &workspace_root_value);
@@ -1457,7 +1460,7 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 mod tests {
     use super::{
         guess_mime_and_kind, interactive_execution_progress_observe_success,
-        interactive_tool_panic_message, manuscript_save_result_path,
+        interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
         structured_tool_error_code, InteractiveExecutionContract, InteractiveExecutionProgress,
     };
@@ -1568,6 +1571,24 @@ mod tests {
         );
         assert!(progress.source_read_completed);
     }
+
+    #[test]
+    fn json_value_to_path_list_accepts_single_string_payload() {
+        let items = json_value_to_path_list(&json!("C:\\Knowledge"));
+        assert_eq!(items, vec![std::path::PathBuf::from("C:\\Knowledge")]);
+    }
+
+    #[test]
+    fn json_value_to_path_list_accepts_array_payload() {
+        let items = json_value_to_path_list(&json!(["C:\\A", "C:\\B"]));
+        assert_eq!(
+            items,
+            vec![
+                std::path::PathBuf::from("C:\\A"),
+                std::path::PathBuf::from("C:\\B")
+            ]
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1625,6 +1646,27 @@ fn escape_powershell_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+fn json_value_to_path_list(value: &Value) -> Vec<PathBuf> {
+    match value {
+        Value::String(path) => {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![PathBuf::from(trimmed)]
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(PathBuf::from)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn pick_files_native(
     prompt: &str,
     folders_only: bool,
@@ -1641,13 +1683,7 @@ fn pick_files_native(
             "var app=Application.currentApplication(); app.includeStandardAdditions=true; var picked=app.{base_call}({{withPrompt:{prompt:?}, multipleSelectionsAllowed:{multiple}}}); var list=Array.isArray(picked)?picked:[picked]; JSON.stringify(list.map(String));"
         );
         let value = run_osascript_json(&picker_call)?;
-        let items = value
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|item| item.as_str().map(PathBuf::from))
-            .collect::<Vec<_>>();
+        let items = json_value_to_path_list(&value);
         return Ok(items);
     }
 
@@ -1684,13 +1720,7 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
             )
         };
         let value = run_powershell_json(&script)?;
-        let items = value
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|item| item.as_str().map(PathBuf::from))
-            .collect::<Vec<_>>();
+        let items = json_value_to_path_list(&value);
         return Ok(items);
     }
 
@@ -5182,6 +5212,31 @@ fn append_generated_media_sections(
     append_generated_media_markdown(&with_images, "## 生成视频", videos)
 }
 
+fn interactive_tool_round_fallback_response(
+    outcomes: &[InteractiveToolOutcomeDigest],
+) -> Option<String> {
+    let successful = outcomes
+        .iter()
+        .filter(|item| item.success)
+        .collect::<Vec<_>>();
+    if successful.is_empty() {
+        return None;
+    }
+    let summary = successful
+        .iter()
+        .take(3)
+        .map(|item| match tool_action_name(&item.arguments) {
+            Some(action) => format!("- {} · {}：{}", item.name, action, item.summary),
+            None => format!("- {}：{}", item.name, item.summary),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!(
+        "已完成工具执行，但本轮模型没有补充最终说明。最近结果：\n{}",
+        summary
+    ))
+}
+
 #[derive(Debug, Clone)]
 struct PendingInteractiveToolCall {
     call_id: String,
@@ -5354,6 +5409,7 @@ fn run_anthropic_interactive_chat_runtime(
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
+    let mut latest_successful_tool_round = Vec::<InteractiveToolOutcomeDigest>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut in_flight_tool_calls = InteractiveToolCallGuard::new(app, state, session_id);
     let mut tool_turn = 0usize;
@@ -5707,6 +5763,12 @@ fn run_anthropic_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
+            let final_content = if final_content.trim().is_empty() {
+                interactive_tool_round_fallback_response(&latest_successful_tool_round)
+                    .unwrap_or(final_content)
+            } else {
+                final_content
+            };
             if final_content.trim().is_empty() {
                 finalize_interactive_runtime_state(
                     state,
@@ -5906,6 +5968,11 @@ fn run_anthropic_interactive_chat_runtime(
                 instruction,
             );
         }
+        latest_successful_tool_round = tool_round_digests
+            .iter()
+            .filter(|item| item.success)
+            .cloned()
+            .collect();
         save_runtime_session_bundle(
             state,
             session_id,
@@ -5939,6 +6006,7 @@ fn run_gemini_interactive_chat_runtime(
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
+    let mut latest_successful_tool_round = Vec::<InteractiveToolOutcomeDigest>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut in_flight_tool_calls = InteractiveToolCallGuard::new(app, state, session_id);
     let mut tool_turn = 0usize;
@@ -6282,6 +6350,12 @@ fn run_gemini_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
+            let final_content = if final_content.trim().is_empty() {
+                interactive_tool_round_fallback_response(&latest_successful_tool_round)
+                    .unwrap_or(final_content)
+            } else {
+                final_content
+            };
             if final_content.trim().is_empty() {
                 finalize_interactive_runtime_state(
                     state,
@@ -6480,6 +6554,11 @@ fn run_gemini_interactive_chat_runtime(
                 instruction,
             );
         }
+        latest_successful_tool_round = tool_round_digests
+            .iter()
+            .filter(|item| item.success)
+            .cloned()
+            .collect();
         save_runtime_session_bundle(
             state,
             session_id,
@@ -6513,6 +6592,7 @@ fn run_openai_interactive_chat_runtime(
     let mut wander_saw_tool_call = false;
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
     let mut generated_videos = Vec::<GeneratedMediaPreview>::new();
+    let mut latest_successful_tool_round = Vec::<InteractiveToolOutcomeDigest>::new();
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut in_flight_tool_calls = InteractiveToolCallGuard::new(app, state, session_id);
     let mut tool_turn = 0usize;
@@ -6661,6 +6741,12 @@ fn run_openai_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
+            let final_content = if final_content.trim().is_empty() {
+                interactive_tool_round_fallback_response(&latest_successful_tool_round)
+                    .unwrap_or(final_content)
+            } else {
+                final_content
+            };
             if let Some(correction) =
                 interactive_execution_contract_followup(&execution_contract, &execution_progress)
             {
@@ -7063,6 +7149,11 @@ fn run_openai_interactive_chat_runtime(
                 instruction,
             );
         }
+        latest_successful_tool_round = tool_round_digests
+            .iter()
+            .filter(|item| item.success)
+            .cloned()
+            .collect();
         if let Some(instruction) = authoring_continuation_instruction {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
@@ -7732,6 +7823,7 @@ fn main() {
     register_global_debug_store(Arc::clone(&shared_store));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             store_path,
             store: shared_store,
@@ -7774,6 +7866,9 @@ fn main() {
             commands::library::knowledge_get_index_status,
             commands::library::knowledge_rebuild_catalog,
             commands::library::knowledge_open_index_root,
+            commands::notifications::notifications_permission_state,
+            commands::notifications::notifications_request_permission,
+            commands::notifications::notifications_show_system,
             commands::redclaw::redclaw_runner_status
         ])
         .setup(|app| {
