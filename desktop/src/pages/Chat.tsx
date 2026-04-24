@@ -80,6 +80,7 @@ interface ChatProps {
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
   emptyStateVerticalAlign?: 'center' | 'lower';
+  showComposer?: boolean;
 }
 
 interface ChatContextUsage {
@@ -406,6 +407,7 @@ export function Chat({
   showWelcomeHeader = true,
   emptyStateComposerPlacement = 'inline',
   emptyStateVerticalAlign = 'center',
+  showComposer = true,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -3115,10 +3117,10 @@ export function Chat({
               )}
 
               {/* 居中的输入框 (Codex Style) */}
-              {renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+              {showComposer ? renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
                 className: 'mt-10',
                 showCancelWhenBusy: false,
-              })}
+              }) : null}
             </div>
             {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
             <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
@@ -3160,6 +3162,7 @@ export function Chat({
             </div>
 
             {/* Input Area - Bottom Fixed */}
+            {showComposer ? (
             <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
               <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
                 {dockedEmptyState ? (
@@ -3211,6 +3214,7 @@ export function Chat({
                 )}
               </div>
             </div>
+            ) : null}
           </>
         )}
       </div>
