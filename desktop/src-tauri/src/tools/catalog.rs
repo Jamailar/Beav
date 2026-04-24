@@ -807,6 +807,21 @@ fn image_generate_input_schema() -> Value {
                 bool_schema("Whether the user has confirmed the multi-image plan."),
             ),
             (
+                "planExecutionMode",
+                json!({
+                    "type": "string",
+                    "description": "How a multi-image plan is allowed to proceed. Use `user_confirmed` by default. `redclaw_auto_execute` is only valid for RedClaw card-set automation."
+                }),
+            ),
+            (
+                "setType",
+                string_schema("Selected multi-image set type, for example `knowledge_card_set` or `xiaohongshu_text_cards`."),
+            ),
+            (
+                "sequenceGoal",
+                string_schema("Ordering goal for the multi-image batch."),
+            ),
+            (
                 "sharedStyleGuide",
                 string_schema("Shared style anchor for a coordinated multi-image batch."),
             ),

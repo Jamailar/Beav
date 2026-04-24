@@ -1,9 +1,9 @@
 ---
 name: redbox-image-director
-description: Use when planning and generating a coordinated batch of multiple images in RedBox. First identify the user's motive and final goal, then choose the right image-set type and ordering strategy, lock the batch-level subject anchor, keep the style guide concise, define text placement and image details for each card, wait for user confirmation, then call app_cli(action="image.generate", payload={ ... }) once with planConfirmed, sharedStyleGuide, and imagePlanItems so the host can generate the whole batch concurrently.
+description: Use when planning and generating a coordinated batch of multiple images in RedBox. First identify the user's motive and final goal, then choose the right image-set type and ordering strategy, lock the batch-level subject anchor, keep the style guide concise, define text placement and image details for each card, then call app_cli(action="image.generate", payload={ ... }) with the correct execution contract for the current runtime.
 allowedRuntimeModes: [chatroom, redclaw, image-generation]
 allowed-tools: app_cli
-activationScope: session
+activationScope: turn
 autoActivate: false
 hookMode: inline
 ---
@@ -204,10 +204,9 @@ Before any multi-image `app_cli(action="image.generate", payload={ ... })` call:
 2. Choose the sequence strategy that best matches that motive and set type.
 3. Write one concise shared consistency guide for the whole batch.
 4. Draft an image plan as a Markdown table with explicit text placement and must-keep details.
-5. Show the plan to the user and wait for confirmation.
-6. Only after confirmation, call `app_cli(action="image.generate", payload={ ... })` once for the whole batch.
-
-Do not skip the confirmation step.
+5. In normal runtimes, show the plan to the user and wait for confirmation.
+6. In `redclaw` runtime, if the user clearly asked for a card-set batch such as `知识卡片 / 图文卡片 / 小红书文字卡片`, do not stop for a second confirmation after planning; continue in the same turn.
+7. Then call `app_cli(action="image.generate", payload={ ... })` once for the whole batch.
 
 ## Required Planning Output
 
@@ -259,13 +258,23 @@ Then move the detail budget into:
 
 ## Confirmation Rule
 
-After showing the table, ask for confirmation.
+In normal runtimes, after showing the table, ask for confirmation.
 
 Example:
 
 - `请确认这组图片方案。我确认后会一次性并发生成整组图片。`
 
 If the user changes the order, copy, or any image content, revise the table first and wait again.
+
+RedClaw exception:
+
+- If current runtime is `redclaw` and the request is already an explicit card-set generation task, do not ask for a second confirmation.
+- In that case, finish the plan and call `image.generate` in the same turn with:
+  - `planExecutionMode: "redclaw_auto_execute"`
+  - `setType: "knowledge_card_set" | "image_card_set" | "xiaohongshu_text_cards"`
+  - `sequenceGoal`
+  - `sharedStyleGuide`
+  - `imagePlanItems`
 
 ## Tool Call Contract
 
@@ -277,7 +286,8 @@ The payload should include:
 
 - `prompt`: the overall batch brief
 - `count`: total image count
-- `planConfirmed`: `true`
+- `planConfirmed`: `true` in normal confirmation flow
+- `planExecutionMode`: `user_confirmed` by default; `redclaw_auto_execute` for RedClaw card-set auto execution
 - `setType`: the selected image set type
 - `sequenceGoal`: the ordering logic for the batch
 - `sharedStyleGuide`: one concise shared subject-and-style anchor for the whole batch
@@ -304,7 +314,8 @@ When reference images exist, still pass them through `referenceImages` or `subje
 
 ## Hard Rules
 
-- Do not call multi-image generation before confirmation.
+- Do not call multi-image generation before confirmation in normal runtimes.
+- In `redclaw` runtime, only skip the extra confirmation when the request is an explicit supported card-set task and you pass `planExecutionMode=redclaw_auto_execute` with a valid `setType`.
 - Do not collapse a multi-image request into one generic prompt repeated N times.
 - Do not choose image order randomly; sequence must match the user's motive and set type.
 - Do not let one batch image drift into a different subject, color system, outfit, product shape, or rendering style.
