@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::MutexGuard;
+use std::time::Duration;
 use tauri::State;
 
 use crate::runtime::SkillRecord;
@@ -645,7 +646,6 @@ pub fn with_store_mut<T>(
     let mut store = state.store.lock().map_err(|_| "状态锁已损坏".to_string())?;
     let result = mutator(&mut store)?;
     let retention = crate::session_manager::enforce_default_retention(&mut store);
-    let snapshot = store.clone();
     drop(store);
     for session_id in retention.removed_session_ids {
         let _ = crate::runtime::remove_session_bundle(state, &session_id);
@@ -653,7 +653,7 @@ pub fn with_store_mut<T>(
             guard.remove(&session_id);
         }
     }
-    schedule_store_persist(state, snapshot);
+    schedule_store_persist(state);
     Ok(result)
 }
 
@@ -829,15 +829,29 @@ pub fn ensure_store_hydrated_for_redclaw(state: &State<'_, AppState>) -> Result<
     Ok(())
 }
 
-fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {
+fn schedule_store_persist(state: &State<'_, AppState>) {
     let path = state.store_path.clone();
-    let version = state
-        .store_persist_version
-        .fetch_add(1, Ordering::SeqCst)
-        .saturating_add(1);
+    let store_handle = state.store.clone();
+    state.store_persist_version.fetch_add(1, Ordering::SeqCst);
     let latest = state.store_persist_version.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut snapshot = store.clone();
+    let scheduled = state.store_persist_scheduled.clone();
+    if scheduled.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(move || loop {
+        let target_version = latest.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(180));
+        if target_version != latest.load(Ordering::SeqCst) {
+            continue;
+        }
+        let mut snapshot = match store_handle.lock() {
+            Ok(store) => store.clone(),
+            Err(_) => {
+                eprintln!("[RedBox async persist] store lock poisoned");
+                scheduled.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
         crate::session_manager::enforce_default_retention(&mut snapshot);
         crate::auth::sanitize_store_for_persist(&mut snapshot);
         let session_artifacts = take_session_artifacts_from_store(&mut snapshot);
@@ -846,34 +860,47 @@ fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {
             Ok(value) => value,
             Err(error) => {
                 eprintln!("[RedBox async persist] serialize failed: {error}");
+                scheduled.store(false, Ordering::SeqCst);
                 return;
             }
         };
-        if version != latest.load(Ordering::SeqCst) {
-            return;
+        if target_version != latest.load(Ordering::SeqCst) {
+            continue;
         }
         if let Err(error) = write_session_artifacts_to_disk(&path, &session_artifacts) {
             eprintln!("[RedBox async persist] session artifact write failed: {error}");
+            scheduled.store(false, Ordering::SeqCst);
             return;
         }
         if let Some(parent) = path.parent() {
             if let Err(error) = fs::create_dir_all(parent) {
                 eprintln!("[RedBox async persist] create dir failed: {error}");
+                scheduled.store(false, Ordering::SeqCst);
                 return;
             }
         }
-        let tmp_path = path.with_extension(format!("json.tmp.{version}"));
+        let tmp_path = path.with_extension(format!("json.tmp.{target_version}"));
         if let Err(error) = fs::write(&tmp_path, serialized) {
             eprintln!("[RedBox async persist] temp write failed: {error}");
+            scheduled.store(false, Ordering::SeqCst);
             return;
         }
-        if version != latest.load(Ordering::SeqCst) {
+        if target_version != latest.load(Ordering::SeqCst) {
             let _ = fs::remove_file(&tmp_path);
-            return;
+            continue;
         }
         if let Err(error) = fs::rename(&tmp_path, &path) {
             let _ = fs::remove_file(&tmp_path);
             eprintln!("[RedBox async persist] rename failed: {error}");
+            scheduled.store(false, Ordering::SeqCst);
+            return;
+        }
+        scheduled.store(false, Ordering::SeqCst);
+        if target_version == latest.load(Ordering::SeqCst) {
+            break;
+        }
+        if scheduled.swap(true, Ordering::SeqCst) {
+            break;
         }
     });
 }

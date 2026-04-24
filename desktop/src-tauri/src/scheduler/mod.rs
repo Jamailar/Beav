@@ -318,7 +318,15 @@ fn definition_kind_for_background(kind: &str) -> &str {
     }
 }
 
+pub fn derived_background_task_summaries(store: &AppStore) -> Vec<Value> {
+    derived_background_tasks_internal(store, false)
+}
+
 pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
+    derived_background_tasks_internal(store, true)
+}
+
+fn derived_background_tasks_internal(store: &AppStore, include_turns: bool) -> Vec<Value> {
     let mut tasks = Vec::new();
     let latest_execution_by_definition: std::collections::HashMap<
         String,
@@ -406,7 +414,11 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
                 .map(|item| item.updated_at.clone())
                 .unwrap_or_else(|| definition.updated_at.clone()),
             "completedAt": execution.and_then(|item| item.completed_at.clone()),
-            "turns": execution.map(|item| item.checkpoints.clone()).unwrap_or_default()
+            "turns": if include_turns {
+                execution.map(|item| item.checkpoints.clone()).unwrap_or_default()
+            } else {
+                Vec::<Value>::new()
+            }
         }));
     }
 
@@ -462,14 +474,18 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
             "createdAt": execution.created_at,
             "updatedAt": execution.updated_at,
             "completedAt": execution.completed_at,
-            "turns": execution.checkpoints
+            "turns": if include_turns {
+                execution.checkpoints.clone()
+            } else {
+                Vec::<Value>::new()
+            }
         }));
     }
     for task in &store.runtime_tasks {
-        if task.task_type != "media-followup" {
+        if task.task_type == "media-followup" {
             continue;
         }
-        tasks.push(runtime_task_background_projection(task));
+        tasks.push(runtime_task_background_projection(task, include_turns));
     }
     tasks.sort_by(|a, b| {
         b.get("updatedAt")
@@ -479,7 +495,10 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
     tasks
 }
 
-fn runtime_task_background_projection(task: &RuntimeTaskRecord) -> Value {
+pub(crate) fn runtime_task_background_projection(
+    task: &RuntimeTaskRecord,
+    include_turns: bool,
+) -> Value {
     let summary = task
         .goal
         .clone()
@@ -530,7 +549,11 @@ fn runtime_task_background_projection(task: &RuntimeTaskRecord) -> Value {
         "updatedAt": format_timestamp_rfc3339_from_ms(task.updated_at)
             .unwrap_or_else(|| task.updated_at.to_string()),
         "completedAt": task.completed_at.and_then(format_timestamp_rfc3339_from_ms),
-        "turns": runtime_task_background_turns(&task.checkpoints),
+        "turns": if include_turns {
+            runtime_task_background_turns(&task.checkpoints)
+        } else {
+            Vec::<Value>::new()
+        },
     })
 }
 
@@ -664,7 +687,7 @@ mod tests {
     use crate::runtime::{RuntimeCheckpointRecord, RuntimeTaskRecord};
 
     #[test]
-    fn derived_background_tasks_includes_media_followup_runtime_tasks() {
+    fn derived_background_tasks_excludes_media_followup_runtime_tasks() {
         let mut store = AppStore::default();
         store.runtime_tasks.push(RuntimeTaskRecord {
             id: "task-1".to_string(),
@@ -690,9 +713,8 @@ mod tests {
 
         let tasks = derived_background_tasks(&store);
 
-        assert!(tasks.iter().any(|item| {
-            item.get("id").and_then(Value::as_str) == Some("task-1")
-                && item.get("kind").and_then(Value::as_str) == Some("headless-runtime")
-        }));
+        assert!(!tasks
+            .iter()
+            .any(|item| { item.get("id").and_then(Value::as_str) == Some("task-1") }));
     }
 }

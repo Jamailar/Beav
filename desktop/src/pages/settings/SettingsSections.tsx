@@ -1969,6 +1969,7 @@ interface ToolsSettingsSectionProps {
     setSelectedRuntimeSessionId: Dispatch<SetStateAction<string>>;
     selectedBackgroundTaskId: string;
     setSelectedBackgroundTaskId: Dispatch<SetStateAction<string>>;
+    selectedBackgroundTask: BackgroundTaskItem | null;
     runtimeTaskTraces: AgentTaskTrace[];
     runtimeSessionTranscript: Array<{
         id: number;
@@ -2094,6 +2095,7 @@ export function ToolsSettingsSection({
     setSelectedRuntimeSessionId,
     selectedBackgroundTaskId,
     setSelectedBackgroundTaskId,
+    selectedBackgroundTask,
     runtimeTaskTraces,
     runtimeSessionTranscript,
     runtimeSessionCheckpoints,
@@ -2255,8 +2257,6 @@ export function ToolsSettingsSection({
 
     const selectedRuntimeTask = runtimeTasks.find((task) => task.id === selectedRuntimeTaskId) || null;
     const selectedRuntimeSession = runtimeSessions.find((session) => session.id === selectedRuntimeSessionId) || null;
-    const selectedBackgroundTask = backgroundTasks.find((task) => task.id === selectedBackgroundTaskId) || null;
-
     const runtimeSessionMetaText = useMemo(() => {
         if (!selectedRuntimeSession) return '';
         return [

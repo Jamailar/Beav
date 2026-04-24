@@ -51,7 +51,7 @@ pub struct MediaGenerationRuntime {
     pub dispatcher_join: Option<JoinHandle<()>>,
 }
 
-pub(crate) use followup::spawn_media_job_followup;
+pub(crate) use followup::{spawn_media_job_followup, tick_media_followups};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -631,6 +631,93 @@ fn job_projection(
     })
 }
 
+fn media_job_summary(
+    job: &MediaJobRecord,
+    attempt: &MediaJobAttemptRecord,
+    artifact_count: i64,
+) -> Value {
+    let request = &job.request_json;
+    let title = request
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| {
+            let count = request
+                .get("imagePlanItems")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .or_else(|| {
+                    request
+                        .get("count")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as usize)
+                })
+                .unwrap_or(1);
+            match job.kind.as_str() {
+                "image" if count > 1 => format!("图片生成 · {} 张", count),
+                "image" => "图片生成".to_string(),
+                "video" => "视频生成".to_string(),
+                _ => "媒体生成".to_string(),
+            }
+        });
+    let summary = request
+        .get("prompt")
+        .and_then(Value::as_str)
+        .or_else(|| request.get("compiledPrompt").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(96).collect::<String>())
+        .unwrap_or_else(|| title.clone());
+    let latest_text = attempt
+        .last_error
+        .clone()
+        .or_else(|| {
+            job.result_json
+                .as_ref()
+                .and_then(|value| value.get("error"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| match job.status.as_str() {
+            "queued" => "等待执行".to_string(),
+            "submitting" => "提交中".to_string(),
+            "polling" => "轮询中".to_string(),
+            "downloading" => "下载中".to_string(),
+            "completed" => "已完成".to_string(),
+            "failed" => "执行失败".to_string(),
+            "cancel_requested" => "等待取消".to_string(),
+            "cancelled" => "已取消".to_string(),
+            _ => "处理中".to_string(),
+        });
+    json!({
+        "jobId": job.job_id,
+        "id": job.job_id,
+        "kind": job.kind,
+        "source": job.source,
+        "priority": job.priority,
+        "status": job.status,
+        "providerKey": job.provider_key,
+        "providerModel": job.provider_model,
+        "title": title,
+        "summary": summary,
+        "latestText": latest_text,
+        "ownerSessionId": job.owner_session_id,
+        "projectId": job.project_id,
+        "manuscriptPath": job.manuscript_path,
+        "videoProjectPath": job.video_project_path,
+        "cancelReason": job.cancel_reason,
+        "createdAt": job.created_at,
+        "updatedAt": job.updated_at,
+        "completedAt": job.completed_at,
+        "attemptNo": attempt.attempt_no,
+        "attemptStatus": attempt.status,
+        "error": attempt.last_error,
+        "artifactCount": artifact_count.max(0),
+    })
+}
+
 fn get_job_projection_with_connection(conn: &Connection, job_id: &str) -> Result<Value, String> {
     let Some(loaded) = load_job_with_current_attempt(conn, job_id)? else {
         return Ok(Value::Null);
@@ -651,6 +738,15 @@ pub(crate) fn get_media_job_projection(
 ) -> Result<Value, String> {
     let conn = open_media_runtime_connection(state)?;
     get_job_projection_with_connection(&conn, job_id)
+}
+
+fn artifact_count_for_job(conn: &Connection, job_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM media_job_artifacts WHERE job_id = ?1",
+        params![job_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn next_job_candidates(
@@ -1356,6 +1452,62 @@ pub(crate) fn list_media_jobs(
     let mut items = Vec::with_capacity(ids.len());
     for job_id in ids {
         items.push(get_job_projection_with_connection(&conn, &job_id)?);
+    }
+    Ok(json!({ "success": true, "items": items }))
+}
+
+pub(crate) fn list_media_job_summaries(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    ensure_media_runtime_ready(state)?;
+    let conn = open_media_runtime_connection(state)?;
+    let limit = payload_field(payload, "limit")
+        .and_then(Value::as_i64)
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let kind_filter = normalize_optional_string(payload_string(payload, "kind"));
+    let status_filter = normalize_optional_string(payload_string(payload, "status"));
+    let source_filter = normalize_optional_string(payload_string(payload, "source"));
+    let owner_session_id_filter =
+        normalize_optional_string(payload_string(payload, "ownerSessionId"));
+    let mut statement = conn
+        .prepare(
+            "SELECT job_id FROM media_jobs
+             WHERE (?1 IS NULL OR kind = ?1)
+               AND (?2 IS NULL OR status = ?2)
+               AND (?3 IS NULL OR source = ?3)
+               AND (?4 IS NULL OR owner_session_id = ?4)
+             ORDER BY updated_at DESC, job_id DESC
+             LIMIT ?5",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(
+            params![
+                kind_filter.as_deref(),
+                status_filter.as_deref(),
+                source_filter.as_deref(),
+                owner_session_id_filter.as_deref(),
+                limit
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let ids = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let mut items = Vec::with_capacity(ids.len());
+    for job_id in ids {
+        let Some(loaded) = load_job_with_current_attempt(&conn, &job_id)? else {
+            continue;
+        };
+        let artifact_count = artifact_count_for_job(&conn, &job_id)?;
+        items.push(media_job_summary(
+            &loaded.job,
+            &loaded.attempt,
+            artifact_count,
+        ));
     }
     Ok(json!({ "success": true, "items": items }))
 }
@@ -2804,6 +2956,7 @@ fn run_media_generation_dispatcher(
             let _ = ensure_media_runtime_ready(&state);
             let _ = expire_timed_out_video_jobs(&app, &state);
             let _ = clear_expired_leases(&app, &state);
+            let _ = tick_media_followups(&app, &state);
             let _ = dispatch_stage(
                 &app,
                 &state,
