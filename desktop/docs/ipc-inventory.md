@@ -339,7 +339,7 @@
 | `skills:list` | 1 |
 | `skills:market-install` | 1 |
 | `skills:save` | 2 |
-| `space:changed` | 4 |
+| `space:changed` | 5 |
 | `spaces:create` | 1 |
 | `spaces:rename` | 1 |
 | `spaces:switch` | 1 |
