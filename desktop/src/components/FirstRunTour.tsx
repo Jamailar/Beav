@@ -1,59 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Dices, FileEdit, FolderOpen, Sparkles, Wand2 } from 'lucide-react';
-import tippy, { type Instance, type Placement } from 'tippy.js';
+import { Bot, FileEdit, FolderOpen, Sparkles } from 'lucide-react';
+import tippy, { type Instance } from 'tippy.js';
 import type { ViewType } from '../App';
-
-const TOUR_DONE_KEY = 'redbox:first-run-tour:v2';
-
-interface TourStep {
-  id: string;
-  selector: string;
-  title: string;
-  description: string;
-  placement: Placement;
-  view?: ViewType;
-}
+import {
+  getStartupAnnouncementByVersion,
+  getStartupAnnouncementSeenKey,
+  type StartupAnnouncement,
+  type StartupAnnouncementFeature,
+  type StartupAnnouncementStep,
+} from '../config/startupAnnouncements';
 
 interface FirstRunTourProps {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
 }
 
-interface IntroFeature {
-  id: string;
-  title: string;
-  description: string;
-  icon: typeof FolderOpen;
+const HERO_ICON_MAP: Record<StartupAnnouncementFeature['icon'], typeof FolderOpen> = {
+  knowledge: FolderOpen,
+  wander: Sparkles,
+  draft: FileEdit,
+  generate: Sparkles,
+  automation: Bot,
+};
+
+function readSeenFlag(announcementId: string): boolean {
+  try {
+    return window.localStorage.getItem(getStartupAnnouncementSeenKey(announcementId)) === '1';
+  } catch {
+    return false;
+  }
 }
 
-const INTRO_FEATURES: IntroFeature[] = [
-  {
-    id: 'capture',
-    title: '采集入口',
-    description: '插件、链接和素材先进入知识库，后续所有创作都从这里起步。',
-    icon: FolderOpen,
-  },
-  {
-    id: 'wander',
-    title: '灵感发散',
-    description: '漫步把已有素材重新碰撞，快速长出新选题和表达角度。',
-    icon: Dices,
-  },
-  {
-    id: 'drafts',
-    title: '稿件主线',
-    description: '图文、视频和音频稿都回到稿件工作台统一组织与绑定。',
-    icon: FileEdit,
-  },
-  {
-    id: 'generate',
-    title: '画面生成',
-    description: '创作页负责生图、生视频和参考图驱动，不再只是补充能力。',
-    icon: Sparkles,
-  },
-];
-
 export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
+  const [announcement, setAnnouncement] = useState<StartupAnnouncement | null>(null);
   const [introVisible, setIntroVisible] = useState(false);
   const [active, setActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
@@ -61,83 +40,72 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
   const instanceRef = useRef<Instance | null>(null);
   const highlightedElementRef = useRef<HTMLElement | null>(null);
 
-  const steps = useMemo<TourStep[]>(() => ([
-    {
-      id: 'knowledge',
-      selector: '[data-guide-id="nav-knowledge"]',
-      title: '1/5 先把素材收进知识库',
-      description: '插件采集、链接入库和外部内容导入都先落在这里，后续的漫步、写稿和自动化都会复用这些内容。',
-      placement: 'right',
-      view: 'knowledge',
-    },
-    {
-      id: 'wander',
-      selector: '[data-guide-id="nav-wander"]',
-      title: '2/5 漫步负责把内容撞出新选题',
-      description: '当知识库里已经有素材时，优先来漫步做灵感碰撞，再把结果继续送到稿件或任务执行链路。',
-      placement: 'right',
-      view: 'wander',
-    },
-    {
-      id: 'manuscripts',
-      selector: '[data-guide-id="nav-manuscripts"]',
-      title: '3/5 稿件是现在的主工作台',
-      description: '图文稿、视频稿、音频稿和素材绑定都在稿件页完成，启动后默认进入这里是为了更快回到正在生产的内容。',
-      placement: 'right',
-      view: 'manuscripts',
-    },
-    {
-      id: 'generation-studio',
-      selector: '[data-guide-id="nav-generation-studio"]',
-      title: '4/5 创作页负责画面与视频生成',
-      description: '需要生图、生视频、参考图视频或首尾帧视频时，直接进入创作页处理，再把产物回流到稿件或媒体库。',
-      placement: 'right',
-      view: 'generation-studio',
-    },
-    {
-      id: 'redclaw',
-      selector: '[data-guide-id="nav-redclaw"]',
-      title: '5/5 RedClaw 接管持续执行',
-      description: '当任务已经明确，需要自动创作、工具串联或持续值守时，再把工作交给 RedClaw 来跑完整执行链。',
-      placement: 'right',
-      view: 'redclaw',
-    },
-  ]), []);
+  const steps = useMemo<StartupAnnouncementStep[]>(
+    () => announcement?.steps || [],
+    [announcement],
+  );
 
   useEffect(() => {
-    let done = false;
-    try {
-      done = window.localStorage.getItem(TOUR_DONE_KEY) === '1';
-    } catch {
-      done = false;
-    }
+    let disposed = false;
 
-    if (!done) {
-      setIntroVisible(true);
-      setStepIndex(0);
-    }
-    setInitialized(true);
+    const loadAnnouncement = async () => {
+      try {
+        const version = await window.ipcRenderer.getAppVersion();
+        if (disposed) return;
+        const next = getStartupAnnouncementByVersion(typeof version === 'string' ? version.trim() : String(version || '').trim());
+        if (!next) {
+          setInitialized(true);
+          return;
+        }
+        setAnnouncement(next);
+        if (!readSeenFlag(next.id)) {
+          setIntroVisible(true);
+          setStepIndex(0);
+        }
+      } catch {
+        // Do not block the app if version resolution fails.
+      } finally {
+        if (!disposed) {
+          setInitialized(true);
+        }
+      }
+    };
+
+    void loadAnnouncement();
+    return () => {
+      disposed = true;
+    };
   }, []);
 
-  const markDone = useCallback(() => {
+  const markDone = useCallback((announcementId: string | null) => {
+    if (!announcementId) return;
     try {
-      window.localStorage.setItem(TOUR_DONE_KEY, '1');
+      window.localStorage.setItem(getStartupAnnouncementSeenKey(announcementId), '1');
     } catch {
       // Ignore storage failures so onboarding never blocks the app.
     }
   }, []);
 
   const finishTour = useCallback(() => {
-    markDone();
+    markDone(announcement?.id || null);
     setIntroVisible(false);
     setActive(false);
-  }, [markDone]);
+  }, [announcement?.id, markDone]);
 
   const startTour = useCallback(() => {
+    if (!steps.length) {
+      finishTour();
+      return;
+    }
     setIntroVisible(false);
     setActive(true);
     setStepIndex(0);
-  }, []);
+  }, [finishTour, steps.length]);
+
+  const handleShortcutNavigate = useCallback((view: ViewType) => {
+    finishTour();
+    onNavigate(view);
+  }, [finishTour, onNavigate]);
 
   useEffect(() => {
     if (!initialized) return;
@@ -159,7 +127,7 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
   }, [active, finishTour, initialized, introVisible]);
 
   useEffect(() => {
-    if (!initialized || !active) {
+    if (!initialized || !active || !announcement || steps.length === 0) {
       instanceRef.current?.destroy();
       instanceRef.current = null;
       highlightedElementRef.current?.removeAttribute('data-redbox-tour-target');
@@ -171,7 +139,7 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
     let timer: number | null = null;
     const step = steps[stepIndex];
 
-    if (step.view && currentView !== step.view) {
+    if (step?.view && currentView !== step.view) {
       onNavigate(step.view);
     }
 
@@ -181,7 +149,7 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
 
       const eyebrow = document.createElement('div');
       eyebrow.className = 'redbox-tour-kicker';
-      eyebrow.textContent = '推荐工作流';
+      eyebrow.textContent = announcement.badge;
 
       const title = document.createElement('div');
       title.className = 'redbox-tour-title';
@@ -244,7 +212,7 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
     };
 
     const showStep = (attempt: number) => {
-      if (cancelled) return;
+      if (cancelled || !step) return;
 
       const target = document.querySelector(step.selector) as HTMLElement | null;
       if (!target) {
@@ -267,7 +235,7 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
         hideOnClick: false,
         placement: step.placement,
         theme: 'redbox-tour',
-        maxWidth: 380,
+        maxWidth: 360,
         offset: [0, 14],
       });
 
@@ -287,81 +255,57 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
       highlightedElementRef.current?.removeAttribute('data-redbox-tour-target');
       highlightedElementRef.current = null;
     };
-  }, [active, currentView, initialized, onNavigate, stepIndex, steps]);
+  }, [active, announcement, currentView, finishTour, initialized, onNavigate, stepIndex, steps]);
 
-  if (!initialized || !introVisible) {
+  if (!initialized || !introVisible || !announcement) {
     return null;
   }
 
   return (
-    <div className="redbox-tour-overlay" role="dialog" aria-modal="true" aria-label="RedBox 启动引导">
+    <div className="redbox-tour-overlay" role="dialog" aria-modal="true" aria-label="RedBox 更新提示">
       <div className="redbox-tour-backdrop" onClick={finishTour} />
       <div className="redbox-tour-panel">
         <div className="redbox-tour-hero" aria-hidden="true">
           <div className="redbox-tour-hero-orbit redbox-tour-hero-orbit--one" />
           <div className="redbox-tour-hero-orbit redbox-tour-hero-orbit--two" />
-          <div className="redbox-tour-hero-grid">
-            <div className="redbox-tour-hero-card redbox-tour-hero-card--knowledge">
-              <FolderOpen className="h-4 w-4" strokeWidth={1.75} />
-              <span>知识入库</span>
-            </div>
-            <div className="redbox-tour-hero-card redbox-tour-hero-card--wander">
-              <Dices className="h-4 w-4" strokeWidth={1.75} />
-              <span>漫步发散</span>
-            </div>
-            <div className="redbox-tour-hero-card redbox-tour-hero-card--draft">
-              <FileEdit className="h-4 w-4" strokeWidth={1.75} />
-              <span>稿件组织</span>
-            </div>
-            <div className="redbox-tour-hero-card redbox-tour-hero-card--generate">
-              <Sparkles className="h-4 w-4" strokeWidth={1.75} />
-              <span>画面生成</span>
-            </div>
-            <div className="redbox-tour-hero-card redbox-tour-hero-card--automation">
-              <Bot className="h-4 w-4" strokeWidth={1.75} />
-              <span>持续执行</span>
-            </div>
+          <div className="redbox-tour-hero-grid redbox-tour-hero-grid--compact">
+            {announcement.hero.map((feature) => {
+              const Icon = HERO_ICON_MAP[feature.icon];
+              return (
+                <div key={feature.id} className="redbox-tour-hero-card redbox-tour-hero-card--compact">
+                  <Icon className="h-4 w-4" strokeWidth={1.75} />
+                  <span>{feature.label}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
         <div className="redbox-tour-panel-body">
-          <div className="redbox-tour-panel-kicker">
-            <Wand2 className="h-4 w-4" strokeWidth={1.8} />
-            <span>新版启动引导</span>
-          </div>
+          <div className="redbox-tour-panel-kicker">{announcement.badge}</div>
+          <h2 className="redbox-tour-panel-title">{announcement.title}</h2>
+          <p className="redbox-tour-panel-desc">{announcement.summary}</p>
 
-          <h2 className="redbox-tour-panel-title">RedBox 现在的主流程已经切到“生产优先”</h2>
-          <p className="redbox-tour-panel-desc">
-            启动后默认回到稿件工作台，知识采集、灵感发散、画面生成和自动执行围绕同一条内容生产链协同工作。
-            这轮引导会先给你一个总览，再用 5 个定位步骤带你过一遍现在的入口顺序。
-          </p>
-
-          <div className="redbox-tour-feature-grid">
-            {INTRO_FEATURES.map(({ id, title, description, icon: Icon }) => (
-              <div key={id} className="redbox-tour-feature-card">
-                <div className="redbox-tour-feature-icon">
-                  <Icon className="h-4 w-4" strokeWidth={1.8} />
-                </div>
-                <div>
-                  <div className="redbox-tour-feature-title">{title}</div>
-                  <div className="redbox-tour-feature-desc">{description}</div>
-                </div>
-              </div>
+          <ul className="redbox-tour-highlight-list">
+            {announcement.highlights.map((item) => (
+              <li key={item} className="redbox-tour-highlight-item">{item}</li>
             ))}
-          </div>
+          </ul>
 
-          <div className="redbox-tour-path">
-            <span className="redbox-tour-path-label">推荐起手路径</span>
-            <strong>知识库</strong>
-            <span>→</span>
-            <strong>漫步</strong>
-            <span>→</span>
-            <strong>稿件</strong>
-            <span>→</span>
-            <strong>创作</strong>
-            <span>→</span>
-            <strong>RedClaw</strong>
-          </div>
+          {announcement.shortcuts && announcement.shortcuts.length > 0 && (
+            <div className="redbox-tour-shortcuts">
+              {announcement.shortcuts.map((shortcut) => (
+                <button
+                  key={shortcut.id}
+                  type="button"
+                  onClick={() => handleShortcutNavigate(shortcut.view)}
+                  className="redbox-tour-shortcut-btn"
+                >
+                  {shortcut.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="redbox-tour-panel-actions">
             <button
@@ -369,15 +313,17 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
               onClick={finishTour}
               className="redbox-tour-panel-btn redbox-tour-panel-btn-ghost"
             >
-              暂不显示
+              知道了
             </button>
-            <button
-              type="button"
-              onClick={startTour}
-              className="redbox-tour-panel-btn redbox-tour-panel-btn-primary"
-            >
-              开始查看
-            </button>
+            {steps.length > 0 && (
+              <button
+                type="button"
+                onClick={startTour}
+                className="redbox-tour-panel-btn redbox-tour-panel-btn-primary"
+              >
+                查看引导
+              </button>
+            )}
           </div>
         </div>
       </div>

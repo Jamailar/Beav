@@ -18,8 +18,8 @@ use crate::{
     active_space_workspace_root_from_store, load_advisors_from_fs, load_cover_assets_from_fs,
     load_document_sources_from_fs, load_knowledge_notes_from_fs, load_media_assets_from_fs,
     load_redclaw_state_from_fs, load_subject_categories_from_fs, load_subjects_from_fs,
-    load_work_items_from_fs, load_youtube_videos_from_fs, now_iso, AppState, AppStore,
-    AssistantStateRecord, RedclawStateRecord, SpaceRecord,
+    load_work_items_from_fs, load_youtube_videos_from_fs, now_iso, storage_safe_file_stem,
+    AppState, AppStore, AssistantStateRecord, RedclawStateRecord, SpaceRecord,
 };
 
 pub(crate) struct WorkspaceHydrationSnapshot {
@@ -260,10 +260,8 @@ fn session_artifact_dir(store_path: &Path) -> Result<PathBuf, String> {
 }
 
 fn session_artifact_path(store_path: &Path, session_id: &str) -> Result<PathBuf, String> {
-    Ok(session_artifact_dir(store_path)?.join(format!(
-        "{}.json",
-        crate::slug_from_relative_path(session_id)
-    )))
+    Ok(session_artifact_dir(store_path)?
+        .join(format!("{}.json", storage_safe_file_stem(session_id))))
 }
 
 fn append_session_artifacts_bucket<'a>(

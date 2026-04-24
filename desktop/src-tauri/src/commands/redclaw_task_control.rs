@@ -963,6 +963,8 @@ fn task_list_item(store: &crate::AppStore, definition: &RedclawJobDefinitionReco
         "definitionId": definition.id,
         "title": definition.title,
         "kind": definition.kind,
+        "sourceKind": definition.source_kind,
+        "sourceTaskId": definition.source_task_id,
         "enabled": definition.enabled,
         "ownerScope": definition.owner_scope,
         "createdBy": definition.created_by,
@@ -980,6 +982,14 @@ fn task_list_item(store: &crate::AppStore, definition: &RedclawJobDefinitionReco
         "policyDecision": definition.payload.get("policyDecision"),
         "policyWarnings": definition.payload.get("policyWarnings"),
         "actionType": definition.payload.get("actionType"),
+        "goal": definition.payload.get("goal"),
+        "prompt": definition.payload.get("prompt"),
+        "objective": definition.payload.get("objective"),
+        "stepPrompt": definition.payload.get("stepPrompt"),
+        "riskRationale": definition.payload.get("riskRationale"),
+        "totalRounds": definition.payload.get("totalRounds"),
+        "completedRounds": definition.payload.get("completedRounds"),
+        "lastUpdatedReason": definition.payload.get("lastUpdatedReason"),
         "latestExecution": latest_execution.map(|item| {
             json!({
                 "executionId": item.id,

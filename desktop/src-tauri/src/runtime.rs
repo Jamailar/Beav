@@ -375,6 +375,14 @@ mod tests {
             "knowledge"
         );
         assert_eq!(
+            resolve_runtime_mode_from_context_type(Some("xiaohongshu_note")),
+            "knowledge"
+        );
+        assert_eq!(
+            resolve_runtime_mode_from_context_type(Some("youtube_video")),
+            "knowledge"
+        );
+        assert_eq!(
             resolve_runtime_mode_from_context_type(Some("unknown")),
             "chatroom"
         );

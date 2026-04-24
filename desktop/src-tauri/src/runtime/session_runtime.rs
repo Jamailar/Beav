@@ -6,13 +6,13 @@ use crate::runtime::{
 #[cfg(test)]
 use crate::ChatSessionRecord;
 use crate::{
-    make_id, now_iso, slug_from_relative_path, store_root, AppState, AppStore, ChatMessageRecord,
-    ChatSessionContextRecord,
+    make_id, now_iso, slug_from_relative_path, storage_safe_file_stem, store_root, AppState,
+    AppStore, ChatMessageRecord, ChatSessionContextRecord,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 pub const SESSION_CONTEXT_TAIL_MESSAGES: usize = 8;
@@ -317,6 +317,211 @@ pub fn chat_messages_for_session(store: &AppStore, session_id: &str) -> Vec<Chat
         .collect();
     items.sort_by(|a, b| compare_created_at(&a.created_at, &b.created_at));
     items
+}
+
+pub fn resolve_session_file_reference_inputs(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    inputs: Vec<String>,
+) -> Vec<String> {
+    if inputs.is_empty() {
+        return inputs;
+    }
+    let original_inputs = inputs.clone();
+    let fallback_dirs = session_reference_fallback_dirs(state);
+    with_store(state, |store| {
+        Ok(inputs
+            .into_iter()
+            .map(|raw| {
+                resolve_session_file_reference_input_from_store(
+                    &store,
+                    session_id,
+                    &raw,
+                    &fallback_dirs,
+                )
+            })
+            .collect::<Vec<_>>())
+    })
+    .unwrap_or(original_inputs)
+}
+
+fn resolve_session_file_reference_input_from_store(
+    store: &AppStore,
+    session_id: &str,
+    raw: &str,
+    fallback_dirs: &[PathBuf],
+) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("data:")
+        || Path::new(trimmed).exists()
+    {
+        return trimmed.to_string();
+    }
+    let target_name = Path::new(trimmed)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(trimmed)
+        .trim();
+    let chat_messages = chat_messages_for_session(store, session_id);
+    if let Some(resolved) = chat_messages.iter().rev().find_map(|message| {
+        message.attachment.as_ref().and_then(|attachment| {
+            resolve_reference_from_value_tree(attachment, trimmed, target_name, fallback_dirs, 0)
+        })
+    }) {
+        return resolved;
+    }
+    let tool_results = tool_results_for_session(store, session_id);
+    if let Some(resolved) = tool_results.iter().rev().find_map(|result| {
+        result.payload.as_ref().and_then(|payload| {
+            resolve_reference_from_value_tree(payload, trimmed, target_name, fallback_dirs, 0)
+        })
+    }) {
+        return resolved;
+    }
+    if let Some(resolved) = fallback_dirs
+        .iter()
+        .find_map(|root| resolve_reference_from_dir(root, trimmed))
+    {
+        return resolved;
+    }
+    trimmed.to_string()
+}
+
+fn session_reference_fallback_dirs(state: &State<'_, AppState>) -> Vec<PathBuf> {
+    let mut dirs = Vec::<PathBuf>::new();
+    if let Ok(workspace) = crate::workspace_root(state) {
+        dirs.push(workspace.clone());
+        dirs.push(workspace.join(".redbox").join("chat-attachments"));
+        dirs.push(workspace.join(".redbox").join("media"));
+    }
+    if let Ok(store_root) = store_root(state) {
+        dirs.push(store_root.join("tmp").join("chat-inline-attachments"));
+        dirs.push(store_root.join("media"));
+    }
+    dirs
+}
+
+fn resolve_reference_from_value_tree(
+    value: &Value,
+    raw: &str,
+    target_name: &str,
+    fallback_dirs: &[PathBuf],
+    depth: usize,
+) -> Option<String> {
+    const MAX_DEPTH: usize = 8;
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    match value {
+        Value::Object(object) => {
+            if let Some(resolved) =
+                resolve_reference_from_object(object, raw, target_name, fallback_dirs)
+            {
+                return Some(resolved);
+            }
+            object.values().find_map(|nested| {
+                resolve_reference_from_value_tree(
+                    nested,
+                    raw,
+                    target_name,
+                    fallback_dirs,
+                    depth + 1,
+                )
+            })
+        }
+        Value::Array(items) => items.iter().find_map(|nested| {
+            resolve_reference_from_value_tree(nested, raw, target_name, fallback_dirs, depth + 1)
+        }),
+        _ => None,
+    }
+}
+
+fn resolve_reference_from_object(
+    value: &serde_json::Map<String, Value>,
+    raw: &str,
+    target_name: &str,
+    fallback_dirs: &[PathBuf],
+) -> Option<String> {
+    let get = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|candidate| !candidate.is_empty())
+    };
+
+    let absolute_path = get("absolutePath")
+        .or_else(|| get("originalAbsolutePath"))
+        .or_else(|| get("path").filter(|candidate| Path::new(candidate).is_absolute()));
+    let relative_path = get("workspaceRelativePath")
+        .or_else(|| get("relativePath"))
+        .or_else(|| get("path").filter(|candidate| !Path::new(candidate).is_absolute()));
+    let remote_path = get("previewUrl").or_else(|| get("localUrl"));
+    let matches_name = [
+        get("name"),
+        get("title"),
+        get("label"),
+        absolute_path.and_then(path_file_name),
+        relative_path.and_then(path_file_name),
+        remote_path.and_then(path_file_name_from_url),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|candidate| candidate == raw || candidate == target_name);
+    if !matches_name {
+        return None;
+    }
+    if let Some(path) = absolute_path {
+        return Some(path.to_string());
+    }
+    if let Some(path) = relative_path.and_then(|candidate| {
+        fallback_dirs
+            .iter()
+            .find_map(|root| resolve_reference_from_dir(root, candidate))
+    }) {
+        return Some(path);
+    }
+    if let Some(path) = remote_path.and_then(local_file_url_to_path) {
+        return Some(path);
+    }
+    remote_path.map(ToString::to_string)
+}
+
+fn resolve_reference_from_dir(root: &Path, raw: &str) -> Option<String> {
+    let direct = root.join(raw);
+    if direct.exists() {
+        return Some(direct.display().to_string());
+    }
+    let file_name = Path::new(raw).file_name()?;
+    let by_name = root.join(file_name);
+    if by_name.exists() {
+        return Some(by_name.display().to_string());
+    }
+    None
+}
+
+fn path_file_name(path: &str) -> Option<&str> {
+    Path::new(path).file_name().and_then(|value| value.to_str())
+}
+
+fn path_file_name_from_url(path: &str) -> Option<&str> {
+    path.split('?')
+        .next()
+        .and_then(|value| value.rsplit('/').next())
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn local_file_url_to_path(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let rest = trimmed.strip_prefix("file://")?;
+    #[cfg(target_os = "windows")]
+    let normalized = rest.trim_start_matches('/');
+    #[cfg(not(target_os = "windows"))]
+    let normalized = rest;
+    Some(normalized.to_string())
 }
 
 pub fn session_message_count_for_session(store: &AppStore, session_id: &str) -> i64 {
@@ -957,12 +1162,34 @@ fn session_transcript_dir(state: &State<'_, AppState>) -> Result<PathBuf, String
     Ok(dir)
 }
 
+fn storage_file_path(dir: &PathBuf, session_id: &str, ext: &str) -> PathBuf {
+    dir.join(format!("{}.{}", storage_safe_file_stem(session_id), ext))
+}
+
+fn legacy_storage_file_path(dir: &PathBuf, session_id: &str, ext: &str) -> PathBuf {
+    dir.join(format!("{}.{}", slug_from_relative_path(session_id), ext))
+}
+
+fn resolve_storage_file_path(
+    dir: &PathBuf,
+    session_id: &str,
+    ext: &str,
+) -> Result<PathBuf, String> {
+    let primary = storage_file_path(dir, session_id, ext);
+    let legacy = legacy_storage_file_path(dir, session_id, ext);
+    if primary == legacy || primary.exists() || !legacy.exists() {
+        return Ok(primary);
+    }
+    fs::rename(&legacy, &primary).map_err(|error| error.to_string())?;
+    Ok(primary)
+}
+
 fn session_transcript_path(
     state: &State<'_, AppState>,
     session_id: &str,
 ) -> Result<PathBuf, String> {
-    Ok(session_transcript_dir(state)?
-        .join(format!("{}.jsonl", slug_from_relative_path(session_id))))
+    let dir = session_transcript_dir(state)?;
+    resolve_storage_file_path(&dir, session_id, "jsonl")
 }
 
 fn session_transcript_index_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -1162,8 +1389,8 @@ fn session_runtime_bundle_path(
     state: &State<'_, AppState>,
     session_id: &str,
 ) -> Result<PathBuf, String> {
-    Ok(session_runtime_bundle_dir(state)?
-        .join(format!("{}.json", slug_from_relative_path(session_id))))
+    let dir = session_runtime_bundle_dir(state)?;
+    resolve_storage_file_path(&dir, session_id, "json")
 }
 
 fn session_runtime_bundle_index_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -1289,6 +1516,9 @@ fn persist_session_runtime_bundle(
     for removed_id in removed_ids {
         let removed_path = session_runtime_bundle_path(state, &removed_id)?;
         let _ = fs::remove_file(removed_path);
+        let legacy_removed_path =
+            legacy_storage_file_path(&session_runtime_bundle_dir(state)?, &removed_id, "json");
+        let _ = fs::remove_file(legacy_removed_path);
     }
     Ok(())
 }
@@ -1684,6 +1914,134 @@ mod tests {
 
         let traces = trace_value_for_session(&store, "session-parent", true, None);
         assert_eq!(traces.as_array().map(|items| items.len()), Some(2));
+    }
+
+    #[test]
+    fn resolve_session_file_reference_prefers_recent_chat_attachment_paths() {
+        let mut store = crate::AppStore::default();
+        store.chat_messages.push(crate::ChatMessageRecord {
+            id: "message-1".to_string(),
+            session_id: "session-1".to_string(),
+            role: "user".to_string(),
+            content: "use prior image".to_string(),
+            display_content: None,
+            attachment: Some(json!({
+                "name": "WechatIMG174.jpg",
+                "absolutePath": "/tmp/session-image.jpg",
+                "originalAbsolutePath": "/Users/jam/Desktop/WechatIMG174.jpg",
+                "workspaceRelativePath": ".redbox/chat-attachments/WechatIMG174.jpg"
+            })),
+            created_at: "10".to_string(),
+        });
+
+        let resolved = resolve_session_file_reference_input_from_store(
+            &store,
+            "session-1",
+            "WechatIMG174.jpg",
+            &[],
+        );
+
+        assert_eq!(resolved, "/tmp/session-image.jpg");
+    }
+
+    #[test]
+    fn resolve_session_file_reference_reads_recent_tool_result_artifacts() {
+        let mut store = crate::AppStore::default();
+        store.session_tool_results.push(SessionToolResultRecord {
+            id: "tool-1".to_string(),
+            session_id: "session-1".to_string(),
+            runtime_id: None,
+            parent_runtime_id: None,
+            source_task_id: None,
+            call_id: "call-1".to_string(),
+            tool_name: "app_cli".to_string(),
+            command: Some("image.generate".to_string()),
+            success: true,
+            result_text: None,
+            summary_text: None,
+            prompt_text: None,
+            original_chars: None,
+            prompt_chars: None,
+            truncated: false,
+            payload: Some(json!({
+                "data": {
+                    "artifacts": [
+                        {
+                            "title": "封面主图",
+                            "absolutePath": "/tmp/generated/cover.png",
+                            "previewUrl": "file:///tmp/generated/cover.png"
+                        }
+                    ]
+                }
+            })),
+            created_at: 20,
+            updated_at: 20,
+        });
+
+        let resolved =
+            resolve_session_file_reference_input_from_store(&store, "session-1", "cover.png", &[]);
+
+        assert_eq!(resolved, "/tmp/generated/cover.png");
+    }
+
+    #[test]
+    fn resolve_session_file_reference_falls_back_to_known_directories() {
+        let unique = format!("redbox-session-ref-{}", crate::now_ms());
+        let temp_root = std::env::temp_dir().join(unique);
+        let target = temp_root.join("WechatIMG174.jpg");
+        fs::create_dir_all(&temp_root).unwrap();
+        fs::write(&target, b"test").unwrap();
+
+        let resolved = resolve_session_file_reference_input_from_store(
+            &crate::AppStore::default(),
+            "session-1",
+            "WechatIMG174.jpg",
+            &[temp_root.clone()],
+        );
+
+        assert_eq!(resolved, target.display().to_string());
+
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn resolve_session_file_reference_uses_workspace_relative_path_from_attachment() {
+        let unique = format!("redbox-session-workspace-ref-{}", crate::now_ms());
+        let workspace_root = std::env::temp_dir().join(unique);
+        let nested_dir = workspace_root.join("docs").join("assets");
+        let target = nested_dir.join("brief.pdf");
+        fs::create_dir_all(&nested_dir).unwrap();
+        fs::write(&target, b"pdf").unwrap();
+
+        let attachment = json!({
+            "name": "brief.pdf",
+            "workspaceRelativePath": "docs/assets/brief.pdf"
+        });
+        let resolved = resolve_reference_from_value_tree(
+            &attachment,
+            "brief.pdf",
+            "brief.pdf",
+            std::slice::from_ref(&workspace_root),
+            0,
+        );
+
+        assert_eq!(resolved.as_deref(), Some(target.to_string_lossy().as_ref()));
+
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_dir_all(&workspace_root);
+    }
+
+    #[test]
+    fn resolve_session_file_reference_converts_file_url_to_local_path() {
+        let payload = json!({
+            "title": "封面主图",
+            "previewUrl": "file:///tmp/generated/cover.png"
+        });
+        let resolved =
+            resolve_reference_from_value_tree(&payload, "cover.png", "cover.png", &[], 0);
+
+        assert_eq!(resolved.as_deref(), Some("/tmp/generated/cover.png"));
     }
 
     #[test]

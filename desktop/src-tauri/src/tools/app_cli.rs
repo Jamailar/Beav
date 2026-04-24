@@ -16,7 +16,7 @@ use crate::helpers::{
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{McpServerRecord, SkillRecord};
+use crate::runtime::{resolve_session_file_reference_inputs, McpServerRecord, SkillRecord};
 use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
@@ -56,6 +56,13 @@ struct ImageGenerationPlanItem {
     title: String,
     prompt: String,
     copy: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageGenerationDeliveryMode {
+    InlineWait,
+    BackgroundFollowup,
+    AsyncSubmit,
 }
 
 #[derive(Debug, Clone)]
@@ -2396,12 +2403,12 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             .collect::<Vec<_>>();
         let mut reference_images = value_string_list(merged.get("referenceImages"), 4);
         reference_images.extend(subject_reference_images);
+        reference_images = self.resolve_reference_image_inputs(reference_images);
         dedupe_string_list(&mut reference_images, 4);
         let image_plan_items = extract_image_plan_items(merged.get("imagePlanItems"));
         let requested_count = requested_image_generation_count(&merged, image_plan_items.len());
         let multi_image_agent_turn = requested_count > 1 && self.session_id.is_some();
         let plan_confirmed = payload_bool(&merged, &["planConfirmed"]).unwrap_or(false);
-        let wait_for_completion = payload_bool(&merged, &["waitForCompletion"]).unwrap_or(false);
         let shared_style_guide =
             payload_string(&merged, "sharedStyleGuide").filter(|item| !item.trim().is_empty());
         let base_prompt = payload_string(&merged, "prompt").unwrap_or_default();
@@ -2508,8 +2515,49 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 object.insert("toolName".to_string(), json!("app_cli"));
             }
         }
-        if wait_for_completion {
-            return self.call_channel("image-gen:generate", merged);
+        match image_generation_delivery_mode(self.session_id, &merged, requested_count) {
+            ImageGenerationDeliveryMode::InlineWait => {
+                self.emit_tool_partial("图片生成任务已提交，正在等待生成完成。");
+                return self.call_channel("image-gen:generate", merged);
+            }
+            ImageGenerationDeliveryMode::BackgroundFollowup => {
+                self.emit_tool_partial(
+                    "多图生成任务已提交到媒体 runtime，后台任务将持续跟进结果。",
+                );
+                let submitted = self.call_channel("generation:submit-image", merged)?;
+                let Some(job_id) = submitted.get("jobId").and_then(Value::as_str) else {
+                    return Ok(submitted);
+                };
+                let follow_up = self
+                    .session_id
+                    .map(|session_id| {
+                        crate::media_runtime::spawn_media_job_followup(
+                            self.app,
+                            self.runtime_mode,
+                            session_id,
+                            job_id,
+                            requested_count,
+                        )
+                    })
+                    .transpose();
+                return Ok(match follow_up {
+                    Ok(Some(follow_up)) => json!({
+                        "success": true,
+                        "submitted": submitted,
+                        "followUp": follow_up,
+                    }),
+                    Ok(None) => submitted,
+                    Err(error) => json!({
+                        "success": true,
+                        "submitted": submitted,
+                        "followUp": {
+                            "success": false,
+                            "error": error,
+                        },
+                    }),
+                });
+            }
+            ImageGenerationDeliveryMode::AsyncSubmit => {}
         }
         self.emit_tool_partial("图片生成任务已提交到媒体 runtime，正在排队执行。");
         self.call_channel("generation:submit-image", merged)
@@ -2612,6 +2660,13 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return;
         }
         emit_runtime_tool_partial(self.app, self.session_id, tool_call_id, "app_cli", trimmed);
+    }
+
+    fn resolve_reference_image_inputs(&self, inputs: Vec<String>) -> Vec<String> {
+        let Some(session_id) = self.session_id else {
+            return inputs;
+        };
+        resolve_session_file_reference_inputs(self.state, session_id, inputs)
     }
 
     fn handle_video_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
@@ -3800,6 +3855,23 @@ fn requested_image_generation_count(payload: &Value, image_plan_len: usize) -> u
         .clamp(1, MAX_IMAGE_BATCH_ITEMS as i64) as usize
 }
 
+fn image_generation_delivery_mode(
+    session_id: Option<&str>,
+    payload: &Value,
+    requested_count: usize,
+) -> ImageGenerationDeliveryMode {
+    let explicit_wait_for_completion = payload_field(payload, "waitForCompletion")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if session_id.is_some() && requested_count > 1 {
+        return ImageGenerationDeliveryMode::BackgroundFollowup;
+    }
+    if explicit_wait_for_completion || (session_id.is_some() && requested_count == 1) {
+        return ImageGenerationDeliveryMode::InlineWait;
+    }
+    ImageGenerationDeliveryMode::AsyncSubmit
+}
+
 fn compile_image_batch_prompt(
     base_prompt: &str,
     shared_style_guide: Option<&str>,
@@ -4582,20 +4654,6 @@ fn help_response(namespace: Option<&str>) -> Value {
 mod tests {
     use super::*;
 
-    fn test_skill(name: &str, allowed_runtime_modes: &str, disabled: Option<bool>) -> SkillRecord {
-        SkillRecord {
-            name: name.to_string(),
-            description: format!("{name} desc"),
-            location: format!("redbox://skills/{name}"),
-            body: format!(
-                "---\nallowedRuntimeModes: [{allowed_runtime_modes}]\n---\n# {name}\n\nBody"
-            ),
-            source_scope: Some("builtin".to_string()),
-            is_builtin: Some(true),
-            disabled,
-        }
-    }
-
     #[test]
     fn build_video_project_relative_path_uses_timestamp_file_name_by_default() {
         let path = build_video_project_relative_path(None);
@@ -4870,6 +4928,26 @@ mod tests {
                 9,
             ),
             6
+        );
+    }
+
+    #[test]
+    fn image_generation_delivery_mode_defaults_to_inline_wait_for_single_session_image() {
+        assert_eq!(
+            image_generation_delivery_mode(Some("session-1"), &json!({}), 1),
+            ImageGenerationDeliveryMode::InlineWait
+        );
+        assert_eq!(
+            image_generation_delivery_mode(Some("session-1"), &json!({}), 6),
+            ImageGenerationDeliveryMode::BackgroundFollowup
+        );
+        assert_eq!(
+            image_generation_delivery_mode(None, &json!({}), 1),
+            ImageGenerationDeliveryMode::AsyncSubmit
+        );
+        assert_eq!(
+            image_generation_delivery_mode(None, &json!({ "waitForCompletion": true }), 1),
+            ImageGenerationDeliveryMode::InlineWait
         );
     }
 

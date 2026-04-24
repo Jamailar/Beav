@@ -18,8 +18,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
+    RuntimeCheckpointRecord, RuntimeTaskRecord,
 };
-use crate::{AppState, AppStore};
+use crate::{format_timestamp_rfc3339_from_ms, AppState, AppStore};
 use task_policy::{
     fingerprint_for_definition_payload, next_daily_timestamp_in_timezone,
     next_weekly_timestamp_in_timezone,
@@ -464,12 +465,119 @@ pub fn derived_background_tasks(store: &AppStore) -> Vec<Value> {
             "turns": execution.checkpoints
         }));
     }
+    for task in &store.runtime_tasks {
+        if task.task_type != "media-followup" {
+            continue;
+        }
+        tasks.push(runtime_task_background_projection(task));
+    }
     tasks.sort_by(|a, b| {
         b.get("updatedAt")
             .and_then(Value::as_str)
             .cmp(&a.get("updatedAt").and_then(Value::as_str))
     });
     tasks
+}
+
+fn runtime_task_background_projection(task: &RuntimeTaskRecord) -> Value {
+    let summary = task
+        .goal
+        .clone()
+        .or_else(|| {
+            task.metadata
+                .as_ref()
+                .and_then(|value| value.get("title"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "后台任务".to_string());
+    let latest_text = task
+        .metadata
+        .as_ref()
+        .and_then(|value| value.get("latestText"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| task.checkpoints.last().map(|item| item.summary.clone()));
+    json!({
+        "id": task.id,
+        "definitionId": Value::Null,
+        "executionId": task.id,
+        "sourceTaskId": task.id,
+        "kind": "headless-runtime",
+        "title": task
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("图片结果回传任务"),
+        "status": runtime_task_background_status(&task.status),
+        "phase": runtime_task_background_phase(&task.status),
+        "sessionId": task.owner_session_id,
+        "contextId": Value::Null,
+        "error": task.last_error,
+        "summary": summary,
+        "latestText": latest_text,
+        "attemptCount": 0,
+        "workerState": runtime_task_worker_state(&task.status),
+        "workerMode": "main-process",
+        "workerLastHeartbeatAt": format_timestamp_rfc3339_from_ms(task.updated_at),
+        "cancelReason": Value::Null,
+        "deadLetteredAt": Value::Null,
+        "archivedAt": Value::Null,
+        "rollbackState": "not_required",
+        "createdAt": format_timestamp_rfc3339_from_ms(task.created_at)
+            .unwrap_or_else(|| task.created_at.to_string()),
+        "updatedAt": format_timestamp_rfc3339_from_ms(task.updated_at)
+            .unwrap_or_else(|| task.updated_at.to_string()),
+        "completedAt": task.completed_at.and_then(format_timestamp_rfc3339_from_ms),
+        "turns": runtime_task_background_turns(&task.checkpoints),
+    })
+}
+
+fn runtime_task_background_status(status: &str) -> &'static str {
+    match status {
+        "completed" => "completed",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        _ => "running",
+    }
+}
+
+fn runtime_task_background_phase(status: &str) -> &'static str {
+    match status {
+        "completed" => "completed",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        "pending" => "queued",
+        _ => "updating",
+    }
+}
+
+fn runtime_task_worker_state(status: &str) -> &'static str {
+    match status {
+        "completed" => "succeeded",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        "pending" => "queued",
+        _ => "running",
+    }
+}
+
+fn runtime_task_background_turns(checkpoints: &[RuntimeCheckpointRecord]) -> Vec<Value> {
+    checkpoints
+        .iter()
+        .rev()
+        .take(12)
+        .map(|checkpoint| {
+            json!({
+                "id": checkpoint.id,
+                "at": format_timestamp_rfc3339_from_ms(checkpoint.created_at)
+                    .unwrap_or_else(|| checkpoint.created_at.to_string()),
+                "text": checkpoint.summary,
+                "source": "system",
+            })
+        })
+        .collect::<Vec<_>>()
 }
 
 pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandle<()> {
@@ -548,4 +656,43 @@ pub fn run_redclaw_job_runner(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHand
             thread::sleep(std::time::Duration::from_millis(500));
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{RuntimeCheckpointRecord, RuntimeTaskRecord};
+
+    #[test]
+    fn derived_background_tasks_includes_media_followup_runtime_tasks() {
+        let mut store = AppStore::default();
+        store.runtime_tasks.push(RuntimeTaskRecord {
+            id: "task-1".to_string(),
+            task_type: "media-followup".to_string(),
+            status: "running".to_string(),
+            runtime_mode: "default".to_string(),
+            owner_session_id: Some("session-1".to_string()),
+            goal: Some("等待图片完成".to_string()),
+            checkpoints: vec![RuntimeCheckpointRecord::new(
+                "media-followup.started",
+                "execute_tools",
+                "waiting",
+                None,
+            )],
+            metadata: Some(json!({
+                "title": "图片结果回传 · 6 张",
+                "latestText": "等待图片生成完成",
+            })),
+            created_at: 1,
+            updated_at: 2,
+            ..RuntimeTaskRecord::default()
+        });
+
+        let tasks = derived_background_tasks(&store);
+
+        assert!(tasks.iter().any(|item| {
+            item.get("id").and_then(Value::as_str) == Some("task-1")
+                && item.get("kind").and_then(Value::as_str) == Some("headless-runtime")
+        }));
+    }
 }

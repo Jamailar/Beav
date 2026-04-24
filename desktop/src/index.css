@@ -716,6 +716,12 @@ select {
   min-height: 170px;
 }
 
+.redbox-tour-hero-grid--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  min-height: 132px;
+}
+
 .redbox-tour-hero-card {
   display: flex;
   align-items: center;
@@ -729,6 +735,11 @@ select {
   box-shadow: 0 12px 32px rgba(16, 18, 27, 0.08);
   backdrop-filter: blur(10px);
   animation: redbox-tour-card-float 6s ease-in-out infinite;
+}
+
+.redbox-tour-hero-card--compact {
+  grid-column: span 1;
+  min-height: 52px;
 }
 
 .redbox-tour-hero-card span {
@@ -788,10 +799,61 @@ select {
 
 .redbox-tour-panel-desc {
   margin: 0;
-  max-width: 720px;
+  max-width: 640px;
   font-size: 14px;
   line-height: 1.7;
   color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-highlight-list {
+  list-style: none;
+  padding: 0;
+  margin: 18px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.redbox-tour-highlight-item {
+  position: relative;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-highlight-item::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgb(var(--color-accent-primary) / 1) 0%, rgb(var(--color-brand-red) / 0.82) 100%);
+}
+
+.redbox-tour-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.redbox-tour-shortcut-btn {
+  border: 1px solid rgb(var(--color-border) / 0.82);
+  background: rgb(var(--color-surface-primary) / 0.88);
+  color: rgb(var(--color-text-primary) / 1);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.redbox-tour-shortcut-btn:hover {
+  background: rgb(var(--color-surface-secondary) / 1);
 }
 
 .redbox-tour-feature-grid {
@@ -943,7 +1005,13 @@ select {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .redbox-tour-hero-grid--compact {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
   .redbox-tour-hero-card,
+  .redbox-tour-hero-card--compact,
   .redbox-tour-hero-card--knowledge,
   .redbox-tour-hero-card--wander,
   .redbox-tour-hero-card--draft,

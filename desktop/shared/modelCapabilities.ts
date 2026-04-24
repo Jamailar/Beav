@@ -21,6 +21,11 @@ export const MODEL_INPUT_CAPABILITY_ORDER: ModelInputCapability[] = [
     'file',
 ];
 
+export const DEFAULT_UNKNOWN_CHAT_MODEL_INPUT_CAPABILITIES: ModelInputCapability[] = [
+    'image',
+    'video',
+];
+
 export const MODEL_CAPABILITY_ORDER: ModelCapability[] = [
     'chat',
     'image',
@@ -176,6 +181,14 @@ export const getModelInputCapabilities = (modelId: string): ModelInputCapability
             }
         }
     }
+    if (detected.size > 0) {
+        return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
+    }
+
+    if (inferModelCapabilities(normalized).includes('chat')) {
+        return DEFAULT_UNKNOWN_CHAT_MODEL_INPUT_CAPABILITIES;
+    }
+
     return MODEL_INPUT_CAPABILITY_ORDER.filter((capability) => detected.has(capability));
 };
 

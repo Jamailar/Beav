@@ -44,6 +44,7 @@ pub struct ChatExchangeRequest<'a> {
     pub session_id: Option<String>,
     pub message: String,
     pub display_content: String,
+    pub persist_user_message: bool,
     pub model_config: Option<&'a Value>,
     pub attachment: Option<Value>,
     pub turn_kind: SessionAgentTurnKind,
@@ -63,6 +64,7 @@ impl<'a> ChatExchangeRequest<'a> {
             session_id,
             message,
             display_content,
+            persist_user_message: true,
             model_config,
             attachment,
             turn_kind: SessionAgentTurnKind::ChatSend,
@@ -81,6 +83,7 @@ impl<'a> ChatExchangeRequest<'a> {
             session_id,
             message: effective_message,
             display_content,
+            persist_user_message: true,
             model_config,
             attachment: None,
             turn_kind: SessionAgentTurnKind::RuntimeQuery,
@@ -94,6 +97,7 @@ impl<'a> ChatExchangeRequest<'a> {
             session_id: Some(session_id),
             display_content: message.clone(),
             message,
+            persist_user_message: false,
             model_config: None,
             attachment: None,
             turn_kind: SessionAgentTurnKind::SessionBridge,
@@ -107,6 +111,7 @@ impl<'a> ChatExchangeRequest<'a> {
             session_id: Some(session_id),
             display_content: prompt.clone(),
             message: prompt,
+            persist_user_message: true,
             model_config,
             attachment: None,
             turn_kind: SessionAgentTurnKind::Wander,
@@ -120,6 +125,7 @@ impl<'a> ChatExchangeRequest<'a> {
             session_id: Some(session_id),
             display_content: prompt.clone(),
             message: prompt,
+            persist_user_message: true,
             model_config: None,
             attachment: None,
             turn_kind: SessionAgentTurnKind::AssistantDaemon,
@@ -133,6 +139,7 @@ impl<'a> ChatExchangeRequest<'a> {
             session_id: Some(session_id),
             display_content: prompt.clone(),
             message: prompt,
+            persist_user_message: true,
             model_config: None,
             attachment: None,
             turn_kind: SessionAgentTurnKind::RedclawRun,
@@ -334,6 +341,10 @@ mod tests {
         assert_eq!(
             ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string()).turn_kind,
             SessionAgentTurnKind::SessionBridge
+        );
+        assert!(
+            !ChatExchangeRequest::session_bridge("s".to_string(), "m".to_string())
+                .persist_user_message
         );
         assert_eq!(
             ChatExchangeRequest::assistant_daemon("s".to_string(), "m".to_string(), "feishu")

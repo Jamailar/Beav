@@ -1388,8 +1388,10 @@ pub fn handle_chat_sessions_wander_channel(
                         title,
                         initial_context.as_deref(),
                     );
-                    Ok(merge_session_metadata_fields(store, &session.id, metadata.as_ref())
-                        .unwrap_or(session))
+                    Ok(
+                        merge_session_metadata_fields(store, &session.id, metadata.as_ref())
+                            .unwrap_or(session),
+                    )
                 })?;
                 Ok(json!(session))
             }
@@ -1436,8 +1438,10 @@ pub fn handle_chat_sessions_wander_channel(
                         title,
                         initial_context.as_deref(),
                     );
-                    Ok(merge_session_metadata_fields(store, &session.id, metadata.as_ref())
-                        .unwrap_or(session))
+                    Ok(
+                        merge_session_metadata_fields(store, &session.id, metadata.as_ref())
+                            .unwrap_or(session),
+                    )
                 })?;
                 Ok(json!(session))
             }
@@ -1861,12 +1865,15 @@ pub fn handle_chat_sessions_wander_channel(
                     .filter(|value| !value.trim().is_empty())
                     .unwrap_or_else(|| format!("inline-image-{}.png", now_ms()));
                 let safe_file_name = sanitize_chat_attachment_name(&file_name);
-                let temp_dir = store_root(state)?.join("tmp").join("chat-inline-attachments");
+                let temp_dir = store_root(state)?
+                    .join("tmp")
+                    .join("chat-inline-attachments");
                 fs::create_dir_all(&temp_dir).map_err(|error| error.to_string())?;
                 let output_path = temp_dir.join(format!("{}-{}", now_ms(), safe_file_name));
                 write_base64_payload_to_file(&data_url, &output_path)?;
                 let metadata = fs::metadata(&output_path).map_err(|error| error.to_string())?;
-                let staged = stage_chat_attachment_for_workspace(state, &output_path, metadata.len());
+                let staged =
+                    stage_chat_attachment_for_workspace(state, &output_path, metadata.len());
                 let effective_path = staged
                     .as_ref()
                     .map(|(absolute, _)| absolute.as_path())
