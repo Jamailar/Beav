@@ -11,7 +11,6 @@ use crate::session_manager::{
     list_context_sessions, list_sessions, resolve_resume_target_session_id, session_detail_value,
     session_list_item_value, session_resume_value, update_metadata,
 };
-use crate::skills::{merge_requested_skills_into_session, SkillActivationSource};
 use crate::*;
 use base64::Engine;
 use serde_json::{json, Value};
@@ -30,6 +29,7 @@ fn chat_attachment_value_for_path(
     effective_path: &Path,
     file_size: u64,
     staged_relative_path: Option<String>,
+    media_asset: Option<&MediaAssetRecord>,
 ) -> Value {
     let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(original_path);
     let thumbnail_data_url = if kind == "image" {
@@ -37,13 +37,17 @@ fn chat_attachment_value_for_path(
     } else {
         None
     };
+    let workspace_relative_path = media_asset
+        .and_then(|asset| asset.relative_path.as_ref())
+        .map(|relative_path| format!("media/{relative_path}"))
+        .or(staged_relative_path);
     json!({
         "type": "uploaded-file",
         "name": original_path.file_name().and_then(|value| value.to_str()).unwrap_or("attachment"),
         "ext": original_path.extension().and_then(|value| value.to_str()).unwrap_or(""),
         "size": file_size,
         "thumbnailDataUrl": thumbnail_data_url,
-        "workspaceRelativePath": staged_relative_path,
+        "workspaceRelativePath": workspace_relative_path,
         "absolutePath": effective_path.display().to_string(),
         "originalAbsolutePath": original_path.display().to_string(),
         "localUrl": file_url_for_path(effective_path),
@@ -54,6 +58,9 @@ fn chat_attachment_value_for_path(
         "processingStrategy": if direct_upload_eligible { "direct" } else { "path-reference" },
         "summary": original_path.display().to_string(),
         "requiresMultimodal": kind == "image" || kind == "audio" || kind == "video",
+        "mediaAssetId": media_asset.map(|asset| asset.id.clone()),
+        "mediaRelativePath": media_asset.and_then(|asset| asset.relative_path.clone()),
+        "mediaSource": media_asset.map(|asset| asset.source.clone()),
     })
 }
 
@@ -1845,16 +1852,27 @@ pub fn handle_chat_sessions_wander_channel(
                     return Ok(json!({ "success": true, "canceled": true }));
                 };
                 let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
-                let staged = stage_chat_attachment_for_workspace(state, &path, metadata.len());
-                let effective_path = staged
+                let imported_media_asset =
+                    crate::knowledge::import_chat_attachment_image(Some(app), state, &path).ok();
+                let staged = if imported_media_asset.is_some() {
+                    None
+                } else {
+                    stage_chat_attachment_for_workspace(state, &path, metadata.len())
+                };
+                let imported_absolute_path = imported_media_asset
                     .as_ref()
-                    .map(|(absolute, _)| absolute.as_path())
+                    .and_then(|asset| asset.absolute_path.as_ref())
+                    .map(PathBuf::from);
+                let effective_path = imported_absolute_path
+                    .as_deref()
+                    .or_else(|| staged.as_ref().map(|(absolute, _)| absolute.as_path()))
                     .unwrap_or(path.as_path());
                 let attachment = chat_attachment_value_for_path(
                     &path,
                     effective_path,
                     metadata.len(),
                     staged.as_ref().map(|(_, relative)| relative.clone()),
+                    imported_media_asset.as_ref(),
                 );
                 Ok(json!({ "success": true, "canceled": false, "attachment": attachment }))
             }
@@ -1872,17 +1890,28 @@ pub fn handle_chat_sessions_wander_channel(
                 let output_path = temp_dir.join(format!("{}-{}", now_ms(), safe_file_name));
                 write_base64_payload_to_file(&data_url, &output_path)?;
                 let metadata = fs::metadata(&output_path).map_err(|error| error.to_string())?;
-                let staged =
-                    stage_chat_attachment_for_workspace(state, &output_path, metadata.len());
-                let effective_path = staged
+                let imported_media_asset =
+                    crate::knowledge::import_chat_attachment_image(Some(app), state, &output_path)
+                        .ok();
+                let staged = if imported_media_asset.is_some() {
+                    None
+                } else {
+                    stage_chat_attachment_for_workspace(state, &output_path, metadata.len())
+                };
+                let imported_absolute_path = imported_media_asset
                     .as_ref()
-                    .map(|(absolute, _)| absolute.as_path())
+                    .and_then(|asset| asset.absolute_path.as_ref())
+                    .map(PathBuf::from);
+                let effective_path = imported_absolute_path
+                    .as_deref()
+                    .or_else(|| staged.as_ref().map(|(absolute, _)| absolute.as_path()))
                     .unwrap_or(output_path.as_path());
                 let attachment = chat_attachment_value_for_path(
                     &output_path,
                     effective_path,
                     metadata.len(),
                     staged.as_ref().map(|(_, relative)| relative.clone()),
+                    imported_media_asset.as_ref(),
                 );
                 Ok(json!({ "success": true, "attachment": attachment }))
             }
@@ -2005,9 +2034,6 @@ pub fn handle_chat_sessions_wander_channel(
                 let multi_choice = payload_field(&options, "multiChoice")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false);
-                let load_writing_style_skill = payload_field(&options, "loadWritingStyleSkill")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(true);
                 let wander_session_id =
                     format!("session_wander_{}", slug_from_relative_path(&request_id));
                 let _ = app.emit(
@@ -2111,19 +2137,7 @@ pub fn handle_chat_sessions_wander_channel(
                         "wanderMaterialBundleChars".to_string(),
                         json!(material_bundle.chars().count()),
                     );
-                    metadata.insert(
-                        "loadWritingStyleSkill".to_string(),
-                        json!(load_writing_style_skill),
-                    );
                     session.metadata = Some(Value::Object(metadata));
-                    if load_writing_style_skill {
-                        merge_requested_skills_into_session(
-                            session,
-                            &["writing-style".to_string()],
-                            SkillActivationSource::RoutePolicy,
-                            "wander.bootstrap",
-                        );
-                    }
                     session.updated_at = now_iso();
                     Ok(())
                 })?;

@@ -107,8 +107,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
-  const [skillLoadingEnabled, setSkillLoadingEnabled] = useState(true);
-  const [isSavingSkillLoading, setIsSavingSkillLoading] = useState(false);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -538,12 +536,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '',
       '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
       '',
-      '当前会话会预加载 writing-style，直接按这份风格写；不要再次调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`。',
+      '如果你判断需要某个写作类 skill，自行决定是否激活；不要假定任何写作 skill 已经预加载。',
       '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md 再基于素材完成标题候选、正文、标签建议和封面文案，避免模板化表达。',
       '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
       '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
       '写正文时禁止输出分页符、`page-break`、单独一行的 `---` / `***` / `___`，也不要故意插入连续三个空行；正文只保留正常段落结构。',
-      '完稿时按 writing-style 的要求自检，再保存。',
+      '完稿前自行做一次风格与事实自检，再保存。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
@@ -578,7 +576,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         taskType: 'direct_write',
         formatTarget: 'markdown',
         sourceMode: 'knowledge',
-        activeSkills: ['writing-style'],
       },
       attachment: {
         type: 'wander-references',
@@ -592,7 +589,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     try {
       const settings = await window.ipcRenderer.getSettings();
       setMultiChoiceEnabled(Boolean(settings?.wander_deep_think_enabled));
-      setSkillLoadingEnabled(settings?.wander_skill_loading_enabled !== false);
     } catch (error) {
       console.error('Failed to load wander settings:', error);
     }
@@ -600,7 +596,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
   const persistWanderSettings = useCallback(async (patch: {
     wander_deep_think_enabled?: boolean;
-    wander_skill_loading_enabled?: boolean;
   }) => {
     const settings = await window.ipcRenderer.getSettings();
     await window.ipcRenderer.saveSettings({
@@ -629,7 +624,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       mcp_servers_json: settings?.mcp_servers_json,
       redclaw_compact_target_tokens: settings?.redclaw_compact_target_tokens,
       wander_deep_think_enabled: patch.wander_deep_think_enabled ?? settings?.wander_deep_think_enabled,
-      wander_skill_loading_enabled: patch.wander_skill_loading_enabled ?? settings?.wander_skill_loading_enabled,
+      wander_skill_loading_enabled: settings?.wander_skill_loading_enabled,
     });
   }, []);
 
@@ -648,24 +643,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       setMultiChoiceEnabled(!nextValue);
     } finally {
       setIsSavingMode(false);
-    }
-  };
-
-  const handleToggleSkillLoading = async () => {
-    if (isSavingSkillLoading || loading) return;
-    const nextValue = !skillLoadingEnabled;
-    setSkillLoadingEnabled(nextValue);
-    setIsSavingSkillLoading(true);
-
-    try {
-      await persistWanderSettings({
-        wander_skill_loading_enabled: nextValue,
-      });
-    } catch (error) {
-      console.error('Failed to persist wander skill loading setting:', error);
-      setSkillLoadingEnabled(!nextValue);
-    } finally {
-      setIsSavingSkillLoading(false);
     }
   };
 
@@ -898,7 +875,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         items: randomItems,
         options: {
           multiChoice: multiChoiceEnabled,
-          loadWritingStyleSkill: skillLoadingEnabled,
           requestId,
         },
       });
@@ -963,22 +939,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
             </>
           )}
-          <div className={clsx('flex items-center gap-3', phase !== 'idle' && 'ml-1 pl-4 border-l border-black/[0.06]')}>
-            <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
-              技能加载
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleToggleSkillLoading()}
-              disabled={isSavingSkillLoading || loading}
-              className="ui-switch-track shrink-0 disabled:opacity-50"
-              data-size="sm"
-              data-state={skillLoadingEnabled ? 'on' : 'off'}
-            >
-              <div className="ui-switch-thumb" />
-            </button>
-          </div>
-          <div className="w-[1px] h-4 bg-black/[0.06]" />
           <div className="flex items-center gap-3">
             <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
               多选题

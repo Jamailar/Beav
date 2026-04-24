@@ -37,9 +37,6 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
         .iter()
         .map(|skill| {
             let mut item = format!("- {}: {}", skill.name, skill.description);
-            if skill.metadata.auto_activate {
-                item.push_str(" [auto]");
-            }
             if let Some(hint) = skill.metadata.activation_hint.as_deref() {
                 let hint = hint.trim();
                 if !hint.is_empty() {
@@ -51,28 +48,6 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let mut preflight_rules = Vec::<&str>::new();
-    let available_names = resolved
-        .visible_skills
-        .iter()
-        .map(|skill| skill.name.as_str())
-        .collect::<Vec<_>>();
-    if available_names
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("redbox-image-director"))
-    {
-        preflight_rules.push(
-            "Before any multi-image `app_cli(action=\"image.generate\", payload={ \"count\": N, ... })` call where `N > 1`, you must first call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"redbox-image-director\" })`, produce the ordered image plan plus shared style guide, wait for user confirmation, and only then call `image.generate` with `planConfirmed`, `sharedStyleGuide`, and `imagePlanItems`.",
-        );
-    }
-    if available_names
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case("redbox-video-director"))
-    {
-        preflight_rules.push(
-            "Before any `app_cli(action=\"video.generate\", payload={ ... })`, you must first call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"redbox-video-director\" })` in the same turn, then follow its script-confirmation workflow before generating video.",
-        );
-    }
 
     if resolved.can_invoke_skill {
         let mut sections = vec![
@@ -89,10 +64,6 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
                 active_names.join(", ")
             ));
         }
-        if !preflight_rules.is_empty() {
-            sections.push("Mandatory preflight rules:".to_string());
-            sections.extend(preflight_rules.into_iter().map(ToString::to_string));
-        }
         if inactive_visible_skills.is_empty() {
             sections.push("All visible skills for this runtime are already active.".to_string());
         } else {
@@ -105,7 +76,7 @@ fn build_skill_catalog_prompt_section(resolved: &ResolvedSkillSet) -> String {
 
     [
         "You have access to specialized skills in this runtime.",
-        "Manual skill invocation is unavailable here, so rely on the auto-activated skills and the instructions already injected into this session.",
+        "Manual skill invocation is unavailable here, so only rely on skills that are already active in this session.",
         "",
         "Available skills:",
         &list,
