@@ -25,6 +25,38 @@ const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
 const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+fn chat_attachment_value_for_path(
+    original_path: &Path,
+    effective_path: &Path,
+    file_size: u64,
+    staged_relative_path: Option<String>,
+) -> Value {
+    let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(original_path);
+    let thumbnail_data_url = if kind == "image" {
+        inline_image_thumbnail_data_url(effective_path, &mime_type, file_size)
+    } else {
+        None
+    };
+    json!({
+        "type": "uploaded-file",
+        "name": original_path.file_name().and_then(|value| value.to_str()).unwrap_or("attachment"),
+        "ext": original_path.extension().and_then(|value| value.to_str()).unwrap_or(""),
+        "size": file_size,
+        "thumbnailDataUrl": thumbnail_data_url,
+        "workspaceRelativePath": staged_relative_path,
+        "absolutePath": effective_path.display().to_string(),
+        "originalAbsolutePath": original_path.display().to_string(),
+        "localUrl": file_url_for_path(effective_path),
+        "kind": kind,
+        "mimeType": mime_type,
+        "storageMode": if effective_path != original_path { "staged" } else { "absolute" },
+        "directUploadEligible": direct_upload_eligible,
+        "processingStrategy": if direct_upload_eligible { "direct" } else { "path-reference" },
+        "summary": original_path.display().to_string(),
+        "requiresMultimodal": kind == "image" || kind == "audio" || kind == "video",
+    })
+}
+
 fn merge_session_metadata_fields(
     store: &mut AppStore,
     session_id: &str,
@@ -1313,6 +1345,7 @@ pub fn handle_chat_sessions_wander_channel(
             | "chat:update-session-metadata"
             | "chat:bind-editor-session"
             | "chat:pick-attachment"
+            | "chat:create-inline-attachment"
             | "chat:transcribe-audio"
             | "wander:list-history"
             | "wander:delete-history"
@@ -1808,38 +1841,43 @@ pub fn handle_chat_sessions_wander_channel(
                     return Ok(json!({ "success": true, "canceled": true }));
                 };
                 let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
-                let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(&path);
-                let requires_multimodal = kind == "image" || kind == "audio" || kind == "video";
                 let staged = stage_chat_attachment_for_workspace(state, &path, metadata.len());
                 let effective_path = staged
                     .as_ref()
                     .map(|(absolute, _)| absolute.as_path())
                     .unwrap_or(path.as_path());
-                let workspace_relative_path = staged.as_ref().map(|(_, relative)| relative.clone());
-                let thumbnail_data_url = if kind == "image" {
-                    inline_image_thumbnail_data_url(effective_path, &mime_type, metadata.len())
-                } else {
-                    None
-                };
-                let attachment = json!({
-                    "type": "uploaded-file",
-                    "name": path.file_name().and_then(|value| value.to_str()).unwrap_or("attachment"),
-                    "ext": path.extension().and_then(|value| value.to_str()).unwrap_or(""),
-                    "size": metadata.len(),
-                    "thumbnailDataUrl": thumbnail_data_url,
-                    "workspaceRelativePath": workspace_relative_path,
-                    "absolutePath": effective_path.display().to_string(),
-                    "originalAbsolutePath": path.display().to_string(),
-                    "localUrl": file_url_for_path(effective_path),
-                    "kind": kind,
-                    "mimeType": mime_type,
-                    "storageMode": if staged.is_some() { "staged" } else { "absolute" },
-                    "directUploadEligible": direct_upload_eligible,
-                    "processingStrategy": if direct_upload_eligible { "direct" } else { "path-reference" },
-                    "summary": path.display().to_string(),
-                    "requiresMultimodal": requires_multimodal,
-                });
+                let attachment = chat_attachment_value_for_path(
+                    &path,
+                    effective_path,
+                    metadata.len(),
+                    staged.as_ref().map(|(_, relative)| relative.clone()),
+                );
                 Ok(json!({ "success": true, "canceled": false, "attachment": attachment }))
+            }
+            "chat:create-inline-attachment" => {
+                let data_url = payload_string(&payload, "dataUrl")
+                    .ok_or_else(|| "缺少 dataUrl".to_string())?;
+                let file_name = payload_string(&payload, "fileName")
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| format!("inline-image-{}.png", now_ms()));
+                let safe_file_name = sanitize_chat_attachment_name(&file_name);
+                let temp_dir = store_root(state)?.join("tmp").join("chat-inline-attachments");
+                fs::create_dir_all(&temp_dir).map_err(|error| error.to_string())?;
+                let output_path = temp_dir.join(format!("{}-{}", now_ms(), safe_file_name));
+                write_base64_payload_to_file(&data_url, &output_path)?;
+                let metadata = fs::metadata(&output_path).map_err(|error| error.to_string())?;
+                let staged = stage_chat_attachment_for_workspace(state, &output_path, metadata.len());
+                let effective_path = staged
+                    .as_ref()
+                    .map(|(absolute, _)| absolute.as_path())
+                    .unwrap_or(output_path.as_path());
+                let attachment = chat_attachment_value_for_path(
+                    &output_path,
+                    effective_path,
+                    metadata.len(),
+                    staged.as_ref().map(|(_, relative)| relative.clone()),
+                );
+                Ok(json!({ "success": true, "attachment": attachment }))
             }
             "chat:transcribe-audio" => {
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;

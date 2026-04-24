@@ -1,5 +1,17 @@
 [
     {
+        "id": "deepseek-v4-family",
+        "vendor": "deepseek",
+        "displayName": "DeepSeek V4 family",
+        "matchers": [
+            "\\bdeepseek[-_ ]?v?4\\b",
+            "\\bdeepseek[-_ ]?chat[-_ ]?v?4\\b"
+        ],
+        "capabilities": ["chat"],
+        "inputCapabilities": ["image", "file"],
+        "notes": "DeepSeek V4 multimodal family with image understanding and file-style attachment support."
+    },
+    {
         "id": "openai-gpt-5-family",
         "vendor": "openai",
         "displayName": "OpenAI GPT-5 family",

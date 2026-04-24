@@ -73,6 +73,24 @@ export interface PendingChatMessage {
       summary?: string;
       cover?: string;
     }>;
+  } | {
+    type: 'uploaded-file';
+    name: string;
+    ext?: string;
+    size?: number;
+    thumbnailDataUrl?: string;
+    workspaceRelativePath?: string;
+    absolutePath?: string;
+    originalAbsolutePath?: string;
+    localUrl?: string;
+    kind?: 'text' | 'image' | 'audio' | 'video' | 'binary' | string;
+    mimeType?: string;
+    storageMode?: 'staged' | string;
+    directUploadEligible?: boolean;
+    processingStrategy?: string;
+    deliveryMode?: 'direct-input' | 'tool-read';
+    summary?: string;
+    requiresMultimodal?: boolean;
   };
 }
 

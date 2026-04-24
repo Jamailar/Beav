@@ -772,6 +772,8 @@ function createIpcRenderer() {
     chat: {
       send: (data: Record<string, unknown>) => sendChannel('chat:send-message', data),
       pickAttachment: (payload?: { sessionId?: string }) => invokeChannel('chat:pick-attachment', payload || {}),
+      createInlineAttachment: (payload: { dataUrl: string; fileName?: string; sessionId?: string }) =>
+        invokeChannel('chat:create-inline-attachment', payload),
       transcribeAudio: (payload: Record<string, unknown>) => invokeChannel('chat:transcribe-audio', payload),
       cancel: (data?: { sessionId?: string } | string) => sendChannel('chat:cancel', data),
       confirmTool: (callId: string, confirmed: boolean) => sendChannel('chat:confirm-tool', { callId, confirmed }),
