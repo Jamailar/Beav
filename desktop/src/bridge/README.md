@@ -12,6 +12,7 @@
 - 统一处理 command/channel 路由
 - 提供 timeout、fallback、normalize
 - 维护少量显式 Tauri command 映射
+- 收敛宿主能力入口，例如 `audio:*` 这类页面级共享能力
 
 ## Rules
 

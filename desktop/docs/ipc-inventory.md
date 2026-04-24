@@ -60,6 +60,11 @@
 | `assistant:daemon-stop` | 1 |
 | `assistant:daemon-weixin-login-start` | 1 |
 | `assistant:daemon-weixin-login-wait` | 1 |
+| `audio:cancel-recording` | 1 |
+| `audio:get-capture-capability` | 1 |
+| `audio:open-microphone-settings` | 1 |
+| `audio:start-recording` | 1 |
+| `audio:stop-recording` | 1 |
 | `auth:data-changed` | 2 |
 | `auth:get-state` | 1 |
 | `auth:login-sms` | 1 |
@@ -84,6 +89,7 @@
 | `chat:confirm-tool` | 1 |
 | `chat:create-context-session` | 1 |
 | `chat:create-diagnostics-session` | 1 |
+| `chat:create-inline-attachment` | 1 |
 | `chat:create-session` | 1 |
 | `chat:delete-session` | 1 |
 | `chat:get-context-usage` | 1 |
@@ -157,6 +163,7 @@
 | `generation:get-runtime-status` | 1 |
 | `generation:job-log` | 1 |
 | `generation:job-updated` | 1 |
+| `generation:list-job-summaries` | 1 |
 | `generation:list-jobs` | 1 |
 | `generation:retry-job` | 1 |
 | `generation:submit-image` | 1 |
@@ -432,6 +439,11 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/assistant_daemon.rs:assistant:daemon-weixin-login-start` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/assistant_daemon.rs:assistant:daemon-weixin-login-wait` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/assistant_daemon.rs:background-workers:get-pool-state` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/audio.rs:audio:cancel-recording` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/audio.rs:audio:get-capture-capability` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/audio.rs:audio:open-microphone-settings` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/audio.rs:audio:start-recording` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/audio.rs:audio:stop-recording` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/bridge.rs:background-tasks:archive` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/bridge.rs:background-tasks:cancel` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/bridge.rs:background-tasks:get` | 1 |
@@ -449,6 +461,7 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/chat_sessions_wander.rs:chat:compact-context` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/chat_sessions_wander.rs:chat:create-context-session` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/chat_sessions_wander.rs:chat:create-diagnostics-session` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/chat_sessions_wander.rs:chat:create-inline-attachment` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/chat_sessions_wander.rs:chat:create-session` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/chat_sessions_wander.rs:chat:delete-session` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/chat_sessions_wander.rs:chat:get-context-usage` | 1 |
@@ -649,6 +662,7 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:get-job` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:get-job-artifacts` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:get-runtime-status` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:list-job-summaries` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:list-jobs` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:retry-job` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:submit-image` | 1 |

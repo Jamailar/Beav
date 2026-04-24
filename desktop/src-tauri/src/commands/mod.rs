@@ -1,5 +1,6 @@
 pub mod advisor_ops;
 pub mod assistant_daemon;
+pub mod audio;
 pub mod bridge;
 pub mod chat;
 pub mod chat_sessions_wander;
