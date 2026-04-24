@@ -310,6 +310,7 @@ pub fn handle_task_cancel(
     payload: &Value,
 ) -> Result<Value, String> {
     let job_definition_id = payload_string(payload, "jobDefinitionId")
+        .or_else(|| payload_string(payload, "draftId"))
         .ok_or_else(|| "jobDefinitionId is required".to_string())?;
     let reason = payload_string(payload, "reason")
         .unwrap_or_else(|| "Cancelled by task control".to_string());
@@ -457,7 +458,11 @@ pub fn handle_task_stats(state: &State<'_, AppState>) -> Result<Value, String> {
 }
 
 fn parse_task_intent(payload: &Value) -> Result<TaskIntentSchema, String> {
-    let mut root = payload_field(payload, "intent").unwrap_or(payload).clone();
+    let mut root = payload
+        .get("intent")
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| payload.clone());
     if let Some(object) = root.as_object_mut() {
         if object.get("cron").is_none() {
             if let Some(value) = object.get("schedule").cloned() {
@@ -566,6 +571,24 @@ mod tests {
             intent.prompt.as_deref(),
             Some("每天晚上 9:45 向用户发送问候消息")
         );
+        assert_eq!(intent.action_type, "greeting");
+    }
+
+    #[test]
+    fn parse_task_intent_accepts_raw_task_intent_objects() {
+        let intent = parse_task_intent(&json!({
+            "intent": "",
+            "name": "晚间问候",
+            "cron": "25 20 * * *",
+            "prompt": "每天晚上 20:25 和我打招呼",
+            "actionType": "greeting",
+            "ownerScope": "manual:redclaw",
+        }))
+        .expect("raw task intent objects should not be mistaken for wrapped payloads");
+
+        assert_eq!(intent.name, "晚间问候");
+        assert_eq!(intent.cron.as_deref(), Some("25 20 * * *"));
+        assert_eq!(intent.prompt.as_deref(), Some("每天晚上 20:25 和我打招呼"));
         assert_eq!(intent.action_type, "greeting");
     }
 }

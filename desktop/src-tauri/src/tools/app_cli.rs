@@ -1536,7 +1536,9 @@ impl<'a> AppCliExecutor<'a> {
                 json!({
                     "jobDefinitionId": args
                         .string(&["job-definition-id", "jobDefinitionId"])
+                        .or_else(|| args.string(&["draft-id", "draftId"]))
                         .or_else(|| payload_string(payload, "jobDefinitionId"))
+                        .or_else(|| payload_string(payload, "draftId"))
                         .ok_or_else(|| "redclaw task-cancel requires --job-definition-id".to_string())?,
                     "reason": args
                         .string(&["reason"])
@@ -5155,6 +5157,23 @@ mod tests {
         assert_eq!(
             normalized_app_cli_action_key("redclaw/task-list"),
             "redclawtasklist"
+        );
+    }
+
+    #[test]
+    fn normalized_structured_arguments_preserves_redclaw_task_cancel_draft_id() {
+        let normalized = normalized_structured_arguments(&json!({
+            "action": "redclaw.task.cancel",
+            "draftId": "taskdraft-123",
+            "reason": "重新创建任务"
+        }));
+        assert_eq!(
+            normalized.pointer("/payload/draftId"),
+            Some(&json!("taskdraft-123"))
+        );
+        assert_eq!(
+            normalized.pointer("/payload/reason"),
+            Some(&json!("重新创建任务"))
         );
     }
 
