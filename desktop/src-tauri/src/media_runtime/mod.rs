@@ -1344,6 +1344,51 @@ fn infer_job_priority(source: &str, payload: &Value) -> String {
     })
 }
 
+fn looks_like_video_model_id(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    [
+        "video",
+        "text-to-video",
+        "image-to-video",
+        "t2v",
+        "i2v",
+        "r2v",
+        "kling",
+        "veo",
+        "hailuo",
+        "runway",
+    ]
+    .iter()
+    .any(|keyword| normalized.contains(keyword))
+}
+
+fn resolve_image_provider_model(
+    configured_model: Option<String>,
+    requested_model: Option<String>,
+) -> Result<Option<String>, String> {
+    if let Some(model) = requested_model
+        .as_deref()
+        .filter(|model| !model.trim().is_empty())
+    {
+        crate::append_debug_trace_global(format!(
+            "[media-runtime] ignoring requested image model and using configured default requestedModel={}",
+            model.trim()
+        ));
+    }
+    let configured_model = normalize_optional_string(configured_model);
+    if let Some(model) = configured_model.as_deref() {
+        if looks_like_video_model_id(model) {
+            return Err(format!(
+                "图片生成配置无效：当前默认图片模型 `{model}` 看起来是视频模型。请到设置里改成图片模型。"
+            ));
+        }
+    }
+    Ok(configured_model)
+}
+
 fn resolve_provider_metadata(
     state: &State<'_, AppState>,
     kind: &str,
@@ -1358,9 +1403,10 @@ fn resolve_provider_metadata(
         payload_string(payload, "provider").unwrap_or_else(|| "redbox-official".to_string())
     };
     let model = if kind == "image" {
-        normalize_optional_string(
-            payload_string(payload, "model").or_else(|| payload_string(&settings, "image_model")),
-        )
+        resolve_image_provider_model(
+            payload_string(&settings, "image_model"),
+            payload_string(payload, "model"),
+        )?
     } else {
         let generation_mode = payload_field(payload, "generationMode")
             .and_then(Value::as_str)
@@ -3194,6 +3240,26 @@ mod tests {
             "interactive"
         );
         assert_eq!(infer_job_priority("redclaw", &json!({})), "batch");
+    }
+
+    #[test]
+    fn image_jobs_ignore_requested_model_and_use_configured_default() {
+        let resolved = resolve_image_provider_model(
+            Some("gpt-image-1".to_string()),
+            Some("wan2.7-r2v-video".to_string()),
+        )
+        .expect("configured image model should be used");
+        assert_eq!(resolved, Some("gpt-image-1".to_string()));
+    }
+
+    #[test]
+    fn image_jobs_reject_video_model_as_default_config() {
+        let error = resolve_image_provider_model(
+            Some("wan2.7-r2v-video".to_string()),
+            None,
+        )
+        .expect_err("video model should not be accepted as image default");
+        assert!(error.contains("默认图片模型"));
     }
 
     #[test]
