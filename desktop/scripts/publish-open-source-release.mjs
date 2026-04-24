@@ -17,6 +17,7 @@ const DEFAULT_REMOTE = 'export-sanitized';
 const MAC_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'mac-build-summary.json');
 const WINDOWS_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'windows-build-summary.json');
 const LINUX_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'linux-build-summary.json');
+const CHANGELOG_PATH = path.join(repoRoot, 'CHANGELOG.md');
 
 async function readJsonFile(filePath) {
   const raw = await fs.readFile(filePath, 'utf8');
@@ -133,6 +134,44 @@ async function latestReleaseTagExcluding(tag) {
     .find((item) => item && item !== tag) || null;
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractChangelogSection(changelogText, tag) {
+  const normalizedTag = String(tag || '').trim().replace(/^v/i, '');
+  if (!normalizedTag) {
+    return null;
+  }
+
+  const sectionHeaderPattern = new RegExp(
+    `^##\\s+v?${escapeRegExp(normalizedTag)}(?:（[^\\n]*）)?\\s*$`,
+    'm',
+  );
+  const headerMatch = changelogText.match(sectionHeaderPattern);
+  if (!headerMatch || headerMatch.index == null) {
+    return null;
+  }
+
+  const sectionStart = headerMatch.index;
+  const remaining = changelogText.slice(sectionStart + headerMatch[0].length);
+  const nextSectionMatch = remaining.match(/\n##\s+/);
+  const sectionEnd = nextSectionMatch
+    ? sectionStart + headerMatch[0].length + nextSectionMatch.index
+    : changelogText.length;
+
+  return changelogText.slice(sectionStart, sectionEnd).trim();
+}
+
+async function readChangelogSection(tag) {
+  if (!(await pathExists(CHANGELOG_PATH))) {
+    return null;
+  }
+
+  const raw = await fs.readFile(CHANGELOG_PATH, 'utf8');
+  return extractChangelogSection(raw, tag);
+}
+
 async function collectReleaseAssets() {
   const assets = [];
   const summaries = [];
@@ -187,32 +226,34 @@ async function collectReleaseAssets() {
 }
 
 async function buildReleaseNotes({ productName, tag, previousTag, assets }) {
+  const changelogSection = await readChangelogSection(tag);
   const range = previousTag ? `${previousTag}..HEAD` : 'HEAD';
-  const logResult = await captureCommand(
-    'git',
-    ['log', '--no-merges', '--pretty=format:- %s (%h)', range],
-    { cwd: repoRoot, allowFailure: true },
-  );
-  const commitLines = logResult.stdout
-    .split('\n')
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  const lines = [
-    `# ${productName} ${tag}`,
-    '',
-    '## 更新日志',
-  ];
+  const lines = [`# ${productName} ${tag}`, ''];
 
   if (previousTag) {
     lines.push(`对比版本：\`${previousTag}\` -> \`${tag}\``);
     lines.push('');
   }
 
-  if (commitLines.length > 0) {
-    lines.push(...commitLines);
+  if (changelogSection) {
+    lines.push(changelogSection);
   } else {
-    lines.push('- 本次发布没有检测到可归档的非 merge 提交。');
+    const logResult = await captureCommand(
+      'git',
+      ['log', '--no-merges', '--pretty=format:- %s (%h)', range],
+      { cwd: repoRoot, allowFailure: true },
+    );
+    const commitLines = logResult.stdout
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    lines.push('## 更新日志');
+    if (commitLines.length > 0) {
+      lines.push(...commitLines);
+    } else {
+      lines.push('- 本次发布没有检测到可归档的非 merge 提交。');
+    }
   }
 
   lines.push('');
