@@ -48,6 +48,7 @@
 
 - 根目录不是完整 monorepo orchestrator；大多数命令都要进入具体子项目执行。
 - `Plugin/` 是直接加载目录；改动后要在浏览器扩展管理页重新加载。
+- agent 流程复盘、任务执行链路排查、会话异常分析时，默认先检查 `~/Library/Application Support/RedBox/`，重点看 `session-transcripts/`、`session-bundles/` 和状态库；不要只凭 UI 现象或零散控制台输出下结论。
 - 最低验证矩阵：
   - 改 renderer 页面：验证页面切换、已有数据保留、刷新态。
   - 改 bridge / IPC / Tauri command：至少走一次真实 renderer 调用。
@@ -100,6 +101,7 @@
 - 调度逻辑使用本地时间；处理 daily / weekly / cron 时不要忽视时区和 DST。
 - 不要把用户可见页面在刷新时清空成 loading 态。
 - 不要在持锁范围内做慢 I/O。
+- agent 问题复盘不要跳过本地运行证据；默认去 `~/Library/Application Support/RedBox/` 对照 `session-transcripts/`、`session-bundles/` 和状态库还原实际执行链路。
 
 ## Documentation Expectations
 

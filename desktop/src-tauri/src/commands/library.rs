@@ -513,6 +513,48 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     parts.join("\n")
 }
 
+fn extract_cover_generation_reference_images(payload: &Value) -> Vec<String> {
+    let mut reference_images = Vec::new();
+    for key in ["baseImage", "templateImage"] {
+        if let Some(value) = payload_string(payload, key)
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+        {
+            reference_images.push(value);
+        }
+    }
+    if let Some(items) = payload_field(payload, "referenceImages").and_then(Value::as_array) {
+        for item in items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            reference_images.push(item.to_string());
+        }
+    }
+    reference_images.dedup();
+    reference_images.truncate(4);
+    reference_images
+}
+
+fn build_cover_generation_request_payload(payload: &Value, prompt: &str) -> Value {
+    let reference_images = extract_cover_generation_reference_images(payload);
+    let mut request_payload = json!({
+        "prompt": prompt,
+        "count": 1,
+        "quality": normalize_optional_string(payload_string(payload, "quality")),
+        "aspectRatio": "3:4",
+    });
+    if let Some(object) = request_payload.as_object_mut() {
+        if !reference_images.is_empty() {
+            object.insert("generationMode".to_string(), json!("reference-guided"));
+            object.insert("referenceImages".to_string(), json!(reference_images));
+        }
+    }
+    request_payload
+}
+
 fn summary_to_legacy_note(summary: &KnowledgeCatalogSummary) -> Value {
     json!({
         "id": summary.item_id,
@@ -1569,11 +1611,8 @@ pub fn handle_library_channel(
                                 endpoint, effective_provider, effective_template, effective_model, asset_title
                             ),
                         );
-                        let request_payload = json!({
-                            "prompt": prompt,
-                            "count": 1,
-                            "quality": quality,
-                        });
+                        let request_payload =
+                            build_cover_generation_request_payload(payload, &prompt);
                         let response = match run_image_generation_request(
                             endpoint,
                             api_key.as_deref(),
@@ -1717,4 +1756,51 @@ pub fn handle_library_channel(
             _ => unreachable!(),
         }
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_cover_generation_request_payload, extract_cover_generation_reference_images,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn cover_generation_request_uses_base_and_template_images_as_references() {
+        let payload = json!({
+            "templateImage": "data:image/png;base64,TEMPLATE",
+            "baseImage": "data:image/png;base64,BASE",
+            "quality": "high",
+        });
+
+        let reference_images = extract_cover_generation_reference_images(&payload);
+        assert_eq!(
+            reference_images,
+            vec![
+                "data:image/png;base64,BASE".to_string(),
+                "data:image/png;base64,TEMPLATE".to_string()
+            ]
+        );
+
+        let request_payload = build_cover_generation_request_payload(&payload, "cover prompt");
+        assert_eq!(
+            request_payload.get("referenceImages"),
+            Some(&json!([
+                "data:image/png;base64,BASE",
+                "data:image/png;base64,TEMPLATE"
+            ]))
+        );
+        assert_eq!(
+            request_payload
+                .get("generationMode")
+                .and_then(|value| value.as_str()),
+            Some("reference-guided")
+        );
+        assert_eq!(
+            request_payload
+                .get("aspectRatio")
+                .and_then(|value| value.as_str()),
+            Some("3:4")
+        );
+    }
 }

@@ -22,6 +22,7 @@
 - Persistence / workspace：`src-tauri/src/persistence/*`、`src-tauri/src/workspace_loaders.rs`
 - Events：`src-tauri/src/events/*`
 - Docs / assets：`docs/`、`prompts/`、`skills/`、`builtin-skills/`
+- Agent 复盘日志：`~/Library/Application Support/RedBox/session-transcripts/`、`~/Library/Application Support/RedBox/session-bundles/`、`~/Library/Application Support/RedBox/` 下状态库
 
 ## Build And Verification
 
@@ -31,6 +32,7 @@
 - `pnpm tauri:build`
 - `pnpm ipc:inventory`
 - `cd src-tauri && cargo fmt --check && cargo check`
+- agent 流程复盘、tool 调用排查、会话状态异常分析时，默认先对照 `~/Library/Application Support/RedBox/` 下 transcript、bundle 和状态库，还原真实执行链路；不要只看渲染层现象或单点日志。
 
 最低验证要求：
 
@@ -100,6 +102,7 @@
 - 不要在 render 中直接解引用不稳定的嵌套宿主字段；旧持久化数据、部分迁移和陈旧 daemon 快照都可能缺字段。
 - 不要引入基于 ad hoc 字符串匹配的用户意图路由。
 - 不要把新逻辑继续堆进 `src-tauri/src/main.rs`，除非只是接线。
+- agent 执行异常不要只截取表层报错；先去 `~/Library/Application Support/RedBox/` 联合检查 `session-transcripts/`、`session-bundles/` 和状态库，再判断是 prompt、runtime、tool 还是持久化问题。
 
 ## Documentation Expectations
 

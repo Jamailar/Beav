@@ -167,6 +167,48 @@ pub(crate) fn delete_session(store: &mut AppStore, session_id: &str) -> bool {
     true
 }
 
+pub(crate) fn clear_session_runtime_artifacts(store: &mut AppStore, session_id: &str) -> bool {
+    let had_artifacts = store
+        .chat_messages
+        .iter()
+        .any(|item| item.session_id == session_id)
+        || store
+            .session_context_records
+            .iter()
+            .any(|item| item.session_id == session_id)
+        || store
+            .session_transcript_records
+            .iter()
+            .any(|item| item.session_id == session_id)
+        || store
+            .session_checkpoints
+            .iter()
+            .any(|item| item.session_id == session_id)
+        || store
+            .session_tool_results
+            .iter()
+            .any(|item| item.session_id == session_id);
+    if !had_artifacts {
+        return false;
+    }
+    store
+        .chat_messages
+        .retain(|item| item.session_id != session_id);
+    store
+        .session_context_records
+        .retain(|item| item.session_id != session_id);
+    store
+        .session_transcript_records
+        .retain(|item| item.session_id != session_id);
+    store
+        .session_checkpoints
+        .retain(|item| item.session_id != session_id);
+    store
+        .session_tool_results
+        .retain(|item| item.session_id != session_id);
+    true
+}
+
 pub(crate) fn fork_session(
     store: &mut AppStore,
     source_session_id: &str,
@@ -749,6 +791,68 @@ mod tests {
         assert!(store.chat_sessions.is_empty());
         assert!(store.chat_messages.is_empty());
         assert!(store.session_transcript_records.is_empty());
+    }
+
+    #[test]
+    fn clear_session_runtime_artifacts_preserves_session_but_resets_history() {
+        let mut store = AppStore::default();
+        store
+            .chat_sessions
+            .push(test_session("session-1", "1", None));
+        store
+            .chat_messages
+            .push(test_message("session-1", "user", "hello", "1"));
+        store
+            .session_context_records
+            .push(ChatSessionContextRecord {
+                session_id: "session-1".to_string(),
+                summary: "summary".to_string(),
+                summary_source: "auto".to_string(),
+                total_message_count: 2,
+                compacted_message_count: 0,
+                tail_message_count: 2,
+                compact_rounds: 0,
+                summary_chars: 7,
+                estimated_total_tokens: 16,
+                first_user_message: Some("hello".to_string()),
+                last_user_message: Some("hello".to_string()),
+                last_assistant_message: Some("world".to_string()),
+                updated_at: "1".to_string(),
+            });
+        store
+            .session_transcript_records
+            .push(SessionTranscriptRecord {
+                id: "trace-1".to_string(),
+                session_id: "session-1".to_string(),
+                record_type: "message".to_string(),
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                payload: None,
+                created_at: 1,
+            });
+        store.session_checkpoints.push(SessionCheckpointRecord {
+            id: "checkpoint-1".to_string(),
+            session_id: "session-1".to_string(),
+            runtime_id: None,
+            parent_runtime_id: None,
+            source_task_id: None,
+            checkpoint_type: "turn".to_string(),
+            summary: "first turn".to_string(),
+            payload: None,
+            created_at: 1,
+        });
+
+        assert!(clear_session_runtime_artifacts(&mut store, "session-1"));
+        assert_eq!(store.chat_sessions.len(), 1);
+        assert!(store
+            .chat_sessions
+            .iter()
+            .any(|session| session.id == "session-1"));
+        assert!(store.chat_messages.is_empty());
+        assert!(store.session_context_records.is_empty());
+        assert!(store.session_transcript_records.is_empty());
+        assert!(store.session_checkpoints.is_empty());
+        assert!(store.session_tool_results.is_empty());
     }
 
     #[test]
