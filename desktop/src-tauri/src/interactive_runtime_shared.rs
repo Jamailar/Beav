@@ -542,7 +542,9 @@ pub(crate) fn collect_recent_chat_messages(
         return Vec::new();
     };
     if let Ok(bundle_messages) = load_session_bundle_messages(state, session_id) {
-        if !bundle_messages.is_empty() {
+        let sanitized_messages =
+            crate::runtime::sanitize_runtime_history_messages(&bundle_messages);
+        if !sanitized_messages.is_empty() {
             let summary_prompt = with_store(state, |store| {
                 Ok(
                     store
@@ -562,7 +564,7 @@ pub(crate) fn collect_recent_chat_messages(
             .ok()
             .flatten();
             return crate::runtime::bundle_messages_for_runtime(
-                &bundle_messages,
+                &sanitized_messages,
                 summary_prompt,
                 limit,
             );
