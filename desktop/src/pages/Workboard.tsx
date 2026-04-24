@@ -188,17 +188,14 @@ async function setTaskEnabled(item: TaskListItem, enabled: boolean): Promise<voi
 function StatCard({
     label,
     value,
-    note,
 }: {
     label: string;
     value: number;
-    note: string;
 }) {
     return (
-        <div className="rounded-[22px] border border-[#ece4d8] bg-white px-4 py-4">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a09789]">{label}</div>
-            <div className="mt-2 text-[24px] font-semibold text-[#1d1b18]">{value}</div>
-            <div className="mt-1 text-xs text-[#7d766a]">{note}</div>
+        <div className="inline-flex min-w-fit items-center gap-2.5 rounded-full border border-[#ece4d8] bg-white px-3.5 py-2">
+            <div className="whitespace-nowrap text-[10px] uppercase tracking-[0.16em] text-[#a09789]">{label}</div>
+            <div className="text-[18px] font-semibold leading-none text-[#1d1b18]">{value}</div>
         </div>
     );
 }
@@ -211,9 +208,9 @@ function DetailRow({
     value: string;
 }) {
     return (
-        <div className="rounded-2xl border border-[#eee7dc] bg-[#fcfbf9] px-4 py-3">
-            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">{label}</div>
-            <div className="mt-1 text-sm text-[#201d1a] break-words">{value}</div>
+        <div className="rounded-[18px] border border-[#eee7dc] bg-[#fcfbf9] px-3.5 py-2.5">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">{label}</div>
+            <div className="mt-1 text-[13px] leading-5 text-[#201d1a] break-words">{value}</div>
         </div>
     );
 }
@@ -334,47 +331,45 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
 
     return (
         <div className="h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
-            <div className="h-full min-h-0 flex flex-col gap-5 px-8 py-7">
-                <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                        <div className="inline-flex items-center gap-2 rounded-full border border-[#ece3d5] bg-white px-3 py-1 text-xs text-[#7c7468]">
-                            <ListTodo className="h-3.5 w-3.5" />
+                        <div className="inline-flex items-center gap-1.5 rounded-full border border-[#ece3d5] bg-white px-2.5 py-1 text-[11px] text-[#7c7468]">
+                            <ListTodo className="h-3 w-3" />
                             RedClaw 任务中心
                         </div>
-                        <h1 className="mt-3 text-[28px] font-semibold tracking-[-0.03em] text-[#1d1b18]">统一任务列表</h1>
-                        <p className="mt-2 max-w-[760px] text-sm leading-6 text-[#7b7469]">
-                            所有定时任务和长周期任务都在这里统一展示。任务卡片只保留分类、调度、策略和执行状态，不再拆出媒体任务等单独面板。
-                        </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                        <div className="rounded-full border border-[#ece5da] bg-white px-3 py-1.5 text-xs text-[#7d766a]">
+                        <div className="rounded-full border border-[#ece5da] bg-white px-2.5 py-1 text-[11px] text-[#7d766a]">
                             更新于 {formatDateTime(lastUpdatedAt)}
                         </div>
                         <button
                             onClick={() => void load()}
-                            className="inline-flex h-[36px] items-center gap-2 rounded-full border border-[#e7e0d4] bg-white px-4 text-xs text-[#7d766a] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f5f1e9]"
+                            className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#e7e0d4] bg-white px-3 text-[11px] text-[#7d766a] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f5f1e9]"
                         >
-                            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                            <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
                             刷新
                         </button>
                     </div>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-                    <StatCard label="任务总数" value={topStats.totalDefinitions} note="当前可管理的任务定义" />
-                    <StatCard label="定时任务" value={topStats.scheduled} note="interval / daily / weekly / once" />
-                    <StatCard label="长周期" value={topStats.longCycle} note="多轮推进任务" />
-                    <StatCard label="已启用" value={topStats.active} note="已进入调度系统" />
-                    <StatCard label="执行中" value={topStats.runningExecutions} note="当前活跃 execution" />
-                    <StatCard label="失败执行" value={topStats.failedExecutions} note="需要关注的失败记录" />
+                <div className="overflow-x-auto pb-1">
+                    <div className="flex min-w-max items-center gap-2.5">
+                        <StatCard label="任务总数" value={topStats.totalDefinitions} />
+                        <StatCard label="定时任务" value={topStats.scheduled} />
+                        <StatCard label="长周期" value={topStats.longCycle} />
+                        <StatCard label="已启用" value={topStats.active} />
+                        <StatCard label="执行中" value={topStats.runningExecutions} />
+                        <StatCard label="失败执行" value={topStats.failedExecutions} />
+                    </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-1.5">
                     {filterOptions.map((option) => (
                         <button
                             key={option.key}
                             onClick={() => setFilter(option.key)}
-                            className={`rounded-full border px-4 py-2 text-sm transition ${
+                            className={`rounded-full border px-3 py-1.5 text-[12px] transition ${
                                 filter === option.key
                                     ? 'border-[#c8b08b] bg-[#efe3d0] text-[#5c4630]'
                                     : 'border-[#e8dfd2] bg-white text-[#736b60] hover:bg-[#f6f2ea]'
@@ -387,35 +382,35 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                 </div>
 
                 {error && (
-                    <div className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
-                        <AlertCircle className="h-4 w-4" />
+                    <div className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[13px] text-red-700">
+                        <AlertCircle className="h-3.5 w-3.5" />
                         {error}
                     </div>
                 )}
 
                 <div className="min-h-0 flex-1 overflow-hidden">
-                    <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(360px,460px)_minmax(0,1fr)]">
-                        <div className="min-h-0 overflow-hidden rounded-[28px] border border-[#ece4d8] bg-white">
-                            <div className="flex items-center justify-between border-b border-[#f0e9de] px-5 py-4">
+                    <div className="grid h-full min-h-0 gap-3 xl:grid-cols-[minmax(320px,400px)_minmax(0,1fr)]">
+                        <div className="min-h-0 overflow-hidden rounded-[24px] border border-[#ece4d8] bg-white">
+                            <div className="flex items-center justify-between border-b border-[#f0e9de] px-4 py-3">
                                 <div>
-                                    <div className="text-sm font-medium text-[#1d1b18]">任务列表</div>
-                                    <div className="mt-1 text-xs text-[#8b8378]">按当前筛选展示统一任务定义</div>
+                                    <div className="text-[13px] font-medium text-[#1d1b18]">任务列表</div>
+                                    <div className="mt-0.5 text-[11px] text-[#8b8378]">按当前筛选展示统一任务定义</div>
                                 </div>
-                                <div className="text-xs text-[#9a9184]">{filteredItems.length} 项</div>
+                                <div className="text-[11px] text-[#9a9184]">{filteredItems.length} 项</div>
                             </div>
 
-                            <div className="h-[calc(100%-73px)] overflow-y-auto px-3 py-3">
+                            <div className="h-[calc(100%-61px)] overflow-y-auto px-2.5 py-2.5">
                                 {loading && items.length === 0 ? (
-                                    <div className="flex h-full min-h-[260px] items-center justify-center text-sm text-[#7b7469]">
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    <div className="flex h-full min-h-[240px] items-center justify-center text-[13px] text-[#7b7469]">
+                                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                                         正在加载任务列表
                                     </div>
                                 ) : filteredItems.length === 0 ? (
-                                    <div className="flex h-full min-h-[260px] items-center justify-center px-6 text-center text-sm leading-6 text-[#7b7469]">
+                                    <div className="flex h-full min-h-[240px] items-center justify-center px-5 text-center text-[13px] leading-6 text-[#7b7469]">
                                         当前筛选下没有任务。你可以切换筛选查看其他任务状态。
                                     </div>
                                 ) : (
-                                    <div className="space-y-3">
+                                    <div className="space-y-2.5">
                                         {filteredItems.map((item) => {
                                             const active = selectedItem?.definitionId === item.definitionId;
                                             const actionType = actionTypeLabel(item.actionType);
@@ -423,58 +418,45 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                 <button
                                                     key={item.definitionId}
                                                     onClick={() => setSelectedId(item.definitionId)}
-                                                    className={`w-full rounded-[24px] border px-4 py-4 text-left transition ${
+                                                    className={`w-full rounded-[18px] border px-3 py-2.5 text-left transition ${
                                                         active
-                                                            ? 'border-[#d5b68b] bg-[#fbf2e6] shadow-[0_12px_30px_rgba(95,70,35,0.08)]'
+                                                            ? 'border-[#d5b68b] bg-[#fbf2e6] shadow-[0_10px_24px_rgba(95,70,35,0.06)]'
                                                             : 'border-[#eee7dc] bg-[#fdfcf9] hover:border-[#e1d4c2] hover:bg-white'
                                                     }`}
                                                 >
-                                                    <div className="flex flex-wrap items-start justify-between gap-3">
-                                                        <div className="min-w-0 flex-1">
-                                                            <div className="flex flex-wrap items-center gap-2">
-                                                                <span className="rounded-full bg-[#efe5d6] px-2.5 py-1 text-[11px] font-medium text-[#6d553a]">
-                                                                    {kindLabel(item.kind)}
-                                                                </span>
-                                                                {actionType && (
-                                                                    <span className="rounded-full bg-[#eef1f5] px-2.5 py-1 text-[11px] font-medium text-[#687180]">
-                                                                        {actionType}
-                                                                    </span>
-                                                                )}
-                                                                <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${lifecycleTone(item)}`}>
-                                                                    {lifecycleLabel(item)}
-                                                                </span>
-                                                            </div>
-                                                            <div className="mt-3 truncate text-[16px] font-semibold text-[#1d1b18]">
-                                                                {item.title}
-                                                            </div>
-                                                            <div className="mt-2 line-clamp-2 text-sm leading-6 text-[#70695d]">
-                                                                {taskContent(item)}
-                                                            </div>
-                                                        </div>
-                                                        <div className="shrink-0 rounded-2xl bg-white/80 px-3 py-2 text-right">
-                                                            <div className="text-[11px] uppercase tracking-[0.16em] text-[#a3998a]">下次执行</div>
-                                                            <div className="mt-1 text-sm font-medium text-[#2a2723]">
-                                                                {formatDateTime(item.nextDueAt)}
-                                                            </div>
-                                                        </div>
+                                                    <div className="flex flex-wrap items-center gap-1.5">
+                                                        <span className="rounded-full bg-[#efe5d6] px-2 py-0.5 text-[10px] font-medium text-[#6d553a]">
+                                                            {kindLabel(item.kind)}
+                                                        </span>
+                                                        {actionType && (
+                                                            <span className="rounded-full bg-[#eef1f5] px-2 py-0.5 text-[10px] font-medium text-[#687180]">
+                                                                {actionType}
+                                                            </span>
+                                                        )}
+                                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${lifecycleTone(item)}`}>
+                                                            {lifecycleLabel(item)}
+                                                        </span>
                                                     </div>
 
-                                                    <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-[#877f73]">
+                                                    <div className="mt-2 truncate text-[13px] font-semibold text-[#1d1b18]">
+                                                        {item.title}
+                                                    </div>
+
+                                                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-[#877f73]">
                                                         <span className="inline-flex items-center gap-1.5">
-                                                            <Clock3 className="h-3.5 w-3.5" />
+                                                            <Clock3 className="h-3 w-3" />
                                                             {triggerLabel(item)}
                                                         </span>
+                                                        <span>下次 {formatDateTime(item.nextDueAt)}</span>
                                                         <span>策略 {policyLabel(item.policyDecision)}</span>
-                                                        <span>
-                                                            {item.latestExecution
-                                                                ? `最近执行 ${executionStatusLabel(item.latestExecution.status)}`
-                                                                : '暂无执行记录'}
-                                                        </span>
+                                                        {item.latestExecution && (
+                                                            <span>执行 {executionStatusLabel(item.latestExecution.status)}</span>
+                                                        )}
                                                     </div>
 
                                                     {item.cooldown?.state === 'active' && (
-                                                        <div className="mt-3 rounded-2xl border border-[#f0d5d8] bg-[#fff4f5] px-3 py-2 text-xs text-[#9a525c]">
-                                                            冷却中：连续失败 {Number(item.cooldown.consecutiveFailures || 0)} 次，原因为 {item.cooldown.reason || '连续失败进入冷却'}。
+                                                        <div className="mt-1.5 rounded-[14px] border border-[#f0d5d8] bg-[#fff4f5] px-2.5 py-1.5 text-[10px] leading-4 text-[#9a525c]">
+                                                            冷却中：连续失败 {Number(item.cooldown.consecutiveFailures || 0)} 次。
                                                         </div>
                                                     )}
                                                 </button>
@@ -485,37 +467,37 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                             </div>
                         </div>
 
-                        <div className="min-h-0 overflow-y-auto rounded-[28px] border border-[#ece4d8] bg-white px-6 py-6">
+                        <div className="min-h-0 overflow-y-auto rounded-[24px] border border-[#ece4d8] bg-white px-5 py-5">
                             {!selectedItem ? (
-                                <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-sm leading-6 text-[#7b7469]">
+                                <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-[13px] leading-6 text-[#7b7469]">
                                     选择左侧任务后，这里会显示调度规则、策略信息和最近执行状态。
                                 </div>
                             ) : (
-                                <div className="space-y-6">
-                                    <div className="flex flex-wrap items-start justify-between gap-4">
+                                <div className="space-y-5">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
                                         <div>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <span className="rounded-full bg-[#efe5d6] px-3 py-1 text-xs font-medium text-[#6d553a]">
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                <span className="rounded-full bg-[#efe5d6] px-2.5 py-0.5 text-[11px] font-medium text-[#6d553a]">
                                                     {kindLabel(selectedItem.kind)}
                                                 </span>
                                                 {selectedItem.actionType && (
-                                                    <span className="rounded-full bg-[#eef1f5] px-3 py-1 text-xs font-medium text-[#687180]">
+                                                    <span className="rounded-full bg-[#eef1f5] px-2.5 py-0.5 text-[11px] font-medium text-[#687180]">
                                                         {actionTypeLabel(selectedItem.actionType)}
                                                     </span>
                                                 )}
-                                                <span className={`rounded-full px-3 py-1 text-xs font-medium ${lifecycleTone(selectedItem)}`}>
+                                                <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${lifecycleTone(selectedItem)}`}>
                                                     {lifecycleLabel(selectedItem)}
                                                 </span>
                                             </div>
-                                            <h2 className="mt-3 text-[26px] font-semibold tracking-[-0.03em] text-[#1d1b18]">
+                                            <h2 className="mt-2.5 text-[21px] font-semibold tracking-[-0.03em] text-[#1d1b18]">
                                                 {selectedItem.title}
                                             </h2>
-                                            <p className="mt-2 max-w-[720px] text-sm leading-6 text-[#70695d]">
+                                            <p className="mt-1.5 max-w-[680px] text-[13px] leading-6 text-[#70695d]">
                                                 {taskContent(selectedItem)}
                                             </p>
                                         </div>
 
-                                        <div className="flex flex-wrap items-center gap-2">
+                                        <div className="flex flex-wrap items-center gap-1.5">
                                             {selectedItem.requiresConfirmation && selectedItem.draftId && (
                                                 <>
                                                     <button
@@ -525,7 +507,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                                 confirm: true,
                                                             });
                                                         })}
-                                                        className="rounded-full border border-[#d2b690] bg-[#efe1ca] px-4 py-2 text-sm text-[#5e4730] hover:bg-[#e7d5b9]"
+                                                        className="rounded-full border border-[#d2b690] bg-[#efe1ca] px-3.5 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
                                                     >
                                                         {actionState?.id === selectedItem.definitionId && actionState.action === 'confirm'
                                                             ? '确认中...'
@@ -538,7 +520,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                                 confirm: false,
                                                             });
                                                         })}
-                                                        className="rounded-full border border-[#eadfce] bg-white px-4 py-2 text-sm text-[#776f63] hover:bg-[#f7f3ec]"
+                                                        className="rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
                                                     >
                                                         {actionState?.id === selectedItem.definitionId && actionState.action === 'discard'
                                                             ? '处理中...'
@@ -550,9 +532,9 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             {!selectedItem.requiresConfirmation && (
                                                 <button
                                                     onClick={() => void executeAction(selectedItem, 'run-now', () => runTaskNow(selectedItem))}
-                                                    className="inline-flex rounded-full border border-[#d2b690] bg-[#efe1ca] px-4 py-2 text-sm text-[#5e4730] hover:bg-[#e7d5b9]"
+                                                    className="inline-flex items-center rounded-full border border-[#d2b690] bg-[#efe1ca] px-3.5 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
                                                 >
-                                                    <Play className="mr-2 h-4 w-4" />
+                                                    <Play className="mr-1.5 h-3.5 w-3.5" />
                                                     {actionState?.id === selectedItem.definitionId && actionState.action === 'run-now'
                                                         ? '执行中...'
                                                         : '立即执行'}
@@ -562,7 +544,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             {!selectedItem.requiresConfirmation && selectedItem.enabled && (
                                                 <button
                                                     onClick={() => void executeAction(selectedItem, 'pause', () => setTaskEnabled(selectedItem, false))}
-                                                    className="rounded-full border border-[#eadfce] bg-white px-4 py-2 text-sm text-[#776f63] hover:bg-[#f7f3ec]"
+                                                    className="rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
                                                 >
                                                     {actionState?.id === selectedItem.definitionId && actionState.action === 'pause'
                                                         ? '处理中...'
@@ -573,7 +555,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             {!selectedItem.requiresConfirmation && !selectedItem.enabled && (
                                                 <button
                                                     onClick={() => void executeAction(selectedItem, 'resume', () => setTaskEnabled(selectedItem, true))}
-                                                    className="rounded-full border border-[#eadfce] bg-white px-4 py-2 text-sm text-[#776f63] hover:bg-[#f7f3ec]"
+                                                    className="rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
                                                 >
                                                     {actionState?.id === selectedItem.definitionId && actionState.action === 'resume'
                                                         ? '处理中...'
@@ -583,7 +565,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                         </div>
                                     </div>
 
-                                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                                    <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
                                         <DetailRow label="任务分类" value={kindLabel(selectedItem.kind)} />
                                         <DetailRow label="调度方式" value={triggerLabel(selectedItem)} />
                                         <DetailRow label="策略判定" value={policyLabel(selectedItem.policyDecision)} />
@@ -592,32 +574,32 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                         <DetailRow label="任务指纹" value={shortFingerprint(selectedItem.definitionFingerprint)} />
                                     </div>
 
-                                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(280px,0.9fr)]">
-                                        <div className="space-y-4">
-                                            <section className="rounded-[24px] border border-[#eee7dc] bg-[#fcfbf9] px-5 py-5">
-                                                <div className="text-sm font-medium text-[#1d1b18]">任务内容</div>
-                                                <div className="mt-4 space-y-3 text-sm leading-6 text-[#595247]">
+                                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1.3fr)_minmax(260px,0.9fr)]">
+                                        <div className="space-y-3">
+                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
+                                                <div className="text-[13px] font-medium text-[#1d1b18]">任务内容</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
                                                     {selectedItem.goal && (
                                                         <div>
-                                                            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">Goal</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Goal</div>
                                                             <div className="mt-1">{selectedItem.goal}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.prompt && (
                                                         <div>
-                                                            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">Prompt</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Prompt</div>
                                                             <div className="mt-1">{selectedItem.prompt}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.objective && (
                                                         <div>
-                                                            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">Objective</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Objective</div>
                                                             <div className="mt-1">{selectedItem.objective}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.stepPrompt && (
                                                         <div>
-                                                            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">Step Prompt</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Step Prompt</div>
                                                             <div className="mt-1">{selectedItem.stepPrompt}</div>
                                                         </div>
                                                     )}
@@ -627,13 +609,13 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                 </div>
                                             </section>
 
-                                            <section className="rounded-[24px] border border-[#eee7dc] bg-[#fcfbf9] px-5 py-5">
-                                                <div className="text-sm font-medium text-[#1d1b18]">策略与风险</div>
-                                                <div className="mt-4 space-y-3 text-sm leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
+                                                <div className="text-[13px] font-medium text-[#1d1b18]">策略与风险</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
                                                     <div>策略结论：{policyLabel(selectedItem.policyDecision)}</div>
                                                     {Array.isArray(selectedItem.policyWarnings) && selectedItem.policyWarnings.length > 0 && (
                                                         <div>
-                                                            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">Warnings</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Warnings</div>
                                                                 <div className="mt-1 space-y-1">
                                                                     {selectedItem.policyWarnings.map((warning, index) => (
                                                                         <div key={`${selectedItem.definitionId}-warning-${index}`}>- {warning}</div>
@@ -643,13 +625,13 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                     )}
                                                     {selectedItem.riskRationale && (
                                                         <div>
-                                                            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">Risk Rationale</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Risk Rationale</div>
                                                             <div className="mt-1">{selectedItem.riskRationale}</div>
                                                         </div>
                                                     )}
                                                     {selectedItem.lastUpdatedReason && (
                                                         <div>
-                                                            <div className="text-[11px] uppercase tracking-[0.18em] text-[#a39a8e]">Last Updated Reason</div>
+                                                            <div className="text-[10px] uppercase tracking-[0.16em] text-[#a39a8e]">Last Updated Reason</div>
                                                             <div className="mt-1">{selectedItem.lastUpdatedReason}</div>
                                                         </div>
                                                     )}
@@ -657,10 +639,10 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             </section>
                                         </div>
 
-                                        <div className="space-y-4">
-                                            <section className="rounded-[24px] border border-[#eee7dc] bg-[#fcfbf9] px-5 py-5">
-                                                <div className="text-sm font-medium text-[#1d1b18]">调度信息</div>
-                                                <div className="mt-4 space-y-3 text-sm leading-6 text-[#595247]">
+                                        <div className="space-y-3">
+                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
+                                                <div className="text-[13px] font-medium text-[#1d1b18]">调度信息</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
                                                     <div>{scheduleSummary(selectedItem)}</div>
                                                     <div>创建于 {formatDateTime(selectedItem.createdAt)}</div>
                                                     <div>更新于 {formatDateTime(selectedItem.updatedAt)}</div>
@@ -672,9 +654,9 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                 </div>
                                             </section>
 
-                                            <section className="rounded-[24px] border border-[#eee7dc] bg-[#fcfbf9] px-5 py-5">
-                                                <div className="text-sm font-medium text-[#1d1b18]">最近执行</div>
-                                                <div className="mt-4 space-y-3 text-sm leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
+                                                <div className="text-[13px] font-medium text-[#1d1b18]">最近执行</div>
+                                                <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
                                                     {selectedItem.latestExecution ? (
                                                         <>
                                                             <div>状态：{executionStatusLabel(selectedItem.latestExecution.status)}</div>
@@ -682,7 +664,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                             <div>最近心跳：{formatDateTime(selectedItem.latestExecution.lastHeartbeatAt)}</div>
                                                             <div>尝试次数：{Number(selectedItem.latestExecution.attemptNo || 0)}</div>
                                                             {selectedItem.latestExecution.lastError && (
-                                                                <div className="rounded-2xl border border-[#f0d5d8] bg-[#fff4f5] px-3 py-2 text-xs text-[#9a525c]">
+                                                                <div className="rounded-[16px] border border-[#f0d5d8] bg-[#fff4f5] px-3 py-2 text-[11px] leading-5 text-[#9a525c]">
                                                                     {selectedItem.latestExecution.lastError}
                                                                 </div>
                                                             )}
@@ -693,9 +675,9 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                 </div>
                                             </section>
 
-                                            <section className="rounded-[24px] border border-[#eee7dc] bg-[#fcfbf9] px-5 py-5">
-                                                <div className="text-sm font-medium text-[#1d1b18]">冷却状态</div>
-                                                <div className="mt-4 text-sm leading-6 text-[#595247]">
+                                            <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
+                                                <div className="text-[13px] font-medium text-[#1d1b18]">冷却状态</div>
+                                                <div className="mt-3 text-[13px] leading-6 text-[#595247]">
                                                     {selectedItem.cooldown?.state === 'active' ? (
                                                         <div>
                                                             连续失败 {Number(selectedItem.cooldown.consecutiveFailures || 0)} 次，
