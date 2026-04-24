@@ -5,6 +5,7 @@ allowedToolPack: redclaw
 allowedTools: [bash, app_cli]
 hookMode: inline
 autoActivate: false
+activationScope: turn
 contextNote: 需要明确输出封面标题、构图与提示词。
 ---
 # Cover Builder

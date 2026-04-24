@@ -1460,10 +1460,11 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 mod tests {
     use super::{
         append_generated_media_markdown, decode_command_json_stdout, guess_mime_and_kind,
-        interactive_execution_progress_observe_success, interactive_tool_panic_message,
-        json_value_to_path_list, manuscript_save_result_path,
-        normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
-        structured_tool_error_code, validate_runtime_tool_message_sequence, GeneratedMediaPreview,
+        interactive_execution_progress_observe_success, interactive_skill_activation_continuation,
+        interactive_skill_activations, interactive_tool_panic_message, json_value_to_path_list,
+        manuscript_save_result_path, normalized_structured_payload_arguments,
+        redbox_fs_profile_read_completed, structured_tool_error_code,
+        validate_runtime_tool_message_sequence, GeneratedMediaPreview,
         InteractiveExecutionContract, InteractiveExecutionProgress,
     };
     use serde_json::json;
@@ -1659,6 +1660,51 @@ mod tests {
         let error = validate_runtime_tool_message_sequence(&messages)
             .expect_err("orphan tool results should be rejected");
         assert!(error.contains("call-orphan"));
+    }
+
+    #[test]
+    fn interactive_skill_activations_keep_turn_scope_out_of_session_copy() {
+        let activations = interactive_skill_activations(
+            "app_cli",
+            &json!({
+                "data": {
+                    "description": "writing helper",
+                    "persistedToSession": false,
+                    "activationTransition": {
+                        "continueWithUpdatedContext": true,
+                        "activatedSkillNames": ["writing-style"]
+                    }
+                }
+            }),
+        );
+        assert_eq!(activations.len(), 1);
+        assert_eq!(activations[0].name, "writing-style");
+        assert!(!activations[0].persisted_to_session);
+
+        let continuation = interactive_skill_activation_continuation(&activations)
+            .expect("continuation should exist");
+        assert!(continuation.contains("加入当前轮上下文"));
+        assert!(!continuation.contains("写入当前会话"));
+    }
+
+    #[test]
+    fn interactive_skill_activations_preserve_session_scope_copy() {
+        let activations = interactive_skill_activations(
+            "app_cli",
+            &json!({
+                "data": {
+                    "description": "theme editor",
+                    "persistedToSession": true,
+                    "activationTransition": {
+                        "continueWithUpdatedContext": true,
+                        "activatedSkillNames": ["richpost-theme-editor"]
+                    }
+                }
+            }),
+        );
+        let continuation = interactive_skill_activation_continuation(&activations)
+            .expect("continuation should exist");
+        assert!(continuation.contains("写入当前会话"));
     }
 }
 
@@ -4720,11 +4766,22 @@ fn interactive_tool_call_description(tool_name: &str, arguments: &Value) -> Stri
     }
 }
 
-fn interactive_skill_activation_names(tool_name: &str, result: &Value) -> Vec<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InteractiveSkillActivation {
+    name: String,
+    description: Option<String>,
+    persisted_to_session: bool,
+}
+
+fn interactive_skill_activations(
+    tool_name: &str,
+    result: &Value,
+) -> Vec<InteractiveSkillActivation> {
     if tool_name != "app_cli" {
         return Vec::new();
     }
-    let Some(transition) = tool_result_data(result).get("activationTransition") else {
+    let data = tool_result_data(result);
+    let Some(transition) = data.get("activationTransition") else {
         return Vec::new();
     };
     if !transition
@@ -4734,6 +4791,16 @@ fn interactive_skill_activation_names(tool_name: &str, result: &Value) -> Vec<St
     {
         return Vec::new();
     }
+    let description = data
+        .get("description")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let persisted_to_session = data
+        .get("persistedToSession")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut activated = transition
         .get("activatedSkillNames")
         .and_then(Value::as_array)
@@ -4743,12 +4810,16 @@ fn interactive_skill_activation_names(tool_name: &str, result: &Value) -> Vec<St
                 .filter_map(Value::as_str)
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
-                .map(ToString::to_string)
+                .map(|name| InteractiveSkillActivation {
+                    name: name.to_string(),
+                    description: description.clone(),
+                    persisted_to_session,
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    activated.sort_by_key(|name| name.to_ascii_lowercase());
-    activated.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    activated.sort_by_key(|item| item.name.to_ascii_lowercase());
+    activated.dedup_by(|left, right| left.name.eq_ignore_ascii_case(&right.name));
     activated
 }
 
@@ -4771,13 +4842,40 @@ fn structured_tool_error_code(text: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn interactive_skill_activation_continuation(names: &[String]) -> Option<String> {
-    if names.is_empty() {
+fn interactive_skill_activation_continuation(
+    activations: &[InteractiveSkillActivation],
+) -> Option<String> {
+    if activations.is_empty() {
         return None;
     }
+    let mut session_scoped = Vec::<String>::new();
+    let mut turn_scoped = Vec::<String>::new();
+    for activation in activations {
+        if activation.persisted_to_session {
+            session_scoped.push(activation.name.clone());
+        } else {
+            turn_scoped.push(activation.name.clone());
+        }
+    }
+    let scope_text = match (session_scoped.is_empty(), turn_scoped.is_empty()) {
+        (false, true) => format!(
+            "以下技能已激活并写入当前会话：{}",
+            session_scoped.join(", ")
+        ),
+        (true, false) => format!(
+            "以下技能已激活并加入当前轮上下文：{}",
+            turn_scoped.join(", ")
+        ),
+        (false, false) => format!(
+            "以下技能已激活：会话级 {}；当前轮 {}",
+            session_scoped.join(", "),
+            turn_scoped.join(", ")
+        ),
+        (true, true) => return None,
+    };
     Some(format!(
-        "系统状态更新：以下技能已激活并写入当前会话：{}。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。",
-        names.join(", ")
+        "系统状态更新：{}。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。",
+        scope_text
     ))
 }
 
@@ -6002,7 +6100,7 @@ fn run_anthropic_interactive_chat_runtime(
             &mut canonical_messages,
             canonical_assistant_message(assistant_text.clone(), &tool_calls),
         );
-        let mut skill_activation_names = Vec::<String>::new();
+        let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
         for call in tool_calls {
             let description = interactive_tool_call_description(&call.name, &call.arguments);
@@ -6028,8 +6126,7 @@ fn run_anthropic_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
-                    let activated_skills =
-                        interactive_skill_activation_names(&call.name, &result_value);
+                    let activated_skills = interactive_skill_activations(&call.name, &result_value);
                     let (image_previews, video_previews) =
                         extract_generated_media_previews_from_tool_result(
                             &call.name,
@@ -6094,7 +6191,20 @@ fn run_anthropic_interactive_chat_runtime(
                         &mut canonical_messages,
                         tool_message,
                     );
-                    skill_activation_names.extend(activated_skills);
+                    for activation in &activated_skills {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            session_id,
+                            "chat.skill_activated",
+                            "skill activated",
+                            Some(json!({
+                                "name": activation.name.clone(),
+                                "description": activation.description.clone(),
+                            })),
+                        );
+                    }
+                    skill_activations.extend(activated_skills);
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         &call.name,
                         &call.arguments,
@@ -6129,9 +6239,7 @@ fn run_anthropic_interactive_chat_runtime(
                 ),
             );
         }
-        if let Some(instruction) =
-            interactive_skill_activation_continuation(&skill_activation_names)
-        {
+        if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
                 &mut canonical_messages,
@@ -6591,7 +6699,7 @@ fn run_gemini_interactive_chat_runtime(
             canonical_assistant_message(assistant_text.clone(), &tool_calls),
         );
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
-        let mut skill_activation_names = Vec::<String>::new();
+        let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
         for call in tool_calls {
             let description = interactive_tool_call_description(&call.name, &call.arguments);
             in_flight_tool_calls.start(&call.id, &call.name);
@@ -6616,8 +6724,7 @@ fn run_gemini_interactive_chat_runtime(
             );
             match result {
                 Ok(result_value) => {
-                    let activated_skills =
-                        interactive_skill_activation_names(&call.name, &result_value);
+                    let activated_skills = interactive_skill_activations(&call.name, &result_value);
                     let (image_previews, video_previews) =
                         extract_generated_media_previews_from_tool_result(
                             &call.name,
@@ -6681,7 +6788,20 @@ fn run_gemini_interactive_chat_runtime(
                             true,
                         ),
                     );
-                    skill_activation_names.extend(activated_skills);
+                    for activation in &activated_skills {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            session_id,
+                            "chat.skill_activated",
+                            "skill activated",
+                            Some(json!({
+                                "name": activation.name.clone(),
+                                "description": activation.description.clone(),
+                            })),
+                        );
+                    }
+                    skill_activations.extend(activated_skills);
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         &call.name,
                         &call.arguments,
@@ -6716,9 +6836,7 @@ fn run_gemini_interactive_chat_runtime(
                 ),
             );
         }
-        if let Some(instruction) =
-            interactive_skill_activation_continuation(&skill_activation_names)
-        {
+        if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
                 &mut canonical_messages,
@@ -7039,7 +7157,7 @@ fn run_openai_interactive_chat_runtime(
             canonical_assistant_message(assistant_content.clone(), &tool_calls),
         );
         let mut tool_round_digests = Vec::<InteractiveToolOutcomeDigest>::new();
-        let mut skill_activation_names = Vec::<String>::new();
+        let mut skill_activations = Vec::<InteractiveSkillActivation>::new();
         let mut authoring_continuation_instruction = None::<String>;
         let mut authoring_error_correction_instruction = None::<String>;
         for call in tool_calls {
@@ -7080,7 +7198,7 @@ fn run_openai_interactive_chat_runtime(
             match result {
                 Ok(result_value) => {
                     let activated_skills =
-                        interactive_skill_activation_names(effective_tool_name, &result_value);
+                        interactive_skill_activations(effective_tool_name, &result_value);
                     let (image_previews, video_previews) =
                         extract_generated_media_previews_from_tool_result(
                             effective_tool_name,
@@ -7190,7 +7308,20 @@ fn run_openai_interactive_chat_runtime(
                         &result_value,
                     );
                     execution_contract_nudge_count = 0;
-                    skill_activation_names.extend(activated_skills);
+                    for activation in &activated_skills {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            session_id,
+                            "chat.skill_activated",
+                            "skill activated",
+                            Some(json!({
+                                "name": activation.name.clone(),
+                                "description": activation.description.clone(),
+                            })),
+                        );
+                    }
+                    skill_activations.extend(activated_skills);
                     if authoring_continuation_instruction.is_none() {
                         authoring_continuation_instruction =
                             interactive_authoring_continuation_instruction(
@@ -7308,9 +7439,7 @@ fn run_openai_interactive_chat_runtime(
                 }
             }
         }
-        if let Some(instruction) =
-            interactive_skill_activation_continuation(&skill_activation_names)
-        {
+        if let Some(instruction) = interactive_skill_activation_continuation(&skill_activations) {
             append_internal_runtime_user_message(
                 &mut prompt_messages,
                 &mut canonical_messages,

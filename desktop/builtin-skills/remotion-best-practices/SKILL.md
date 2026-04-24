@@ -3,6 +3,7 @@ allowedRuntimeModes: [video-editor]
 allowedTools: [redbox_editor, redbox_fs, app_cli]
 hookMode: inline
 autoActivate: true
+activationScope: turn
 contextNote: 当前视频运行时默认启用 Remotion 官方最佳实践知识包。优先按 Composition / Sequence / timing / assets 的思路设计动画，但最终仍以 remotion.scene.json 与 editor.project.json 为宿主真相层。
 promptPrefix: 你当前必须遵守 remotion-best-practices：先读取当前 Remotion 工程状态，再决定 composition/scene 边界、主体 element、timing 与 assets；不要直接虚构任意 React 代码或 CSS 动画。
 promptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落地结果。若官方 Remotion 能力超出宿主范围，必须显式降级为可预览的 scene patch，而不是假装已实现。
