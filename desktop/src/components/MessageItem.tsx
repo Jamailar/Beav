@@ -202,6 +202,7 @@ interface MessageItemProps {
   workflowVariant?: 'default' | 'compact';
   workflowEmphasis?: 'default' | 'thoughts-first';
   workflowDisplayMode?: 'all' | 'thoughts-only';
+  showAttachments?: boolean;
 }
 
 interface ImageContextMenuState {
@@ -327,6 +328,7 @@ export const MessageItem = memo(({
   workflowVariant = 'default',
   workflowEmphasis = 'default',
   workflowDisplayMode = 'all',
+  showAttachments = true,
 }: MessageItemProps) => {
   const isUser = msg.role === 'user';
   const isThinkingMessage = !isUser && msg.messageType === 'thinking';
@@ -646,13 +648,13 @@ export const MessageItem = memo(({
                   )}
                   <div className="whitespace-pre-wrap">{displayText}</div>
                 </div>
-                {msg.attachment?.type === 'youtube-video' && !videoCard && (
+                {showAttachments && msg.attachment?.type === 'youtube-video' && !videoCard && (
                   <div className="mt-2 w-full max-w-[420px]">
                     {renderYoutubeCard(msg.attachment)}
                   </div>
                 )}
-                {msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
-                {msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
+                {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
+                {showAttachments && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
               </div>
             );
           })()
@@ -808,7 +810,8 @@ export const MessageItem = memo(({
     prevProps.workflowPlacement !== nextProps.workflowPlacement ||
     prevProps.workflowVariant !== nextProps.workflowVariant ||
     prevProps.workflowEmphasis !== nextProps.workflowEmphasis ||
-    prevProps.workflowDisplayMode !== nextProps.workflowDisplayMode;
+    prevProps.workflowDisplayMode !== nextProps.workflowDisplayMode ||
+    prevProps.showAttachments !== nextProps.showAttachments;
 
   return !msgChanged && !copyStatusChanged && !workflowStyleChanged;
 });
