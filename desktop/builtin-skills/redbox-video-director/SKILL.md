@@ -3,6 +3,7 @@ name: redbox-video-director
 description: Use when generating short videos with RedBox official video API, including motion clips, animated cover/video requests, reference-image video, image-to-video, and first/last-frame transitions. Produces a detailed shot script first, asks the user to confirm it, then chooses between text-to-video, reference-guided, and first-last-frame modes and calls the correct wan2.7 video model with prompt discipline focused on motion, reference elements, and transitions.
 allowedRuntimeModes: [chatroom, redclaw]
 allowed-tools: app_cli
+activationScope: turn
 ---
 
 # RedBox Video Director

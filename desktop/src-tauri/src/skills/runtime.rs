@@ -107,7 +107,7 @@ pub fn build_user_skill_record(name: &str) -> SkillRecord {
         description: format!("{name} skill"),
         location: format!("redbox://skills/{}", slug_from_relative_path(name)),
         body: format!(
-            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: inline\nautoActivate: false\nactivationScope: session\ncontextNote: \n---\n# {name}\n\nDescribe this skill's runtime rules, prompt patches, and execution contract here."
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: inline\nautoActivate: false\nactivationScope: turn\ncontextNote: \n---\n# {name}\n\nDescribe this skill's runtime rules, prompt patches, and execution contract here."
         ),
         source_scope: Some("user".to_string()),
         is_builtin: Some(false),
@@ -121,7 +121,7 @@ pub fn build_market_skill_record(slug: &str) -> SkillRecord {
         description: format!("Market placeholder skill: {slug}"),
         location: format!("redbox://skills/market/{slug}"),
         body: format!(
-            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: session\ncontextNote: Registered as a market placeholder. This does not provision CLI tools or external runtimes.\n---\n# {slug}\n\nThis skill entry was registered from the RedBox market installer as a placeholder only.\n\nIt does not install upstream toolchains, npm packages, binaries, or other external runtimes.\nUse the CLI Runtime control plane to provision required tools, then replace this body with the upstream skill contract or runtime modifiers."
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: turn\ncontextNote: Registered as a market placeholder. This does not provision CLI tools or external runtimes.\n---\n# {slug}\n\nThis skill entry was registered from the RedBox market installer as a placeholder only.\n\nIt does not install upstream toolchains, npm packages, binaries, or other external runtimes.\nUse the CLI Runtime control plane to provision required tools, then replace this body with the upstream skill contract or runtime modifiers."
         ),
         source_scope: Some("user".to_string()),
         is_builtin: Some(false),

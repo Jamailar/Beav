@@ -167,7 +167,7 @@ pub fn normalized_activation_scope(value: Option<&str>) -> &'static str {
     match value
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("session")
+        .unwrap_or("turn")
         .to_ascii_lowercase()
         .as_str()
     {
@@ -528,6 +528,10 @@ mod tests {
         assert_eq!(loaded.body, "# Legacy\n\nBody");
         assert!(loaded.metadata.allowed_runtime_modes.is_empty());
         assert!(!loaded.fingerprint.is_empty());
+        assert_eq!(
+            normalized_activation_scope(loaded.metadata.activation_scope.as_deref()),
+            "turn"
+        );
     }
 
     #[test]

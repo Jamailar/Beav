@@ -198,19 +198,7 @@ pub fn handle_send_channel(
                         runtime_mode
                     ),
                 );
-                for (name, description) in activated_skills {
-                    emit_runtime_task_checkpoint_saved(
-                        app,
-                        None,
-                        Some(active_session_id),
-                        "chat.skill_activated",
-                        "skill activated",
-                        Some(json!({
-                            "name": name,
-                            "description": description,
-                        })),
-                    );
-                }
+                let _ = activated_skills;
             }
             let turn = build_chat_send_turn(
                 session_id.clone(),
