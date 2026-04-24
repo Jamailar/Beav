@@ -1,7 +1,7 @@
 ---
 name: redbox-image-director
 description: Use when planning and generating a coordinated batch of multiple images in RedBox, including carousel posts, multi-card covers, ordered visual sequences, or any image set that must keep stable style and subject consistency. Build an image order table first, define each image's content and copy details plus a shared style guide, wait for user confirmation, then call app_cli(action="image.generate", payload={ ... }) once with planConfirmed, sharedStyleGuide, and imagePlanItems so the host can generate the whole batch concurrently.
-allowedRuntimeModes: [chatroom, redclaw]
+allowedRuntimeModes: [chatroom, redclaw, image-generation]
 allowed-tools: app_cli
 activationScope: session
 autoActivate: false
