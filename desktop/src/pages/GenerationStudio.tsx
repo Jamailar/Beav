@@ -1381,6 +1381,14 @@ export function GenerationStudio({
                 });
                 if (requestId !== agentSessionRequestIdRef.current) return;
                 setAgentSessionId(session.id);
+                const rawSessionTimestamp = session.createdAt || session.created_at || session.updatedAt || Date.now();
+                const numericSessionTimestamp = typeof rawSessionTimestamp === 'number'
+                    ? rawSessionTimestamp
+                    : Number(rawSessionTimestamp);
+                const sessionCreatedAt = Number.isFinite(numericSessionTimestamp)
+                    ? numericSessionTimestamp
+                    : Date.parse(String(rawSessionTimestamp));
+                ensureAgentFeedEntry(session.id, Number.isFinite(sessionCreatedAt) ? sessionCreatedAt : Date.now());
                 const existingMessages = await window.ipcRenderer.chat.getMessages(session.id);
                 if (requestId !== agentSessionRequestIdRef.current) return;
                 const hasExistingMessages = Array.isArray(existingMessages) && existingMessages.length > 0;
@@ -2087,6 +2095,7 @@ export function GenerationStudio({
                                 ) : (
                                     <Chat
                                         key={entry.id}
+                                        isActive={isActive}
                                         fixedSessionId={entry.sessionId}
                                         pendingMessage={entry.sessionId === agentSessionId ? agentPendingMessage : null}
                                         onMessageConsumed={() => {
@@ -2101,6 +2110,7 @@ export function GenerationStudio({
                                         showComposer={false}
                                         showMessageAttachments={false}
                                         showWelcomeHeader={false}
+                                        collapseEmptyFixedSession={true}
                                         fixedSessionContextIndicatorMode="none"
                                         welcomeTitle=""
                                         welcomeSubtitle=""

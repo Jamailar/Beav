@@ -82,6 +82,7 @@ interface ChatProps {
   emptyStateVerticalAlign?: 'center' | 'lower';
   showComposer?: boolean;
   showMessageAttachments?: boolean;
+  collapseEmptyFixedSession?: boolean;
 }
 
 interface ChatContextUsage {
@@ -410,6 +411,7 @@ export function Chat({
   emptyStateVerticalAlign = 'center',
   showComposer = true,
   showMessageAttachments = true,
+  collapseEmptyFixedSession = false,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -2794,6 +2796,15 @@ export function Chat({
   );
   const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedEffectiveTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
+  const shouldCollapseEmptyFixedSession = Boolean(
+    collapseEmptyFixedSession &&
+    fixedSessionId &&
+    isEmptySession &&
+    !showComposer &&
+    !showWelcomeHeader &&
+    !showWelcomeShortcuts &&
+    welcomeActions.length === 0
+  );
   const composerContextUsageIndicator = showComposerContextUsageIndicator ? (
     <div className="relative">
       <button
@@ -2992,6 +3003,10 @@ export function Chat({
     '问我任何问题，使用 @ 引用文件，/ 执行指令...',
     { showContextUsage: true, showCancelWhenBusy: false },
   );
+
+  if (shouldCollapseEmptyFixedSession) {
+    return null;
+  }
 
   return (
     <div className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}>
