@@ -166,14 +166,14 @@ mod tests {
     }
 
     #[test]
-    fn build_skill_runtime_state_auto_activates_and_restricts_tools() {
+    fn build_skill_runtime_state_keeps_skills_inactive_without_request() {
         let state = build_skill_runtime_state(
             &skills(),
             "redclaw",
             None,
             &["bash".to_string(), "app_cli".to_string()],
         );
-        assert_eq!(state.active_skills.len(), 1);
+        assert!(state.active_skills.is_empty());
         assert_eq!(
             state.allowed_tools,
             vec!["bash".to_string(), "app_cli".to_string()]
@@ -193,7 +193,7 @@ mod tests {
                 "redbox_skill".to_string(),
             ],
         );
-        assert_eq!(state.active_skills.len(), 2);
+        assert_eq!(state.active_skills.len(), 1);
         assert_eq!(state.allowed_tools, vec!["app_cli".to_string()]);
         assert!(state.skills_section.contains(
             "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn build_skill_runtime_state_auto_activates_video_editor_remotion_skill_only_in_video_mode() {
+    fn build_skill_runtime_state_keeps_video_skill_inactive_until_requested() {
         let video_state = build_skill_runtime_state(
             &skills(),
             "video-editor",
@@ -213,11 +213,7 @@ mod tests {
                 "redbox_skill".to_string(),
             ],
         );
-        assert_eq!(video_state.active_skills.len(), 1);
-        assert_eq!(
-            video_state.active_skills[0].name,
-            "remotion-best-practices".to_string()
-        );
+        assert!(video_state.active_skills.is_empty());
 
         let default_state = build_skill_runtime_state(
             &skills(),
@@ -278,7 +274,7 @@ mod tests {
         assert!(!state.skills_section.contains(
             "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
         ));
-        assert!(state.skills_section.contains("writing-style [inline]"));
+        assert!(state.skills_section.contains("- writing-style: desc"));
     }
 
     #[test]
@@ -321,9 +317,6 @@ mod tests {
         assert!(state
             .skills_section
             .contains("redbox-image-director: image desc"));
-        assert!(state
-            .skills_section
-            .contains("Before any multi-image `app_cli(action=\"image.generate\", payload={ \"count\": N, ... })`"));
         assert!(state.skills_section.contains(
             "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
         ));
@@ -346,8 +339,5 @@ mod tests {
         assert!(redclaw_state
             .skills_section
             .contains("redbox-image-director: image desc"));
-        assert!(redclaw_state
-            .skills_section
-            .contains("Before any multi-image `app_cli(action=\"image.generate\", payload={ \"count\": N, ... })`"));
     }
 }
