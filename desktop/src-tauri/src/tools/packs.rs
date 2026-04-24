@@ -2,6 +2,7 @@
 pub enum ToolPack {
     Wander,
     Chatroom,
+    ImageGeneration,
     Knowledge,
     Redclaw,
     BackgroundMaintenance,
@@ -13,6 +14,7 @@ pub fn pack_by_name(name: &str) -> Option<ToolPack> {
     match name.trim().to_lowercase().as_str() {
         "wander" => Some(ToolPack::Wander),
         "chatroom" | "default" => Some(ToolPack::Chatroom),
+        "image-generation" | "image_generation" => Some(ToolPack::ImageGeneration),
         "knowledge" => Some(ToolPack::Knowledge),
         "redclaw" => Some(ToolPack::Redclaw),
         "background-maintenance" => Some(ToolPack::BackgroundMaintenance),
@@ -25,6 +27,7 @@ pub fn pack_by_name(name: &str) -> Option<ToolPack> {
 pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
     match runtime_mode.trim().to_lowercase().as_str() {
         "wander" => ToolPack::Wander,
+        "image-generation" | "image_generation" => ToolPack::ImageGeneration,
         "knowledge" => ToolPack::Knowledge,
         "redclaw" => ToolPack::Redclaw,
         "video-editor" | "audio-editor" => ToolPack::Editor,
@@ -38,6 +41,7 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["redbox_fs"],
         ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
+        ToolPack::ImageGeneration => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Redclaw => {
             if cfg!(target_os = "windows") {
@@ -70,6 +74,14 @@ mod tests {
     fn audio_editor_runtime_includes_editor_tool_pack() {
         let tools = tool_names_for_runtime_mode("audio-editor");
         assert!(tools.contains(&"redbox_editor"));
+    }
+
+    #[test]
+    fn image_generation_runtime_includes_generation_tools() {
+        let tools = tool_names_for_runtime_mode("image-generation");
+        assert!(tools.contains(&"app_cli"));
+        assert!(tools.contains(&"redbox_fs"));
+        assert!(tools.contains(&"bash"));
     }
 
     #[test]
