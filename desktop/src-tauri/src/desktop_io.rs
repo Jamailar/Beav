@@ -22,8 +22,14 @@ pub(crate) fn write_base64_payload_to_file(
     encoded: &str,
     output_path: &Path,
 ) -> Result<(), String> {
+    let normalized = encoded
+        .trim()
+        .split_once(',')
+        .map(|(_, payload)| payload.trim())
+        .filter(|payload| !payload.is_empty())
+        .unwrap_or_else(|| encoded.trim());
     let encoded_path = std::env::temp_dir().join(format!("redbox-audio-{}.b64", now_ms()));
-    fs::write(&encoded_path, encoded).map_err(|error| error.to_string())?;
+    fs::write(&encoded_path, normalized).map_err(|error| error.to_string())?;
     let mut command = std::process::Command::new("base64");
     configure_background_command(&mut command);
     let output = command
