@@ -1908,16 +1908,31 @@ export function GenerationStudio({
             {studioMode === 'image' && (
                 <button
                     type="button"
+                    role="switch"
+                    aria-checked={isAgentMode}
+                    aria-label="套图制作"
                     onClick={() => setImageCreationSurface((prev) => prev === 'agent' ? 'manual' : 'agent')}
-                    className={clsx(
-                        'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium transition-colors',
-                        isAgentMode
-                            ? 'border-brand-red/50 bg-brand-red text-white'
-                            : 'border-border bg-surface-primary text-text-secondary',
-                    )}
+                    className="inline-flex items-center gap-3 rounded-full px-1 py-1 text-[14px] font-medium text-text-secondary transition-colors"
                 >
-                    <Sparkles className="h-4 w-4" />
-                    套图制作
+                    <span className="inline-flex items-center gap-2">
+                        <Sparkles className={clsx('h-4 w-4 transition-colors', isAgentMode ? 'text-brand-red' : 'text-text-tertiary')} />
+                        <span>套图制作</span>
+                    </span>
+                    <span
+                        className={clsx(
+                            'relative inline-flex h-7 w-12 shrink-0 rounded-full border transition-colors duration-200',
+                            isAgentMode
+                                ? 'border-brand-red/40 bg-brand-red'
+                                : 'border-border bg-surface-tertiary',
+                        )}
+                    >
+                        <span
+                            className={clsx(
+                                'absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.22)] transition-transform duration-200',
+                                isAgentMode ? 'translate-x-[22px]' : 'translate-x-0.5',
+                            )}
+                        />
+                    </span>
                 </button>
             )}
             <div className="ml-auto hidden text-[12px] text-text-tertiary md:block">{currentHeaderHint}</div>
