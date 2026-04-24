@@ -781,9 +781,10 @@ function createIpcRenderer() {
         invokeChannel('chat:create-diagnostics-session', payload || {}),
       listContextSessions: (payload: { contextId: string; contextType: string }) =>
         invokeChannel('chat:list-context-sessions', payload),
-      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string }) =>
+      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; metadata?: Record<string, unknown> }) =>
         invokeChannel('chat:create-context-session', payload),
-      getOrCreateContextSession: (params: Record<string, unknown>) => invokeChannel('chat:getOrCreateContextSession', params),
+      getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; metadata?: Record<string, unknown> }) =>
+        invokeChannel('chat:getOrCreateContextSession', params),
       deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
       getMessages: (sessionId: string) => invokeChannel('chat:get-messages', sessionId),
       clearMessages: (sessionId: string) => invokeChannel('chat:clear-messages', sessionId),

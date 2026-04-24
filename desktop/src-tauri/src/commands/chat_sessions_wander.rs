@@ -25,6 +25,29 @@ const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
 const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+fn merge_session_metadata_fields(
+    store: &mut AppStore,
+    session_id: &str,
+    incoming: Option<&Value>,
+) -> Option<ChatSessionRecord> {
+    let incoming = incoming?.as_object()?;
+    let session = store
+        .chat_sessions
+        .iter_mut()
+        .find(|item| item.id == session_id)?;
+    let mut metadata = session
+        .metadata
+        .clone()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    for (key, value) in incoming {
+        metadata.insert(key.clone(), value.clone());
+    }
+    session.metadata = Some(Value::Object(metadata));
+    session.updated_at = now_iso();
+    Some(session.clone())
+}
+
 fn inline_image_thumbnail_data_url(path: &Path, mime_type: &str, file_size: u64) -> Option<String> {
     if !mime_type.starts_with("image/")
         || file_size == 0
@@ -1323,14 +1346,17 @@ pub fn handle_chat_sessions_wander_channel(
                 let title =
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
                 let initial_context = payload_string(&payload, "initialContext");
+                let metadata = payload_field(&payload, "metadata").cloned();
                 let session = with_store_mut(state, |store| {
-                    Ok(ensure_context_session(
+                    let session = ensure_context_session(
                         store,
                         &context_type,
                         &context_id,
                         title,
                         initial_context.as_deref(),
-                    ))
+                    );
+                    Ok(merge_session_metadata_fields(store, &session.id, metadata.as_ref())
+                        .unwrap_or(session))
                 })?;
                 Ok(json!(session))
             }
@@ -1368,14 +1394,17 @@ pub fn handle_chat_sessions_wander_channel(
                 let title =
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
                 let initial_context = payload_string(&payload, "initialContext");
+                let metadata = payload_field(&payload, "metadata").cloned();
                 let session = with_store_mut(state, |store| {
-                    Ok(create_context_session(
+                    let session = create_context_session(
                         store,
                         &context_type,
                         &context_id,
                         title,
                         initial_context.as_deref(),
-                    ))
+                    );
+                    Ok(merge_session_metadata_fields(store, &session.id, metadata.as_ref())
+                        .unwrap_or(session))
                 })?;
                 Ok(json!(session))
             }
