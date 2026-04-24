@@ -1462,7 +1462,8 @@ mod tests {
         guess_mime_and_kind, interactive_execution_progress_observe_success,
         interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
-        structured_tool_error_code, InteractiveExecutionContract, InteractiveExecutionProgress,
+        structured_tool_error_code, validate_runtime_tool_message_sequence,
+        InteractiveExecutionContract, InteractiveExecutionProgress,
     };
     use serde_json::json;
     use std::path::Path;
@@ -1588,6 +1589,46 @@ mod tests {
                 std::path::PathBuf::from("C:\\B")
             ]
         );
+    }
+
+    #[test]
+    fn validate_runtime_tool_message_sequence_accepts_paired_messages() {
+        let messages = vec![
+            json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "redbox_fs",
+                        "arguments": "{}"
+                    }
+                }]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "tool_name": "redbox_fs",
+                "content": "{\"ok\":true}"
+            }),
+        ];
+
+        assert!(validate_runtime_tool_message_sequence(&messages).is_ok());
+    }
+
+    #[test]
+    fn validate_runtime_tool_message_sequence_rejects_orphan_tool_results() {
+        let messages = vec![json!({
+            "role": "tool",
+            "tool_call_id": "call-orphan",
+            "tool_name": "redbox_fs",
+            "content": "{\"ok\":true}"
+        })];
+
+        let error = validate_runtime_tool_message_sequence(&messages)
+            .expect_err("orphan tool results should be rejected");
+        assert!(error.contains("call-orphan"));
     }
 }
 
@@ -4139,6 +4180,51 @@ fn canonical_tool_result_message(
     })
 }
 
+fn validate_runtime_tool_message_sequence(messages: &[Value]) -> Result<(), String> {
+    let mut seen_tool_calls = std::collections::HashSet::<String>::new();
+    for (index, message) in messages.iter().enumerate() {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match role {
+            "assistant" => {
+                if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                    for tool_call in tool_calls {
+                        let Some(call_id) = tool_call.get("id").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let trimmed = call_id.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        seen_tool_calls.insert(trimmed.to_string());
+                    }
+                }
+            }
+            "tool" => {
+                let call_id = message
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or_default();
+                if call_id.is_empty() {
+                    return Err(format!(
+                        "runtime protocol validation failed: tool message at index {index} is missing tool_call_id"
+                    ));
+                }
+                if !seen_tool_calls.contains(call_id) {
+                    return Err(format!(
+                        "runtime protocol validation failed: orphan tool result references unknown call_id {call_id}"
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn canonical_messages_to_openai_messages(messages: &[Value]) -> Vec<Value> {
     messages
         .iter()
@@ -5462,6 +5548,7 @@ fn run_anthropic_interactive_chat_runtime(
             anthropic_tools_for_session(state, runtime_mode, session_id)
         };
         let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        validate_runtime_tool_message_sequence(&prompt_messages)?;
         let messages = canonical_messages_to_anthropic_messages(&prompt_messages);
 
         let mut body = json!({
@@ -6059,6 +6146,7 @@ fn run_gemini_interactive_chat_runtime(
             gemini_tools_for_session(state, runtime_mode, session_id)
         };
         let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        validate_runtime_tool_message_sequence(&prompt_messages)?;
         let contents = canonical_messages_to_gemini_contents(&prompt_messages);
 
         let mut body = json!({
@@ -6665,6 +6753,7 @@ fn run_openai_interactive_chat_runtime(
             );
         }
         let system_prompt = interactive_runtime_turn_system_prompt(state, session_id, runtime_mode);
+        validate_runtime_tool_message_sequence(&prompt_messages)?;
         let mut messages = canonical_messages_to_openai_messages(&prompt_messages);
         messages.insert(
             0,
