@@ -302,18 +302,18 @@ mod tests {
     }
 
     #[test]
-    fn build_skill_runtime_state_lists_multi_image_director_in_chatroom_and_redclaw_catalog() {
+    fn build_skill_runtime_state_lists_multi_image_director_in_image_generation_catalog() {
         let state = build_skill_runtime_state(
             &[SkillRecord {
                 name: "redbox-image-director".to_string(),
                 description: "image desc".to_string(),
                 location: "redbox://skills/redbox-image-director".to_string(),
-                body: "---\nallowedRuntimeModes: [chatroom, redclaw]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
             }],
-            "chatroom",
+            "image-generation",
             None,
             &["app_cli".to_string()],
         );
@@ -333,7 +333,7 @@ mod tests {
                 name: "redbox-image-director".to_string(),
                 description: "image desc".to_string(),
                 location: "redbox://skills/redbox-image-director".to_string(),
-                body: "---\nallowedRuntimeModes: [chatroom, redclaw]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),

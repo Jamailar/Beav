@@ -495,6 +495,9 @@ fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &st
 
 fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
     match runtime_mode {
+        "image-generation" => {
+            load_redbox_prompt("runtime/agents/image_generation/base.txt").unwrap_or_default()
+        }
         "video-editor" => {
             load_redbox_prompt("runtime/agents/video_editor/base.txt").unwrap_or_default()
         }
