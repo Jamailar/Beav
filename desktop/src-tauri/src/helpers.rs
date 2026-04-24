@@ -1013,7 +1013,21 @@ pub(crate) fn escape_html(value: &str) -> String {
 pub(crate) fn file_url_for_path(path: &Path) -> String {
     Url::from_file_path(path)
         .map(|url| url.into())
-        .unwrap_or_else(|_| format!("file://{}", path.display()))
+        .unwrap_or_else(|_| {
+            let raw = path.to_string_lossy().trim().replace('\\', "/");
+            if raw.len() >= 2 && raw.as_bytes().get(1).copied() == Some(b':') {
+                let synthetic_posix = format!("/{}", raw.trim_start_matches('/'));
+                return Url::from_file_path(Path::new(&synthetic_posix))
+                    .map(|url| url.into())
+                    .unwrap_or_else(|_| format!("file:///{}", raw));
+            }
+            if raw.starts_with("//") {
+                return Url::parse(&format!("file:{raw}"))
+                    .map(|url| url.into())
+                    .unwrap_or_else(|_| format!("file:{raw}"));
+            }
+            format!("file://{}", raw)
+        })
 }
 
 #[cfg(test)]
@@ -1088,6 +1102,12 @@ mod tests {
             assert_eq!(context.exe_suffix, "");
             assert_eq!(context.line_ending, "lf");
         }
+    }
+
+    #[test]
+    fn file_url_for_path_normalizes_windows_drive_paths() {
+        let url = file_url_for_path(Path::new(r#"C:\Users\Jam\My Images\demo 1.png"#));
+        assert_eq!(url, "file:///C:/Users/Jam/My%20Images/demo%201.png");
     }
 
     #[test]

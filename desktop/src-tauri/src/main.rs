@@ -1459,12 +1459,12 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_generated_media_markdown, decode_command_json_stdout, guess_mime_and_kind,
-        interactive_execution_progress_observe_success, interactive_skill_activation_continuation,
-        interactive_skill_activations, interactive_tool_panic_message, json_value_to_path_list,
-        manuscript_save_result_path, normalized_structured_payload_arguments,
-        redbox_fs_profile_read_completed, structured_tool_error_code,
-        validate_runtime_tool_message_sequence, GeneratedMediaPreview,
+        append_generated_media_markdown, asset_preview_url_from_result, decode_command_json_stdout,
+        guess_mime_and_kind, interactive_execution_progress_observe_success,
+        interactive_skill_activation_continuation, interactive_skill_activations,
+        interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
+        normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
+        structured_tool_error_code, validate_runtime_tool_message_sequence, GeneratedMediaPreview,
         InteractiveExecutionContract, InteractiveExecutionProgress,
     };
     use serde_json::json;
@@ -1620,6 +1620,18 @@ mod tests {
             }],
         );
         assert!(markdown.contains("![generated-1](<file:///C:/Users/Jam/My Images/cover (1).png>)"));
+    }
+
+    #[test]
+    fn asset_preview_url_from_result_normalizes_windows_preview_path() {
+        let asset = json!({
+            "previewUrl": r#"C:\Users\Jam\.redconvert\spaces\default\media\generated\demo 1.png"#
+        });
+        let preview = asset_preview_url_from_result(&asset, "image");
+        assert_eq!(
+            preview.as_deref(),
+            Some("file:///C:/Users/Jam/.redconvert/spaces/default/media/generated/demo%201.png")
+        );
     }
 
     #[test]
@@ -5349,6 +5361,19 @@ fn media_preview_matches_kind(url_or_path: &str, media_kind: &str) -> bool {
 }
 
 fn asset_preview_url_from_result(asset: &Value, media_kind: &str) -> Option<String> {
+    let normalize_preview_url = |value: &str| {
+        if value.starts_with("file://") {
+            return value.to_string();
+        }
+        if Path::new(value).is_absolute()
+            || value.starts_with("\\\\")
+            || value.as_bytes().get(1).copied() == Some(b':')
+        {
+            return file_url_for_path(Path::new(value));
+        }
+        value.to_string()
+    };
+
     let preview_url = asset
         .get("previewUrl")
         .or_else(|| asset.get("preview_url"))
