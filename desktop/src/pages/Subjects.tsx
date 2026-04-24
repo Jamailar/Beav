@@ -937,7 +937,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                         ) : (
                                             <div className="space-y-3">
                                                 {draft.attributes.map((attribute, index) => (
-                                                    <div key={`${index}-${attribute.key}-${attribute.value}`} className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)_40px] gap-3">
+                                                    <div key={index} className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)_40px] gap-3">
                                                         <input
                                                             value={attribute.key}
                                                             onChange={(event) => handleAttributeChange(index, { key: event.target.value })}

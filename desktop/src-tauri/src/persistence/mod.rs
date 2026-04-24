@@ -701,7 +701,7 @@ pub fn ensure_store_hydrated_for_knowledge(state: &State<'_, AppState>) -> Resul
 
 pub fn ensure_store_hydrated_for_subjects(state: &State<'_, AppState>) -> Result<(), String> {
     let root = with_store(state, |store| {
-        let needs_hydration = store.subjects.is_empty() || store.categories.is_empty();
+        let needs_hydration = should_hydrate_subjects(&store);
         if !needs_hydration {
             return Ok(None);
         }
@@ -719,6 +719,10 @@ pub fn ensure_store_hydrated_for_subjects(state: &State<'_, AppState>) -> Result
         })?;
     }
     Ok(())
+}
+
+fn should_hydrate_subjects(store: &AppStore) -> bool {
+    store.subjects.is_empty() && store.categories.is_empty()
 }
 
 pub fn ensure_store_hydrated_for_media(state: &State<'_, AppState>) -> Result<(), String> {
@@ -1101,5 +1105,46 @@ mod tests {
         assert_eq!(artifact_files, 1);
 
         let _ = fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn should_hydrate_subjects_only_when_subjects_and_categories_are_both_empty() {
+        let mut store = default_store();
+        assert!(should_hydrate_subjects(&store));
+
+        store.categories.push(crate::SubjectCategory {
+            id: "category-1".to_string(),
+            name: "服装".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+        });
+        assert!(
+            !should_hydrate_subjects(&store),
+            "new in-memory categories must not be overwritten by workspace hydration"
+        );
+
+        store.categories.clear();
+        store.subjects.push(crate::SubjectRecord {
+            id: "subject-1".to_string(),
+            name: "男士皮夹克".to_string(),
+            category_id: None,
+            description: None,
+            tags: Vec::new(),
+            attributes: Vec::new(),
+            image_paths: Vec::new(),
+            voice_path: None,
+            voice_script: None,
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            absolute_image_paths: Vec::new(),
+            preview_urls: Vec::new(),
+            primary_preview_url: None,
+            absolute_voice_path: None,
+            voice_preview_url: None,
+        });
+        assert!(
+            !should_hydrate_subjects(&store),
+            "new in-memory subjects must not be overwritten when category list is still empty"
+        );
     }
 }
