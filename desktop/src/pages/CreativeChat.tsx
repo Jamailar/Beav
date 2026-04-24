@@ -13,6 +13,7 @@ import {
 } from '../components/ChatComposer';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
+import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -142,6 +143,7 @@ export function CreativeChat({
     const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
     const [pendingRoomClear, setPendingRoomClear] = useState<ChatRoom | null>(null);
     const [pendingRoomDelete, setPendingRoomDelete] = useState<ChatRoom | null>(null);
+    const attachmentDraftScopeId = selectedRoom?.id || '__none__';
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const composerRef = useRef<ChatComposerHandle>(null);
     const selectedRoomIdRef = useRef<string | null>(null);
@@ -338,6 +340,19 @@ export function CreativeChat({
             composerRef.current?.syncHeight();
         });
     }, []);
+
+    useEffect(() => {
+        if (!selectedRoom?.id) {
+            setPendingAttachment(null);
+            return;
+        }
+        setPendingAttachment(loadAttachmentDraft('creative-chat', attachmentDraftScopeId));
+    }, [attachmentDraftScopeId, selectedRoom?.id]);
+
+    useEffect(() => {
+        if (!selectedRoom?.id) return;
+        saveAttachmentDraft('creative-chat', attachmentDraftScopeId, pendingAttachment);
+    }, [attachmentDraftScopeId, pendingAttachment, selectedRoom?.id]);
 
     const loadChatModelOptions = useCallback(async () => {
         if (!isActiveRef.current) return;

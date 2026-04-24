@@ -1639,6 +1639,7 @@ fn title_from_media_source(raw: &str) -> Option<String> {
 fn create_media_asset_record(
     media_root: &Path,
     asset_path: &Path,
+    record_source: &str,
     source: &KnowledgeSourceInput,
     item: &KnowledgeMediaAssetItemInput,
 ) -> Result<MediaAssetRecord, String> {
@@ -1663,7 +1664,7 @@ fn create_media_asset_record(
     let timestamp = now_rfc3339();
     Ok(MediaAssetRecord {
         id: make_id("media"),
-        source: "knowledge-api".to_string(),
+        source: record_source.to_string(),
         source_domain: source_domain_from_input(source),
         source_link: source_link_from_input(source),
         project_id: None,
@@ -1686,8 +1687,56 @@ fn create_media_asset_record(
     })
 }
 
+fn emit_media_assets_changed(app: Option<&AppHandle>) {
+    if let Some(app) = app {
+        let _ = app.emit(
+            "knowledge:changed",
+            json!({ "at": now_iso(), "kind": "media-assets" }),
+        );
+    }
+}
+
+pub(crate) fn import_chat_attachment_image(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    source_path: &Path,
+) -> Result<MediaAssetRecord, String> {
+    let _ = ensure_store_hydrated_for_media(state);
+    let media_root = media_root(state)?;
+    let normalized_source = normalize_legacy_workspace_path(source_path);
+    let imports_root = media_root.join("imports").join("chat-attachments");
+    let materialized =
+        if relative_media_path_from_absolute(&media_root, &normalized_source).is_some() {
+            normalized_source.clone()
+        } else {
+            fs::create_dir_all(&imports_root).map_err(|error| error.to_string())?;
+            let (_, copied) = copy_file_into_dir(&normalized_source, &imports_root)?;
+            copied
+        };
+    let source_text = normalized_source.display().to_string();
+    let item = KnowledgeMediaAssetItemInput {
+        title: title_from_media_source(&source_text),
+        source: source_text,
+        mime_type: None,
+    };
+    let source = KnowledgeSourceInput {
+        app_id: Some("chat".to_string()),
+        ..KnowledgeSourceInput::default()
+    };
+    let asset =
+        create_media_asset_record(&media_root, &materialized, "chat-upload", &source, &item)?;
+
+    with_store_mut(state, |store| {
+        store.media_assets.push(asset.clone());
+        Ok(())
+    })?;
+    crate::commands::library::persist_media_workspace_catalog(state)?;
+    emit_media_assets_changed(app);
+    Ok(asset)
+}
+
 pub(crate) fn ingest_media_assets(
-    _app: Option<&AppHandle>,
+    app: Option<&AppHandle>,
     state: &State<'_, AppState>,
     request: &KnowledgeMediaAssetIngestRequest,
 ) -> Result<Value, String> {
@@ -1718,7 +1767,13 @@ pub(crate) fn ingest_media_assets(
             } else {
                 materialize_image_source(&source, &imports_root)?
             };
-        match create_media_asset_record(&media_root, &materialized, &request.source, item) {
+        match create_media_asset_record(
+            &media_root,
+            &materialized,
+            "knowledge-api",
+            &request.source,
+            item,
+        ) {
             Ok(asset) => assets.push(asset),
             Err(error) => {
                 if materialized.starts_with(&imports_root) {
@@ -1736,6 +1791,7 @@ pub(crate) fn ingest_media_assets(
         Ok(())
     })?;
     crate::commands::library::persist_media_workspace_catalog(state)?;
+    emit_media_assets_changed(app);
 
     Ok(json!({
         "success": true,

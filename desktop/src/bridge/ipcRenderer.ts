@@ -254,6 +254,15 @@ function buildFallbackResponse(channel: string, error: unknown): any {
       tools: [],
     };
   }
+  if (channel === 'cli-runtime:discover') {
+    return {
+      success: true,
+      tools: [],
+      query: null,
+      limit: 100,
+      truncated: false,
+    };
+  }
   if (channel === 'cli-runtime:list-tools' || channel === 'cli-runtime:list-environments') {
     return [];
   }
@@ -595,6 +604,21 @@ function createIpcRenderer() {
       copyImage: (payload: { source: string }) => invokeChannel('file:copy-image', payload),
       saveAs: (payload: { source: string; defaultName?: string }) => invokeChannel('file:save-as', payload),
     },
+    notifications: {
+      getPermissionState: () => invokeCommandGuarded('notifications_permission_state', undefined, {
+        fallback: { state: 'unknown' },
+      }),
+      requestPermission: () => invokeCommandGuarded('notifications_request_permission', undefined, {
+        fallback: { state: 'unknown' },
+      }),
+      showSystem: (payload: { title: string; body?: string; sound?: string }) => invokeCommandGuarded(
+        'notifications_show_system',
+        payload,
+        {
+          fallback: { success: false, error: 'System notifications unavailable' },
+        },
+      ),
+    },
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
     getSettings: () => invokeChannel('db:get-settings'),
@@ -695,8 +719,9 @@ function createIpcRenderer() {
     },
     cliRuntime: {
       detect: (payload?: { commands?: string[] }) => invokeChannel('cli-runtime:detect', payload || {}),
+      discover: (payload?: { query?: string; limit?: number }) => invokeChannel('cli-runtime:discover', payload || {}),
       listTools: () => invokeChannel('cli-runtime:list-tools'),
-      inspect: (payload: { toolId: string }) => invokeChannel('cli-runtime:inspect', payload),
+      inspect: (payload: { toolId?: string; command?: string; executable?: string }) => invokeChannel('cli-runtime:inspect', payload),
       listEnvironments: () => invokeChannel('cli-runtime:list-environments'),
       createEnvironment: (payload: {
         scope: 'app-global' | 'workspace-local' | 'task-ephemeral';
@@ -704,7 +729,7 @@ function createIpcRenderer() {
         taskId?: string;
       }) => invokeChannel('cli-runtime:create-environment', payload),
       install: (payload: {
-        environmentId: string;
+        environmentId?: string;
         installMethod: string;
         spec: string;
         toolName?: string;
@@ -875,6 +900,10 @@ function createIpcRenderer() {
         invokeChannel('redclaw:profile:update-doc', payload),
       getOnboardingStatus: () => invokeChannel('redclaw:profile:onboarding-status'),
       onboardingTurn: (payload: { input: string }) => invokeChannel('redclaw:profile:onboarding-turn', payload),
+      saveInitializationProgress: (payload: { stepIndex: number; answers: Record<string, unknown> }) =>
+        invokeChannel('redclaw:profile:save-initialization-progress', payload),
+      completeInitialization: (payload: { answers: Record<string, unknown> }) =>
+        invokeChannel('redclaw:profile:complete-initialization', payload),
     },
     assistantDaemon: {
       getStatus: () => invokeChannel('assistant:daemon-status'),

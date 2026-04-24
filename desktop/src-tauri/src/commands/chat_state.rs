@@ -292,39 +292,6 @@ pub fn resolve_runtime_mode_for_session(store: &AppStore, session_id: &str) -> S
     crate::resolve_runtime_mode_from_context_type(Some(&context_type)).to_string()
 }
 
-pub fn session_context_type_and_id(store: &AppStore, session_id: &str) -> (String, Option<String>) {
-    let context_type_from_metadata = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-        .and_then(|session| {
-            session
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("contextType"))
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
-        });
-    let context_id_from_metadata = store
-        .chat_sessions
-        .iter()
-        .find(|item| item.id == session_id)
-        .and_then(|session| {
-            session
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("contextId"))
-                .and_then(|value| value.as_str())
-                .map(ToString::to_string)
-        });
-    let context_type = context_type_from_metadata
-        .or_else(|| infer_context_type_from_session_id(session_id))
-        .unwrap_or_else(|| "chat".to_string());
-    let context_id =
-        context_id_from_metadata.or_else(|| infer_context_id_from_session_id(session_id));
-    (context_type, context_id)
-}
-
 pub fn is_first_assistant_turn_for_session(store: &AppStore, session_id: &str) -> bool {
     let history: Vec<&ChatMessageRecord> = store
         .chat_messages
@@ -338,15 +305,6 @@ pub fn is_first_assistant_turn_for_session(store: &AppStore, session_id: &str) -
         .filter(|item| item.role == "assistant")
         .count();
     assistant_count == 0 && history.len() <= 1
-}
-
-pub fn should_handle_redclaw_onboarding_for_session(store: &AppStore, session_id: &str) -> bool {
-    let (context_type, context_id) = session_context_type_and_id(store, session_id);
-    if context_type.trim().to_lowercase() != "redclaw" {
-        return false;
-    }
-    let id = context_id.unwrap_or_default();
-    id.starts_with("redclaw-singleton:") || id.trim() == "redclaw-singleton"
 }
 
 #[cfg(test)]

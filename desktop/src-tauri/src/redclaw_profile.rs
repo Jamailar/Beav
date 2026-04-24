@@ -2,13 +2,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{AppHandle, State};
 
+use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
 use crate::skills::{
     build_workspace_skill_record, refresh_skill_store_catalog, resolve_skill_file_path,
     write_skill_record_to_path,
 };
-use crate::{now_iso, refresh_runtime_warm_state, workspace_root, AppState};
+use crate::{
+    now_iso, refresh_runtime_warm_state, slug_from_relative_path, workspace_root, AppState,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RedclawProfilePromptBundle {
@@ -770,6 +773,179 @@ fn build_space_writing_style_skill(
     lines.join("\n")
 }
 
+#[derive(Debug, Deserialize)]
+struct GeneratedRedclawInitializationArtifacts {
+    markdown: String,
+}
+
+fn strip_optional_code_fence(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if !trimmed.starts_with("```") {
+        return trimmed.to_string();
+    }
+    let without_open = trimmed
+        .split_once('\n')
+        .map(|(_, rest)| rest)
+        .unwrap_or(trimmed);
+    without_open
+        .rsplit_once("```")
+        .map(|(content, _)| content.trim().to_string())
+        .unwrap_or_else(|| without_open.trim().to_string())
+}
+
+fn normalize_generated_skill_markdown(markdown: &str) -> Result<String, String> {
+    let normalized = strip_optional_code_fence(markdown);
+    if normalized.trim().is_empty() {
+        return Err("模型返回的 writing-style 技能为空".to_string());
+    }
+    if !normalized.trim_start().starts_with("---") {
+        return Err("模型返回的 writing-style 技能缺少 frontmatter".to_string());
+    }
+    if !normalized.contains("# Writing Style") {
+        return Err("模型返回的 writing-style 技能缺少主标题".to_string());
+    }
+    Ok(normalized)
+}
+
+fn build_existing_docs_context(existing_docs: &[(&str, &str)]) -> String {
+    let sections = existing_docs
+        .iter()
+        .filter_map(|(title, markdown)| {
+            let normalized = markdown.trim();
+            if normalized.is_empty() {
+                return None;
+            }
+            Some(format!("### {title}\n{normalized}"))
+        })
+        .collect::<Vec<_>>();
+    if sections.is_empty() {
+        String::new()
+    } else {
+        format!("## 已生成的上游文档\n{}\n\n", sections.join("\n\n"))
+    }
+}
+
+fn build_redclaw_initialization_artifact_prompt(
+    artifact_kind: &str,
+    normalized_answers: &Value,
+    style_profile: &Value,
+    fallback_skill: &str,
+    existing_docs: &[(&str, &str)],
+) -> Result<String, String> {
+    let answers_json =
+        serde_json::to_string_pretty(normalized_answers).map_err(|error| error.to_string())?;
+    let style_profile_json =
+        serde_json::to_string_pretty(style_profile).map_err(|error| error.to_string())?;
+    let task_block = match artifact_kind {
+        "soul" => [
+            "## 当前任务",
+            "你现在只负责生成 `Soul.md`。",
+            "职责边界：只写 RedClaw 如何与用户协作、反馈、执行，不写标题策略、正文结构、CTA、禁用词等写作技法。",
+            "必须突出：高执行、强结构、直接反馈、先结论后细节、给验收标准。",
+            "长度要求：控制在 6 条以内的高密度规则，不写长篇说明。",
+            "输出要求：只返回完整 Markdown，不要解释，不要代码围栏。",
+        ]
+        .join("\n"),
+        "user" => [
+            "## 当前任务",
+            "你现在只负责生成 `user.md`。",
+            "职责边界：只写用户稳定事实、经营重心、目标、受众、长期偏好摘要，不写逐句写作规则。",
+            "必须体现：内容/商业权重、人设/品牌权重、账号角色、风格偏好摘要、转化表达强度。",
+            "避免重复：不要复述 Soul.md 里的协作原则，也不要写成 CreatorProfile.md 的品牌策略版。",
+            "长度要求：控制在 6 到 8 条关键事实以内。",
+            "输出要求：只返回完整 Markdown，不要解释，不要代码围栏。",
+        ]
+        .join("\n"),
+        "creator_profile" => [
+            "## 当前任务",
+            "你现在只负责生成 `CreatorProfile.md`。",
+            "职责边界：只写账号定位、经营模式、品牌策略、内容方向、商业边界，不写逐句写法配方。",
+            "必须体现：经营模式、经营重心、信任来源、角色姿态、内容风格、长期策略取向。",
+            "避免重复：不要重复 Soul.md 的协作规则，不要重复 user.md 里已经稳定存在的用户事实，只保留品牌/账号层面的长期策略。",
+            "长度要求：控制在 3 到 4 个短章节，每章 2 到 3 条要点。",
+            "输出要求：只返回完整 Markdown，不要解释，不要代码围栏。",
+        ]
+        .join("\n"),
+        "writing_style_skill" => [
+            "## 当前任务",
+            "你现在只负责生成当前空间的 `writing-style` 技能 Markdown。",
+            "职责边界：只写实际写作执行规则：标题、开头、正文推进、语言、情绪、CTA、禁区、自检。",
+            "必须输出合法 frontmatter，并包含 `# Writing Style` 标题。",
+            "请沿用下面参考模板的结构层次和 frontmatter 形态，但内容必须按当前问卷结果重新生成，不要照抄。",
+            "避免重复：不要把 Soul.md 的协作规则和 user.md 的稳定事实大段抄进 skill，只保留真正影响写作执行的规则。",
+            "长度要求：这是四份资产里可以最详细的一份，但仍然只保留高价值规则，不写空话。",
+            "输出要求：只返回完整 Markdown，不要解释，不要代码围栏。",
+        ]
+        .join("\n"),
+        _ => return Err(format!("unsupported onboarding artifact kind: {artifact_kind}")),
+    };
+    let existing_docs_context = build_existing_docs_context(existing_docs);
+    Ok(format!(
+        concat!(
+            "你是 RedClaw。当前正在执行空间风格初始化后的内部档案更新任务。\n",
+            "这不是和用户闲聊，也不是让你解释过程。你只需要生成目标文件的最终内容。\n\n",
+            "{task_block}\n\n",
+            "## 问卷原始答案\n{answers_json}\n\n",
+            "## 结构化风格画像\n{style_profile_json}\n\n",
+            "{existing_docs_context}",
+            "## 写作技能参考模板\n{fallback_skill}\n\n",
+            "## 通用约束\n",
+            "- 全部使用中文。\n",
+            "- 不要编造经历、用户背景、案例、数据。\n",
+            "- 只基于给定问卷结果和结构化画像推导。\n",
+            "- 如果上游文档已经覆盖某个信息点，当前文档不要重复大段复述。\n",
+            "- 文本要具体、可执行、可长期遵守，不能空泛。\n"
+        ),
+        task_block = task_block,
+        answers_json = answers_json,
+        style_profile_json = style_profile_json,
+        existing_docs_context = existing_docs_context,
+        fallback_skill = fallback_skill
+    ))
+}
+
+fn onboarding_artifact_session_id(space_slug: &str, artifact_kind: &str) -> String {
+    format!(
+        "context-session:redclaw:{}",
+        slug_from_relative_path(&format!("onboarding-init-{space_slug}-{artifact_kind}"))
+    )
+}
+
+fn generate_redclaw_initialization_artifact_via_agent(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    artifact_kind: &str,
+    normalized_answers: &Value,
+    style_profile: &Value,
+    fallback_skill: &str,
+    existing_docs: &[(&str, &str)],
+) -> Result<GeneratedRedclawInitializationArtifacts, String> {
+    let workspace = workspace_root(state)?;
+    let space_slug = workspace
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default-space");
+    let prompt = build_redclaw_initialization_artifact_prompt(
+        artifact_kind,
+        normalized_answers,
+        style_profile,
+        fallback_skill,
+        existing_docs,
+    )?;
+    let session_id = onboarding_artifact_session_id(space_slug, artifact_kind);
+    let turn = PreparedSessionAgentTurn::redclaw_run(RedclawRunTurn::new(
+        &format!("onboarding-{artifact_kind}"),
+        session_id,
+        prompt,
+    ));
+    let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
+    Ok(GeneratedRedclawInitializationArtifacts {
+        markdown: execution.response().to_string(),
+    })
+}
+
 fn build_mvp_style_summary(style_profile: &Value) -> Value {
     let content_vs_commerce = style_profile
         .get("workspaceMission")
@@ -941,6 +1117,7 @@ pub(crate) fn ensure_redclaw_space_writing_style_skill(
 }
 
 pub(crate) fn complete_redclaw_mvp_onboarding(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     answers: &Value,
 ) -> Result<Value, String> {
@@ -964,7 +1141,7 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
     let (opening_key, opening_label) = label_opening_style(&opening_preference);
     let (primary_model_key, primary_model_label) = label_primary_model(&primary_model);
     let (role_position_key, role_position_label) = label_role_position(&role_position);
-    let style_profile = json!({
+    let mut style_profile = json!({
         "workspaceMission": {
             "contentVsCommerce": content_vs_commerce
         },
@@ -1007,7 +1184,7 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
         }
     });
     let summary = build_mvp_style_summary(&style_profile);
-    let writing_style_skill = build_space_writing_style_skill(
+    let fallback_writing_style_skill = build_space_writing_style_skill(
         content_vs_commerce,
         persona_vs_brand,
         consistency_vs_virality,
@@ -1022,7 +1199,7 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
         opening_label,
     );
 
-    let identity = [
+    let identity_markdown = [
         "# identity.md".to_string(),
         "".to_string(),
         "- Name: RedClaw".to_string(),
@@ -1033,21 +1210,19 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
     ]
     .join("\n");
 
-    let soul = [
+    let fallback_soul_markdown = [
         "# Soul.md".to_string(),
         "".to_string(),
         "## 当前人格与协作偏好".to_string(),
         "- 协作风格: 高执行 + 强结构 + 直接反馈".to_string(),
-        "".to_string(),
-        "## 执行原则".to_string(),
-        "- 先明确目标，再拆解步骤。".to_string(),
-        "- 每一步都给出具体动作和验收点。".to_string(),
+        "- 反馈方式: 先结论，后细节；必要时直接指出问题。".to_string(),
+        "- 执行姿态: 先拆目标，再给动作和验收点。".to_string(),
         "- 用户未明确要求改动协作方式时，默认保持高执行、强结构、直接反馈。".to_string(),
         format!("- UpdatedAt: {}", now_iso()),
     ]
     .join("\n");
 
-    let user = [
+    let fallback_user_markdown = [
         "# user.md".to_string(),
         "".to_string(),
         "## 用户创作档案".to_string(),
@@ -1068,14 +1243,12 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
             opening_label
         ),
         format!("- 转化表达强度: {}", label_sales(sales_explicitness)),
-        "".to_string(),
-        "## 更新原则".to_string(),
         "- 当用户明确给出新的长期偏好时，及时覆盖旧偏好。".to_string(),
         "- 单次任务中的临时要求，不默认升格为长期规则。".to_string(),
     ]
     .join("\n");
 
-    let creator_profile = [
+    let fallback_creator_profile_markdown = [
         "# CreatorProfile.md".to_string(),
         "".to_string(),
         "## 定位总览".to_string(),
@@ -1101,17 +1274,119 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
             "- 长期策略取向: {}",
             label_consistency_vs_virality(consistency_vs_virality)
         ),
-        "- 先形成稳定空间风格底盘，再允许用户在真实创作中持续纠偏。".to_string(),
         format!("- UpdatedAt: {}", now_iso()),
     ]
     .join("\n");
 
+    let mut generation_errors = Vec::<String>::new();
+    let soul_markdown = match generate_redclaw_initialization_artifact_via_agent(
+        app,
+        state,
+        "soul",
+        &normalized_answers,
+        &style_profile,
+        &fallback_writing_style_skill,
+        &[],
+    ) {
+        Ok(generated) => normalize_profile_doc_markdown(
+            "Soul.md",
+            &strip_optional_code_fence(&generated.markdown),
+        )?,
+        Err(error) => {
+            eprintln!("[redclaw][onboarding] soul agent generation failed: {error}");
+            generation_errors.push(format!("soul:{error}"));
+            fallback_soul_markdown
+        }
+    };
+    let user_markdown = match generate_redclaw_initialization_artifact_via_agent(
+        app,
+        state,
+        "user",
+        &normalized_answers,
+        &style_profile,
+        &fallback_writing_style_skill,
+        &[("Soul.md", &soul_markdown)],
+    ) {
+        Ok(generated) => normalize_profile_doc_markdown(
+            "user.md",
+            &strip_optional_code_fence(&generated.markdown),
+        )?,
+        Err(error) => {
+            eprintln!("[redclaw][onboarding] user agent generation failed: {error}");
+            generation_errors.push(format!("user:{error}"));
+            fallback_user_markdown
+        }
+    };
+    let creator_profile_markdown = match generate_redclaw_initialization_artifact_via_agent(
+        app,
+        state,
+        "creator_profile",
+        &normalized_answers,
+        &style_profile,
+        &fallback_writing_style_skill,
+        &[("Soul.md", &soul_markdown), ("user.md", &user_markdown)],
+    ) {
+        Ok(generated) => normalize_profile_doc_markdown(
+            "CreatorProfile.md",
+            &strip_optional_code_fence(&generated.markdown),
+        )?,
+        Err(error) => {
+            eprintln!("[redclaw][onboarding] creator profile agent generation failed: {error}");
+            generation_errors.push(format!("creator_profile:{error}"));
+            fallback_creator_profile_markdown
+        }
+    };
+    let writing_style_skill = match generate_redclaw_initialization_artifact_via_agent(
+        app,
+        state,
+        "writing_style_skill",
+        &normalized_answers,
+        &style_profile,
+        &fallback_writing_style_skill,
+        &[
+            ("Soul.md", &soul_markdown),
+            ("user.md", &user_markdown),
+            ("CreatorProfile.md", &creator_profile_markdown),
+        ],
+    ) {
+        Ok(generated) => normalize_generated_skill_markdown(&generated.markdown)?,
+        Err(error) => {
+            eprintln!("[redclaw][onboarding] writing-style agent generation failed: {error}");
+            generation_errors.push(format!("writing_style_skill:{error}"));
+            fallback_writing_style_skill
+        }
+    };
+    let generation_mode = if generation_errors.is_empty() {
+        "agent-sequential"
+    } else {
+        "agent-sequential-with-fallback"
+    };
+    if let Some(metadata) = style_profile
+        .get_mut("metadata")
+        .and_then(Value::as_object_mut)
+    {
+        metadata.insert("generationMode".to_string(), json!(generation_mode));
+        metadata.insert("generatedAt".to_string(), json!(now_iso()));
+        metadata.insert(
+            "generationStrategy".to_string(),
+            json!("redclaw-agent-sequential-artifact-generation"),
+        );
+        if !generation_errors.is_empty() {
+            metadata.insert("generationFallbackReason".to_string(), json!("agent_error"));
+            metadata.insert("generationErrors".to_string(), json!(generation_errors));
+        }
+    }
+
     let profile_root = redclaw_profile_root(state)?;
-    fs::write(profile_root.join("identity.md"), identity).map_err(|error| error.to_string())?;
-    fs::write(profile_root.join("Soul.md"), soul).map_err(|error| error.to_string())?;
-    fs::write(profile_root.join("user.md"), user).map_err(|error| error.to_string())?;
-    fs::write(profile_root.join("CreatorProfile.md"), creator_profile)
+    fs::write(profile_root.join("identity.md"), identity_markdown)
         .map_err(|error| error.to_string())?;
+    fs::write(profile_root.join("Soul.md"), soul_markdown).map_err(|error| error.to_string())?;
+    fs::write(profile_root.join("user.md"), user_markdown).map_err(|error| error.to_string())?;
+    fs::write(
+        profile_root.join("CreatorProfile.md"),
+        creator_profile_markdown,
+    )
+    .map_err(|error| error.to_string())?;
     save_redclaw_style_profile(state, &style_profile)?;
     let workspace = workspace_root(state).ok();
     let mut skill_record = build_workspace_skill_record("writing-style");

@@ -23,6 +23,7 @@ import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
+import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
@@ -69,7 +70,7 @@ interface ChatProps {
   welcomeIconSrc?: string;
   welcomeAvatarText?: string;
   welcomeIconVariant?: 'default' | 'avatar';
-  welcomeActions?: Array<{ label: string; text?: string; url?: string; icon?: React.ReactNode; color?: string }>;
+  welcomeActions?: Array<{ label: string; text?: string; url?: string; onClick?: () => void; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
   allowFileUpload?: boolean;
@@ -444,6 +445,7 @@ export function Chat({
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
+  const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
 
   useEffect(() => {
     onExecutionStateChange?.(isProcessing);
@@ -687,6 +689,14 @@ export function Chat({
     });
   }, []);
 
+  useEffect(() => {
+    setPendingAttachment(loadAttachmentDraft('chat', attachmentDraftScopeId));
+  }, [attachmentDraftScopeId]);
+
+  useEffect(() => {
+    saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachment);
+  }, [attachmentDraftScopeId, pendingAttachment]);
+
   const loadChatModelOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
     try {
@@ -915,6 +925,10 @@ export function Chat({
         console.error('Failed to resolve pending chat model config:', error);
         resolvedModelConfig = undefined;
       }
+      const resolvedAttachment = applyAttachmentDeliveryMode(
+        pendingMessage.attachment as UploadedFileAttachment | undefined,
+        resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
+      );
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
@@ -923,7 +937,7 @@ export function Chat({
         role: 'user',
         content: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
-        attachment: pendingMessage.attachment,
+        attachment: resolvedAttachment as Message['attachment'],
         tools: [],
         timeline: []
       };
@@ -957,7 +971,7 @@ export function Chat({
         sessionId: sessionId,
         message: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
-        attachment: pendingMessage.attachment,
+        attachment: stripTransientAttachmentPreview(resolvedAttachment),
         modelConfig: resolvedModelConfig,
         taskHints: pendingMessage.taskHints,
       });
@@ -981,7 +995,11 @@ export function Chat({
       }
       const normalizedList = Array.isArray(list) ? list : [];
       setSessions(normalizedList);
-      if (normalizedList.length > 0 && !currentSessionIdRef.current) {
+      if (
+        normalizedList.length > 0
+        && !currentSessionIdRef.current
+        && !loadAttachmentDraft('chat', '__new__')
+      ) {
         void selectSession(normalizedList[0].id);
       }
     } catch (error) {
@@ -2893,7 +2911,11 @@ export function Chat({
     </div>
   ) : null;
 
-  const handleWelcomeAction = useCallback(async (action: { label: string; text?: string; url?: string }) => {
+  const handleWelcomeAction = useCallback(async (action: { label: string; text?: string; url?: string; onClick?: () => void }) => {
+    if (action.onClick) {
+      action.onClick();
+      return;
+    }
     if (action.url) {
       try {
         await window.ipcRenderer.invoke('app:open-path', { path: action.url });

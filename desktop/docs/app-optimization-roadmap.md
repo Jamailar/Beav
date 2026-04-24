@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 owner: product-engineering
 scope: desktop
 source_of_truth: true
@@ -151,9 +151,11 @@ Status: Current
 | WS2-04 | AI Runtime | subagent 与 MCP 调度边界治理 | P1 | planned | 0% | WS2-02 | 多任务执行与权限验证 |
 | WS2-05 | AI Runtime | 内置 vLLM 运行时与本地模型托管 | P1 | planned | 0% | WS1-02 | 本地模型拉起、切换、回退验证 |
 | WS2-06 | AI Runtime | 记忆模块升级重做 | P0 | planned | 0% | WS2-01 | recall、maintenance、写回验证 |
+| WS2-07 | AI Runtime | 记忆 dreaming 自动整理能力 | P0 | planned | 0% | WS2-06 | 记忆整理任务可调度、可回溯、可恢复 |
 | WS3-01 | 知识与检索 | 文档摄取 pipeline 统一切片和元数据结构 | P1 | planned | 0% | WS1-04 | 多格式导入验证 |
 | WS3-02 | 知识与检索 | 检索结果加引用、来源与重排序策略 | P1 | planned | 0% | WS3-01 | grounded answer 验证 |
 | WS3-03 | 知识与检索 | 索引重建改为增量任务和后台调度 | P1 | planned | 0% | WS3-01 | 大库重建耗时验证 |
+| WS3-04 | 知识与检索 | 新闻源接入与时效化知识更新链路 | P1 | planned | 0% | WS3-01 | RSS/Atom/API 接入、去重更新、召回可见性 |
 | WS4-01 | 稿件与视频生产 | Manuscripts 数据模型与编辑状态机收口 | P0 | planned | 0% | WS1-04 | 稿件编辑、刷新恢复验证 |
 | WS4-02 | 稿件与视频生产 | 时间线数据结构、虚拟化与大稿件性能治理 | P0 | planned | 0% | WS4-01 | 长时间线操作验证 |
 | WS4-03 | 稿件与视频生产 | 预览渲染与导出编排分层 | P0 | planned | 0% | WS4-02 | 预览流畅度 + 导出成功率 |
@@ -370,6 +372,23 @@ Status: Current
 | Cleanup | 删除 settings fallback JSON、历史兼容写法和 memory/history 混用结构 |
 | Last Update | 2026-04-23 新增 |
 
+#### Task Card: WS2-07
+
+| Field | Detail |
+| --- | --- |
+| Task | 记忆 dreaming 自动整理能力 |
+| Status | planned |
+| Progress | 0% |
+| Entry Points | `desktop/src-tauri/src/memory/*`, `desktop/src-tauri/src/memory_maintenance.rs`, `desktop/src-tauri/src/commands/chat_state.rs`, `desktop/src-tauri/src/agent/persistence.rs` |
+| Why | 当前 memory 缺少“离线整理”闭环，记忆累计导致 recall 成本上升，难以追溯哪些条目已做过整理与归并 |
+| Implementation | 新增 sleeping scheduler：支持手动与自动触发；对历史记忆做聚类/去重/摘要重写；输出可版本化的 consolidation artifact，并与会话 recall 链路解耦，避免写入路径串扰 |
+| Existing Libraries | `serde_json`、文件系统 API、现有 recall 与 maintenance 基础 |
+| Must Self Build | dreaming scheduler、artifact 冲突合并策略、maintenance 回溯审计 |
+| Performance Strategy | 仅在空闲时段跑全量整理，常规只做增量；整理任务按窗口分页并限流，降低对实时会话的资源竞争 |
+| Verification | `dreaming` 任务可手动/自动触发；任务状态可查；整理前后 recall 一致性不降低且延迟下降 |
+| Cleanup | 禁止记忆整理逻辑在会话实时链路直接运行，避免阻塞与结果抖动 |
+| Last Update | 2026-04-24 新增 |
+
 ### WS3 知识与检索
 
 #### Goal
@@ -423,6 +442,23 @@ Status: Current
 | Verification | 大知识库增量更新、失败重试、索引恢复 |
 | Cleanup | 删除全量重扫触发的 page-path 重建 |
 | Last Update | 2026-04-23 初始化 |
+
+#### Task Card: WS3-04
+
+| Field | Detail |
+| --- | --- |
+| Task | 新闻源接入与时效化知识更新链路 |
+| Status | planned |
+| Progress | 0% |
+| Entry Points | `desktop/src-tauri/src/knowledge_index/*`, `desktop/src-tauri/src/document_ingest/*`, `desktop/src-tauri/src/scheduler/*`, `desktop/src-tauri/src/commands/library.rs` |
+| Why | 当前知识体系主要依赖文档和素材，缺少结构化新闻采集入口，时效信息无法持续进入检索与回复链路 |
+| Implementation | 引入统一 `news source connector`：支持 RSS/Atom/JSON API 采集，保存 raw feed 与 canonical article；做 URL/内容签名去重、时间窗归档、来源可信度权重，接入增量索引更新链路，支持全量同步与增量定时更新两种模式 |
+| Existing Libraries | feed parser、HTTP client、JSON parser、现有 knowledge index |
+| Must Self Build | 新闻源配置 schema、增量抓取状态机、时效性排序与失效回收策略 |
+| Performance Strategy | 采集按频率分组、并发数限流，优先增量头条拉取，失败源进入指数退避，不阻塞主线程主检索 |
+| Verification | 配置并抓取至少 1 个新闻源，验证增量更新、去重、时效字段；检索命中后可追溯 source 与发布时间 |
+| Cleanup | 把新闻采集并入统一知识摄取与索引流水线，避免形成独立未编排的数据支线 |
+| Last Update | 2026-04-24 新增 |
 
 ### WS4 稿件与视频生产
 
@@ -755,18 +791,20 @@ Status: Current
 3. `WS1-04` workspace hydration 改为最小快照 + 分阶段加载
 4. `WS2-01` 收口 context bundle / skills / tools
 5. `WS2-06` 重做记忆模块边界与 recall pipeline
-6. `WS2-02` 收口 approval runtime / tool policy
-7. `WS4-01` 收口 manuscript canonical state
-8. `WS4-02` 做时间线虚拟化与交互性能治理
-9. `WS4-03` 收口预览与导出编排
-10. `WS4-05` 建立自动剪视频工作流
-11. `WS5-01` 统一 RedClaw execution model
-12. `WS5-04` 升级统一定时任务平台
-13. `WS8-01` 升级 Team 模块为协作控制台
-14. `WS8-02` 升级 ACP 协作模块
-15. `WS2-05` 内置 vLLM 运行时
-16. `WS4-06` 建立 AI 生成动画工作流
-17. `WS6-01` 建立统一 diagnostics summary
+6. `WS2-07` 落地记忆 dreaming 自动整理闭环
+7. `WS2-02` 收口 approval runtime / tool policy
+8. `WS4-01` 收口 manuscript canonical state
+9. `WS4-02` 做时间线虚拟化与交互性能治理
+10. `WS4-03` 收口预览与导出编排
+11. `WS3-04` 建立新闻源接入与时效化知识更新链路
+12. `WS4-05` 建立自动剪视频工作流
+13. `WS5-01` 统一 RedClaw execution model
+14. `WS5-04` 升级统一定时任务平台
+15. `WS8-01` 升级 Team 模块为协作控制台
+16. `WS8-02` 升级 ACP 协作模块
+17. `WS2-05` 内置 vLLM 运行时
+18. `WS4-06` 建立 AI 生成动画工作流
+19. `WS6-01` 建立统一 diagnostics summary
 
 这个顺序是当前最优解，因为它先解决基础稳定与 AI 可控性，再解决创作主链路，最后补自动化和运维观测。反过来做会导致每个功能线都反复返工。
 

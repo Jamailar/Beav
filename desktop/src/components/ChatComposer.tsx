@@ -75,6 +75,7 @@ export interface ChatComposerHandle {
 
 type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
 type ChatComposerAudioState = 'idle' | 'recording' | 'transcribing';
+const RECORDING_WAVE_BARS = [0.3, 0.58, 0.92, 0.42, 0.74, 0.98, 0.5, 0.8, 0.64, 0.9, 0.46, 0.7, 1, 0.62, 0.84, 0.54, 0.95, 0.4, 0.78, 0.34, 0.88, 0.56, 0.72, 0.44];
 
 interface ComposerAttachmentPreviewProps {
   attachment: UploadedFileAttachment;
@@ -189,6 +190,13 @@ function formatAttachmentSize(size?: number): string {
   return `${Math.round(size)} B`;
 }
 
+function formatRecordingDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 function getAttachmentKindLabel(kind: ComposerAttachmentVisualKind): string {
   switch (kind) {
     case 'image':
@@ -217,6 +225,59 @@ function getAttachmentKindIcon(kind: ComposerAttachmentVisualKind, className: st
     default:
       return <FileIcon className={className} />;
   }
+}
+
+function ComposerRecordingStatus({
+  darkEmbedded,
+  elapsedMs,
+}: {
+  darkEmbedded: boolean;
+  elapsedMs: number;
+}) {
+  return (
+    <div
+      className={clsx(
+        'flex min-w-0 flex-1 items-center gap-3 overflow-hidden rounded-full border px-3 py-2',
+        darkEmbedded
+          ? 'border-white/10 bg-white/[0.045] text-white/76'
+          : 'border-[#dccfb6] bg-[#f7f0e2] text-[#5f6d79]',
+      )}
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2 shrink-0">
+        <span className={clsx('h-2.5 w-2.5 rounded-full', darkEmbedded ? 'bg-red-400' : 'bg-[#dd6b5b]', 'animate-pulse')} />
+        <span className={clsx('text-[12px] font-medium tracking-[0.08em]', darkEmbedded ? 'text-white/54' : 'text-[#998a74]')}>
+          正在录音
+        </span>
+      </div>
+      <div className="relative flex min-w-0 flex-1 items-center">
+        <div
+          className={clsx(
+            'pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed',
+            darkEmbedded ? 'border-white/10' : 'border-[#d8cbb4]',
+          )}
+        />
+        <div className="relative z-[1] flex h-8 min-w-0 flex-1 items-center justify-center gap-1 px-2">
+          {RECORDING_WAVE_BARS.map((height, index) => (
+            <span
+              key={`${index}-${height}`}
+              className={clsx(
+                'recording-wave-bar w-[3px] shrink-0 rounded-full',
+                darkEmbedded ? 'bg-white/75' : 'bg-[#61707c]',
+              )}
+              style={{
+                height: `${10 + Math.round(height * 18)}px`,
+                animationDelay: `${index * 70}ms`,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+      <div className={clsx('shrink-0 text-[12px] font-semibold tabular-nums', darkEmbedded ? 'text-white/72' : 'text-[#7b8590]')}>
+        {formatRecordingDuration(elapsedMs)}
+      </div>
+    </div>
+  );
 }
 
 function isImeComposingEvent(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
@@ -463,6 +524,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const darkEmbedded = theme === 'dark';
   const palette = getChatComposerPalette(theme);
   const selectedModel = useMemo(
@@ -508,6 +570,19 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [showModelPicker]);
+
+  useEffect(() => {
+    if (audioState !== 'recording') {
+      setRecordingElapsedMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setRecordingElapsedMs(0);
+    const timer = window.setInterval(() => {
+      setRecordingElapsedMs(Date.now() - startedAt);
+    }, 120);
+    return () => window.clearInterval(timer);
+  }, [audioState]);
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
@@ -589,8 +664,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           </div>
         ) : textarea}
 
-        <div className={clsx('flex items-center justify-between', variant === 'empty' ? 'px-2 pb-1' : 'px-1.5 pb-0.5')}>
-          <div className="flex items-center gap-1">
+        <div className={clsx('flex items-center gap-2', variant === 'empty' ? 'px-2 pb-1' : 'px-1.5 pb-0.5')}>
+          <div className="flex shrink-0 items-center gap-1">
             {showAttachmentButton ? (
               <button type="button" onClick={() => void onPickAttachment?.()} className={clsx('p-2 transition-colors', subtleButtonClass)} title="添加文件">
                 <Plus className="h-[18px] w-[18px]" />
@@ -640,7 +715,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             ) : null}
           </div>
 
-          <div className="flex items-center gap-2">
+          {audioState === 'recording' ? (
+            <ComposerRecordingStatus darkEmbedded={darkEmbedded} elapsedMs={recordingElapsedMs} />
+          ) : (
+            <div className="flex-1" />
+          )}
+
+          <div className="flex shrink-0 items-center gap-2">
             {showCancelButton ? (
               <button
                 type="button"

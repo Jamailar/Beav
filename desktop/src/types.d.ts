@@ -34,6 +34,44 @@ export interface ToolDiagnosticRunResult {
   executionSucceeded?: boolean;
 }
 
+export interface NotificationSettingsPayload {
+  enabled: boolean;
+  inApp: {
+    enabled: boolean;
+    maxVisible: number;
+    autoCloseMs: number;
+  };
+  sound: {
+    enabled: boolean;
+    volume: number;
+    muteWhenFocused: boolean;
+    success: boolean;
+    failure: boolean;
+    attention: boolean;
+  };
+  system: {
+    enabled: boolean;
+  };
+  quietHours: {
+    enabled: boolean;
+    start: string;
+    end: string;
+  };
+  rules: {
+    runtimeBackgroundDone: boolean;
+    runtimeFailed: boolean;
+    runtimeNeedsApproval: boolean;
+    generationCompleted: boolean;
+    generationFailed: boolean;
+    redclawCompleted: boolean;
+    redclawFailed: boolean;
+  };
+}
+
+export interface NotificationPermissionState {
+  state: 'granted' | 'denied' | 'prompt' | 'unknown';
+}
+
 export interface AgentTaskNode {
   id: string;
   type: string;
@@ -160,6 +198,13 @@ export type CliRuntimeToolHealth =
   | 'missing'
   | 'broken';
 
+export type CliRuntimeResolvedFrom =
+  | 'host-shell-path'
+  | 'extra-bin-path'
+  | 'managed-environment'
+  | 'explicit-path'
+  | 'unknown';
+
 export type CliRuntimeEnvironmentScope =
   | 'app-global'
   | 'workspace-local'
@@ -180,6 +225,7 @@ export interface CliRuntimeToolRecord {
   name: string;
   executable: string;
   resolvedPath?: string | null;
+  resolvedFrom?: CliRuntimeResolvedFrom | null;
   source: CliRuntimeToolSource;
   installMethod?: string | null;
   installSpec?: string | null;
@@ -188,6 +234,9 @@ export interface CliRuntimeToolRecord {
   manifestId?: string | null;
   environmentId?: string | null;
   lastCheckedAt?: number | null;
+  effectivePathPreview?: string[];
+  searchedPathEntriesCount?: number | null;
+  isInDefaultDetectCatalog?: boolean;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -522,8 +571,8 @@ declare global {
         cancelRecording: () => Promise<{ success?: boolean; error?: string; reason?: string; durationMs?: number; discarded?: boolean }>;
         openMicrophoneSettings: () => Promise<{ success?: boolean; error?: string; path?: string }>;
       };
-      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number }) => Promise<unknown>;
-      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number } | undefined>;
+      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number; notifications_json?: string }) => Promise<unknown>;
+      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number; notifications_json?: string } | undefined>;
       pickWorkspaceDir: () => Promise<{ success: boolean; canceled?: boolean; path?: string | null; error?: string }>;
       debug: {
         getStatus: () => Promise<{ enabled: boolean; logDirectory: string }>;
@@ -1125,6 +1174,11 @@ declare global {
         showInFolder: (payload: { source: string }) => Promise<unknown>;
         copyImage: (payload: { source: string }) => Promise<unknown>;
       };
+      notifications: {
+        getPermissionState: () => Promise<NotificationPermissionState>;
+        requestPermission: () => Promise<NotificationPermissionState>;
+        showSystem: (payload: { title: string; body?: string; sound?: string }) => Promise<{ success: boolean; error?: string }>;
+      };
 
       // YouTube Import
       checkYtdlp: () => Promise<{ installed: boolean; version?: string; path?: string }>;
@@ -1475,12 +1529,14 @@ declare global {
         getBundle: () => Promise<{
           activeSpaceId?: string;
           profileRoot?: string;
+          success?: boolean;
           agent?: string;
           soul?: string;
           identity?: string;
           user?: string;
           creatorProfile?: string;
           bootstrap?: string;
+          styleProfile?: Record<string, unknown>;
           files?: {
             agent?: string;
             soul?: string;
@@ -1508,6 +1564,24 @@ declare global {
           handled?: boolean;
           completed?: boolean;
           responseText?: string;
+        }>;
+        saveInitializationProgress: (payload: { stepIndex: number; answers: Record<string, unknown> }) => Promise<{
+          success?: boolean;
+          state?: Record<string, unknown>;
+        }>;
+        completeInitialization: (payload: { answers: Record<string, unknown> }) => Promise<{
+          success?: boolean;
+          summary?: {
+            headline?: string;
+            chips?: string[];
+            lines?: string[];
+          };
+          styleProfile?: Record<string, unknown>;
+          skill?: {
+            name?: string;
+            path?: string;
+          };
+          onboardingState?: Record<string, unknown>;
         }>;
       };
       assistantDaemon: {

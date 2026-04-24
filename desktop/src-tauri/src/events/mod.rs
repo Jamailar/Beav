@@ -654,3 +654,32 @@ pub fn emit_creative_chat_checkpoint(
         Some(payload.clone()),
     );
 }
+
+pub fn emit_redclaw_task_event(
+    app: &AppHandle,
+    event_type: &str,
+    task_id: &str,
+    task_name: &str,
+    task_kind: &str,
+    result: Option<&str>,
+    summary: Option<&str>,
+    session_id: Option<&str>,
+    execution_id: Option<&str>,
+    artifact_count: usize,
+) {
+    let _ = app.emit(
+        "redclaw:task-event",
+        json!({
+            "eventType": event_type,
+            "taskId": task_id,
+            "taskName": task_name,
+            "taskKind": task_kind,
+            "result": result,
+            "summary": summary,
+            "sessionId": session_id,
+            "executionId": execution_id,
+            "artifactCount": artifact_count,
+            "createdAt": crate::now_iso(),
+        }),
+    );
+}

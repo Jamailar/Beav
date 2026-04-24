@@ -14,6 +14,7 @@ pub mod library;
 pub mod manuscripts;
 pub mod mcp_tools;
 pub mod media_jobs;
+pub mod notifications;
 pub mod official;
 pub mod plugin;
 pub mod redclaw;

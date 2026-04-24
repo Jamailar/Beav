@@ -6,7 +6,8 @@ use crate::persistence::{
     with_store_mut,
 };
 use crate::{
-    active_space_workspace_root_from_store, emit_space_changed, make_id, now_iso, payload_string,
+    active_space_workspace_root_from_store, emit_space_changed,
+    ensure_redclaw_space_writing_style_skill, make_id, now_iso, payload_string,
     payload_value_as_string, update_workspace_root_cache, AppState, SpaceRecord,
 };
 
@@ -83,6 +84,7 @@ pub fn handle_spaces_channel(
                     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                     let _ =
                         update_workspace_root_cache(state, &settings_snapshot, active_space_id)?;
+                    let _ = ensure_redclaw_space_writing_style_skill(state)?;
                     emit_space_changed(app, active_space_id);
                 }
 
@@ -138,6 +140,7 @@ pub fn handle_spaces_channel(
                     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
                     let _ =
                         update_workspace_root_cache(state, &settings_snapshot, active_space_id)?;
+                    let _ = ensure_redclaw_space_writing_style_skill(state)?;
                     emit_space_changed(app, active_space_id);
                 }
 

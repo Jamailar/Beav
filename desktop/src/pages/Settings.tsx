@@ -67,12 +67,19 @@ import type {
   CliRuntimeToolRecord,
   DiagnosticsLogStatus,
   DiagnosticsPendingReport,
+  NotificationPermissionState,
+  NotificationSettingsPayload,
 } from '../types';
 import {
   REDBOX_OFFICIAL_VIDEO_BASE_URL,
   REDBOX_OFFICIAL_VIDEO_MODEL_LIST,
   REDBOX_OFFICIAL_VIDEO_MODELS,
 } from '../../shared/redboxVideo';
+import { RedClawOnboardingFlow } from './redclaw/RedClawOnboardingFlow';
+import {
+  normalizeOnboardingAnswers,
+  type RedClawOnboardingAnswers,
+} from './redclaw/onboardingMvp';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
 import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
@@ -81,6 +88,8 @@ import {
   ToolsSettingsSection,
 } from './settings/SettingsSections';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { playTestNotificationSound } from '../notifications/audio';
+import { DEFAULT_NOTIFICATION_SETTINGS, parseNotificationSettings } from '../notifications/types';
 
 const MIN_CHAT_MAX_TOKENS = 1024;
 const DEFAULT_CHAT_MAX_TOKENS = 262144;
@@ -120,12 +129,49 @@ type RedclawProfileDraft = {
   creatorProfile: string;
 };
 
+type RedclawOnboardingState = Record<string, unknown> | null;
+
 const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
   user: '',
   creatorProfile: '',
 };
 
+function isRedClawOnboardingCompleted(state: RedclawOnboardingState): boolean {
+  const completedAt = String(state?.completedAt || '').trim();
+  return completedAt.length > 0;
+}
+
+function readRedClawOnboardingDraft(state: RedclawOnboardingState): {
+  stepIndex: number;
+  answers: RedClawOnboardingAnswers;
+} {
+  const uiFlow = state?.uiFlow && typeof state.uiFlow === 'object'
+    ? state.uiFlow as Record<string, unknown>
+    : null;
+  const draft = uiFlow?.draft && typeof uiFlow.draft === 'object'
+    ? uiFlow.draft as Record<string, unknown>
+    : null;
+  const rawAnswers = draft?.answers && typeof draft.answers === 'object'
+    ? draft.answers as Record<string, unknown>
+    : null;
+  const stepIndex = Number(draft?.stepIndex);
+  return {
+    stepIndex: Number.isFinite(stepIndex) ? Math.max(0, Math.round(stepIndex)) : 0,
+    answers: normalizeOnboardingAnswers(rawAnswers),
+  };
+}
+
 const DEFAULT_SPACE_ID = 'default';
+
+function normalizeNotificationPermissionState(
+  value: unknown,
+): NotificationPermissionState['state'] {
+  const state = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (state === 'granted' || state === 'denied' || state === 'prompt') {
+    return state;
+  }
+  return 'unknown';
+}
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
@@ -373,6 +419,7 @@ function normalizeCliRuntimeToolRecord(value: unknown): CliRuntimeToolRecord | n
     name: name || executable || id,
     executable: executable || name || id,
     resolvedPath: String(record.resolvedPath || record.resolved_path || '').trim() || null,
+    resolvedFrom: String(record.resolvedFrom || record.resolved_from || '').trim().toLowerCase() as CliRuntimeToolRecord['resolvedFrom'],
     source: String(record.source || 'unknown').trim().toLowerCase() as CliRuntimeToolRecord['source'],
     installMethod: String(record.installMethod || record.install_method || '').trim() || null,
     installSpec: String(record.installSpec || record.install_spec || '').trim() || null,
@@ -381,6 +428,17 @@ function normalizeCliRuntimeToolRecord(value: unknown): CliRuntimeToolRecord | n
     manifestId: String(record.manifestId || record.manifest_id || '').trim() || null,
     environmentId: String(record.environmentId || record.environment_id || '').trim() || null,
     lastCheckedAt: toRuntimePerfNumber(record.lastCheckedAt) ?? null,
+    effectivePathPreview: Array.isArray(record.effectivePathPreview)
+      ? record.effectivePathPreview.map((item) => String(item || '').trim()).filter(Boolean)
+      : Array.isArray(record.effective_path_preview)
+        ? (record.effective_path_preview as unknown[]).map((item) => String(item || '').trim()).filter(Boolean)
+        : [],
+    searchedPathEntriesCount:
+      toRuntimePerfNumber(record.searchedPathEntriesCount)
+      ?? toRuntimePerfNumber(record.searched_path_entries_count)
+      ?? null,
+    isInDefaultDetectCatalog:
+      record.isInDefaultDetectCatalog === true || record.is_in_default_detect_catalog === true,
     metadata: record.metadata && typeof record.metadata === 'object' ? record.metadata as Record<string, unknown> : null,
   };
 }
@@ -540,6 +598,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isRedclawProfileLoading, setIsRedclawProfileLoading] = useState(false);
   const [redclawProfileDirty, setRedclawProfileDirty] = useState(false);
   const [redclawProfileMessage, setRedclawProfileMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
+  const [redclawOnboardingState, setRedclawOnboardingState] = useState<RedclawOnboardingState>(null);
+  const [redclawOnboardingFlowOpen, setRedclawOnboardingFlowOpen] = useState(false);
   const [currentSpaceId, setCurrentSpaceId] = useState(DEFAULT_SPACE_ID);
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
@@ -550,9 +610,20 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [assistantDaemonWeixinLogin, setAssistantDaemonWeixinLogin] = useState<AssistantDaemonWeixinLoginState | null>(null);
   const [showScopedModelOverrides, setShowScopedModelOverrides] = useState(false);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsPayload>(DEFAULT_NOTIFICATION_SETTINGS);
+  const [notificationPermissionState, setNotificationPermissionState] = useState<NotificationPermissionState['state']>('unknown');
+  const [notificationStatusMessage, setNotificationStatusMessage] = useState('');
   const hasSelectedRuntimeSession = useMemo(
     () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
     [runtimeSessions, selectedRuntimeSessionId],
+  );
+  const redclawOnboardingDraft = useMemo(
+    () => readRedClawOnboardingDraft(redclawOnboardingState),
+    [redclawOnboardingState],
+  );
+  const redclawOnboardingCompleted = useMemo(
+    () => isRedClawOnboardingCompleted(redclawOnboardingState),
+    [redclawOnboardingState],
   );
 
   const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
@@ -628,6 +699,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setRedclawProfileRoot('');
     setSavedRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
     setRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
+    setRedclawOnboardingState(null);
+    setRedclawOnboardingFlowOpen(false);
     setRedclawProfileDirtyState(false);
     setRedclawProfileMessage(null);
     setIsRedclawProfileLoading(false);
@@ -644,6 +717,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (responseSpaceId !== expectedSpaceId || responseSpaceId !== currentSpaceIdRef.current) {
         return;
       }
+      setRedclawOnboardingState(
+        bundle.onboardingState && typeof bundle.onboardingState === 'object'
+          ? bundle.onboardingState as Record<string, unknown>
+          : null
+      );
       if (options?.preserveDraft && redclawProfileDirtyRef.current) {
         setRedclawProfileRoot(String(bundle.profileRoot || '').trim());
         return;
@@ -686,6 +764,40 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setRedclawProfileMessage(null);
     setStatus('idle');
   }, [savedRedclawProfileDraft.creatorProfile, savedRedclawProfileDraft.user, setRedclawProfileDirtyState]);
+
+  const saveRedclawOnboardingProgress = useCallback(async (payload: {
+    stepIndex: number;
+    answers: RedClawOnboardingAnswers;
+  }) => {
+    const result = await window.ipcRenderer.redclawProfile.saveInitializationProgress({
+      stepIndex: payload.stepIndex,
+      answers: { ...payload.answers },
+    });
+    if (result?.state && typeof result.state === 'object') {
+      setRedclawOnboardingState(result.state);
+    }
+  }, []);
+
+  const completeRedclawOnboarding = useCallback(async (answers: RedClawOnboardingAnswers) => {
+    const result = await window.ipcRenderer.redclawProfile.completeInitialization({
+      answers: { ...answers },
+    });
+    if (!result?.success) {
+      throw new Error('初始化保存失败');
+    }
+    setRedclawOnboardingState(
+      result.onboardingState && typeof result.onboardingState === 'object'
+        ? result.onboardingState as Record<string, unknown>
+        : null
+    );
+    setRedclawOnboardingFlowOpen(false);
+    await loadRedclawProfileBundle({ expectedSpaceId: currentSpaceIdRef.current });
+    setRedclawProfileMessage({
+      tone: 'success',
+      text: '已重新完成当前空间的风格定义',
+    });
+    setStatus('saved');
+  }, [loadRedclawProfileBundle]);
 
   const fetchModelsRequestRef = useRef<Record<string, number>>({});
   const fetchImageModelsRequestRef = useRef(0);
@@ -1009,6 +1121,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [cliRuntimeStatusMessage, setCliRuntimeStatusMessage] = useState('');
   const [isCliRuntimeRefreshing, setIsCliRuntimeRefreshing] = useState(false);
   const [cliRuntimeInspectingToolId, setCliRuntimeInspectingToolId] = useState('');
+  const [cliRuntimeDiagnosticCommand, setCliRuntimeDiagnosticCommand] = useState('');
+  const [cliRuntimeDiscoverQuery, setCliRuntimeDiscoverQuery] = useState('');
+  const [cliRuntimeDiscoverResults, setCliRuntimeDiscoverResults] = useState<CliRuntimeToolRecord[]>([]);
+  const [cliRuntimeDiscovering, setCliRuntimeDiscovering] = useState(false);
   const [cliRuntimeCreatingEnvironment, setCliRuntimeCreatingEnvironment] = useState<CliRuntimeEnvironmentScope | ''>('');
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [mcpStatusMessage, setMcpStatusMessage] = useState('');
@@ -2990,6 +3106,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
         setImageSourceId(resolvedImageSourceId);
+        setNotificationSettings(parseNotificationSettings(settings.notifications_json));
         clearAiSourceDraftDirty();
         console.log('[settings][ai] loadSettings-applied', {
           sourceCount: sourceList.length,
@@ -3081,6 +3198,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         setFetchingModelsBySourceId((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
+        setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS);
         clearAiSourceDraftDirty();
       }
     } catch (e) {
@@ -3096,6 +3214,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       ...options,
     });
   }, [loadSettings]);
+
+  const loadNotificationPermissionState = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.notifications.getPermissionState();
+      setNotificationPermissionState(normalizeNotificationPermissionState(result?.state));
+    } catch (error) {
+      console.warn('Failed to load notification permission state:', error);
+      setNotificationPermissionState('unknown');
+    }
+  }, []);
 
 
   useEffect(() => {
@@ -3117,6 +3245,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }, remaining);
     return () => window.clearTimeout(timer);
   }, [expireDeveloperMode, formData.developer_mode_enabled, formData.developer_mode_unlocked_at]);
+
+  useEffect(() => {
+    void loadNotificationPermissionState();
+  }, [loadNotificationPermissionState]);
 
   const checkTools = useCallback(async () => {
     try {
@@ -3215,6 +3347,68 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setCliRuntimeInspectingToolId('');
     }
   }, []);
+
+  const handleDiagnoseCliRuntimeCommand = useCallback(async () => {
+    const command = String(cliRuntimeDiagnosticCommand || '').trim();
+    if (!command) {
+      setCliRuntimeStatusMessage('请先输入要诊断的 CLI 命令名，例如 lark-cli');
+      return;
+    }
+    setCliRuntimeInspectingToolId(command);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.inspect({ command, executable: command });
+      const normalized = normalizeCliRuntimeToolRecord(result);
+      if (normalized) {
+        setCliRuntimeTools((prev) => {
+          const next = prev.filter((item) => item.id !== normalized.id);
+          next.unshift(normalized);
+          return next.sort((left, right) => left.name.localeCompare(right.name));
+        });
+        setCliRuntimeStatusMessage(
+          normalized.resolvedPath
+            ? `已解析 ${command}：${normalized.resolvedPath}`
+            : `未在当前 PATH 中解析到 ${command}`,
+        );
+      } else {
+        setCliRuntimeStatusMessage(`未返回 ${command} 的诊断数据`);
+      }
+    } catch (error) {
+      console.error('Failed to diagnose CLI runtime command', error);
+      setCliRuntimeStatusMessage(`诊断失败：${String(error)}`);
+    } finally {
+      setCliRuntimeInspectingToolId('');
+    }
+  }, [cliRuntimeDiagnosticCommand]);
+
+  const handleDiscoverCliRuntimeTools = useCallback(async () => {
+    setCliRuntimeDiscovering(true);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.discover({
+        query: String(cliRuntimeDiscoverQuery || '').trim() || undefined,
+        limit: 80,
+      });
+      const discoveredToolsRaw = Array.isArray((result as { tools?: unknown[] } | null)?.tools)
+        ? (result as { tools?: unknown[] }).tools || []
+        : Array.isArray(result)
+          ? result
+          : [];
+      const normalizedTools = discoveredToolsRaw
+        .map(normalizeCliRuntimeToolRecord)
+        .filter((item): item is CliRuntimeToolRecord => Boolean(item))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      setCliRuntimeDiscoverResults(normalizedTools);
+      setCliRuntimeStatusMessage(
+        normalizedTools.length > 0
+          ? `已搜索 PATH，命中 ${normalizedTools.length} 个 CLI`
+          : '当前 PATH 搜索没有命中结果',
+      );
+    } catch (error) {
+      console.error('Failed to discover CLI runtime tools', error);
+      setCliRuntimeStatusMessage(`PATH 搜索失败：${String(error)}`);
+    } finally {
+      setCliRuntimeDiscovering(false);
+    }
+  }, [cliRuntimeDiscoverQuery]);
 
   const handleCreateCliRuntimeEnvironment = useCallback(async (scope: CliRuntimeEnvironmentScope) => {
     setCliRuntimeCreatingEnvironment(scope);
@@ -4089,6 +4283,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         diagnostics_last_prompted_at: formData.diagnostics_last_prompted_at || null,
         release_log_retention_days: releaseLogRetentionDays,
         release_log_max_file_mb: releaseLogMaxFileMb,
+        notifications_json: JSON.stringify(notificationSettings),
         developer_mode_enabled: Boolean(formData.developer_mode_enabled),
         developer_mode_unlocked_at: formData.developer_mode_enabled
           ? (formData.developer_mode_unlocked_at || new Date().toISOString())
@@ -4121,6 +4316,44 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       setStatus('error');
     }
   };
+
+  const handleTestNotificationSound = useCallback(async () => {
+    try {
+      await playTestNotificationSound('attention', notificationSettings.sound.volume);
+      setNotificationStatusMessage('已播放测试提醒音。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotificationStatusMessage(`播放测试提醒音失败：${message}`);
+    }
+  }, [notificationSettings.sound.volume]);
+
+  const handleRequestNotificationPermission = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.notifications.requestPermission();
+      const state = normalizeNotificationPermissionState(result?.state);
+      setNotificationPermissionState(state);
+      setNotificationStatusMessage(`系统通知权限状态：${state}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotificationStatusMessage(`请求系统通知权限失败：${message}`);
+    }
+  }, []);
+
+  const handleSendTestSystemNotification = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.notifications.showSystem({
+        title: 'RedBox 通知测试',
+        body: '这是一条系统通知测试消息。',
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || '系统通知发送失败');
+      }
+      setNotificationStatusMessage('系统通知已发送。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotificationStatusMessage(`系统通知测试失败：${message}`);
+    }
+  }, []);
 
   const tabs = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
@@ -4162,6 +4395,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 appVersion={appVersion}
                 formData={formData}
                 setFormData={setFormData}
+                notificationSettings={notificationSettings}
+                setNotificationSettings={setNotificationSettings}
+                notificationPermissionState={notificationPermissionState}
+                notificationStatusMessage={notificationStatusMessage}
+                handleTestNotificationSound={handleTestNotificationSound}
+                handleRequestNotificationPermission={handleRequestNotificationPermission}
+                handleSendTestSystemNotification={handleSendTestSystemNotification}
                 handlePickWorkspaceDir={handlePickWorkspaceDir}
                 handleResetWorkspaceDir={handleResetWorkspaceDir}
                 handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
@@ -4982,7 +5222,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 <section className="space-y-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
+                        <button
+                          type="button"
+                          onClick={() => setRedclawOnboardingFlowOpen(true)}
+                          className="text-xs font-medium text-text-tertiary underline-offset-4 transition-colors hover:text-text-primary hover:underline"
+                        >
+                          {redclawOnboardingCompleted ? '重新自定义风格' : '去定义风格'}
+                        </button>
+                      </div>
                       <div className="mt-1 flex items-center gap-2 text-xs text-text-tertiary">
                         <span
                           className="rounded-full bg-surface-secondary px-2 py-1 font-mono"
@@ -5086,9 +5335,17 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 isCliRuntimeRefreshing={isCliRuntimeRefreshing}
                 cliRuntimeInstalling={cliRuntimeInstalling}
                 cliRuntimeInspectingToolId={cliRuntimeInspectingToolId}
+                cliRuntimeDiagnosticCommand={cliRuntimeDiagnosticCommand}
+                setCliRuntimeDiagnosticCommand={setCliRuntimeDiagnosticCommand}
+                cliRuntimeDiscoverQuery={cliRuntimeDiscoverQuery}
+                setCliRuntimeDiscoverQuery={setCliRuntimeDiscoverQuery}
+                cliRuntimeDiscoverResults={cliRuntimeDiscoverResults}
+                cliRuntimeDiscovering={cliRuntimeDiscovering}
                 cliRuntimeCreatingEnvironment={cliRuntimeCreatingEnvironment}
                 handleRefreshCliRuntime={loadCliRuntimeDashboard}
                 handleInspectCliRuntimeTool={handleInspectCliRuntimeTool}
+                handleDiagnoseCliRuntimeCommand={handleDiagnoseCliRuntimeCommand}
+                handleDiscoverCliRuntimeTools={handleDiscoverCliRuntimeTools}
                 handleCreateCliRuntimeEnvironment={handleCreateCliRuntimeEnvironment}
                 handleInstallCliRuntimeTool={handleInstallCliRuntimeTool}
                 handleOpenCliRuntimeEnvironmentRoot={handleOpenCliRuntimeEnvironmentRoot}
@@ -5462,6 +5719,15 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
             </div>
           )}
         </div>
+        <RedClawOnboardingFlow
+          open={redclawOnboardingFlowOpen}
+          activeSpaceName={currentSpaceId}
+          initialStepIndex={redclawOnboardingDraft.stepIndex}
+          initialAnswers={{ ...redclawOnboardingDraft.answers }}
+          onClose={() => setRedclawOnboardingFlowOpen(false)}
+          onSaveProgress={saveRedclawOnboardingProgress}
+          onComplete={completeRedclawOnboarding}
+        />
       </div>
     </div>
   );
