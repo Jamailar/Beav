@@ -281,7 +281,15 @@ pub(crate) fn interactive_runtime_context_bundle(
                     .and_then(|value| value.as_str())
                     .map(|value| !value.trim().is_empty())
                     .unwrap_or(false);
-                if !onboarding_completed && !bundle.bootstrap.trim().is_empty() {
+                let onboarding_flow_mode = bundle
+                    .onboarding_state
+                    .get("flowMode")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                if !onboarding_completed
+                    && onboarding_flow_mode != "screen-flow"
+                    && !bundle.bootstrap.trim().is_empty()
+                {
                     rendered.push_str("## RedClaw 首次设定引导状态\n");
                     rendered.push_str("- completed: false\n");
                     rendered.push_str(&format!(

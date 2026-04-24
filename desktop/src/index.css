@@ -1050,3 +1050,28 @@ select {
     animation: none !important;
   }
 }
+
+.recording-wave-bar {
+  transform-origin: center;
+  animation: recording-wave-bounce 1.18s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes recording-wave-bounce {
+  0%, 100% {
+    transform: scaleY(0.42);
+    opacity: 0.34;
+  }
+  28% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+  58% {
+    transform: scaleY(0.68);
+    opacity: 0.58;
+  }
+  82% {
+    transform: scaleY(0.9);
+    opacity: 0.88;
+  }
+}

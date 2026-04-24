@@ -18,9 +18,11 @@ use crate::scheduler::{
     sync_redclaw_job_definitions,
 };
 use crate::{
-    handle_redclaw_onboarding_turn, load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
-    load_redclaw_profile_prompt_bundle, now_i64, now_iso, payload_field, payload_string,
-    redclaw_state_value, update_redclaw_profile_doc, AppState,
+    complete_redclaw_mvp_onboarding, handle_redclaw_onboarding_turn,
+    load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
+    load_redclaw_profile_prompt_bundle, load_redclaw_style_profile, now_i64, now_iso,
+    payload_field, payload_string, redclaw_state_value, save_redclaw_mvp_onboarding_progress,
+    update_redclaw_profile_doc, AppState,
 };
 use redclaw_task_control::{
     create_confirmed_task_from_intent, handle_task_cancel, handle_task_confirm, handle_task_create,
@@ -96,6 +98,7 @@ pub fn handle_redclaw_channel(
                 "user": bundle.user,
                 "creatorProfile": bundle.creator_profile,
                 "bootstrap": bundle.bootstrap,
+                "styleProfile": load_redclaw_style_profile(state)?,
                 "files": {
                     "agent": bundle.agent,
                     "soul": bundle.soul,
@@ -145,6 +148,26 @@ pub fn handle_redclaw_channel(
                     "completed": completed
                 }))
             }))
+        })(),
+        "redclaw:profile:save-initialization-progress" => (|| {
+            let step_index = payload_field(payload, "stepIndex")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let answers = payload_field(payload, "answers")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let onboarding_state =
+                save_redclaw_mvp_onboarding_progress(state, step_index, &answers)?;
+            Ok(json!({
+                "success": true,
+                "state": onboarding_state
+            }))
+        })(),
+        "redclaw:profile:complete-initialization" => (|| {
+            let answers = payload_field(payload, "answers")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            complete_redclaw_mvp_onboarding(app, state, &answers)
         })(),
         "redclaw:runner-start" => (|| {
             let status = with_store_mut(state, |store| {

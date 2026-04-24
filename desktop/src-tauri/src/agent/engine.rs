@@ -202,7 +202,6 @@ pub struct ChatExchangeContext {
     pub settings_snapshot: Value,
     pub working_session_id: String,
     pub runtime_mode: String,
-    pub should_handle_redclaw_onboarding: bool,
     pub allow_redclaw_onboarding: bool,
 }
 

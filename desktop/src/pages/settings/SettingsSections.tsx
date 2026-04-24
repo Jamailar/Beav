@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Activity, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
@@ -8,6 +8,8 @@ import type {
   CliRuntimeToolRecord,
   DiagnosticsLogStatus,
   DiagnosticsPendingReport,
+  NotificationPermissionState,
+  NotificationSettingsPayload,
 } from '../../types';
 import type {
   AgentTaskSnapshot,
@@ -293,6 +295,13 @@ interface GeneralSettingsSectionProps {
     appVersion: string | null;
     formData: SettingsFormData;
     setFormData: Dispatch<SetStateAction<any>>;
+    notificationSettings: NotificationSettingsPayload;
+    setNotificationSettings: Dispatch<SetStateAction<NotificationSettingsPayload>>;
+    notificationPermissionState: NotificationPermissionState['state'];
+    notificationStatusMessage: string;
+    handleTestNotificationSound: () => Promise<void>;
+    handleRequestNotificationPermission: () => Promise<void>;
+    handleSendTestSystemNotification: () => Promise<void>;
     handlePickWorkspaceDir: () => Promise<void>;
     handleResetWorkspaceDir: () => void;
     handleOpenKnowledgeApiGuide: () => Promise<void>;
@@ -330,6 +339,13 @@ function GeneralSettingsSectionInner({
     appVersion,
     formData,
     setFormData,
+    notificationSettings,
+    setNotificationSettings,
+    notificationPermissionState,
+    notificationStatusMessage,
+    handleTestNotificationSound,
+    handleRequestNotificationPermission,
+    handleSendTestSystemNotification,
     handlePickWorkspaceDir,
     handleResetWorkspaceDir,
     handleOpenKnowledgeApiGuide,
@@ -421,6 +437,196 @@ function GeneralSettingsSectionInner({
                 <p className="text-[10px] text-text-tertiary mt-2">
                     不要直接选择现有的稿件目录、<code className="bg-surface-secondary px-1 rounded">manuscripts</code> 目录或 <code className="bg-surface-secondary px-1 rounded">documents</code> 目录，否则应用会在其中创建 <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> 等完整工作区结构。
                 </p>
+            </div>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
+                            <Bell className="w-4 h-4" />
+                            通知中心
+                        </h3>
+                        <p className="text-xs text-text-tertiary mt-1">
+                            统一控制后台 AI、媒体生成和 RedClaw 任务的声音、弹窗和系统通知。
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setNotificationSettings((current) => ({ ...current, enabled: !current.enabled }))}
+                        className={clsx(
+                            'h-8 px-3 rounded-md border text-xs font-medium transition-colors',
+                            notificationSettings.enabled
+                                ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                : 'border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+                        )}
+                    >
+                        {notificationSettings.enabled ? '已开启' : '已关闭'}
+                    </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">应用内弹窗</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">用统一 toast 提醒关键任务状态。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.inApp.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                inApp: { ...current.inApp, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">声音提醒</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">成功、失败、待确认使用不同提示音。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.sound.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                sound: { ...current.sound, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">系统通知</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">窗口不在前台时可补充 OS 级通知。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.system.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                system: { ...current.system, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">静默时段</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">默认在该时段不播放成功提示音。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.quietHours.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                quietHours: { ...current.quietHours, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                        <label className="block text-[11px] font-medium text-text-secondary mb-2">提示音音量</label>
+                        <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={notificationSettings.sound.volume}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                sound: { ...current.sound, volume: Number(event.target.value) },
+                            }))}
+                            className="w-full"
+                        />
+                        <div className="mt-1 text-[11px] text-text-tertiary">
+                            {Math.round(notificationSettings.sound.volume * 100)}%
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-[11px] font-medium text-text-secondary mb-2">静默开始</label>
+                            <input
+                                type="time"
+                                value={notificationSettings.quietHours.start}
+                                onChange={(event) => setNotificationSettings((current) => ({
+                                    ...current,
+                                    quietHours: { ...current.quietHours, start: event.target.value },
+                                }))}
+                                className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-[11px] font-medium text-text-secondary mb-2">静默结束</label>
+                            <input
+                                type="time"
+                                value={notificationSettings.quietHours.end}
+                                onChange={(event) => setNotificationSettings((current) => ({
+                                    ...current,
+                                    quietHours: { ...current.quietHours, end: event.target.value },
+                                }))}
+                                className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    {([
+                        ['runtimeBackgroundDone', 'AI 后台完成'],
+                        ['runtimeFailed', 'AI 失败'],
+                        ['runtimeNeedsApproval', 'AI 待确认'],
+                        ['generationCompleted', '媒体生成完成'],
+                        ['generationFailed', '媒体生成失败'],
+                        ['redclawCompleted', 'RedClaw 完成'],
+                        ['redclawFailed', 'RedClaw 失败'],
+                    ] as const).map(([ruleKey, label]) => (
+                        <label key={ruleKey} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                            <div className="text-xs text-text-primary">{label}</div>
+                            <input
+                                type="checkbox"
+                                checked={notificationSettings.rules[ruleKey]}
+                                onChange={(event) => setNotificationSettings((current) => ({
+                                    ...current,
+                                    rules: {
+                                        ...current.rules,
+                                        [ruleKey]: event.target.checked,
+                                    },
+                                }))}
+                            />
+                        </label>
+                    ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => void handleTestNotificationSound()}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        测试提醒音
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleRequestNotificationPermission()}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        请求系统通知权限
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleSendTestSystemNotification()}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        测试系统通知
+                    </button>
+                    <div className="text-[11px] text-text-tertiary">
+                        权限状态：{notificationPermissionState}
+                    </div>
+                </div>
+
+                {notificationStatusMessage ? (
+                    <div className="text-[11px] text-text-tertiary">{notificationStatusMessage}</div>
+                ) : null}
             </div>
 
             <div className={clsx(
@@ -1860,6 +2066,7 @@ export function MemorySettingsSection({
 
 interface ToolsSettingsSectionProps {
     cliRuntimeTools: CliRuntimeToolRecord[];
+    cliRuntimeDiscoverResults: CliRuntimeToolRecord[];
     cliRuntimeEnvironments: CliRuntimeEnvironmentRecord[];
     cliRuntimeInstallDraft: {
         environmentId: string;
@@ -1887,9 +2094,16 @@ interface ToolsSettingsSectionProps {
     isCliRuntimeRefreshing: boolean;
     cliRuntimeInstalling: boolean;
     cliRuntimeInspectingToolId: string;
+    cliRuntimeDiagnosticCommand: string;
+    setCliRuntimeDiagnosticCommand: Dispatch<SetStateAction<string>>;
+    cliRuntimeDiscoverQuery: string;
+    setCliRuntimeDiscoverQuery: Dispatch<SetStateAction<string>>;
+    cliRuntimeDiscovering: boolean;
     cliRuntimeCreatingEnvironment: CliRuntimeEnvironmentScope | '';
     handleRefreshCliRuntime: () => Promise<void>;
     handleInspectCliRuntimeTool: (toolId: string) => Promise<void>;
+    handleDiagnoseCliRuntimeCommand: () => Promise<void>;
+    handleDiscoverCliRuntimeTools: () => Promise<void>;
     handleCreateCliRuntimeEnvironment: (scope: CliRuntimeEnvironmentScope) => Promise<void>;
     handleInstallCliRuntimeTool: () => Promise<void>;
     handleOpenCliRuntimeEnvironmentRoot: (rootPath: string) => Promise<void>;
@@ -2016,6 +2230,7 @@ interface ToolsSettingsSectionProps {
 
 export function ToolsSettingsSection({
     cliRuntimeTools,
+    cliRuntimeDiscoverResults,
     cliRuntimeEnvironments,
     cliRuntimeInstallDraft,
     setCliRuntimeInstallDraft,
@@ -2024,9 +2239,16 @@ export function ToolsSettingsSection({
     isCliRuntimeRefreshing,
     cliRuntimeInstalling,
     cliRuntimeInspectingToolId,
+    cliRuntimeDiagnosticCommand,
+    setCliRuntimeDiagnosticCommand,
+    cliRuntimeDiscoverQuery,
+    setCliRuntimeDiscoverQuery,
+    cliRuntimeDiscovering,
     cliRuntimeCreatingEnvironment,
     handleRefreshCliRuntime,
     handleInspectCliRuntimeTool,
+    handleDiagnoseCliRuntimeCommand,
+    handleDiscoverCliRuntimeTools,
     handleCreateCliRuntimeEnvironment,
     handleInstallCliRuntimeTool,
     handleOpenCliRuntimeEnvironmentRoot,
@@ -2207,6 +2429,21 @@ export function ToolsSettingsSection({
                 return '系统环境';
             default:
                 return '未知';
+        }
+    };
+
+    const cliResolvedFromLabel = (resolvedFrom?: CliRuntimeToolRecord['resolvedFrom'] | null) => {
+        switch (resolvedFrom) {
+            case 'host-shell-path':
+                return '宿主 PATH';
+            case 'extra-bin-path':
+                return '补充 bin 目录';
+            case 'managed-environment':
+                return '托管环境 PATH';
+            case 'explicit-path':
+                return '显式路径';
+            default:
+                return '未解析';
         }
     };
 
@@ -2500,6 +2737,90 @@ export function ToolsSettingsSection({
 
                 <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
                     <div>
+                        <div className="text-xs font-medium text-text-primary">CLI 诊断面板</div>
+                        <div className="text-[11px] text-text-tertiary mt-1">
+                            已知命令优先 Diagnose，模糊查找再用 PATH 搜索。不要再依赖只读 bash 做 `which` 或 `command -v`。
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-4">
+                        <div className="space-y-3">
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">Diagnose 命令名</div>
+                                <div className="flex gap-2">
+                                    <input
+                                        value={cliRuntimeDiagnosticCommand}
+                                        onChange={(event) => setCliRuntimeDiagnosticCommand(event.target.value)}
+                                        placeholder="例如：lark-cli、ffmpeg、wrangler"
+                                        className="flex-1 rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleDiagnoseCliRuntimeCommand()}
+                                        disabled={cliRuntimeInspectingToolId === cliRuntimeDiagnosticCommand.trim()}
+                                        className="px-3 py-2 rounded bg-accent-primary text-white text-sm hover:opacity-90 disabled:opacity-50"
+                                    >
+                                        {cliRuntimeInspectingToolId === cliRuntimeDiagnosticCommand.trim() ? '诊断中...' : 'Diagnose'}
+                                    </button>
+                                </div>
+                            </label>
+
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">PATH 搜索</div>
+                                <div className="flex gap-2">
+                                    <input
+                                        value={cliRuntimeDiscoverQuery}
+                                        onChange={(event) => setCliRuntimeDiscoverQuery(event.target.value)}
+                                        placeholder="例如：lark、node、python"
+                                        className="flex-1 rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleDiscoverCliRuntimeTools()}
+                                        disabled={cliRuntimeDiscovering}
+                                        className="px-3 py-2 border border-border rounded text-sm hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                    >
+                                        {cliRuntimeDiscovering ? '搜索中...' : '搜索 PATH'}
+                                    </button>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                            <div className="text-xs font-medium text-text-primary">最近 PATH 搜索结果</div>
+                            {cliRuntimeDiscoverResults.length === 0 ? (
+                                <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                    暂无 PATH 搜索结果。输入关键字后可直接枚举当前宿主 PATH 中的命令。
+                                </div>
+                            ) : (
+                                <div className="space-y-2 max-h-60 overflow-auto">
+                                    {cliRuntimeDiscoverResults.map((tool) => (
+                                        <button
+                                            key={`${tool.id}:${tool.resolvedPath || tool.executable}`}
+                                            type="button"
+                                            onClick={() => {
+                                                setCliRuntimeDiagnosticCommand(tool.executable);
+                                                void handleInspectCliRuntimeTool(tool.id);
+                                            }}
+                                            className="w-full rounded border border-border bg-surface-primary/60 px-3 py-2 text-left hover:bg-surface-secondary transition-colors"
+                                        >
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-sm font-medium text-text-primary">{tool.name || tool.executable}</div>
+                                                <span className="text-[10px] text-text-tertiary">{cliResolvedFromLabel(tool.resolvedFrom)}</span>
+                                            </div>
+                                            <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                {tool.resolvedPath || tool.executable}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                    <div>
                         <div className="text-xs font-medium text-text-primary">受控安装入口</div>
                         <div className="text-[11px] text-text-tertiary mt-1">
                             通过 CLI Runtime 安装工具到托管环境，并在下方保留最近安装队列。
@@ -2656,17 +2977,26 @@ export function ToolsSettingsSection({
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-text-secondary">
                                             <div>version: {tool.version || 'unknown'}</div>
                                             <div>executable: {tool.executable || 'unknown'}</div>
+                                            <div>resolved from: {cliResolvedFromLabel(tool.resolvedFrom)}</div>
                                             <div>install: {tool.installMethod || 'n/a'}</div>
                                             <div>manifest: {tool.manifestId || 'n/a'}</div>
                                             <div>environment: {tool.environmentId || '未绑定'}</div>
                                             <div>checked: {formatCliTime(tool.lastCheckedAt)}</div>
                                             <div>commands: {String(tool.metadata?.commandCount || 'n/a')}</div>
                                             <div>json: {tool.metadata?.supportsJsonOutput ? 'yes' : 'no'}</div>
+                                            <div>detect catalog: {tool.isInDefaultDetectCatalog ? 'yes' : 'no'}</div>
+                                            <div>searched path entries: {String(tool.searchedPathEntriesCount || 'n/a')}</div>
                                         </div>
 
                                         {typeof tool.metadata?.helpExcerpt === 'string' && tool.metadata.helpExcerpt.trim() ? (
                                             <div className="rounded border border-border bg-surface-primary/60 px-2.5 py-2 text-[10px] text-text-tertiary font-mono whitespace-pre-wrap break-all max-h-28 overflow-auto">
                                                 {tool.metadata.helpExcerpt}
+                                            </div>
+                                        ) : null}
+
+                                        {Array.isArray(tool.effectivePathPreview) && tool.effectivePathPreview.length > 0 ? (
+                                            <div className="rounded border border-border bg-surface-primary/60 px-2.5 py-2 text-[10px] text-text-tertiary font-mono whitespace-pre-wrap break-all max-h-28 overflow-auto">
+                                                {tool.effectivePathPreview.join('\n')}
                                             </div>
                                         ) : null}
                                     </div>

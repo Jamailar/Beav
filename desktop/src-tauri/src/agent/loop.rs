@@ -6,9 +6,7 @@ use crate::agent::{
     SessionAgentTurnExecution,
 };
 use crate::commands::chat_state::{is_chat_runtime_cancel_requested, update_chat_runtime_state};
-use crate::{
-    ensure_redclaw_onboarding_completed_with_defaults, handle_redclaw_onboarding_turn, AppState,
-};
+use crate::{handle_redclaw_onboarding_turn, AppState};
 
 pub fn execute_prepared_session_agent_turn(
     app: Option<&AppHandle>,
@@ -47,12 +45,6 @@ pub fn execute_session_agent_turn(
         None,
     );
 
-    if context.runtime_mode == "redclaw"
-        && context.should_handle_redclaw_onboarding
-        && !context.allow_redclaw_onboarding
-    {
-        let _ = ensure_redclaw_onboarding_completed_with_defaults(state);
-    }
     let onboarding_response = if context.allow_redclaw_onboarding {
         handle_redclaw_onboarding_turn(state, &message)?
     } else {

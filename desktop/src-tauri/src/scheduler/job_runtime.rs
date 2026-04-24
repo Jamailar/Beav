@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use serde_json::{json, Value};
 
 use crate::commands::redclaw_runtime::execute_redclaw_run;
-use crate::events::emit_runtime_task_checkpoint_saved;
+use crate::events::{emit_redclaw_task_event, emit_runtime_task_checkpoint_saved};
 use crate::persistence::with_store_mut;
 use crate::runtime::{RedclawJobDefinitionRecord, RedclawJobExecutionRecord};
 use crate::scheduler::dead_letter::mark_dead_lettered;
@@ -925,6 +925,20 @@ fn mark_execution_failed(
     Ok(())
 }
 
+fn redclaw_task_id(prepared: &PreparedJobExecution) -> &str {
+    prepared
+        .source_task_id
+        .as_deref()
+        .unwrap_or(prepared.execution_id.as_str())
+}
+
+fn redclaw_task_kind(prepared: &PreparedJobExecution) -> &str {
+    prepared
+        .source_kind
+        .as_deref()
+        .unwrap_or(prepared.kind.as_str())
+}
+
 pub fn emit_scheduler_snapshot(app: &AppHandle, state: &State<'_, AppState>) {
     if let Ok(store) = state.store.lock() {
         let _ = app.emit(
@@ -974,6 +988,28 @@ pub fn run_job_queue_once(
             with_store_mut(state, |store| {
                 mark_execution_succeeded(store, &prepared, &value)
             })?;
+            let artifact_count = value
+                .get("artifacts")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0);
+            let summary = value
+                .get("response")
+                .and_then(Value::as_str)
+                .map(|text| text.chars().take(120).collect::<String>());
+            let session_id = value.get("sessionId").and_then(Value::as_str);
+            emit_redclaw_task_event(
+                app,
+                "task_completed",
+                redclaw_task_id(&prepared),
+                &prepared.title,
+                redclaw_task_kind(&prepared),
+                Some("success"),
+                summary.as_deref(),
+                session_id,
+                Some(&prepared.execution_id),
+                artifact_count,
+            );
             emit_runtime_task_checkpoint_saved(
                 app,
                 Some(&prepared.execution_id),
@@ -1004,6 +1040,30 @@ pub fn run_job_queue_once(
             with_store_mut(state, |store| {
                 mark_execution_failed(store, &prepared, &error)
             })?;
+            let final_status = with_store_mut(state, |store| {
+                Ok(store
+                    .redclaw_job_executions
+                    .iter()
+                    .find(|item| item.id == prepared.execution_id)
+                    .map(|item| item.status.clone()))
+            })?;
+            if matches!(
+                final_status.as_deref(),
+                Some("dead_lettered") | Some("failed")
+            ) {
+                emit_redclaw_task_event(
+                    app,
+                    "task_failed",
+                    redclaw_task_id(&prepared),
+                    &prepared.title,
+                    redclaw_task_kind(&prepared),
+                    Some("failed"),
+                    Some(&error),
+                    None,
+                    Some(&prepared.execution_id),
+                    0,
+                );
+            }
             emit_runtime_task_checkpoint_saved(
                 app,
                 Some(&prepared.execution_id),

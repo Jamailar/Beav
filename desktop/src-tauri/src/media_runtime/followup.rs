@@ -20,6 +20,10 @@ struct MediaFollowupCandidate {
     task_id: String,
     session_id: String,
     job_id: String,
+    image_count: usize,
+    progress_notified_count: usize,
+    progress_notification_status: String,
+    progress_retry_not_before: i64,
     created_at: i64,
 }
 
@@ -60,6 +64,25 @@ pub(crate) fn tick_media_followups(
                     task_id: task.id.clone(),
                     session_id: metadata.get("sessionId")?.as_str()?.to_string(),
                     job_id: metadata.get("jobId")?.as_str()?.to_string(),
+                    image_count: metadata
+                        .get("imageCount")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as usize)
+                        .unwrap_or(1),
+                    progress_notified_count: metadata
+                        .get("progressNotifiedCount")
+                        .and_then(Value::as_u64)
+                        .map(|value| value as usize)
+                        .unwrap_or(0),
+                    progress_notification_status: metadata
+                        .get("progressNotificationStatus")
+                        .and_then(Value::as_str)
+                        .unwrap_or("idle")
+                        .to_string(),
+                    progress_retry_not_before: metadata
+                        .get("progressRetryNotBefore")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
                     created_at: task.created_at,
                 })
             })
@@ -95,6 +118,40 @@ pub(crate) fn tick_media_followups(
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let artifact_count = projection
+            .get("artifacts")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0);
+
+        if artifact_count > candidate.progress_notified_count
+            && candidate.progress_notification_status != "sending"
+            && now_i64() >= candidate.progress_retry_not_before
+        {
+            let delivered_count = artifact_count.min(candidate.image_count.max(1));
+            if mark_media_followup_progress_notifying(
+                state,
+                &candidate.task_id,
+                delivered_count,
+                candidate.image_count,
+            )? {
+                let bridge_message = build_progress_bridge_message(
+                    &candidate.job_id,
+                    delivered_count,
+                    candidate.image_count,
+                );
+                dispatch_media_followup_progress_notification(
+                    app,
+                    candidate.clone(),
+                    bridge_message,
+                    delivered_count,
+                );
+                continue;
+            }
+        }
+        if candidate.progress_notification_status == "sending" {
+            continue;
+        }
 
         if status == "completed" {
             let artifacts = projection
@@ -199,6 +256,10 @@ fn create_media_followup_task(
         "jobId": job_id,
         "sessionId": session_id,
         "imageCount": image_count,
+        "progressNotifiedCount": 0,
+        "progressNotificationStatus": "idle",
+        "progressRetryNotBefore": 0,
+        "notificationStatus": "idle",
         "deliveryPolicy": "background_followup",
         "latestText": "等待图片生成完成",
     });
@@ -282,6 +343,154 @@ fn mark_media_followup_notifying(
         );
         Ok(true)
     })
+}
+
+fn mark_media_followup_progress_notifying(
+    state: &tauri::State<'_, AppState>,
+    task_id: &str,
+    delivered_count: usize,
+    total_count: usize,
+) -> Result<bool, String> {
+    with_store_mut(state, |store| {
+        let Some(task) = store
+            .runtime_tasks
+            .iter_mut()
+            .find(|item| item.id == task_id)
+        else {
+            return Ok(false);
+        };
+        if !matches!(task.status.as_str(), "pending" | "running") {
+            return Ok(false);
+        }
+        let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) else {
+            return Ok(false);
+        };
+        let already_notified = metadata
+            .get("progressNotifiedCount")
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or(0);
+        let progress_status = metadata
+            .get("progressNotificationStatus")
+            .and_then(Value::as_str)
+            .unwrap_or("idle");
+        if delivered_count <= already_notified || progress_status == "sending" {
+            return Ok(false);
+        }
+        metadata.insert(
+            "latestText".to_string(),
+            json!(format!(
+                "已生成 {delivered_count}/{total_count} 张，准备回传进度。"
+            )),
+        );
+        metadata.insert("progressNotificationStatus".to_string(), json!("sending"));
+        metadata.insert(
+            "progressNotificationTarget".to_string(),
+            json!(delivered_count),
+        );
+        metadata.insert("progressRetryNotBefore".to_string(), json!(0));
+        task.updated_at = now_i64();
+        append_runtime_task_trace(
+            store,
+            task_id,
+            "media-followup.progress.pending",
+            Some(json!({
+                "completedImages": delivered_count,
+                "expectedImages": total_count,
+            })),
+        );
+        Ok(true)
+    })
+}
+
+fn finish_media_followup_progress_notification(
+    state: &tauri::State<'_, AppState>,
+    task_id: &str,
+    delivered_count: usize,
+    total_count: usize,
+    error: Option<String>,
+) {
+    let _ = with_store_mut(state, |store| {
+        let Some(task) = store
+            .runtime_tasks
+            .iter_mut()
+            .find(|item| item.id == task_id)
+        else {
+            return Ok(());
+        };
+        let now = now_i64();
+        task.updated_at = now;
+        if let Some(metadata) = task.metadata.as_mut().and_then(Value::as_object_mut) {
+            metadata.insert("progressNotificationStatus".to_string(), json!("idle"));
+            metadata.insert(
+                "progressRetryNotBefore".to_string(),
+                json!(if error.is_some() { now + 5_000 } else { 0 }),
+            );
+            if error.is_none() {
+                metadata.insert("progressNotifiedCount".to_string(), json!(delivered_count));
+                metadata.insert(
+                    "latestText".to_string(),
+                    json!(format!("已回传进度 {delivered_count}/{total_count} 张。")),
+                );
+            } else {
+                metadata.insert(
+                    "latestText".to_string(),
+                    json!(format!(
+                        "进度回传失败（{delivered_count}/{total_count} 张），稍后重试。"
+                    )),
+                );
+            }
+        }
+        append_runtime_task_trace(
+            store,
+            task_id,
+            if error.is_none() {
+                "media-followup.progress.sent"
+            } else {
+                "media-followup.progress.failed"
+            },
+            Some(json!({
+                "completedImages": delivered_count,
+                "expectedImages": total_count,
+                "error": error,
+            })),
+        );
+        Ok(())
+    });
+}
+
+fn dispatch_media_followup_progress_notification(
+    app: &AppHandle,
+    candidate: MediaFollowupCandidate,
+    bridge_message: String,
+    delivered_count: usize,
+) {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let notify_result = notify_session_with_media_result(
+            &app_handle,
+            &state,
+            &candidate.session_id,
+            &bridge_message,
+        );
+        match notify_result {
+            Ok(()) => finish_media_followup_progress_notification(
+                &state,
+                &candidate.task_id,
+                delivered_count,
+                candidate.image_count,
+                None,
+            ),
+            Err(error) => finish_media_followup_progress_notification(
+                &state,
+                &candidate.task_id,
+                delivered_count,
+                candidate.image_count,
+                Some(error),
+            ),
+        }
+    });
 }
 
 fn dispatch_media_followup_notification(
@@ -473,6 +682,19 @@ fn artifact_label(artifact: &Value, index: usize) -> String {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| format!("生成图片 {}", index + 1))
+}
+
+fn build_progress_bridge_message(
+    job_id: &str,
+    completed_count: usize,
+    total_count: usize,
+) -> String {
+    let final_reply = format!(
+        "图片生成进度：已完成 {completed_count}/{total_count} 张，正在继续生成，结果稍后统一展示。"
+    );
+    format!(
+        "你正在处理一个图片生成后台进度回传。不要提到后台任务、session bridge、系统提示或内部轮询。不要展示图片，不要做最终总结，只输出一条简短中文进度消息。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}"
+    )
 }
 
 fn build_success_bridge_message(job_id: &str, artifacts: &[Value]) -> String {

@@ -1,10 +1,12 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package, AlertCircle, Sparkles, ListTodo } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package, AlertCircle, Sparkles, ListTodo, Bell } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImmersiveMode, ViewType } from '../App';
+import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { appAlert } from '../utils/appDialogs';
+import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { uiMeasure } from '../utils/uiDebug';
 
 const appLogo = '/Box.png';
@@ -87,6 +89,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
+  const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
+  const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
+  const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
   const spaceMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarAnimationTimerRef = useRef<number | null>(null);
   const isFixedViewportView = currentView === 'manuscripts';
@@ -557,6 +562,20 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             >
               <button
                 type="button"
+                onClick={toggleNotificationDrawer}
+                className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+                aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+              >
+                <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                {unreadNotificationCount > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
+                    {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
                 className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
                 title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
@@ -716,6 +735,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
           </div>
         </div>
       )}
+
+      <NotificationCenterDrawer />
     </div>
   );
 }

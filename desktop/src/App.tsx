@@ -5,6 +5,8 @@ import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
+import { NotificationsHost } from './notifications/NotificationsHost';
+import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -343,6 +345,20 @@ function App() {
       setImmersiveMode(false);
     }
   }, [currentView, immersiveMode]);
+
+  useEffect(() => {
+    const handleNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<{ view?: ViewType }>).detail;
+      const nextView = detail?.view;
+      if (!nextView) return;
+      setCurrentView(nextView);
+    };
+
+    window.addEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
+    return () => {
+      window.removeEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     capturePromptOpenRef.current = isCapturePromptOpen;
@@ -775,6 +791,7 @@ function App() {
         onClose={handleCloseStartupMigration}
       />
       <FirstRunTour currentView={currentView} onNavigate={setCurrentView} />
+      <NotificationsHost currentView={currentView} />
       <AppDialogsHost />
     </>
   );

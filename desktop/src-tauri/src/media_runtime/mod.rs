@@ -670,9 +670,45 @@ fn media_job_summary(
         .filter(|value| !value.is_empty())
         .map(|value| value.chars().take(96).collect::<String>())
         .unwrap_or_else(|| title.clone());
+    let progress_text = if job.kind == "image" {
+        let completed_images = job
+            .result_json
+            .as_ref()
+            .and_then(|value| value.pointer("/progress/completedImages"))
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .unwrap_or_else(|| artifact_count.max(0) as usize);
+        let expected_images = job
+            .result_json
+            .as_ref()
+            .and_then(|value| value.pointer("/progress/expectedImages"))
+            .and_then(Value::as_u64)
+            .map(|value| value as usize)
+            .or_else(|| {
+                request
+                    .get("imagePlanItems")
+                    .and_then(Value::as_array)
+                    .map(|items| items.len())
+            })
+            .or_else(|| {
+                request
+                    .get("count")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize)
+            })
+            .unwrap_or(completed_images.max(1));
+        if completed_images > 0 && completed_images < expected_images {
+            Some(format!("已生成 {completed_images}/{expected_images} 张"))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let latest_text = attempt
         .last_error
         .clone()
+        .or(progress_text)
         .or_else(|| {
             job.result_json
                 .as_ref()
@@ -2105,49 +2141,116 @@ pub(crate) fn compat_generate_and_wait(
     }))
 }
 
-fn run_image_job_sync(app: &AppHandle, loaded: &LoadedJob) -> Result<Value, String> {
+fn persist_generated_image_artifact(
+    app: &AppHandle,
+    loaded: &LoadedJob,
+    asset: &MediaAssetRecord,
+    completed_count: usize,
+    total_count: usize,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let conn = open_media_runtime_connection(&state)?;
+    let Some(current) = load_job_with_current_attempt(&conn, &loaded.job.job_id)? else {
+        return Ok(());
+    };
+    let asset_value =
+        serde_json::to_value(asset).map_err(|error| format!("serialize media asset: {error}"))?;
+    insert_artifact_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        "media",
+        asset.relative_path.as_deref(),
+        asset.absolute_path.as_deref(),
+        asset.mime_type.as_deref(),
+        asset.preview_url.as_deref(),
+        Some(&asset_value),
+    )?;
+    set_attempt_details(
+        &conn,
+        &current,
+        "persisting",
+        current.attempt.provider_task_id.as_deref(),
+        current.attempt.provider_status_url.as_deref(),
+        current.attempt.next_poll_at,
+        current.attempt.response_json.as_ref(),
+        None,
+        false,
+    )?;
+    append_event_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        Some(&current.attempt.attempt_id),
+        "artifact_persisted",
+        &format!("Image {completed_count}/{total_count} persisted"),
+        Some(&json!({
+            "completedImages": completed_count,
+            "expectedImages": total_count,
+            "asset": asset_value.clone(),
+        })),
+    )?;
+    with_store_mut(&state, |store| {
+        store.media_assets.push(asset.clone());
+        Ok(())
+    })?;
+    persist_media_workspace_catalog(&state)?;
+    let artifacts = load_artifacts_for_job(&conn, &loaded.job.job_id)?;
+    update_job_result_json(
+        &conn,
+        &loaded.job.job_id,
+        &json!({
+            "assets": artifacts.iter().map(artifact_projection).collect::<Vec<_>>(),
+            "progress": {
+                "completedImages": completed_count,
+                "expectedImages": total_count,
+            },
+            "lastCompletedAsset": asset_value,
+        }),
+        false,
+    )?;
+    emit_job_updated(app, &state, &loaded.job.job_id);
+    Ok(())
+}
+
+fn run_image_job_sync(
+    app: &AppHandle,
+    loaded: &LoadedJob,
+) -> Result<Vec<MediaAssetRecord>, String> {
     let state = app.state::<AppState>();
     let mut payload = loaded.job.request_json.clone();
     if let Some(object) = payload.as_object_mut() {
         object.insert("runtimeBypass".to_string(), json!(true));
         object.insert("source".to_string(), json!(loaded.job.source.clone()));
     }
-    commands::generation::handle_generation_channel(app, &state, "image-gen:generate", &payload)
-        .ok_or_else(|| "image generation handler unavailable".to_string())?
+    commands::generation::generate_image_assets(&state, &payload, |asset, completed, total| {
+        persist_generated_image_artifact(app, loaded, asset, completed, total)
+    })
+    .map(|execution| execution.assets)
 }
 
-fn complete_image_job(app: &AppHandle, job_id: &str, response: &Value) -> Result<(), String> {
+fn complete_image_job(
+    app: &AppHandle,
+    job_id: &str,
+    assets: &[MediaAssetRecord],
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     let conn = open_media_runtime_connection(&state)?;
     let Some(loaded) = load_job_with_current_attempt(&conn, job_id)? else {
         return Ok(());
     };
-    let assets = response
-        .get("assets")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for asset in &assets {
-        insert_artifact_with_connection(
-            &conn,
-            job_id,
-            "media",
-            asset.get("relativePath").and_then(Value::as_str),
-            asset.get("absolutePath").and_then(Value::as_str),
-            asset.get("mimeType").and_then(Value::as_str),
-            asset.get("previewUrl").and_then(Value::as_str),
-            Some(asset),
-        )?;
-    }
-    update_job_result_json(
-        &conn,
-        job_id,
-        &json!({
-            "response": response,
-            "assets": assets,
-        }),
-        true,
-    )?;
+    let asset_values = assets
+        .iter()
+        .map(|asset| {
+            serde_json::to_value(asset).map_err(|error| format!("serialize media asset: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let result_json = json!({
+        "assets": asset_values,
+        "progress": {
+            "completedImages": assets.len(),
+            "expectedImages": assets.len(),
+        },
+    });
+    update_job_result_json(&conn, job_id, &result_json, true)?;
     set_attempt_details(
         &conn,
         &loaded,
@@ -2155,7 +2258,7 @@ fn complete_image_job(app: &AppHandle, job_id: &str, response: &Value) -> Result
         loaded.attempt.provider_task_id.as_deref(),
         loaded.attempt.provider_status_url.as_deref(),
         None,
-        Some(response),
+        Some(&result_json),
         None,
         true,
     )?;
@@ -2165,7 +2268,10 @@ fn complete_image_job(app: &AppHandle, job_id: &str, response: &Value) -> Result
         Some(&loaded.attempt.attempt_id),
         "completed",
         "Image generation completed",
-        Some(response),
+        Some(&json!({
+            "completedImages": assets.len(),
+            "expectedImages": assets.len(),
+        })),
     )?;
     emit_job_updated(app, &state, job_id);
     Ok(())
@@ -2631,7 +2737,7 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
 fn run_image_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<RuntimeSlots>>) {
     let job_id = loaded.job.job_id.clone();
     let result = run_image_job_sync(&app, &loaded)
-        .and_then(|response| complete_image_job(&app, &job_id, &response));
+        .and_then(|assets| complete_image_job(&app, &job_id, &assets));
     if let Err(error) = result {
         let _ = schedule_stage_retry_or_dead_letter(&app, &job_id, "image-submit", &error, None);
         emit_job_log(
