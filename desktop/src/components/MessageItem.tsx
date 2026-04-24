@@ -213,6 +213,7 @@ interface ImageContextMenuState {
   x: number;
   y: number;
   src: string;
+  actionSource: string;
 }
 
 function formatProcessingElapsed(totalMs: number): string {
@@ -345,6 +346,7 @@ export const MessageItem = memo(({
     x: 0,
     y: 0,
     src: '',
+    actionSource: '',
   });
   const filteredTimeline = useMemo(
     () => workflowDisplayMode === 'thoughts-only'
@@ -387,36 +389,43 @@ export const MessageItem = memo(({
     };
   }, [imageMenu.visible]);
 
-  const handleImageContextMenu = useCallback((event: React.MouseEvent<HTMLImageElement>, source: string) => {
-    event.preventDefault();
+  const openImageMenu = useCallback((x: number, y: number, source: string, actionSource?: string) => {
     const normalized = resolveAssetUrl(String(source || '').trim());
-    if (!normalized) return;
+    const rawActionSource = String(actionSource || source || '').trim();
+    if (!normalized || !rawActionSource) return;
     setImageMenu({
       visible: true,
-      x: event.clientX,
-      y: event.clientY,
+      x,
+      y,
       src: normalized,
+      actionSource: rawActionSource,
     });
   }, []);
 
-  const handleMediaContextMenu = useCallback((event: React.MouseEvent<HTMLElement>, source: string) => {
+  const handleImageContextMenu = useCallback((
+    event: React.MouseEvent<HTMLImageElement>,
+    source: string,
+    actionSource?: string,
+  ) => {
     event.preventDefault();
-    const normalized = resolveAssetUrl(String(source || '').trim());
-    if (!normalized) return;
-    setImageMenu({
-      visible: true,
-      x: event.clientX,
-      y: event.clientY,
-      src: normalized,
-    });
-  }, []);
+    openImageMenu(event.clientX, event.clientY, source, actionSource);
+  }, [openImageMenu]);
+
+  const handleMediaContextMenu = useCallback((
+    event: React.MouseEvent<HTMLElement>,
+    source: string,
+    actionSource?: string,
+  ) => {
+    event.preventDefault();
+    openImageMenu(event.clientX, event.clientY, source, actionSource);
+  }, [openImageMenu]);
 
   const handleCopyImage = async () => {
-    if (!imageMenu.src) return;
+    if (!imageMenu.actionSource) return;
     try {
-      const result = await window.ipcRenderer.invoke('file:copy-image', { source: imageMenu.src }) as { success?: boolean };
-      if (!result?.success && /^https?:\/\//i.test(imageMenu.src) && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(imageMenu.src);
+      const result = await window.ipcRenderer.invoke('file:copy-image', { source: imageMenu.actionSource }) as { success?: boolean };
+      if (!result?.success && /^https?:\/\//i.test(imageMenu.actionSource) && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(imageMenu.actionSource);
       }
     } catch (error) {
       console.error('Failed to copy image:', error);
@@ -426,13 +435,13 @@ export const MessageItem = memo(({
   };
 
   const handleShowInFolder = async () => {
-    if (!imageMenu.src) return;
-    if (!isLocalAssetUrl(imageMenu.src)) {
+    if (!imageMenu.actionSource) return;
+    if (!isLocalAssetUrl(imageMenu.actionSource)) {
       setImageMenu((prev) => ({ ...prev, visible: false }));
       return;
     }
     try {
-      await window.ipcRenderer.invoke('file:show-in-folder', { source: imageMenu.src });
+      await window.ipcRenderer.invoke('file:show-in-folder', { source: imageMenu.actionSource });
     } catch (error) {
       console.error('Failed to show image in folder:', error);
     } finally {
@@ -440,12 +449,13 @@ export const MessageItem = memo(({
     }
   };
 
-  const menuSupportsReveal = isLocalAssetUrl(imageMenu.src);
+  const menuSupportsReveal = isLocalAssetUrl(imageMenu.actionSource);
 
   const markdownComponents = useMemo<Components>(() => ({
     ...MARKDOWN_COMPONENTS,
     img({ src, alt }: any) {
-      const mediaUrl = resolveAssetUrl(String(src || '').trim());
+      const rawSource = String(src || '').trim();
+      const mediaUrl = resolveAssetUrl(rawSource);
       if (!mediaUrl) return <span className="text-xs text-text-tertiary">资源地址无效</span>;
       if (isVideoAssetUrl(mediaUrl)) {
         return (
@@ -454,7 +464,7 @@ export const MessageItem = memo(({
             controls
             preload="metadata"
             className="my-3 max-h-[32rem] w-full max-w-full rounded-xl border border-border bg-surface-secondary shadow-sm"
-            onContextMenu={(event) => handleMediaContextMenu(event, mediaUrl)}
+            onContextMenu={(event) => handleMediaContextMenu(event, mediaUrl, rawSource)}
             title="右键复制或在文件夹中打开"
           />
         );
@@ -465,7 +475,7 @@ export const MessageItem = memo(({
           alt={alt || ''}
           className="my-3 max-h-[28rem] w-auto max-w-full cursor-zoom-in rounded-xl border border-border bg-surface-secondary object-contain shadow-sm"
           onClick={() => setPreviewImage({ src: mediaUrl, alt: alt || '' })}
-          onContextMenu={(event) => handleImageContextMenu(event, mediaUrl)}
+          onContextMenu={(event) => handleImageContextMenu(event, mediaUrl, rawSource)}
           title="点击预览，右键复制或在文件夹中打开"
         />
       );
@@ -497,6 +507,15 @@ export const MessageItem = memo(({
     if (!preferred) return '';
     return preferred.startsWith('data:') ? preferred : resolveAssetUrl(preferred);
   }, []);
+
+  const resolveUploadedAttachmentActionSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => (
+    String(
+      attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || '',
+    ).trim()
+  ), []);
 
   const renderYoutubeCard = (card: { title: string; thumbnailUrl?: string }) => (
     <div className="bg-white/10 rounded-lg overflow-hidden">
@@ -566,6 +585,7 @@ export const MessageItem = memo(({
 
   const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const imageSrc = isUploadedImageAttachment(attachment) ? resolveUploadedAttachmentSource(attachment) : '';
+    const actionSource = resolveUploadedAttachmentActionSource(attachment);
     if (imageSrc) {
       return (
         <div className="mt-2">
@@ -574,7 +594,7 @@ export const MessageItem = memo(({
             alt={attachment.name}
             className="h-24 w-24 cursor-zoom-in rounded-2xl border border-border bg-surface-secondary object-cover shadow-sm"
             onClick={() => setPreviewImage({ src: imageSrc, alt: attachment.name })}
-            onContextMenu={(event) => handleImageContextMenu(event, imageSrc)}
+            onContextMenu={(event) => handleImageContextMenu(event, imageSrc, actionSource)}
             title={attachment.name}
           />
         </div>

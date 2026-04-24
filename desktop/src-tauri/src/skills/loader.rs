@@ -155,6 +155,14 @@ fn legacy_default_activation_scope(skill_name: &str) -> Option<&'static str> {
     }
 }
 
+fn compat_activation_scope_override(skill_name: &str) -> Option<&'static str> {
+    match skill_name.trim().to_ascii_lowercase().as_str() {
+        // Writing-style should never stay sticky across unrelated follow-up turns.
+        "writing-style" => Some("turn"),
+        _ => None,
+    }
+}
+
 pub fn normalized_activation_scope(value: Option<&str>) -> &'static str {
     match value
         .map(str::trim)
@@ -219,7 +227,9 @@ fn fingerprint_for_loaded_skill(
 
 pub fn load_skill_record(record: &SkillRecord) -> LoadedSkillRecord {
     let (mut metadata, body) = split_skill_body(&record.body);
-    if metadata.activation_scope.is_none() {
+    if let Some(scope) = compat_activation_scope_override(&record.name) {
+        metadata.activation_scope = Some(scope.to_string());
+    } else if metadata.activation_scope.is_none() {
         metadata.activation_scope =
             legacy_default_activation_scope(&record.name).map(ToString::to_string);
     }
@@ -529,6 +539,23 @@ mod tests {
             body: "# Writing Style\n\nBody".to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: Some(true),
+            disabled: Some(false),
+        });
+        assert_eq!(
+            normalized_activation_scope(loaded.metadata.activation_scope.as_deref()),
+            "turn"
+        );
+    }
+
+    #[test]
+    fn load_skill_record_overrides_session_scope_for_writing_style() {
+        let loaded = load_skill_record(&SkillRecord {
+            name: "writing-style".to_string(),
+            description: "Writing style".to_string(),
+            location: "redbox://skills/writing-style".to_string(),
+            body: "---\nactionivationScope: session\nactivationScope: session\n---\n# Writing Style\n\nBody".to_string(),
+            source_scope: Some("workspace".to_string()),
+            is_builtin: Some(false),
             disabled: Some(false),
         });
         assert_eq!(

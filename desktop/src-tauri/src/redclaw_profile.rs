@@ -191,7 +191,7 @@ fn build_default_space_writing_style_skill_doc() -> String {
         "allowedRuntimeModes: [wander, redclaw, chatroom]",
         "hookMode: inline",
         "autoActivate: false",
-        "activationScope: session",
+        "activationScope: turn",
         "contextNote: 当前空间提供一份默认 writing-style 模板，必要时可按需激活。完成风格初始化后，这份技能会升级为该空间的专属写作规则。",
         "promptPrefix: 当当前任务明确是写作、改写、润色或选题 framing 时，再应用这份默认 writing-style；若用户尚未完成风格初始化，先按这份基础模板写，保持真实、具体、克制、可执行。",
         "promptSuffix: 如果当前任务不是写作，不要让 writing-style 主导其他决策；如果当前任务是写作，标题、正文、CTA 都要先遵守这份默认模板。标题控制在 20 个汉字以内，禁止模板化 AI 文案、编造经历和分页分隔线。",
@@ -664,7 +664,7 @@ fn build_space_writing_style_skill(
         "allowedRuntimeModes: [wander, redclaw, chatroom]".to_string(),
         "hookMode: inline".to_string(),
         "autoActivate: false".to_string(),
-        "activationScope: session".to_string(),
+        "activationScope: turn".to_string(),
         format!(
             "contextNote: 当前空间存在一份可按需激活的 writing-style。当前空间风格画像为 {}；经营模式 {}；账号角色 {}。",
             summary_headline, primary_model_label, role_position_label

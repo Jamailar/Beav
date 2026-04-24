@@ -1459,11 +1459,11 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_command_json_stdout, guess_mime_and_kind,
+        append_generated_media_markdown, decode_command_json_stdout, guess_mime_and_kind,
         interactive_execution_progress_observe_success, interactive_tool_panic_message,
         json_value_to_path_list, manuscript_save_result_path,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
-        structured_tool_error_code, validate_runtime_tool_message_sequence,
+        structured_tool_error_code, validate_runtime_tool_message_sequence, GeneratedMediaPreview,
         InteractiveExecutionContract, InteractiveExecutionProgress,
     };
     use serde_json::json;
@@ -1606,6 +1606,19 @@ mod tests {
             .collect::<Vec<_>>();
         let decoded = decode_command_json_stdout(&utf16);
         assert_eq!(decoded, r#"["C:\\RedBox\\cover.png"]"#);
+    }
+
+    #[test]
+    fn append_generated_media_markdown_wraps_windows_urls_for_markdown() {
+        let markdown = append_generated_media_markdown(
+            "",
+            "## 生成图片",
+            &[GeneratedMediaPreview {
+                id: "asset-1".to_string(),
+                preview_url: "file:///C:/Users/Jam/My Images/cover (1).png".to_string(),
+            }],
+        );
+        assert!(markdown.contains("![generated-1](<file:///C:/Users/Jam/My Images/cover (1).png>)"));
     }
 
     #[test]
@@ -5074,7 +5087,7 @@ fn interactive_authoring_continuation_instruction(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.content_path.as_str());
     Some(format!(
-        "当前写稿工程已创建并绑定为 `{project_path}`，正文入口是 `{content_path}`。下一步直接调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文。不要重新创建工程，不要重复传 path，也不要先输出口头说明。"
+        "当前写稿工程已创建并绑定为 `{project_path}`，正文入口是 `{content_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
     ))
 }
 
@@ -5096,7 +5109,7 @@ fn interactive_authoring_error_correction_instruction(
     }
     let target = interactive_authoring_session_target(state, session_id)?;
     Some(format!(
-        "你刚才发送了空的 `app_cli` 调用。当前写稿工程已经绑定为 `{}`。现在直接调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<完整正文>\" }})` 保存完整正文；不要再次发送空的 app_cli，也不要重新创建工程。",
+        "你刚才发送了空的 `app_cli` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容；不要再次发送空的 app_cli，也不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
         target.project_path
     ))
 }
@@ -5346,7 +5359,7 @@ fn append_generated_media_markdown(
         unique_items
             .iter()
             .enumerate()
-            .map(|(index, item)| format!("![generated-{}]({})", index + 1, item.preview_url))
+            .map(|(index, item)| format!("![generated-{}](<{}>)", index + 1, item.preview_url))
             .collect::<Vec<_>>()
             .join("\n\n"),
     ]
@@ -7029,7 +7042,6 @@ fn run_openai_interactive_chat_runtime(
         let mut skill_activation_names = Vec::<String>::new();
         let mut authoring_continuation_instruction = None::<String>;
         let mut authoring_error_correction_instruction = None::<String>;
-        let mut suppress_loop_guard_for_round = false;
         for call in tool_calls {
             let tool_started_at = now_ms();
             let normalized_tool_call =
@@ -7287,9 +7299,6 @@ fn run_openai_interactive_chat_runtime(
                                 &failure_text,
                             );
                     }
-                    if authoring_error_correction_instruction.is_some() {
-                        suppress_loop_guard_for_round = true;
-                    }
                     tool_round_digests.push(build_interactive_tool_outcome_digest(
                         effective_tool_name,
                         &effective_arguments,
@@ -7335,10 +7344,8 @@ fn run_openai_interactive_chat_runtime(
             &config.model_name,
             &canonical_messages,
         )?;
-        if !suppress_loop_guard_for_round {
-            if let Some(reason) = loop_guard.observe_tool_round(&tool_round_digests) {
-                emit_loop_guard_checkpoint(app, session_id, &reason, &tool_round_digests);
-            }
+        if let Some(reason) = loop_guard.observe_tool_round(&tool_round_digests) {
+            emit_loop_guard_checkpoint(app, session_id, &reason, &tool_round_digests);
         }
     }
     Err(if is_wander {
