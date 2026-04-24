@@ -12,6 +12,7 @@ import {
     type UploadedFileAttachment,
 } from '../components/ChatComposer';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
+import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
@@ -416,12 +417,16 @@ export function CreativeChat({
                 mimeType: clip.mimeType || 'audio/wav',
                 fileName: clip.fileName || `creative_chat_audio_${Date.now()}.wav`,
             });
-            if (!result?.success || !String(result.text || '').trim()) {
-                throw new Error(result?.error || '语音转文字失败');
+            const resolved = resolveUsableTranscript(result);
+            if (resolved.error) {
+                throw new Error(resolved.error || '语音转文字失败');
+            }
+            if (!resolved.text) {
+                return;
             }
             setInputValue((prev) => {
                 const current = String(prev || '').trim();
-                const next = String(result.text || '').trim();
+                const next = resolved.text || '';
                 return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
             });
             requestAnimationFrame(() => {

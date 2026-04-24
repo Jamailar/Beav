@@ -22,6 +22,7 @@ import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
+import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
@@ -2567,12 +2568,16 @@ export function Chat({
         mimeType: clip.mimeType || 'audio/wav',
         fileName: clip.fileName || `chat_audio_${Date.now()}.wav`,
       });
-      if (!result?.success || !String(result.text || '').trim()) {
-        throw new Error(result?.error || '语音转文字失败');
+      const resolved = resolveUsableTranscript(result);
+      if (resolved.error) {
+        throw new Error(resolved.error || '语音转文字失败');
+      }
+      if (!resolved.text) {
+        return;
       }
       setInput((prev) => {
         const current = String(prev || '').trim();
-        const next = String(result.text || '').trim();
+        const next = resolved.text || '';
         return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
       });
       requestAnimationFrame(() => {

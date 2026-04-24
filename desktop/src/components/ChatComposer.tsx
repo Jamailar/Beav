@@ -235,45 +235,28 @@ function ComposerRecordingStatus({
   elapsedMs: number;
 }) {
   return (
-    <div
-      className={clsx(
-        'flex min-w-0 flex-1 items-center gap-3 overflow-hidden rounded-full border px-3 py-2',
-        darkEmbedded
-          ? 'border-white/10 bg-white/[0.045] text-white/76'
-          : 'border-[#dccfb6] bg-[#f7f0e2] text-[#5f6d79]',
-      )}
-      aria-live="polite"
-    >
-      <div className="flex items-center gap-2 shrink-0">
-        <span className={clsx('h-2.5 w-2.5 rounded-full', darkEmbedded ? 'bg-red-400' : 'bg-[#dd6b5b]', 'animate-pulse')} />
-        <span className={clsx('text-[12px] font-medium tracking-[0.08em]', darkEmbedded ? 'text-white/54' : 'text-[#998a74]')}>
-          正在录音
-        </span>
+    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-1" aria-live="polite">
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className={clsx('h-2 w-2 rounded-full', darkEmbedded ? 'bg-red-400/90' : 'bg-[#dd6b5b]', 'animate-pulse')} />
       </div>
-      <div className="relative flex min-w-0 flex-1 items-center">
-        <div
-          className={clsx(
-            'pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed',
-            darkEmbedded ? 'border-white/10' : 'border-[#d8cbb4]',
-          )}
-        />
-        <div className="relative z-[1] flex h-8 min-w-0 flex-1 items-center justify-center gap-1 px-2">
+      <div className="flex min-w-0 flex-1 items-center">
+        <div className="relative z-[1] flex h-5 min-w-0 flex-1 items-center justify-center gap-[3px] px-1">
           {RECORDING_WAVE_BARS.map((height, index) => (
             <span
               key={`${index}-${height}`}
               className={clsx(
-                'recording-wave-bar w-[3px] shrink-0 rounded-full',
-                darkEmbedded ? 'bg-white/75' : 'bg-[#61707c]',
+                'recording-wave-bar w-[2px] shrink-0 rounded-full',
+                darkEmbedded ? 'bg-white/68' : 'bg-[#697885]',
               )}
               style={{
-                height: `${10 + Math.round(height * 18)}px`,
+                height: `${5 + Math.round(height * 9)}px`,
                 animationDelay: `${index * 70}ms`,
               }}
             />
           ))}
         </div>
       </div>
-      <div className={clsx('shrink-0 text-[12px] font-semibold tabular-nums', darkEmbedded ? 'text-white/72' : 'text-[#7b8590]')}>
+      <div className={clsx('shrink-0 text-[11px] font-medium tabular-nums', darkEmbedded ? 'text-white/58' : 'text-[#8a94a0]')}>
         {formatRecordingDuration(elapsedMs)}
       </div>
     </div>
