@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 use super::get_media_job_projection;
@@ -11,7 +12,7 @@ use crate::runtime::{
     set_runtime_graph_node, store_runtime_task, RuntimeArtifact, RuntimeCheckpointRecord,
     RuntimeTaskRecord,
 };
-use crate::{now_i64, AppState};
+use crate::{file_url_for_path, now_i64, AppState};
 
 const MEDIA_FOLLOWUP_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 
@@ -702,15 +703,32 @@ fn build_success_bridge_message(job_id: &str, artifacts: &[Value]) -> String {
         .iter()
         .enumerate()
         .filter_map(|(index, artifact)| {
-            let absolute_path = artifact
-                .get("absolutePath")
+            let image_source = artifact
+                .get("previewUrl")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .filter(|value| !value.is_empty())?;
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    artifact
+                        .get("absolutePath")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                })?;
+            let normalized_source = if image_source.starts_with("file://") {
+                image_source.to_string()
+            } else if Path::new(image_source).is_absolute()
+                || image_source.starts_with("\\\\")
+                || image_source.as_bytes().get(1).copied() == Some(b':')
+            {
+                file_url_for_path(Path::new(image_source))
+            } else {
+                image_source.to_string()
+            };
             Some(format!(
-                "![{}]({})",
+                "![{}](<{}>)",
                 sanitize_markdown_label(&artifact_label(artifact, index)),
-                absolute_path
+                normalized_source
             ))
         })
         .collect::<Vec<_>>()
