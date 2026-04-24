@@ -1935,7 +1935,7 @@ pub fn handle_chat_sessions_wander_channel(
                 fs::create_dir_all(&temp_dir).map_err(|error| error.to_string())?;
                 let audio_path = temp_dir.join(file_name);
                 write_base64_payload_to_file(&audio_base64, &audio_path)?;
-                let text = run_curl_transcription(
+                let transcription_result = run_curl_transcription(
                     &endpoint,
                     api_key.as_deref(),
                     &model_name,
@@ -1956,13 +1956,41 @@ pub fn handle_chat_sessions_wander_channel(
                     if fallback.is_empty() {
                         Err("语音转写失败".to_string())
                     } else {
-                        Ok(format!(
-                            "音频已接收，但转写接口不可用。\n\n文件类型：{fallback}"
-                        ))
+                        Err(format!("__transcription_unavailable__::{fallback}"))
                     }
-                })?;
+                });
                 let _ = fs::remove_file(&audio_path);
-                Ok(json!({ "success": true, "text": text }))
+                match transcription_result {
+                    Ok(text) => {
+                        let trimmed = text.trim().to_string();
+                        if trimmed.is_empty() {
+                            Ok(json!({
+                                "success": false,
+                                "reason": "empty_transcript",
+                                "error": "未识别到可用语音内容",
+                            }))
+                        } else {
+                            Ok(json!({ "success": true, "text": trimmed }))
+                        }
+                    }
+                    Err(error) if error.starts_with("__transcription_unavailable__::") => {
+                        let diagnostic = error
+                            .trim_start_matches("__transcription_unavailable__::")
+                            .trim()
+                            .to_string();
+                        Ok(json!({
+                            "success": false,
+                            "reason": "transcription_unavailable",
+                            "error": "音频已接收，但当前转写接口不可用",
+                            "diagnostic": diagnostic,
+                        }))
+                    }
+                    Err(error) => Ok(json!({
+                        "success": false,
+                        "reason": "transcription_failed",
+                        "error": error,
+                    })),
+                }
             }
             "wander:list-history" => with_store_mut(state, |store| {
                 if store.wander_history.is_empty() {
