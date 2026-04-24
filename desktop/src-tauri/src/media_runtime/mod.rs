@@ -1,16 +1,19 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
 };
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::Duration;
 
+use reqwest::Client;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::library::persist_media_workspace_catalog;
@@ -29,6 +32,8 @@ const DISPATCH_TICK_MS: u64 = 350;
 const DEFAULT_POLL_INTERVAL_MS: i64 = 2_500;
 const DEFAULT_JOB_WAIT_TIMEOUT_MS: u64 = 15 * 60 * 1000;
 const ACTIVE_STAGE_LEASE_MS: i64 = 20 * 60 * 1000;
+
+static MEDIA_RUNTIME_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 #[derive(Default)]
 struct RuntimeSlots {
@@ -221,6 +226,172 @@ fn open_media_runtime_connection(state: &State<'_, AppState>) -> Result<Connecti
 pub(crate) fn ensure_media_runtime_ready(state: &State<'_, AppState>) -> Result<(), String> {
     let _ = open_media_runtime_connection(state)?;
     Ok(())
+}
+
+fn media_runtime_http_client() -> Result<&'static Client, String> {
+    if let Some(client) = MEDIA_RUNTIME_HTTP_CLIENT.get() {
+        return Ok(client);
+    }
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let _ = MEDIA_RUNTIME_HTTP_CLIENT.set(client);
+    MEDIA_RUNTIME_HTTP_CLIENT
+        .get()
+        .ok_or_else(|| "media runtime http client initialization failed".to_string())
+}
+
+async fn media_runtime_json_request(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    timeout: Option<Duration>,
+) -> Result<HttpJsonResponse, String> {
+    async fn attempt(
+        client: &Client,
+        method: &str,
+        url: &str,
+        api_key: Option<&str>,
+        extra_headers: &[(&str, String)],
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> Result<HttpJsonResponse, String> {
+        let method =
+            reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| error.to_string())?;
+        let mut request = client.request(method, url);
+        if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+            request = request.bearer_auth(key);
+        }
+        for (header, value) in extra_headers {
+            request = request.header(*header, value.as_str());
+        }
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request.send().await.map_err(|error| error.to_string())?;
+        let status = response.status().as_u16();
+        let text = response.text().await.map_err(|error| error.to_string())?;
+        let body = if text.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text))
+        };
+        Ok(HttpJsonResponse { status, body })
+    }
+
+    let client = media_runtime_http_client()?;
+    let initial = attempt(
+        client,
+        method,
+        url,
+        api_key,
+        extra_headers,
+        body.as_ref(),
+        timeout,
+    )
+    .await?;
+    if initial.status == 401 {
+        if let Some(refreshed_api_key) =
+            crate::try_refresh_official_auth_for_ai_request(url, api_key, "media-runtime-http-401")?
+        {
+            return attempt(
+                client,
+                method,
+                url,
+                Some(refreshed_api_key.as_str()),
+                extra_headers,
+                body.as_ref(),
+                timeout,
+            )
+            .await;
+        }
+    }
+    Ok(initial)
+}
+
+async fn media_runtime_bytes_request(
+    method: &str,
+    url: &str,
+    api_key: Option<&str>,
+    extra_headers: &[(&str, String)],
+    body: Option<Value>,
+    timeout: Option<Duration>,
+) -> Result<Vec<u8>, String> {
+    async fn attempt(
+        client: &Client,
+        method: &str,
+        url: &str,
+        api_key: Option<&str>,
+        extra_headers: &[(&str, String)],
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> Result<Vec<u8>, String> {
+        let method =
+            reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| error.to_string())?;
+        let mut request = client.request(method, url);
+        if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+            request = request.bearer_auth(key);
+        }
+        for (header, value) in extra_headers {
+            request = request.header(*header, value.as_str());
+        }
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request.send().await.map_err(|error| error.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("HTTP {} {}", response.status().as_u16(), url));
+        }
+        let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+        Ok(bytes.to_vec())
+    }
+
+    let client = media_runtime_http_client()?;
+    match attempt(
+        client,
+        method,
+        url,
+        api_key,
+        extra_headers,
+        body.as_ref(),
+        timeout,
+    )
+    .await
+    {
+        Ok(bytes) => Ok(bytes),
+        Err(error) => {
+            if error.starts_with("HTTP 401 ") {
+                if let Some(refreshed_api_key) = crate::try_refresh_official_auth_for_ai_request(
+                    url,
+                    api_key,
+                    "media-runtime-bytes-401",
+                )? {
+                    return attempt(
+                        client,
+                        method,
+                        url,
+                        Some(refreshed_api_key.as_str()),
+                        extra_headers,
+                        body.as_ref(),
+                        timeout,
+                    )
+                    .await;
+                }
+            }
+            Err(error)
+        }
+    }
 }
 
 fn json_to_text(value: &Value) -> Result<String, String> {
@@ -843,42 +1014,100 @@ fn set_job_terminal_failure(
     Ok(())
 }
 
-fn job_retry_prompt_message(kind: &str, timed_out: bool) -> String {
-    match (kind, timed_out) {
-        ("image", true) => "图片生成任务超时，请重试。".to_string(),
-        ("video", true) => "视频生成任务超时，请重试。".to_string(),
-        ("image", false) => "图片生成失败，请重试。".to_string(),
-        ("video", false) => "视频生成失败，请重试。".to_string(),
-        (_, true) => "媒体生成任务超时，请重试。".to_string(),
-        _ => "媒体生成失败，请重试。".to_string(),
+fn retry_policy_for_stage(stage: &str) -> Option<(&'static str, &'static str, usize, i64)> {
+    match stage {
+        "image-submit" => Some(("queued", "retry_image_submit", 3, 1_500)),
+        "video-submit" => Some(("queued", "retry_video_submit", 3, 1_500)),
+        "video-poll" => Some(("polling", "retry_video_poll", 20, 2_500)),
+        "video-download" => Some(("downloading", "retry_video_download", 5, 2_000)),
+        _ => None,
     }
 }
 
 fn schedule_stage_retry_or_dead_letter(
     app: &AppHandle,
     job_id: &str,
-    _stage: &str,
+    stage: &str,
     message: &str,
     result_json: Option<&Value>,
 ) -> Result<(), String> {
+    let Some((next_status, retry_event_type, retry_limit, base_delay_ms)) =
+        retry_policy_for_stage(stage)
+    else {
+        return fail_job(app, job_id, message, result_json);
+    };
     let state = app.state::<AppState>();
     let conn = open_media_runtime_connection(&state)?;
     let Some(loaded) = load_job_with_current_attempt(&conn, job_id)? else {
         return Ok(());
     };
-    let prompt_message = if message.to_ascii_lowercase().contains("timeout") {
-        job_retry_prompt_message(&loaded.job.kind, true)
-    } else {
-        job_retry_prompt_message(&loaded.job.kind, false)
-    };
-    set_job_terminal_failure(&conn, &loaded, "failed", &prompt_message, result_json)?;
+    let retry_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM media_job_events WHERE attempt_id = ?1 AND event_type = ?2",
+            params![loaded.attempt.attempt_id, retry_event_type],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())? as usize;
+    if retry_count >= retry_limit {
+        set_job_terminal_failure(&conn, &loaded, "dead_lettered", message, result_json)?;
+        append_event_with_connection(
+            &conn,
+            job_id,
+            Some(&loaded.attempt.attempt_id),
+            "dead_lettered",
+            message,
+            result_json,
+        )?;
+        emit_job_updated(app, &state, job_id);
+        return Ok(());
+    }
+    let delay_ms = base_delay_ms.saturating_mul(1_i64 << retry_count.min(6));
+    let retry_not_before_at = now_i64() + delay_ms;
+    let now_iso = now_iso();
+    conn.execute(
+        r#"
+        UPDATE media_jobs
+        SET status = ?1, updated_at = ?2
+        WHERE job_id = ?3
+        "#,
+        params![next_status, now_iso, job_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        r#"
+        UPDATE media_job_attempts
+        SET status = ?1,
+            lease_owner = NULL,
+            lease_expires_at = NULL,
+            next_poll_at = CASE WHEN ?1 = 'polling' THEN COALESCE(next_poll_at, ?2) ELSE next_poll_at END,
+            retry_not_before_at = ?2,
+            last_error = ?3,
+            response_json = COALESCE(?4, response_json),
+            updated_at = ?5
+        WHERE attempt_id = ?6
+        "#,
+        params![
+            next_status,
+            retry_not_before_at,
+            message,
+            result_json.map(json_to_text).transpose()?,
+            now_iso,
+            loaded.attempt.attempt_id,
+        ],
+    )
+    .map_err(|error| error.to_string())?;
     append_event_with_connection(
         &conn,
         job_id,
         Some(&loaded.attempt.attempt_id),
-        "failed",
-        &prompt_message,
-        result_json,
+        retry_event_type,
+        &format!("Retrying {stage} after failure"),
+        Some(&json!({
+            "message": message,
+            "retryCount": retry_count + 1,
+            "retryLimit": retry_limit,
+            "retryNotBeforeAt": retry_not_before_at,
+        })),
     )?;
     emit_job_updated(app, &state, job_id);
     Ok(())
@@ -1327,7 +1556,7 @@ fn clear_expired_leases(app: &AppHandle, state: &State<'_, AppState>) -> Result<
             emit_job_updated(app, state, &job_id);
             continue;
         }
-        let timeout_message = job_retry_prompt_message(&loaded.job.kind, true);
+        let timeout_message = format!("{} stage lease expired", loaded.job.kind);
         set_job_terminal_failure(&conn, &loaded, "failed", &timeout_message, None)?;
         append_event_with_connection(
             &conn,
@@ -1474,8 +1703,17 @@ fn write_video_bytes_to_generated_path(
     if let Some(parent) = temp_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    fs::write(&temp_path, bytes).map_err(|error| error.to_string())?;
+    {
+        let mut file = File::create(&temp_path).map_err(|error| error.to_string())?;
+        use std::io::Write as _;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+    }
     fs::rename(&temp_path, &absolute_path).map_err(|error| error.to_string())?;
+    if let Some(parent) = absolute_path.parent() {
+        let dir = File::open(parent).map_err(|error| error.to_string())?;
+        dir.sync_all().map_err(|error| error.to_string())?;
+    }
     Ok((
         relative_path,
         absolute_path.display().to_string(),
@@ -1741,7 +1979,47 @@ fn complete_job_cancelled(app: &AppHandle, job_id: &str, message: &str) -> Resul
     Ok(())
 }
 
-fn poll_video_generation_once(
+async fn run_video_generation_request_async(
+    endpoint: &str,
+    api_key: Option<&str>,
+    model: &str,
+    payload: &Value,
+) -> Result<Value, String> {
+    let create_urls = build_compatible_video_route_urls(endpoint, "/videos/generations/async");
+    let body = build_video_request_body(endpoint, model, payload)?;
+    let mut last_error = None;
+    for url in create_urls {
+        match media_runtime_json_request(
+            "POST",
+            &url,
+            api_key,
+            &[],
+            Some(body.clone()),
+            Some(Duration::from_secs(45)),
+        )
+        .await
+        {
+            Ok(response) => {
+                if (200..300).contains(&response.status) {
+                    return Ok(response.body);
+                }
+                let error = format!(
+                    "[{url}] HTTP {} {}",
+                    response.status,
+                    summarize_json_body(&response.body)
+                );
+                if response.status != 404 {
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
+            Err(error) => last_error = Some(format!("[{url}] {error}")),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "video generation request failed".to_string()))
+}
+
+async fn poll_video_generation_once(
     endpoint: &str,
     api_key: Option<&str>,
     model: &str,
@@ -1752,7 +2030,7 @@ fn poll_video_generation_once(
         let query_urls =
             build_compatible_video_route_urls(endpoint, "/videos/generations/tasks/query");
         for query_url in &query_urls {
-            match run_curl_json_response(
+            match media_runtime_json_request(
                 "POST",
                 query_url,
                 api_key,
@@ -1761,8 +2039,10 @@ fn poll_video_generation_once(
                     "model": model,
                     "task_id": provider_task_id,
                 })),
-                None,
-            ) {
+                Some(Duration::from_secs(45)),
+            )
+            .await
+            {
                 Ok(response) => {
                     if !(200..300).contains(&response.status) {
                         if response.status == 404 {
@@ -1824,7 +2104,15 @@ fn poll_video_generation_once(
         provider_task_id,
         provider_status_url.map(ToString::to_string),
     );
-    let response = run_curl_json_response("GET", &poll_url, api_key, &[], None, None)?;
+    let response = media_runtime_json_request(
+        "GET",
+        &poll_url,
+        api_key,
+        &[],
+        None,
+        Some(Duration::from_secs(45)),
+    )
+    .await?;
     if !(200..300).contains(&response.status) {
         return Err(format!(
             "[{poll_url}] HTTP {} {}",
@@ -1951,7 +2239,7 @@ fn transition_video_job_to_downloading(
     Ok(())
 }
 
-fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Result<(), String> {
+async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Result<(), String> {
     let state = app.state::<AppState>();
     let conn = open_media_runtime_connection(&state)?;
     let Some(loaded) = load_job_with_current_attempt(&conn, job_id)? else {
@@ -1972,7 +2260,8 @@ fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Result<(),
     let bytes = if let Some(b64) = inline_base64 {
         decode_base64_bytes(&b64)?
     } else if let Some(url) = download_url {
-        run_curl_bytes("GET", &url, None, &[], None)?
+        media_runtime_bytes_request("GET", &url, None, &[], None, Some(Duration::from_secs(120)))
+            .await?
     } else {
         return Err("video job did not contain a ready artifact".to_string());
     };
@@ -2120,8 +2409,12 @@ fn run_image_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<R
     release_slot(&slots, &loaded, "image-submit");
 }
 
-fn run_video_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<RuntimeSlots>>) {
-    let result = (|| -> Result<(), String> {
+async fn run_video_submit_worker(
+    app: AppHandle,
+    loaded: LoadedJob,
+    slots: Arc<Mutex<RuntimeSlots>>,
+) {
+    let result = async {
         let state = app.state::<AppState>();
         if get_media_job_projection(&state, &loaded.job.job_id)?
             .get("status")
@@ -2152,12 +2445,13 @@ fn run_video_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<R
                 default_model.clone()
             }
         });
-        let response = run_video_generation_request(
+        let response = run_video_generation_request_async(
             &endpoint,
             api_key.as_deref(),
             &effective_model,
             &loaded.job.request_json,
-        )?;
+        )
+        .await?;
         if let Some(item) = extract_first_media_result(&response) {
             if let Some(b64) = item.get("b64_json").and_then(Value::as_str) {
                 return transition_video_job_to_downloading(
@@ -2181,7 +2475,8 @@ fn run_video_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<R
             extract_status_url(&response).as_deref(),
             &response,
         )
-    })();
+    }
+    .await;
     if let Err(error) = result {
         let _ = schedule_stage_retry_or_dead_letter(
             &app,
@@ -2200,8 +2495,8 @@ fn run_video_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<R
     release_slot(&slots, &loaded, "video-submit");
 }
 
-fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<RuntimeSlots>>) {
-    let result = (|| -> Result<(), String> {
+async fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<RuntimeSlots>>) {
+    let result = async {
         let state = app.state::<AppState>();
         if get_media_job_projection(&state, &loaded.job.job_id)?
             .get("status")
@@ -2225,7 +2520,9 @@ fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<Run
             &model,
             &provider_task_id,
             loaded.attempt.provider_status_url.as_deref(),
-        )? {
+        )
+        .await?
+        {
             VideoPollState::Pending {
                 response,
                 next_poll_at,
@@ -2282,7 +2579,8 @@ fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<Run
                 fail_job(&app, &loaded.job.job_id, &message, Some(&response))
             }
         }
-    })();
+    }
+    .await;
     if let Err(error) = result {
         let _ = schedule_stage_retry_or_dead_letter(
             &app,
@@ -2301,8 +2599,12 @@ fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<Run
     release_slot(&slots, &loaded, "video-poll");
 }
 
-fn run_video_download_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<RuntimeSlots>>) {
-    let result = complete_video_download_and_bind(&app, &loaded.job.job_id);
+async fn run_video_download_worker(
+    app: AppHandle,
+    loaded: LoadedJob,
+    slots: Arc<Mutex<RuntimeSlots>>,
+) {
+    let result = complete_video_download_and_bind(&app, &loaded.job.job_id).await;
     if let Err(error) = result {
         let _ = schedule_stage_retry_or_dead_letter(
             &app,
@@ -2330,16 +2632,24 @@ fn spawn_worker(
     let app_handle = app.clone();
     match stage {
         "image-submit" => {
-            thread::spawn(move || run_image_submit_worker(app_handle, loaded, slots));
+            tauri::async_runtime::spawn_blocking(move || {
+                run_image_submit_worker(app_handle, loaded, slots)
+            });
         }
         "video-submit" => {
-            thread::spawn(move || run_video_submit_worker(app_handle, loaded, slots));
+            tauri::async_runtime::spawn(async move {
+                run_video_submit_worker(app_handle, loaded, slots).await;
+            });
         }
         "video-poll" => {
-            thread::spawn(move || run_video_poll_worker(app_handle, loaded, slots));
+            tauri::async_runtime::spawn(async move {
+                run_video_poll_worker(app_handle, loaded, slots).await;
+            });
         }
         "video-download" => {
-            thread::spawn(move || run_video_download_worker(app_handle, loaded, slots));
+            tauri::async_runtime::spawn(async move {
+                run_video_download_worker(app_handle, loaded, slots).await;
+            });
         }
         _ => {}
     }
@@ -2391,8 +2701,10 @@ fn run_media_generation_dispatcher(
     stop: Arc<AtomicBool>,
     slots: Arc<Mutex<RuntimeSlots>>,
 ) -> JoinHandle<()> {
-    thread::spawn(move || {
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(DISPATCH_TICK_MS));
         while !stop.load(Ordering::Relaxed) {
+            interval.tick().await;
             let state = app.state::<AppState>();
             let _ = ensure_media_runtime_ready(&state);
             let _ = clear_expired_leases(&app, &state);
@@ -2436,7 +2748,6 @@ fn run_media_generation_dispatcher(
                 false,
                 "media-runtime:video-download",
             );
-            thread::sleep(Duration::from_millis(DISPATCH_TICK_MS));
         }
     })
 }
@@ -2466,13 +2777,55 @@ pub(crate) fn ensure_media_generation_runtime_running(
 pub(crate) fn stop_media_generation_runtime(runtime: &mut MediaGenerationRuntime) {
     runtime.stop.store(true, Ordering::Relaxed);
     if let Some(join) = runtime.dispatcher_join.take() {
-        let _ = join.join();
+        join.abort();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_loaded_job(priority: &str, job_id: &str) -> LoadedJob {
+        LoadedJob {
+            job: MediaJobRecord {
+                job_id: job_id.to_string(),
+                kind: "video".to_string(),
+                source: "generation_studio".to_string(),
+                priority: priority.to_string(),
+                status: "queued".to_string(),
+                provider_key: "redbox-official".to_string(),
+                provider_model: Some("wan2.7-t2v-video".to_string()),
+                request_json: json!({}),
+                result_json: None,
+                project_id: None,
+                manuscript_path: None,
+                video_project_path: None,
+                owner_session_id: None,
+                current_attempt_no: 1,
+                cancel_reason: None,
+                created_at: now_iso(),
+                updated_at: now_iso(),
+                completed_at: None,
+            },
+            attempt: MediaJobAttemptRecord {
+                attempt_id: format!("attempt-{job_id}"),
+                job_id: job_id.to_string(),
+                attempt_no: 1,
+                status: "queued".to_string(),
+                provider_task_id: None,
+                provider_status_url: None,
+                idempotency_key: format!("idempotency-{job_id}"),
+                lease_owner: None,
+                lease_expires_at: None,
+                next_poll_at: None,
+                retry_not_before_at: None,
+                last_error: None,
+                response_json: None,
+                created_at: now_iso(),
+                updated_at: now_iso(),
+            },
+        }
+    }
 
     #[test]
     fn infer_job_source_prefers_explicit_value() {
@@ -2486,5 +2839,45 @@ mod tests {
             "interactive"
         );
         assert_eq!(infer_job_priority("redclaw", &json!({})), "batch");
+    }
+
+    #[test]
+    fn weighted_priority_candidates_rotates_by_weight() {
+        let ordered = weighted_priority_candidates(
+            vec![
+                test_loaded_job("background", "bg-1"),
+                test_loaded_job("batch", "batch-1"),
+                test_loaded_job("interactive", "int-1"),
+                test_loaded_job("interactive", "int-2"),
+                test_loaded_job("interactive", "int-3"),
+                test_loaded_job("interactive", "int-4"),
+                test_loaded_job("interactive", "int-5"),
+                test_loaded_job("interactive", "int-6"),
+                test_loaded_job("batch", "batch-2"),
+                test_loaded_job("background", "bg-2"),
+            ],
+            8,
+        );
+        let ids = ordered
+            .into_iter()
+            .map(|item| item.job.job_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec!["int-1", "int-2", "int-3", "int-4", "int-5", "batch-1", "batch-2", "bg-1"]
+        );
+    }
+
+    #[test]
+    fn retry_policy_is_defined_for_runtime_stages() {
+        assert_eq!(
+            retry_policy_for_stage("image-submit"),
+            Some(("queued", "retry_image_submit", 3, 1_500))
+        );
+        assert_eq!(
+            retry_policy_for_stage("video-poll"),
+            Some(("polling", "retry_video_poll", 20, 2_500))
+        );
+        assert_eq!(retry_policy_for_stage("unknown-stage"), None);
     }
 }
