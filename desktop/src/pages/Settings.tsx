@@ -75,11 +75,10 @@ import {
   REDBOX_OFFICIAL_VIDEO_MODEL_LIST,
   REDBOX_OFFICIAL_VIDEO_MODELS,
 } from '../../shared/redboxVideo';
-import { RedClawOnboardingFlow } from './redclaw/RedClawOnboardingFlow';
 import {
-  normalizeOnboardingAnswers,
-  type RedClawOnboardingAnswers,
-} from './redclaw/onboardingMvp';
+  isRedClawOnboardingCompleted,
+  type RedclawOnboardingState,
+} from './redclaw/onboardingState';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
 import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
@@ -129,37 +128,10 @@ type RedclawProfileDraft = {
   creatorProfile: string;
 };
 
-type RedclawOnboardingState = Record<string, unknown> | null;
-
 const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
   user: '',
   creatorProfile: '',
 };
-
-function isRedClawOnboardingCompleted(state: RedclawOnboardingState): boolean {
-  const completedAt = String(state?.completedAt || '').trim();
-  return completedAt.length > 0;
-}
-
-function readRedClawOnboardingDraft(state: RedclawOnboardingState): {
-  stepIndex: number;
-  answers: RedClawOnboardingAnswers;
-} {
-  const uiFlow = state?.uiFlow && typeof state.uiFlow === 'object'
-    ? state.uiFlow as Record<string, unknown>
-    : null;
-  const draft = uiFlow?.draft && typeof uiFlow.draft === 'object'
-    ? uiFlow.draft as Record<string, unknown>
-    : null;
-  const rawAnswers = draft?.answers && typeof draft.answers === 'object'
-    ? draft.answers as Record<string, unknown>
-    : null;
-  const stepIndex = Number(draft?.stepIndex);
-  return {
-    stepIndex: Number.isFinite(stepIndex) ? Math.max(0, Math.round(stepIndex)) : 0,
-    answers: normalizeOnboardingAnswers(rawAnswers),
-  };
-}
 
 const DEFAULT_SPACE_ID = 'default';
 
@@ -485,7 +457,15 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
   return String(Math.floor(parsed));
 };
 
-export function Settings({ isActive = true }: { isActive?: boolean }) {
+export function Settings({
+  isActive = true,
+  onOpenRedClawOnboarding,
+  redclawOnboardingVersion = 0,
+}: {
+  isActive?: boolean;
+  onOpenRedClawOnboarding?: () => void;
+  redclawOnboardingVersion?: number;
+}) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
@@ -599,7 +579,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [redclawProfileDirty, setRedclawProfileDirty] = useState(false);
   const [redclawProfileMessage, setRedclawProfileMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [redclawOnboardingState, setRedclawOnboardingState] = useState<RedclawOnboardingState>(null);
-  const [redclawOnboardingFlowOpen, setRedclawOnboardingFlowOpen] = useState(false);
   const [currentSpaceId, setCurrentSpaceId] = useState(DEFAULT_SPACE_ID);
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
@@ -616,10 +595,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const hasSelectedRuntimeSession = useMemo(
     () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
     [runtimeSessions, selectedRuntimeSessionId],
-  );
-  const redclawOnboardingDraft = useMemo(
-    () => readRedClawOnboardingDraft(redclawOnboardingState),
-    [redclawOnboardingState],
   );
   const redclawOnboardingCompleted = useMemo(
     () => isRedClawOnboardingCompleted(redclawOnboardingState),
@@ -700,7 +675,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setSavedRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
     setRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
     setRedclawOnboardingState(null);
-    setRedclawOnboardingFlowOpen(false);
     setRedclawProfileDirtyState(false);
     setRedclawProfileMessage(null);
     setIsRedclawProfileLoading(false);
@@ -714,8 +688,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       const bundle = await window.ipcRenderer.redclawProfile.getBundle();
       if (requestId !== redclawProfileLoadRequestRef.current) return;
       const responseSpaceId = String(bundle.activeSpaceId || expectedSpaceId).trim() || DEFAULT_SPACE_ID;
-      if (responseSpaceId !== expectedSpaceId || responseSpaceId !== currentSpaceIdRef.current) {
-        return;
+      if (responseSpaceId !== currentSpaceIdRef.current) {
+        setCurrentSpaceState(responseSpaceId);
       }
       setRedclawOnboardingState(
         bundle.onboardingState && typeof bundle.onboardingState === 'object'
@@ -764,40 +738,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setRedclawProfileMessage(null);
     setStatus('idle');
   }, [savedRedclawProfileDraft.creatorProfile, savedRedclawProfileDraft.user, setRedclawProfileDirtyState]);
-
-  const saveRedclawOnboardingProgress = useCallback(async (payload: {
-    stepIndex: number;
-    answers: RedClawOnboardingAnswers;
-  }) => {
-    const result = await window.ipcRenderer.redclawProfile.saveInitializationProgress({
-      stepIndex: payload.stepIndex,
-      answers: { ...payload.answers },
-    });
-    if (result?.state && typeof result.state === 'object') {
-      setRedclawOnboardingState(result.state);
-    }
-  }, []);
-
-  const completeRedclawOnboarding = useCallback(async (answers: RedClawOnboardingAnswers) => {
-    const result = await window.ipcRenderer.redclawProfile.completeInitialization({
-      answers: { ...answers },
-    });
-    if (!result?.success) {
-      throw new Error('初始化保存失败');
-    }
-    setRedclawOnboardingState(
-      result.onboardingState && typeof result.onboardingState === 'object'
-        ? result.onboardingState as Record<string, unknown>
-        : null
-    );
-    setRedclawOnboardingFlowOpen(false);
-    await loadRedclawProfileBundle({ expectedSpaceId: currentSpaceIdRef.current });
-    setRedclawProfileMessage({
-      tone: 'success',
-      text: '已重新完成当前空间的风格定义',
-    });
-    setStatus('saved');
-  }, [loadRedclawProfileBundle]);
 
   const fetchModelsRequestRef = useRef<Record<string, number>>({});
   const fetchImageModelsRequestRef = useRef(0);
@@ -3066,7 +3006,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           && Number.isFinite(unlockedAtMs)
           && (Date.now() - unlockedAtMs) < DEVELOPER_MODE_TTL_MS;
 
-        setCurrentSpaceState(settings.active_space_id);
+        setCurrentSpaceState(
+          (settings as { active_space_id?: string; activeSpaceId?: string }).active_space_id
+          || (settings as { active_space_id?: string; activeSpaceId?: string }).activeSpaceId
+        );
 
         setAiSources(sourceList);
         setDefaultAiSourceId(normalizedDefaultId);
@@ -3962,6 +3905,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
   }, [activeTab, isActive, loadRedclawProfileBundle, resetRedclawProfileState, setCurrentSpaceState]);
+
+  useEffect(() => {
+    if (!redclawOnboardingVersion) return;
+    void loadRedclawProfileBundle({ expectedSpaceId: currentSpaceIdRef.current });
+  }, [loadRedclawProfileBundle, redclawOnboardingVersion]);
 
   useEffect(() => {
     const handleDiagnosticsReportPending = () => {
@@ -5226,7 +5174,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
                         <button
                           type="button"
-                          onClick={() => setRedclawOnboardingFlowOpen(true)}
+                          onClick={() => onOpenRedClawOnboarding?.()}
                           className="text-xs font-medium text-text-tertiary underline-offset-4 transition-colors hover:text-text-primary hover:underline"
                         >
                           {redclawOnboardingCompleted ? '重新自定义风格' : '去定义风格'}
@@ -5719,15 +5667,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
             </div>
           )}
         </div>
-        <RedClawOnboardingFlow
-          open={redclawOnboardingFlowOpen}
-          activeSpaceName={currentSpaceId}
-          initialStepIndex={redclawOnboardingDraft.stepIndex}
-          initialAnswers={{ ...redclawOnboardingDraft.answers }}
-          onClose={() => setRedclawOnboardingFlowOpen(false)}
-          onSaveProgress={saveRedclawOnboardingProgress}
-          onComplete={completeRedclawOnboarding}
-        />
       </div>
     </div>
   );
