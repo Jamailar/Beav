@@ -415,6 +415,36 @@ impl<'a> AppCliExecutor<'a> {
         ))
     }
 
+    fn cli_runtime_scope_input(
+        &self,
+        args: &CliArgs,
+        payload: &Value,
+        fallback_name_keys: &[&str],
+    ) -> Option<String> {
+        let raw = args
+            .string(&["scope"])
+            .or_else(|| payload_string(payload, "scope"))
+            .or_else(|| {
+                fallback_name_keys
+                    .iter()
+                    .find_map(|key| payload_string(payload, key))
+            })?;
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "app-global" | "app_global" | "global" | "npm-global" | "npm_global" => {
+                Some("app-global".to_string())
+            }
+            "workspace-local" | "workspace_local" | "workspace" => {
+                Some("workspace-local".to_string())
+            }
+            "task-ephemeral" | "task_ephemeral" | "task" | "ephemeral" => {
+                Some("task-ephemeral".to_string())
+            }
+            _ if raw.trim().is_empty() => None,
+            _ => Some(raw),
+        }
+    }
+
     pub fn execute(&self, arguments: &Value) -> Result<Value, String> {
         let normalized_arguments = normalized_structured_arguments(arguments);
         let payload = payload_field(&normalized_arguments, "payload")
@@ -1405,34 +1435,8 @@ impl<'a> AppCliExecutor<'a> {
             return Ok(help_response(Some("memory")));
         };
         let args = parse_cli_args(&tokens[1..])?;
-        match action {
-            "list" => self.call_channel("memory:list", json!({})),
-            "search" => self.call_channel(
-                "memory:search",
-                json!({
-                    "query": args
-                        .string(&["query", "q"])
-                        .or_else(|| payload_string(payload, "query"))
-                        .or_else(|| {
-                            if args.positionals.is_empty() {
-                                None
-                            } else {
-                                Some(args.positionals.join(" "))
-                            }
-                        })
-                        .unwrap_or_default()
-                }),
-            ),
-            "add" => self.call_channel("memory:add", merge_payload(&args.options, payload)),
-            "delete" => self.call_channel(
-                "memory:delete",
-                json!(args
-                    .string(&["id"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "memory delete requires --id".to_string())?),
-            ),
-            _ => Err(format!("unsupported memory action: {action}")),
-        }
+        let (channel, request_payload) = memory_action_request(action, &args, payload)?;
+        self.call_channel(channel, request_payload)
     }
 
     fn handle_redclaw(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
@@ -1806,9 +1810,8 @@ impl<'a> AppCliExecutor<'a> {
                     "create" => self.call_channel(
                         "cli-runtime:create-environment",
                         json!({
-                            "scope": nested_args
-                                .string(&["scope"])
-                                .or_else(|| payload_string(payload, "scope"))
+                            "scope": self
+                                .cli_runtime_scope_input(&nested_args, payload, &["name"])
                                 .ok_or_else(|| "cli_runtime environment.create requires --scope".to_string())?,
                             "workspaceRoot": nested_args
                                 .string(&["workspace-root", "workspaceRoot"])
@@ -1826,8 +1829,7 @@ impl<'a> AppCliExecutor<'a> {
                 json!({
                     "environmentId": args
                         .string(&["environment-id", "environmentId"])
-                        .or_else(|| payload_string(payload, "environmentId"))
-                        .ok_or_else(|| "cli_runtime install requires --environment-id".to_string())?,
+                        .or_else(|| payload_string(payload, "environmentId")),
                     "installMethod": args
                         .string(&["install-method", "installMethod"])
                         .or_else(|| payload_string(payload, "installMethod"))
@@ -1835,10 +1837,21 @@ impl<'a> AppCliExecutor<'a> {
                     "spec": args
                         .string(&["spec"])
                         .or_else(|| payload_string(payload, "spec"))
+                        .or_else(|| payload_string(payload, "installSpec"))
+                        .or_else(|| payload_string(payload, "package"))
+                        .or_else(|| payload_string(payload, "packageName"))
+                        .or_else(|| {
+                            if payload_string(payload, "toolName").is_none() {
+                                payload_string(payload, "name")
+                            } else {
+                                None
+                            }
+                        })
                         .ok_or_else(|| "cli_runtime install requires --spec".to_string())?,
                     "toolName": args
                         .string(&["tool-name", "toolName"])
-                        .or_else(|| payload_string(payload, "toolName")),
+                        .or_else(|| payload_string(payload, "toolName"))
+                        .or_else(|| payload_string(payload, "name")),
                     "sessionId": payload_string(payload, "sessionId"),
                     "taskId": payload_string(payload, "taskId"),
                     "runtimeId": payload_string(payload, "runtimeId"),
@@ -3629,6 +3642,41 @@ fn merge_payload(options: &Map<String, Value>, payload: &Value) -> Value {
     Value::Object(merged)
 }
 
+fn memory_action_request(
+    action: &str,
+    args: &CliArgs,
+    payload: &Value,
+) -> Result<(&'static str, Value), String> {
+    match action {
+        "list" => Ok(("memory:list", json!({}))),
+        "search" => Ok((
+            "memory:search",
+            json!({
+                "query": args
+                    .string(&["query", "q"])
+                    .or_else(|| payload_string(payload, "query"))
+                    .or_else(|| {
+                        if args.positionals.is_empty() {
+                            None
+                        } else {
+                            Some(args.positionals.join(" "))
+                        }
+                    })
+                    .unwrap_or_default()
+            }),
+        )),
+        "add" => Ok(("memory:add", merge_payload(&args.options, payload))),
+        "delete" => Ok((
+            "memory:delete",
+            json!(args
+                .string(&["id"])
+                .or_else(|| args.positionals.first().cloned())
+                .ok_or_else(|| "memory delete requires --id".to_string())?),
+        )),
+        _ => Err(format!("unsupported memory action: {action}")),
+    }
+}
+
 fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
     let mut merged = payload
         .as_object()
@@ -5104,5 +5152,69 @@ mod tests {
             normalized.pointer("/payload/title"),
             Some(&json!("测试标题"))
         );
+    }
+
+    #[test]
+    fn memory_action_request_routes_list_to_memory_list_channel() {
+        let (channel, payload) =
+            memory_action_request("list", &CliArgs::default(), &json!({})).expect("list request");
+        assert_eq!(channel, "memory:list");
+        assert_eq!(payload, json!({}));
+    }
+
+    #[test]
+    fn memory_action_request_prefers_flag_query_then_payload_then_positionals() {
+        let flag_args = parse_cli_args(&["--query".to_string(), "flag query".to_string()])
+            .expect("cli args should parse");
+        let (_, flag_payload) =
+            memory_action_request("search", &flag_args, &json!({ "query": "payload query" }))
+                .expect("search request");
+        assert_eq!(flag_payload.get("query"), Some(&json!("flag query")));
+
+        let payload_args = CliArgs::default();
+        let (_, payload_only) = memory_action_request(
+            "search",
+            &payload_args,
+            &json!({ "query": "payload query" }),
+        )
+        .expect("search request");
+        assert_eq!(payload_only.get("query"), Some(&json!("payload query")));
+
+        let positional_args = parse_cli_args(&["复盘".to_string(), "偏好".to_string()])
+            .expect("cli args should parse");
+        let (_, positional_payload) =
+            memory_action_request("search", &positional_args, &json!({})).expect("search request");
+        assert_eq!(positional_payload.get("query"), Some(&json!("复盘 偏好")));
+    }
+
+    #[test]
+    fn memory_action_request_merges_add_payload_with_cli_options() {
+        let args = parse_cli_args(&[
+            "--content".to_string(),
+            "用户偏好简洁方案".to_string(),
+            "--type".to_string(),
+            "preference".to_string(),
+        ])
+        .expect("cli args should parse");
+        let (_, payload) =
+            memory_action_request("add", &args, &json!({ "tags": ["style", "execution"] }))
+                .expect("add request");
+
+        assert_eq!(payload.get("content"), Some(&json!("用户偏好简洁方案")));
+        assert_eq!(payload.get("type"), Some(&json!("preference")));
+        assert_eq!(payload.get("tags"), Some(&json!(["style", "execution"])));
+    }
+
+    #[test]
+    fn memory_action_request_builds_delete_payload_and_requires_id() {
+        let args = parse_cli_args(&["memory-1".to_string()]).expect("cli args should parse");
+        let (channel, payload) =
+            memory_action_request("delete", &args, &json!({})).expect("delete request");
+        assert_eq!(channel, "memory:delete");
+        assert_eq!(payload, json!("memory-1"));
+
+        let err = memory_action_request("delete", &CliArgs::default(), &json!({}))
+            .expect_err("delete without id should fail");
+        assert!(err.contains("memory delete requires --id"));
     }
 }
