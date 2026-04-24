@@ -575,6 +575,34 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["runner-set-config".to_string()];
                 self.handle_redclaw(&tokens, payload)
             }
+            "redclawtaskpreview" => {
+                let tokens = vec!["task-preview".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawtaskcreate" => {
+                let tokens = vec!["task-create".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawtaskconfirm" => {
+                let tokens = vec!["task-confirm".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawtaskupdate" => {
+                let tokens = vec!["task-update".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawtaskcancel" => {
+                let tokens = vec!["task-cancel".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawtasklist" => {
+                let tokens = vec!["task-list".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
+            "redclawtaskstats" => {
+                let tokens = vec!["task-stats".to_string()];
+                self.handle_redclaw(&tokens, payload)
+            }
             "manuscriptslist" => {
                 let tokens = vec!["list".to_string()];
                 self.handle_manuscripts(&tokens, payload)
@@ -5099,6 +5127,14 @@ mod tests {
         assert_eq!(
             normalized_app_cli_action_key("manuscripts/write_current"),
             "manuscriptswritecurrent"
+        );
+        assert_eq!(
+            normalized_app_cli_action_key("redclaw.task.preview"),
+            "redclawtaskpreview"
+        );
+        assert_eq!(
+            normalized_app_cli_action_key("redclaw/task-list"),
+            "redclawtasklist"
         );
     }
 
