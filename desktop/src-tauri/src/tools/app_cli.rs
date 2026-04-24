@@ -21,6 +21,7 @@ use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
+use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{
     join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
     workspace_root, AppState,
@@ -382,17 +383,7 @@ impl<'a> AppCliExecutor<'a> {
                 .iter()
                 .find(|item| item.id == session_id)
                 .and_then(|item| item.metadata.as_ref())
-                .and_then(|metadata| metadata.get("allowedAppCliActions"))
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::trim)
-                        .filter(|item| !item.is_empty())
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                })
+                .map(|metadata| normalized_allowed_app_cli_actions(Some(metadata)))
                 .filter(|items| !items.is_empty()))
         })
         .ok()
@@ -2514,7 +2505,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             }
             if !plan_confirmed {
                 if redclaw_auto_execute {
-                    // RedClaw card-set automation is allowed to plan and submit in one turn.
+                    // RedClaw multi-image automation is allowed to plan and submit in one turn.
                 } else {
                     return Err(app_cli_error_json(
                         Some("image.generate"),
@@ -2523,7 +2514,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                         false,
                         Some(json!({
                             "count": image_plan_items.len(),
-                            "hint": "先向用户展示多图方案并等待确认；确认后传入 planConfirmed=true。RedClaw 卡片套图自动执行时可改用 planExecutionMode=redclaw_auto_execute。"
+                            "hint": "先向用户展示多图方案并等待确认；确认后传入 planConfirmed=true。RedClaw 受控多图批量自动执行时可改用 planExecutionMode=redclaw_auto_execute。"
                         })),
                     ));
                 }
@@ -2531,6 +2522,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         }
 
         if let Some(object) = merged.as_object_mut() {
+            object.remove("model");
             if !reference_images.is_empty() {
                 object.insert("referenceImages".to_string(), json!(reference_images));
                 if object
@@ -3973,33 +3965,9 @@ fn image_plan_execution_mode(payload: &Value) -> String {
         .unwrap_or_else(|| IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED.to_string())
 }
 
-fn normalize_image_set_type(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_")
-        .replace(' ', "_")
-}
-
-fn redclaw_auto_batch_set_type_allowed(set_type: &str) -> bool {
-    matches!(
-        normalize_image_set_type(set_type).as_str(),
-        "knowledge_card_set"
-            | "knowledge_cards"
-            | "image_card_set"
-            | "image_cards"
-            | "xiaohongshu_text_cards"
-            | "xiaohongshu_text_card_set"
-            | "xhs_text_cards"
-    ) || matches!(
-        set_type.trim(),
-        "知识卡片" | "知识卡片套图" | "图文卡片" | "小红书文字卡片"
-    )
-}
-
 fn validate_redclaw_auto_image_plan_execution(
     runtime_mode: &str,
-    payload: &Value,
+    _payload: &Value,
     requested_count: usize,
     plan_execution_mode: &str,
 ) -> Result<bool, String> {
@@ -4041,23 +4009,6 @@ fn validate_redclaw_auto_image_plan_execution(
             false,
             Some(json!({
                 "count": requested_count
-            })),
-        ));
-    }
-    let set_type = payload_string(payload, "setType").unwrap_or_default();
-    if !redclaw_auto_batch_set_type_allowed(&set_type) {
-        return Err(app_cli_error_json(
-            Some("image.generate"),
-            "IMAGE_PLAN_SET_TYPE_REQUIRED",
-            "redclaw_auto_execute requires a supported card-set type",
-            false,
-            Some(json!({
-                "receivedSetType": set_type,
-                "supportedSetTypes": [
-                    "knowledge_card_set",
-                    "image_card_set",
-                    "xiaohongshu_text_cards"
-                ]
             })),
         ));
     }
@@ -5193,42 +5144,42 @@ mod tests {
     }
 
     #[test]
-    fn validate_redclaw_auto_image_plan_execution_accepts_supported_card_sets() {
+    fn validate_redclaw_auto_image_plan_execution_accepts_multi_image_batches_without_set_type() {
         assert_eq!(
             validate_redclaw_auto_image_plan_execution(
                 "redclaw",
-                &json!({ "setType": "knowledge_card_set" }),
+                &json!({}),
                 5,
                 IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
             )
-            .expect("should allow redclaw card set"),
+            .expect("should allow redclaw auto execution"),
             true
         );
         assert_eq!(
             validate_redclaw_auto_image_plan_execution(
                 "redclaw",
-                &json!({ "setType": "图文卡片" }),
+                &json!({ "setType": "product_model_showcase" }),
                 4,
                 IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
             )
-            .expect("should allow localized card set"),
+            .expect("should allow product showcase batches"),
             true
         );
     }
 
     #[test]
-    fn validate_redclaw_auto_image_plan_execution_rejects_other_runtimes_and_set_types() {
+    fn validate_redclaw_auto_image_plan_execution_rejects_other_runtimes_and_single_images() {
         assert!(validate_redclaw_auto_image_plan_execution(
             "chatroom",
-            &json!({ "setType": "knowledge_card_set" }),
+            &json!({}),
             5,
             IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
         )
         .is_err());
         assert!(validate_redclaw_auto_image_plan_execution(
             "redclaw",
-            &json!({ "setType": "ecommerce_gallery" }),
-            5,
+            &json!({}),
+            1,
             IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
         )
         .is_err());

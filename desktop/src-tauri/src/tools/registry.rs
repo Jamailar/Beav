@@ -44,6 +44,22 @@ fn string_list(metadata: Option<&Value>, field: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<String> {
+    let mut actions = string_list(metadata, "allowedAppCliActions");
+    let looks_like_legacy_authoring_whitelist = actions.iter().any(|item| {
+        matches!(
+            item.as_str(),
+            "manuscripts.createProject" | "manuscripts.writeCurrent"
+        )
+    });
+    if looks_like_legacy_authoring_whitelist
+        && !actions.iter().any(|item| item == "image.generate")
+    {
+        actions.push("image.generate".to_string());
+    }
+    actions
+}
+
 fn session_filtered_action_descriptors(
     tool_name: &str,
     runtime_mode: &str,
@@ -52,7 +68,7 @@ fn session_filtered_action_descriptors(
     if tool_name != "app_cli" {
         return None;
     }
-    let allowed_actions = string_list(metadata, "allowedAppCliActions");
+    let allowed_actions = normalized_allowed_app_cli_actions(metadata);
     if allowed_actions.is_empty() {
         return None;
     }
@@ -357,12 +373,17 @@ mod tests {
             .filter_map(Value::as_str)
             .map(ToString::to_string)
             .collect::<Vec<_>>();
+        let mut actions = actions;
+        actions.sort();
+        let mut expected = vec![
+            "image.generate".to_string(),
+            "manuscripts.createProject".to_string(),
+            "manuscripts.writeCurrent".to_string(),
+        ];
+        expected.sort();
         assert_eq!(
             actions,
-            vec![
-                "manuscripts.createProject".to_string(),
-                "manuscripts.writeCurrent".to_string()
-            ]
+            expected
         );
     }
 }
