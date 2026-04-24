@@ -1357,8 +1357,83 @@ declare global {
         taskConfirm: (payload: { draftId: string; confirm: boolean }) => Promise<unknown>;
         taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => Promise<unknown>;
         taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => Promise<unknown>;
-        taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => Promise<unknown>;
-        taskStats: () => Promise<unknown>;
+        taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => Promise<{
+          success?: boolean;
+          items?: Array<{
+            definitionId: string;
+            title: string;
+            kind: 'scheduled' | 'long_cycle' | string;
+            sourceKind?: 'scheduled' | 'long_cycle' | string | null;
+            sourceTaskId?: string | null;
+            enabled: boolean;
+            ownerScope?: string | null;
+            createdBy?: string | null;
+            creatorMode?: string | null;
+            requiresConfirmation: boolean;
+            policySignature?: string | null;
+            definitionFingerprint?: string | null;
+            triggerKind: 'interval' | 'daily' | 'weekly' | 'once' | string;
+            progressionKind?: 'single_run' | 'multi_round' | string;
+            nextDueAt?: string | null;
+            draftId?: string | null;
+            timezone?: string | null;
+            missedRunPolicy?: 'drop' | 'single' | 'catchup' | string | null;
+            cooldown?: {
+              state?: string;
+              activatedAt?: string;
+              consecutiveFailures?: number;
+              reason?: string;
+            } | null;
+            policyDecision?: 'allow' | 'require_confirm' | 'reject' | string | null;
+            policyWarnings?: string[] | null;
+            actionType?: string | null;
+            goal?: string | null;
+            prompt?: string | null;
+            objective?: string | null;
+            stepPrompt?: string | null;
+            riskRationale?: string | null;
+            totalRounds?: number | null;
+            completedRounds?: number | null;
+            lastUpdatedReason?: string | null;
+            latestExecution?: {
+              executionId: string;
+              runId?: string | null;
+              status: 'queued' | 'leased' | 'running' | 'retrying' | 'succeeded' | 'completed' | 'failed' | 'cancelled' | 'dead_lettered' | string;
+              scheduledForAt?: string | null;
+              attemptNo?: number | null;
+              retryBucket?: string | null;
+              lastHeartbeatAt?: string | null;
+              lastError?: string | null;
+              updatedAt: string;
+            } | null;
+            updatedAt: string;
+            createdAt: string;
+          }>;
+          count?: number;
+        }>;
+        taskStats: () => Promise<{
+          success?: boolean;
+          definitions?: {
+            total?: number;
+            drafts?: number;
+            active?: number;
+          };
+          executions?: {
+            total?: number;
+            running?: number;
+            failed?: number;
+            recent?: Array<{
+              executionId: string;
+              runId?: string | null;
+              definitionId: string;
+              status: string;
+              scheduledForAt?: string | null;
+              attemptNo?: number | null;
+              retryBucket?: string | null;
+              lastError?: string | null;
+            }>;
+          };
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{

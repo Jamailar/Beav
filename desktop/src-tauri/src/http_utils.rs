@@ -13,7 +13,6 @@ pub(crate) const HTTP_STATUS_MARKER: &str = "__REDBOX_HTTP_STATUS__:";
 struct CurlJsonDebugCapture {
     dir: PathBuf,
     response_headers_path: PathBuf,
-    trace_path: PathBuf,
 }
 
 impl CurlJsonDebugCapture {
@@ -29,17 +28,12 @@ impl CurlJsonDebugCapture {
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         Ok(Self {
             response_headers_path: dir.join("response-headers.txt"),
-            trace_path: dir.join("trace.txt"),
             dir,
         })
     }
 
     fn response_headers(&self) -> String {
         read_debug_text_file(&self.response_headers_path)
-    }
-
-    fn trace(&self) -> String {
-        read_debug_text_file(&self.trace_path)
     }
 }
 
@@ -179,7 +173,6 @@ fn emit_curl_json_diagnostics(
     response_body: &str,
     response_status_trailer: Option<&str>,
     stderr: &str,
-    trace: &str,
 ) {
     let mut sections = vec![format!(
         "[http][curl-json] diagnostic method={} url={} transport={} exit_status={}",
@@ -199,7 +192,6 @@ fn emit_curl_json_diagnostics(
     sections.push(render_debug_section("response_headers", response_headers));
     sections.push(render_debug_section("response_body", response_body));
     sections.push(render_debug_section("stderr", stderr));
-    sections.push(render_debug_section("trace", trace));
     let line = sections.join("\n");
     eprintln!("{line}");
     crate::append_debug_trace_global(line);
@@ -501,8 +493,6 @@ fn execute_curl_json_response_once(
     command
         .arg("-D")
         .arg(&debug_capture.response_headers_path)
-        .arg("--trace-ascii")
-        .arg(&debug_capture.trace_path)
         .arg("-w")
         .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"));
     command.stdout(std::process::Stdio::piped());
@@ -531,7 +521,6 @@ fn execute_curl_json_response_once(
     let request_headers = debug_request_headers(api_key, extra_headers);
     let request_body = debug_request_body(serialized_body.as_deref());
     let response_headers = redact_http_debug_text(&debug_capture.response_headers(), api_key);
-    let trace = redact_http_debug_text(&debug_capture.trace(), api_key);
 
     if !output.status.success() {
         let stdout = stdout_text.trim().to_string();
@@ -563,7 +552,6 @@ fn execute_curl_json_response_once(
             &response_body,
             response_status_trailer.as_deref(),
             &stderr_text,
-            &trace,
         );
         return Err(error);
     }
@@ -598,7 +586,6 @@ fn execute_curl_json_response_once(
                 "",
                 Some(status_text.trim()),
                 &stderr_text,
-                &trace,
             );
             append_http_error_debug_log("http-json", method, url, status, "", Some(transport));
         }
@@ -640,7 +627,6 @@ fn execute_curl_json_response_once(
             normalized_body,
             Some(status_text.trim()),
             &stderr_text,
-            &trace,
         );
         append_http_error_debug_log(
             "http-json",

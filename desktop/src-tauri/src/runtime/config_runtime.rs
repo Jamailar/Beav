@@ -40,7 +40,9 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
         "audio-editor" | "audio_editor" | "audio-draft" | "redaudio" => "audio-editor",
         "diagnostics" | "debug" | "debugger" => "diagnostics",
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
-        | "wechat-article" => "knowledge",
+        | "wechat-article" | "xiaohongshu_note" | "xiaohongshu_video" | "youtube_video"
+        | "xhs-note" | "xhs-video" | "douyin-video" | "redbook-note" | "youtube-video"
+        | "document-source" | "copied-file" | "tracked-folder" | "obsidian-vault" => "knowledge",
         "advisor-discussion" => "advisor-discussion",
         "background-maintenance" => "background-maintenance",
         _ => "chatroom",

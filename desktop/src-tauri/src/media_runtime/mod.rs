@@ -1,3 +1,5 @@
+mod followup;
+
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::fs::File;
@@ -30,7 +32,8 @@ const VIDEO_POLL_LIMIT_GLOBAL: usize = 32;
 
 const DISPATCH_TICK_MS: u64 = 350;
 const DEFAULT_POLL_INTERVAL_MS: i64 = 2_500;
-const DEFAULT_JOB_WAIT_TIMEOUT_MS: u64 = 15 * 60 * 1000;
+const VIDEO_JOB_TIMEOUT_MS: i64 = 30 * 60 * 1000;
+const DEFAULT_JOB_WAIT_TIMEOUT_MS: u64 = VIDEO_JOB_TIMEOUT_MS as u64;
 const ACTIVE_STAGE_LEASE_MS: i64 = 20 * 60 * 1000;
 
 static MEDIA_RUNTIME_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -47,6 +50,8 @@ pub struct MediaGenerationRuntime {
     pub stop: Arc<AtomicBool>,
     pub dispatcher_join: Option<JoinHandle<()>>,
 }
+
+pub(crate) use followup::spawn_media_job_followup;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1576,6 +1581,61 @@ fn clear_expired_leases(app: &AppHandle, state: &State<'_, AppState>) -> Result<
     Ok(())
 }
 
+fn expire_timed_out_video_jobs(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
+    let conn = open_media_runtime_connection(state)?;
+    let mut statement = conn
+        .prepare(
+            r#"
+            SELECT j.job_id
+            FROM media_jobs j
+            JOIN media_job_attempts a
+              ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
+            WHERE j.kind = 'video'
+              AND j.status IN ('queued', 'polling')
+              AND a.lease_owner IS NULL
+            ORDER BY j.created_at ASC, j.job_id ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let ids = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let now = now_i64();
+    for job_id in ids {
+        let Some(loaded) = load_job_with_current_attempt(&conn, &job_id)? else {
+            continue;
+        };
+        if !video_attempt_timed_out(&loaded, now) {
+            continue;
+        }
+        let message = video_timeout_failure_message();
+        let elapsed_ms = video_attempt_elapsed_ms(&loaded, now).unwrap_or(VIDEO_JOB_TIMEOUT_MS);
+        let result_json = json!({
+            "error": message,
+            "reason": "timeout",
+            "timeoutMs": VIDEO_JOB_TIMEOUT_MS,
+            "elapsedMs": elapsed_ms,
+            "providerTaskId": loaded.attempt.provider_task_id.clone(),
+            "providerStatusUrl": loaded.attempt.provider_status_url.clone(),
+            "attemptNo": loaded.attempt.attempt_no,
+        });
+        set_job_terminal_failure(&conn, &loaded, "failed", &message, Some(&result_json))?;
+        append_event_with_connection(
+            &conn,
+            &job_id,
+            Some(&loaded.attempt.attempt_id),
+            "failed",
+            &message,
+            Some(&result_json),
+        )?;
+        emit_job_updated(app, state, &job_id);
+    }
+    Ok(())
+}
+
 fn emit_job_log(app: &AppHandle, job_id: &str, message: &str, payload: Option<Value>) {
     let _ = app.emit(
         MEDIA_JOB_EVENT_LOG,
@@ -1791,6 +1851,29 @@ fn final_job_error_message(projection: &Value) -> String {
         .or_else(|| projection.get("cancelReason").and_then(Value::as_str))
         .unwrap_or("media generation failed")
         .to_string()
+}
+
+fn video_attempt_started_at_ms(loaded: &LoadedJob) -> Option<i64> {
+    parse_timestamp_ms(&loaded.attempt.created_at)
+        .or_else(|| parse_timestamp_ms(&loaded.job.created_at))
+}
+
+fn video_attempt_elapsed_ms(loaded: &LoadedJob, now_ms: i64) -> Option<i64> {
+    let started_at = video_attempt_started_at_ms(loaded)?;
+    Some(now_ms.saturating_sub(started_at))
+}
+
+fn video_attempt_timed_out(loaded: &LoadedJob, now_ms: i64) -> bool {
+    if loaded.job.kind != "video" {
+        return false;
+    }
+    video_attempt_elapsed_ms(loaded, now_ms)
+        .map(|elapsed| elapsed >= VIDEO_JOB_TIMEOUT_MS)
+        .unwrap_or(false)
+}
+
+fn video_timeout_failure_message() -> String {
+    "视频生成超时：30 分钟内未完成，已停止轮询。".to_string()
 }
 
 pub(crate) fn await_media_job_completion(
@@ -2466,8 +2549,15 @@ async fn run_video_submit_worker(
         if let Some(url) = extract_media_url(&response) {
             return transition_video_job_to_downloading(&app, &loaded, &response, None, Some(url));
         }
-        let (provider_task_id, _) = extract_task_id_details(&response)
-            .ok_or_else(|| "video generation response did not include a task id".to_string())?;
+        let Some((provider_task_id, _)) = extract_task_id_details(&response) else {
+            let message = "视频任务创建失败：provider 未返回 taskId，已停止轮询。".to_string();
+            let failure = json!({
+                "error": message,
+                "reason": "missing_provider_task_id",
+                "providerResponse": response,
+            });
+            return fail_job(&app, &loaded.job.job_id, &message, Some(&failure));
+        };
         transition_video_job_to_polling(
             &app,
             &loaded,
@@ -2509,11 +2599,16 @@ async fn run_video_poll_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mut
         let (endpoint, api_key, default_model) = resolve_video_generation_settings(&settings)
             .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
         let model = loaded.job.provider_model.clone().unwrap_or(default_model);
-        let provider_task_id = loaded
-            .attempt
-            .provider_task_id
-            .clone()
-            .ok_or_else(|| "video poll worker missing provider_task_id".to_string())?;
+        let Some(provider_task_id) = loaded.attempt.provider_task_id.clone() else {
+            let message = "视频任务状态损坏：缺少 provider taskId，已停止轮询。".to_string();
+            let failure = json!({
+                "error": message,
+                "reason": "missing_provider_task_id",
+                "providerStatusUrl": loaded.attempt.provider_status_url.clone(),
+                "attemptNo": loaded.attempt.attempt_no,
+            });
+            return fail_job(&app, &loaded.job.job_id, &message, Some(&failure));
+        };
         match poll_video_generation_once(
             &endpoint,
             api_key.as_deref(),
@@ -2707,6 +2802,7 @@ fn run_media_generation_dispatcher(
             interval.tick().await;
             let state = app.state::<AppState>();
             let _ = ensure_media_runtime_ready(&state);
+            let _ = expire_timed_out_video_jobs(&app, &state);
             let _ = clear_expired_leases(&app, &state);
             let _ = dispatch_stage(
                 &app,
@@ -2879,5 +2975,35 @@ mod tests {
             Some(("polling", "retry_video_poll", 20, 2_500))
         );
         assert_eq!(retry_policy_for_stage("unknown-stage"), None);
+    }
+
+    #[test]
+    fn video_attempt_timeout_uses_attempt_creation_time() {
+        let mut loaded = test_loaded_job("interactive", "video-timeout");
+        let attempt_started_at = 1_700_000_000_000_i64;
+        loaded.job.kind = "video".to_string();
+        loaded.job.created_at = (attempt_started_at - 30_000).to_string();
+        loaded.attempt.created_at = attempt_started_at.to_string();
+
+        assert!(!video_attempt_timed_out(
+            &loaded,
+            attempt_started_at + VIDEO_JOB_TIMEOUT_MS - 1,
+        ));
+        assert!(video_attempt_timed_out(
+            &loaded,
+            attempt_started_at + VIDEO_JOB_TIMEOUT_MS,
+        ));
+    }
+
+    #[test]
+    fn video_attempt_timeout_ignores_non_video_jobs() {
+        let mut loaded = test_loaded_job("interactive", "image-job");
+        loaded.job.kind = "image".to_string();
+        loaded.attempt.created_at = "1700000000000".to_string();
+
+        assert!(!video_attempt_timed_out(
+            &loaded,
+            1_700_000_000_000_i64 + VIDEO_JOB_TIMEOUT_MS,
+        ));
     }
 }

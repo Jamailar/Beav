@@ -548,6 +548,34 @@ pub(crate) fn slug_from_relative_path(path: &str) -> String {
     }
 }
 
+pub(crate) fn storage_safe_file_stem(value: &str) -> String {
+    let raw = slug_from_relative_path(value);
+    let mut sanitized = String::with_capacity(raw.len());
+    let mut previous_was_dash = false;
+    for ch in raw.chars() {
+        let invalid =
+            matches!(ch, '<' | '>' | ':' | '"' | '\\' | '|' | '?' | '*') || ch.is_control();
+        let next = if invalid { '-' } else { ch };
+        if next == '-' {
+            if previous_was_dash {
+                continue;
+            }
+            previous_was_dash = true;
+        } else {
+            previous_was_dash = false;
+        }
+        sanitized.push(next);
+    }
+    let trimmed = sanitized
+        .trim_matches(|ch: char| ch == '-' || ch == ' ' || ch == '.')
+        .to_string();
+    if trimmed.is_empty() {
+        "root".to_string()
+    } else {
+        trimmed
+    }
+}
+
 pub(crate) fn title_from_relative_path(path: &str) -> String {
     Path::new(path)
         .file_stem()
@@ -1076,6 +1104,14 @@ mod tests {
         assert!(section.contains("Path style: windows"));
         assert!(section.contains("Preferred shell syntax hint: powershell"));
         assert!(section.contains("Default line ending: crlf"));
+    }
+
+    #[test]
+    fn storage_safe_file_stem_strips_windows_reserved_filename_chars() {
+        assert_eq!(
+            storage_safe_file_stem("context-session:wechat-article:foo/bar?.md"),
+            "context-session-wechat-article-foo-bar-md"
+        );
     }
 
     #[test]

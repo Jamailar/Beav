@@ -43,7 +43,7 @@ pub fn handle_media_jobs_channel(
                 .and_then(|job_id| {
                     let timeout_ms = payload_field(payload, "timeoutMs")
                         .and_then(Value::as_u64)
-                        .unwrap_or(15 * 60 * 1000);
+                        .unwrap_or(30 * 60 * 1000);
                     media_runtime::await_media_job_completion(state, &job_id, timeout_ms)
                 }),
         ),

@@ -25,6 +25,7 @@ pub fn persist_chat_exchange(
     display_content: &str,
     attachment: Option<Value>,
     response: &str,
+    persist_user_message: bool,
     turn_kind: SessionAgentTurnKind,
     checkpoint_summary: String,
     session_title_override: Option<String>,
@@ -59,21 +60,23 @@ pub fn persist_chat_exchange(
         let runtime_mode = session_runtime_mode(session);
         runtime_mode_snapshot = runtime_mode.clone();
 
-        store.chat_messages.push(ChatMessageRecord {
-            id: make_id("message"),
-            session_id: session.id.clone(),
-            role: "user".to_string(),
-            content: message.to_string(),
-            display_content: if display_content.trim().is_empty()
-                || display_content.trim() == message.trim()
-            {
-                None
-            } else {
-                Some(display_content.to_string())
-            },
-            attachment: attachment.clone(),
-            created_at: now_iso(),
-        });
+        if persist_user_message {
+            store.chat_messages.push(ChatMessageRecord {
+                id: make_id("message"),
+                session_id: session.id.clone(),
+                role: "user".to_string(),
+                content: message.to_string(),
+                display_content: if display_content.trim().is_empty()
+                    || display_content.trim() == message.trim()
+                {
+                    None
+                } else {
+                    Some(display_content.to_string())
+                },
+                attachment: attachment.clone(),
+                created_at: now_iso(),
+            });
+        }
         store.chat_messages.push(ChatMessageRecord {
             id: make_id("message"),
             session_id: session.id.clone(),
@@ -83,18 +86,20 @@ pub fn persist_chat_exchange(
             attachment: None,
             created_at: now_iso(),
         });
-        append_session_transcript(
-            store,
-            &final_session_id,
-            "message",
-            "user",
-            message.to_string(),
-            Some(json!({
-                "displayContent": display_content,
-                "attachment": attachment,
-                "runtimeMode": runtime_mode.clone(),
-            })),
-        );
+        if persist_user_message {
+            append_session_transcript(
+                store,
+                &final_session_id,
+                "message",
+                "user",
+                message.to_string(),
+                Some(json!({
+                    "displayContent": display_content,
+                    "attachment": attachment,
+                    "runtimeMode": runtime_mode.clone(),
+                })),
+            );
+        }
         append_session_transcript(
             store,
             &final_session_id,
