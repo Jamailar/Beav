@@ -1605,7 +1605,11 @@ fn map_openai_video_seconds(duration_seconds: i64) -> &'static str {
     }
 }
 
-fn build_video_request_body(endpoint: &str, model: &str, payload: &Value) -> Result<Value, String> {
+pub(crate) fn build_video_request_body(
+    endpoint: &str,
+    model: &str,
+    payload: &Value,
+) -> Result<Value, String> {
     let prompt = payload_string(payload, "prompt").unwrap_or_default();
     let mut generation_mode =
         payload_string(payload, "generationMode").unwrap_or_else(|| "text-to-video".to_string());
