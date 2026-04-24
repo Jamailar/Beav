@@ -1978,28 +1978,28 @@ export function GenerationStudio({
                                 />
                             ))}
                             {showAgentTranscript && agentSessionId && (
-                                <div className="overflow-hidden rounded-[24px] border border-border bg-surface-secondary shadow-[var(--ui-shadow-1)]">
-                                    <Chat
-                                        fixedSessionId={agentSessionId}
-                                        pendingMessage={agentPendingMessage}
-                                        onMessageConsumed={() => setAgentPendingMessage(null)}
-                                        defaultCollapsed={true}
-                                        showClearButton={false}
-                                        showWelcomeShortcuts={false}
-                                        showComposerShortcuts={false}
-                                        showComposer={false}
-                                        fixedSessionContextIndicatorMode="none"
-                                        welcomeTitle="套图制作"
-                                        welcomeSubtitle="直接告诉 agent 你的成套图片目标、风格和修改意见。图片相关工具调用由它负责。"
-                                        contentLayout="wide"
-                                        allowFileUpload={false}
-                                        messageWorkflowPlacement="top"
-                                        messageWorkflowVariant="compact"
-                                        messageWorkflowEmphasis="thoughts-first"
-                                        messageWorkflowDisplayMode="thoughts-only"
-                                        onExecutionStateChange={setAgentExecutionActive}
-                                    />
-                                </div>
+                                <Chat
+                                    fixedSessionId={agentSessionId}
+                                    pendingMessage={agentPendingMessage}
+                                    onMessageConsumed={() => setAgentPendingMessage(null)}
+                                    defaultCollapsed={true}
+                                    showClearButton={false}
+                                    showWelcomeShortcuts={false}
+                                    showComposerShortcuts={false}
+                                    showComposer={false}
+                                    showMessageAttachments={false}
+                                    showWelcomeHeader={false}
+                                    fixedSessionContextIndicatorMode="none"
+                                    welcomeTitle=""
+                                    welcomeSubtitle=""
+                                    contentLayout="wide"
+                                    allowFileUpload={false}
+                                    messageWorkflowPlacement="top"
+                                    messageWorkflowVariant="compact"
+                                    messageWorkflowEmphasis="thoughts-first"
+                                    messageWorkflowDisplayMode="thoughts-only"
+                                    onExecutionStateChange={setAgentExecutionActive}
+                                />
                             )}
                             <div ref={feedBottomRef} />
                         </div>

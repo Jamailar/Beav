@@ -81,6 +81,7 @@ interface ChatProps {
   emptyStateComposerPlacement?: 'inline' | 'bottom';
   emptyStateVerticalAlign?: 'center' | 'lower';
   showComposer?: boolean;
+  showMessageAttachments?: boolean;
 }
 
 interface ChatContextUsage {
@@ -408,6 +409,7 @@ export function Chat({
   emptyStateComposerPlacement = 'inline',
   emptyStateVerticalAlign = 'center',
   showComposer = true,
+  showMessageAttachments = true,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -3159,6 +3161,7 @@ export function Chat({
                           workflowVariant={messageWorkflowVariant}
                           workflowEmphasis={messageWorkflowEmphasis}
                           workflowDisplayMode={messageWorkflowDisplayMode}
+                          showAttachments={showMessageAttachments}
                         />
                       </ErrorBoundary>
                     ))}
