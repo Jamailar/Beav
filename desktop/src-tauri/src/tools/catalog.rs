@@ -76,7 +76,7 @@ const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
     "diagnostics",
 ];
 const REDCLAW_RUNTIME_MODES: &[&str] = &["chatroom", "default", "knowledge", "redclaw"];
-const DIAGNOSTIC_RUNTIME_MODES: &[&str] = &["background-maintenance", "redclaw", "diagnostics"];
+const DIAGNOSTIC_RUNTIME_MODES: &[&str] = &["background-maintenance", "diagnostics"];
 
 fn string_schema(description: &str) -> Value {
     json!({
@@ -2407,6 +2407,22 @@ mod tests {
         assert!(actions.contains(&"cli_runtime.detect"));
         assert!(actions.contains(&"mcp.list"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
+    }
+
+    #[test]
+    fn redclaw_schema_hides_internal_runtime_task_actions() {
+        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
+            .expect("redclaw schema should exist");
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(actions.contains(&"redclaw.task.preview"));
+        assert!(actions.contains(&"redclaw.task.list"));
+        assert!(!actions.contains(&"runtime.tasks.list"));
+        assert!(!actions.contains(&"cli_runtime.detect"));
     }
 
     #[test]
