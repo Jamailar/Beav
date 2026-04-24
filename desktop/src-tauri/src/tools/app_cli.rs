@@ -1819,6 +1819,19 @@ impl<'a> AppCliExecutor<'a> {
                     "taskId": payload_string(payload, "taskId"),
                 }),
             ),
+            "discover" => self.call_channel(
+                "cli-runtime:discover",
+                json!({
+                    "query": args
+                        .string(&["query", "q"])
+                        .or_else(|| payload_string(payload, "query")),
+                    "limit": args
+                        .i64(&["limit"])
+                        .or_else(|| payload_field(payload, "limit").and_then(Value::as_i64)),
+                    "sessionId": payload_string(payload, "sessionId"),
+                    "taskId": payload_string(payload, "taskId"),
+                }),
+            ),
             "inspect" => self.call_channel(
                 "cli-runtime:inspect",
                 json!({
@@ -1826,8 +1839,15 @@ impl<'a> AppCliExecutor<'a> {
                         .string(&["tool-id", "toolId"])
                         .or_else(|| payload_string(payload, "toolId")),
                     "command": args
-                        .string(&["command"])
-                        .or_else(|| payload_string(payload, "command")),
+                        .string(&["command", "executable", "name"])
+                        .or_else(|| payload_string(payload, "command"))
+                        .or_else(|| payload_string(payload, "executable"))
+                        .or_else(|| payload_string(payload, "name")),
+                    "executable": args
+                        .string(&["executable", "command", "name"])
+                        .or_else(|| payload_string(payload, "executable"))
+                        .or_else(|| payload_string(payload, "command"))
+                        .or_else(|| payload_string(payload, "name")),
                 }),
             ),
             "environment" => {

@@ -81,6 +81,23 @@ pub fn load_host_shell_env() -> Result<BTreeMap<String, String>, String> {
 }
 
 pub fn discover_extra_bin_paths() -> Vec<String> {
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    discover_extra_bin_paths_with_env(&env)
+}
+
+pub fn env_path_entries(env: &BTreeMap<String, String>) -> Vec<String> {
+    let separator = path_separator();
+    env.get("PATH")
+        .cloned()
+        .unwrap_or_default()
+        .split(separator)
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+pub fn discover_extra_bin_paths_with_env(env: &BTreeMap<String, String>) -> Vec<String> {
     let mut items = Vec::<PathBuf>::new();
 
     #[cfg(target_os = "macos")]
@@ -107,6 +124,31 @@ pub fn discover_extra_bin_paths() -> Vec<String> {
         items.push(home.join(".bun").join("bin"));
         items.push(home.join(".deno").join("bin"));
         items.push(home.join("go").join("bin"));
+
+        if let Some(nvm_dir) = env
+            .get("NVM_BIN")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            items.push(nvm_dir);
+        }
+        if let Some(volta_home) = env
+            .get("VOLTA_HOME")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            items.push(volta_home.join("bin"));
+        } else {
+            items.push(home.join(".volta").join("bin"));
+        }
+        if let Some(fnm_multishell) = env
+            .get("FNM_MULTISHELL_PATH")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            items.push(fnm_multishell.join("bin"));
+        }
+        items.push(home.join(".asdf").join("shims"));
     }
 
     let mut deduped = Vec::<String>::new();
@@ -147,7 +189,7 @@ pub fn merge_execution_env(
     for entry in &environment.path_entries {
         push_unique_path(&mut path_entries, entry.clone());
     }
-    for entry in discover_extra_bin_paths() {
+    for entry in discover_extra_bin_paths_with_env(base) {
         push_unique_path(&mut path_entries, entry);
     }
     for entry in existing_path.split(separator) {

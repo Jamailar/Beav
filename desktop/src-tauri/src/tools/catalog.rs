@@ -560,6 +560,25 @@ fn cli_runtime_detect_input_schema() -> Value {
     )
 }
 
+fn cli_runtime_discover_input_schema() -> Value {
+    object_schema(
+        &[
+            ("query", string_schema("Optional CLI name substring to search in PATH.")),
+            (
+                "limit",
+                integer_schema("Maximum number of discovered commands to return.", 1, 500),
+            ),
+            (
+                "sessionId",
+                string_schema("Optional session id for lineage."),
+            ),
+            ("taskId", string_schema("Optional task id for lineage.")),
+        ],
+        &[],
+        None,
+    )
+}
+
 fn cli_runtime_inspect_input_schema() -> Value {
     object_schema(
         &[
@@ -567,6 +586,10 @@ fn cli_runtime_inspect_input_schema() -> Value {
             (
                 "command",
                 string_schema("Direct command/executable to inspect."),
+            ),
+            (
+                "executable",
+                string_schema("Compatibility alias for the command/executable to inspect."),
             ),
         ],
         &[],
@@ -1465,7 +1488,18 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.discover",
+        namespace: "cli_runtime",
+        description: "Enumerate CLI commands visible from the current host PATH, with optional query filtering.",
+        input_schema: cli_runtime_discover_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1476,7 +1510,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1487,7 +1521,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1498,7 +1532,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1509,7 +1543,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1520,7 +1554,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1531,7 +1565,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1542,7 +1576,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -1553,7 +1587,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -2422,6 +2456,7 @@ mod tests {
         let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         assert!(actions.contains(&"runtime.query"));
         assert!(actions.contains(&"cli_runtime.detect"));
+        assert!(actions.contains(&"cli_runtime.discover"));
         assert!(actions.contains(&"mcp.list"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
     }
@@ -2438,8 +2473,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(actions.contains(&"redclaw.task.preview"));
         assert!(actions.contains(&"redclaw.task.list"));
+        assert!(actions.contains(&"cli_runtime.inspect"));
         assert!(!actions.contains(&"runtime.tasks.list"));
-        assert!(!actions.contains(&"cli_runtime.detect"));
+        assert!(actions.contains(&"cli_runtime.detect"));
     }
 
     #[test]
