@@ -378,20 +378,71 @@ pub(crate) fn http_json_response(
     body: Value,
 ) -> Result<(), String> {
     let payload = serde_json::to_string(&body).map_err(|error| error.to_string())?;
-    let response = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+    let response = http_response_bytes(
         status_code,
         status_text,
-        payload.len(),
-        payload
+        &[
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+            (
+                "Access-Control-Allow-Headers",
+                "Content-Type, Authorization, X-Auth-Token",
+            ),
+            ("Access-Control-Max-Age", "600"),
+            ("Access-Control-Allow-Private-Network", "true"),
+        ],
+        Some(payload.as_bytes()),
     );
     stream
-        .write_all(response.as_bytes())
+        .write_all(&response)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn http_empty_response(
+    stream: &mut TcpStream,
+    status_code: u16,
+    status_text: &str,
+) -> Result<(), String> {
+    let response = http_response_bytes(
+        status_code,
+        status_text,
+        &[
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+            (
+                "Access-Control-Allow-Headers",
+                "Content-Type, Authorization, X-Auth-Token",
+            ),
+            ("Access-Control-Max-Age", "600"),
+            ("Access-Control-Allow-Private-Network", "true"),
+        ],
+        None,
+    );
+    stream
+        .write_all(&response)
         .map_err(|error| error.to_string())
 }
 
 pub(crate) fn http_ok_json(stream: &mut TcpStream, body: Value) -> Result<(), String> {
     http_json_response(stream, 200, "OK", body)
+}
+
+fn http_response_bytes(
+    status_code: u16,
+    status_text: &str,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+) -> Vec<u8> {
+    let body = body.unwrap_or(&[]);
+    let mut response = format!("HTTP/1.1 {} {}\r\n", status_code, status_text).into_bytes();
+    for (key, value) in headers {
+        response.extend_from_slice(format!("{key}: {value}\r\n").as_bytes());
+    }
+    response.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+    response.extend_from_slice(b"Connection: close\r\n\r\n");
+    response.extend_from_slice(body);
+    response
 }
 
 pub(crate) fn parse_http_request_parts(raw: &str) -> (String, String) {
@@ -625,6 +676,7 @@ fn handle_knowledge_http_request(
     let state = app.state::<AppState>();
 
     match (method, subpath) {
+        ("OPTIONS", _) => Ok((204, "No Content", json!({}))),
         ("GET", "") | ("GET", "health") => Ok((
             200,
             "OK",
@@ -796,7 +848,11 @@ pub(crate) fn run_assistant_listener(
                             &body,
                         ) {
                             Ok((status, status_text, body)) => {
-                                http_json_response(&mut stream, status, status_text, body)
+                                if status == 204 {
+                                    http_empty_response(&mut stream, status, status_text)
+                                } else {
+                                    http_json_response(&mut stream, status, status_text, body)
+                                }
                             }
                             Err(error) => http_json_response(
                                 &mut stream,
@@ -1064,5 +1120,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("Feishu 加密事件"));
+    }
+
+    #[test]
+    fn http_response_bytes_includes_browser_preflight_headers() {
+        let response = String::from_utf8(http_response_bytes(
+            204,
+            "No Content",
+            &[
+                ("Access-Control-Allow-Origin", "*"),
+                ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+                (
+                    "Access-Control-Allow-Headers",
+                    "Content-Type, Authorization, X-Auth-Token",
+                ),
+                ("Access-Control-Allow-Private-Network", "true"),
+            ],
+            None,
+        ))
+        .unwrap();
+        assert!(response.contains("HTTP/1.1 204 No Content"));
+        assert!(response.contains("Access-Control-Allow-Origin: *"));
+        assert!(response.contains("Access-Control-Allow-Methods: GET, POST, OPTIONS"));
+        assert!(response
+            .contains("Access-Control-Allow-Headers: Content-Type, Authorization, X-Auth-Token"));
+        assert!(response.contains("Access-Control-Allow-Private-Network: true"));
+        assert!(response.contains("Content-Length: 0"));
     }
 }

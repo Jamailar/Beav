@@ -30,6 +30,7 @@ pub fn execute_prepared_wander_turn(
         &request.message,
         request.model_config,
         None,
+        None,
     )?;
     if is_chat_runtime_cancel_requested(state, &context.working_session_id) {
         let _ = update_chat_runtime_state(

@@ -33,6 +33,8 @@ export interface UploadedFileAttachment {
   name: string;
   ext?: string;
   size?: number;
+  thumbnailDataUrl?: string;
+  workspaceRelativePath?: string;
   absolutePath?: string;
   originalAbsolutePath?: string;
   localUrl?: string;
@@ -41,6 +43,7 @@ export interface UploadedFileAttachment {
   storageMode?: 'staged' | string;
   directUploadEligible?: boolean;
   processingStrategy?: string;
+  deliveryMode?: 'direct-input' | 'tool-read';
   summary?: string;
   requiresMultimodal?: boolean;
 }
@@ -140,13 +143,18 @@ function modelSupportsChat(model: string | { id?: unknown; capability?: unknown;
 }
 
 function getAttachmentSource(attachment: UploadedFileAttachment): string {
-  const candidate = String(
-    attachment.localUrl
+  const preferred = String(
+    attachment.thumbnailDataUrl
+      || attachment.localUrl
       || attachment.absolutePath
       || attachment.originalAbsolutePath
       || '',
   ).trim();
-  return candidate ? resolveAssetUrl(candidate) : '';
+  if (!preferred) return '';
+  if (preferred.startsWith('data:')) {
+    return preferred;
+  }
+  return resolveAssetUrl(preferred);
 }
 
 function getAttachmentExtLabel(attachment: UploadedFileAttachment): string {
@@ -318,12 +326,18 @@ function ComposerAttachmentPreview({
   children,
 }: ComposerAttachmentPreviewProps) {
   const visualKind = getAttachmentVisualKind(attachment);
+  const isImageAttachment = visualKind === 'image';
   const previewSrc = visualKind === 'image' ? getAttachmentSource(attachment) : '';
   const extLabel = getAttachmentExtLabel(attachment);
   const sizeLabel = formatAttachmentSize(attachment.size);
   const typeLabel = getAttachmentKindLabel(visualKind);
-  const frameClass = variant === 'empty' ? 'h-[92px] w-[70px]' : 'h-[78px] w-[58px]';
-  const metaClass = darkEmbedded ? 'text-white/46' : 'text-text-tertiary';
+  const frameClass = isImageAttachment
+    ? variant === 'empty' ? 'h-[88px] w-[88px]' : 'h-[72px] w-[72px]'
+    : variant === 'empty' ? 'h-[92px] w-[70px]' : 'h-[78px] w-[58px]';
+  const frameRadiusClass = isImageAttachment
+    ? variant === 'empty' ? 'rounded-[18px]' : 'rounded-[16px]'
+    : 'rounded-[22px]';
+  const metaClass = darkEmbedded ? 'text-white/34' : 'text-text-tertiary/70';
   const titleClass = darkEmbedded ? 'text-white/88' : 'text-text-primary';
   const badgeClass = darkEmbedded
     ? 'border-white/10 bg-white/[0.05] text-white/58'
@@ -341,17 +355,19 @@ function ComposerAttachmentPreview({
       <div className="relative shrink-0">
         {previewSrc ? (
           <div className={clsx(
-            'overflow-hidden rounded-[22px] border',
+            'overflow-hidden border',
             frameClass,
-            variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]',
+            frameRadiusClass,
+            isImageAttachment ? 'rotate-0' : (variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]'),
             previewShellClass,
           )}>
             <img src={previewSrc} alt={attachment.name} className="h-full w-full object-cover" />
           </div>
         ) : (
           <div className={clsx(
-            'flex items-center justify-center rounded-[22px] border',
+            'flex items-center justify-center border',
             frameClass,
+            frameRadiusClass,
             previewShellClass,
           )}>
             <div className="flex flex-col items-center gap-1.5 px-2 text-center">
@@ -381,27 +397,34 @@ function ComposerAttachmentPreview({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="min-w-0 flex-1 pt-1">
-        <div className={clsx('text-[11px] font-medium tracking-[0.08em]', metaClass)}>已添加文件</div>
-        <div className={clsx(
-          'mt-1 truncate font-medium',
-          variant === 'empty' ? 'text-[15px]' : 'text-[13px]',
-          titleClass,
-        )} title={attachment.name}>
-          {attachment.name}
-        </div>
-        {infoTokens.length > 0 ? (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {infoTokens.map((token) => (
-              <span
-                key={token}
-                className={clsx('rounded-full border px-2 py-0.5 text-[10px] font-medium', badgeClass)}
-              >
-                {token}
-              </span>
-            ))}
+      <div className="min-w-0 flex-1 pt-0.5">
+        <div className="flex items-center gap-2">
+          <div className={clsx('shrink-0 text-[9px] font-medium tracking-[0.12em]', metaClass)}>已添加文件</div>
+          <div className={clsx(
+            'min-w-0 truncate font-medium opacity-78',
+            variant === 'empty' ? 'text-[11px]' : 'text-[10px]',
+            titleClass,
+          )} title={attachment.name}>
+            {attachment.name}
           </div>
-        ) : null}
+        </div>
+        <div className={clsx(
+          'mt-2',
+          children ? '' : 'mb-0.5',
+        )}>
+          {infoTokens.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {infoTokens.map((token) => (
+                <span
+                  key={token}
+                  className={clsx('rounded-full border px-2 py-0.5 text-[10px] font-medium', badgeClass)}
+                >
+                  {token}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
         {children}
       </div>
     </div>

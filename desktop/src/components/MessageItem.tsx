@@ -165,6 +165,7 @@ export interface Message {
     name: string;
     ext?: string;
     size?: number;
+    workspaceRelativePath?: string;
     absolutePath?: string;
     originalAbsolutePath?: string;
     localUrl?: string;
@@ -173,6 +174,7 @@ export interface Message {
     storageMode?: 'staged' | string;
     directUploadEligible?: boolean;
     processingStrategy?: string;
+    deliveryMode?: 'direct-input' | 'tool-read';
     summary?: string;
     requiresMultimodal?: boolean;
   };

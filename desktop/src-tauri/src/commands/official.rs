@@ -1572,7 +1572,7 @@ fn spawn_official_cached_data_refresh(app: AppHandle) -> bool {
         return false;
     }
 
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         if let Err(error) = refresh_official_cached_data(&app, &state) {
             if error != "官方账号未登录" {

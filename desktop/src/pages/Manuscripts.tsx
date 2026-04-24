@@ -38,6 +38,9 @@ import {
 import { stabilizeRichpostPagination } from '../components/manuscripts/richpostPaginationGuard';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import type { GenerationIntent, ImmersiveMode, PendingChatMessage } from '../App';
+import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
+import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { composeMarkdownWithFrontmatter, parseMarkdownFrontmatter } from '../utils/markdownFrontmatter';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
@@ -739,6 +742,55 @@ function getVideoReferenceModeHint(mode: 'text-to-video' | 'reference-guided' | 
     return '文生视频不需要参考图。';
 }
 
+function generatedAssetsFromMediaJob(job: MediaJobProjection | null | undefined): GeneratedAsset[] {
+    if (!job) return [];
+    return job.artifacts
+        .map((artifact) => {
+            const metadata = artifact.metadata;
+            if (!metadata || typeof metadata !== 'object') return null;
+            const record = metadata as Record<string, unknown>;
+            if (typeof record.id !== 'string') return null;
+            return {
+                id: record.id,
+                title: typeof record.title === 'string' ? record.title : undefined,
+                prompt: typeof record.prompt === 'string' ? record.prompt : undefined,
+                previewUrl: typeof record.previewUrl === 'string' ? record.previewUrl : undefined,
+                mimeType: typeof record.mimeType === 'string' ? record.mimeType : undefined,
+                exists: typeof record.exists === 'boolean' ? record.exists : undefined,
+                projectId: typeof record.projectId === 'string' ? record.projectId : undefined,
+                provider: typeof record.provider === 'string' ? record.provider : undefined,
+                providerTemplate: typeof record.providerTemplate === 'string' ? record.providerTemplate : undefined,
+                model: typeof record.model === 'string' ? record.model : undefined,
+                aspectRatio: typeof record.aspectRatio === 'string' ? record.aspectRatio : undefined,
+                size: typeof record.size === 'string' ? record.size : undefined,
+                quality: typeof record.quality === 'string' ? record.quality : undefined,
+                relativePath: typeof record.relativePath === 'string' ? record.relativePath : undefined,
+                updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : job.updatedAt,
+            } satisfies GeneratedAsset;
+        })
+        .filter(Boolean) as GeneratedAsset[];
+}
+
+function mediaJobErrorMessage(job: MediaJobProjection | null | undefined, fallback: string): string {
+    if (!job) return fallback;
+    const attemptError = job.attempt?.lastError;
+    if (typeof attemptError === 'string' && attemptError.trim()) return attemptError;
+    const resultError = job.result && typeof job.result === 'object'
+        ? (job.result as Record<string, unknown>).error
+        : null;
+    if (typeof resultError === 'string' && resultError.trim()) return resultError;
+    if (typeof job.cancelReason === 'string' && job.cancelReason.trim()) return job.cancelReason;
+    return fallback;
+}
+
+function sortMediaJobsByRecency(jobs: MediaJobProjection[]): MediaJobProjection[] {
+    return [...jobs].sort((left, right) => {
+        const updatedDelta = parseTimestampMs(right.updatedAt) - parseTimestampMs(left.updatedAt);
+        if (updatedDelta !== 0) return updatedDelta;
+        return parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt);
+    });
+}
+
 function inferImageAspectFromSize(size: string): string {
     const matched = String(size || '').trim().match(/^(\d{2,5})x(\d{2,5})$/i);
     if (!matched) return '';
@@ -913,6 +965,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [isGenerating, setIsGenerating] = useState(false);
     const [genError, setGenError] = useState('');
     const [generatedAssets, setGeneratedAssets] = useState<GeneratedAsset[]>([]);
+    const [activeImageJobId, setActiveImageJobId] = useState<string | null>(null);
     const [videoPrompt, setVideoPrompt] = useState('');
     const [videoProjectId, setVideoProjectId] = useState('');
     const [videoTitle, setVideoTitle] = useState('');
@@ -927,6 +980,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
+    const [activeVideoJobId, setActiveVideoJobId] = useState<string | null>(null);
     const [isUpgradingDraft, setIsUpgradingDraft] = useState(false);
     const [packageState, setPackageState] = useState<PackageState | null>(null);
     const [isGeneratingRemotion, setIsGeneratingRemotion] = useState(false);
@@ -976,6 +1030,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const richpostPreviewGenerationRef = useRef<Set<string>>(new Set());
     const richpostCardPreviewTimerRef = useRef<number | null>(null);
     const richpostCardPreviewRenderedAtRef = useRef<Record<string, number>>({});
+    const handledImageTerminalJobIdRef = useRef<string | null>(null);
+    const handledVideoTerminalJobIdRef = useRef<string | null>(null);
+    const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
     const fileMetaMap = useMemo(() => collectFileMetaMap(tree), [tree]);
     const isMediaScope = filter === 'media' || filter === 'image' || filter === 'video' || filter === 'audio';
     const mediaFolderTree = useMemo(() => buildMediaFolderTree(assets), [assets]);
@@ -983,6 +1040,50 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         () => composeMarkdownWithFrontmatter(editorBody, editorFrontmatterBlock),
         [editorBody, editorFrontmatterBlock]
     );
+    const manuscriptJobBootstrapFilter = useMemo(
+        () => (editorFile ? { source: 'manuscripts', manuscriptPath: editorFile, limit: 40 } : null),
+        [editorFile],
+    );
+    const manuscriptMediaJobs = useMemo(
+        () => sortMediaJobsByRecency(
+            Object.values(trackedJobsById).filter((job) => (
+                job.source === 'manuscripts' && isSameDraftRelativePath(job.manuscriptPath, editorFile)
+            )),
+        ),
+        [editorFile, trackedJobsById],
+    );
+    const trackedMediaJobIds = useMemo(() => {
+        const ids = new Set<string>();
+        if (activeImageJobId) ids.add(activeImageJobId);
+        if (activeVideoJobId) ids.add(activeVideoJobId);
+        for (const job of manuscriptMediaJobs) {
+            ids.add(job.jobId);
+        }
+        return Array.from(ids);
+    }, [activeImageJobId, activeVideoJobId, manuscriptMediaJobs]);
+    const currentImageJob = useMemo(() => {
+        if (activeImageJobId) {
+            const activeJob = trackedJobsById[activeImageJobId];
+            if (activeJob && activeJob.kind === 'image' && isSameDraftRelativePath(activeJob.manuscriptPath, editorFile)) {
+                return activeJob;
+            }
+        }
+        return manuscriptMediaJobs.find((job) => job.kind === 'image') || null;
+    }, [activeImageJobId, editorFile, manuscriptMediaJobs, trackedJobsById]);
+    const currentVideoJob = useMemo(() => {
+        if (activeVideoJobId) {
+            const activeJob = trackedJobsById[activeVideoJobId];
+            if (activeJob && activeJob.kind === 'video' && isSameDraftRelativePath(activeJob.manuscriptPath, editorFile)) {
+                return activeJob;
+            }
+        }
+        return manuscriptMediaJobs.find((job) => job.kind === 'video') || null;
+    }, [activeVideoJobId, editorFile, manuscriptMediaJobs, trackedJobsById]);
+
+    useMediaJobSubscription(trackedMediaJobIds, {
+        enabled: isActive && Boolean(editorFile),
+        bootstrapFilter: manuscriptJobBootstrapFilter,
+    });
 
     useEffect(() => {
         editorFileRef.current = editorFile;
@@ -1004,12 +1105,25 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         editorBodyDirtyRef.current = editorBodyDirty;
     }, [editorBodyDirty]);
 
+    useEffect(() => {
+        setActiveImageJobId(null);
+        setActiveVideoJobId(null);
+        setIsGenerating(false);
+        setIsGeneratingVideo(false);
+        setGenError('');
+        setVideoGenError('');
+        setGeneratedAssets([]);
+        setGeneratedVideoAssets([]);
+        handledImageTerminalJobIdRef.current = null;
+        handledVideoTerminalJobIdRef.current = null;
+    }, [editorFile]);
+
     useEffect(() => () => {
         if (richpostCardPreviewTimerRef.current != null) {
             window.clearTimeout(richpostCardPreviewTimerRef.current);
             richpostCardPreviewTimerRef.current = null;
         }
-    }, []);
+    }, [videoGenerationMode]);
 
     const loadTree = useCallback(async () => {
         const requestId = ++treeRequestIdRef.current;
@@ -1760,6 +1874,61 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setPackageState(null);
         }
     }, [applyPackageState]);
+
+    useEffect(() => {
+        if (!currentImageJob) {
+            setIsGenerating(false);
+            return;
+        }
+        const terminal = isMediaJobTerminal(currentImageJob.status);
+        setIsGenerating(!terminal);
+        if (terminal && activeImageJobId === currentImageJob.jobId) {
+            setActiveImageJobId(null);
+        }
+        if (isMediaJobSuccessful(currentImageJob.status)) {
+            setGenError('');
+            setGeneratedAssets(generatedAssetsFromMediaJob(currentImageJob));
+            if (handledImageTerminalJobIdRef.current !== currentImageJob.jobId) {
+                handledImageTerminalJobIdRef.current = currentImageJob.jobId;
+                void loadData();
+            }
+            return;
+        }
+        if (!terminal) return;
+        setGenError(mediaJobErrorMessage(currentImageJob, '生图失败'));
+        if (handledImageTerminalJobIdRef.current !== currentImageJob.jobId) {
+            handledImageTerminalJobIdRef.current = currentImageJob.jobId;
+        }
+    }, [activeImageJobId, currentImageJob, loadData]);
+
+    useEffect(() => {
+        if (!currentVideoJob) {
+            setIsGeneratingVideo(false);
+            return;
+        }
+        const terminal = isMediaJobTerminal(currentVideoJob.status);
+        setIsGeneratingVideo(!terminal);
+        if (terminal && activeVideoJobId === currentVideoJob.jobId) {
+            setActiveVideoJobId(null);
+        }
+        if (isMediaJobSuccessful(currentVideoJob.status)) {
+            setVideoGenError('');
+            setGeneratedVideoAssets(generatedAssetsFromMediaJob(currentVideoJob));
+            if (handledVideoTerminalJobIdRef.current !== currentVideoJob.jobId) {
+                handledVideoTerminalJobIdRef.current = currentVideoJob.jobId;
+                void loadData();
+                if (editorFile) {
+                    void refreshPackageState(editorFile);
+                }
+            }
+            return;
+        }
+        if (!terminal) return;
+        setVideoGenError(mediaJobErrorMessage(currentVideoJob, '生视频失败'));
+        if (handledVideoTerminalJobIdRef.current !== currentVideoJob.jobId) {
+            handledVideoTerminalJobIdRef.current = currentVideoJob.jobId;
+        }
+    }, [activeVideoJobId, currentVideoJob, editorFile, loadData, refreshPackageState]);
 
     const runEditorSave = useCallback(async (options?: { alertOnError?: boolean }) => {
         const snapshotFile = editorFileRef.current;
@@ -2542,7 +2711,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         setGenError('');
         try {
             const effectiveMode = referenceImages.length > 0 ? generationMode : 'text-to-image';
-            const result = await window.ipcRenderer.invoke('image-gen:generate', {
+            const result = await window.ipcRenderer.generation.submitImage({
                 prompt,
                 bypassPromptOptimizer: true,
                 projectId: genProjectId.trim() || undefined,
@@ -2556,21 +2725,23 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 aspectRatio: aspectRatio.trim() || undefined,
                 size: size.trim() || undefined,
                 quality: quality.trim() || undefined,
-            }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
+                source: 'manuscripts',
+                manuscriptPath: editorFile || undefined,
+            }) as { success?: boolean; error?: string; jobId?: string };
 
-            if (!result?.success) {
+            if (!result?.success || !result?.jobId) {
                 setGenError(result?.error || '生图失败');
+                setIsGenerating(false);
                 return;
             }
-            setGeneratedAssets(Array.isArray(result.assets) ? result.assets : []);
-            await loadData();
+            setActiveImageJobId(result.jobId);
         } catch (generationError) {
             console.error('Failed to generate images:', generationError);
             setGenError('生图失败');
-        } finally {
             setIsGenerating(false);
+        } finally {
         }
-    }, [aspectRatio, count, genProjectId, genTitle, generationMode, loadData, model, prompt, quality, referenceImages, settings.image_provider, settings.image_provider_template, size]);
+    }, [aspectRatio, count, editorFile, genProjectId, genTitle, generationMode, model, prompt, quality, referenceImages, settings.image_provider, settings.image_provider_template, size]);
 
     const handleReferenceFile = useCallback(async (event: ChangeEvent<HTMLInputElement>, targetIndex: number) => {
         const file = event.target.files?.[0];
@@ -2609,15 +2780,18 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             : videoGenerationMode === 'first-last-frame'
                 ? [videoPrimaryReferenceImage, videoLastFrameImage].filter(Boolean) as ReferenceImageItem[]
                 : [];
+        const effectiveVideoGenerationMode = effectiveVideoReferenceImages.length > 0 && videoGenerationMode === 'text-to-video'
+            ? 'reference-guided'
+            : videoGenerationMode;
         if (!videoPrompt.trim()) {
             setVideoGenError('请先输入视频提示词');
             return;
         }
-        if (videoGenerationMode === 'reference-guided' && effectiveVideoReferenceImages.length < 1) {
+        if (effectiveVideoGenerationMode === 'reference-guided' && effectiveVideoReferenceImages.length < 1) {
             setVideoGenError('参考图视频模式至少需要 1 张参考图');
             return;
         }
-        if (videoGenerationMode === 'first-last-frame' && effectiveVideoReferenceImages.length < 2) {
+        if (effectiveVideoGenerationMode === 'first-last-frame' && effectiveVideoReferenceImages.length < 2) {
             setVideoGenError('首尾帧视频模式需要 2 张参考图');
             return;
         }
@@ -2629,36 +2803,40 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         setIsGeneratingVideo(true);
         setVideoGenError('');
         try {
-            const result = await window.ipcRenderer.invoke('video-gen:generate', {
+            const result = await window.ipcRenderer.generation.submitVideo({
                 prompt: videoPrompt,
                 projectId: videoProjectId.trim() || undefined,
                 title: videoTitle.trim() || undefined,
                 model: effectiveVideoModel,
-                generationMode: effectiveVideoReferenceImages.length > 0 ? videoGenerationMode : 'text-to-video',
+                generationMode: effectiveVideoGenerationMode,
                 referenceImages: effectiveVideoReferenceImages.map((item) => item.dataUrl),
                 aspectRatio: videoAspectRatio,
                 resolution: videoResolution,
                 durationSeconds: videoDurationSeconds,
                 count: 1,
                 generateAudio: false,
-            }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
+                source: 'manuscripts',
+                manuscriptPath: editorFile || undefined,
+                videoProjectPath: editorDescriptor?.draftType === 'video' ? editorFile || undefined : undefined,
+            }) as { success?: boolean; error?: string; jobId?: string };
 
-            if (!result?.success) {
+            if (!result?.success || !result?.jobId) {
                 setVideoGenError(result?.error || '生视频失败');
+                setIsGeneratingVideo(false);
                 return;
             }
-            setGeneratedVideoAssets(Array.isArray(result.assets) ? result.assets : []);
-            await loadData();
+            setActiveVideoJobId(result.jobId);
         } catch (generationError) {
             console.error('Failed to generate videos:', generationError);
             setVideoGenError('生视频失败');
-        } finally {
             setIsGeneratingVideo(false);
+        } finally {
         }
     }, [
+        editorDescriptor?.draftType,
+        editorFile,
         effectiveVideoModel,
         hasVideoConfig,
-        loadData,
         videoAspectRatio,
         videoDurationSeconds,
         videoGenerationMode,
@@ -2686,6 +2864,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     next[target] = item;
                     return next.slice(0, 5);
                 });
+                if (videoGenerationMode === 'text-to-video') {
+                    setVideoGenerationMode('reference-guided');
+                }
             } else if (target === 'primary') {
                 setVideoPrimaryReferenceImage(item);
             } else {

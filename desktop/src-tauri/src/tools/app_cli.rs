@@ -2406,6 +2406,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         let requested_count = requested_image_generation_count(&merged, image_plan_items.len());
         let multi_image_agent_turn = requested_count > 1 && self.session_id.is_some();
         let plan_confirmed = payload_bool(&merged, &["planConfirmed"]).unwrap_or(false);
+        let wait_for_completion = payload_bool(&merged, &["waitForCompletion"]).unwrap_or(false);
         let shared_style_guide =
             payload_string(&merged, "sharedStyleGuide").filter(|item| !item.trim().is_empty());
         let base_prompt = payload_string(&merged, "prompt").unwrap_or_default();
@@ -2501,8 +2502,22 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 object.insert("count".to_string(), json!(compiled_items.len()));
                 object.insert("imagePlanItems".to_string(), json!(compiled_items));
             }
+            object
+                .entry("source".to_string())
+                .or_insert_with(|| json!("tool"));
+            if let Some(session_id) = self.session_id {
+                object.insert("sessionId".to_string(), json!(session_id));
+            }
+            if let Some(tool_call_id) = self.tool_call_id {
+                object.insert("toolCallId".to_string(), json!(tool_call_id));
+                object.insert("toolName".to_string(), json!("app_cli"));
+            }
         }
-        self.call_channel("image-gen:generate", merged)
+        if wait_for_completion {
+            return self.call_channel("image-gen:generate", merged);
+        }
+        self.emit_tool_partial("图片生成任务已提交到媒体 runtime，正在排队执行。");
+        self.call_channel("generation:submit-image", merged)
     }
 
     fn run_preflight_multi_image_skill_activation(&self) {
@@ -2606,6 +2621,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
 
     fn handle_video_generate(&self, args: &CliArgs, payload: &Value) -> Result<Value, String> {
         let mut merged = build_generation_payload(args, payload);
+        let wait_for_completion = payload_bool(&merged, &["waitForCompletion"]).unwrap_or(false);
         let video_project_path = self
             .video_project_locator_from_generate(args, payload)
             .map(|locator| self.resolve_video_project_path(locator))
@@ -2684,6 +2700,14 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             }
         }
         self.emit_tool_partial("视频生成已提交到宿主，正在准备 provider 请求。");
+        if !wait_for_completion {
+            let submitted = self.call_channel("generation:submit-video", merged)?;
+            return Ok(merge_video_generation_result(
+                submitted,
+                video_project_path,
+                video_project_state,
+            ));
+        }
         let result = self.call_channel("video-gen:generate", merged)?;
         if let Some(project_path) = video_project_path {
             if let Some(assets) = result.get("assets").and_then(Value::as_array) {

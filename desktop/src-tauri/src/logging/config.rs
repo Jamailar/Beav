@@ -74,7 +74,3 @@ pub fn logging_config_from_settings(settings: &Value) -> LoggingConfig {
         .or(config.upload_endpoint);
     config
 }
-
-pub fn diagnostics_upload_endpoint(settings: &Value) -> Option<String> {
-    logging_config_from_settings(settings).upload_endpoint
-}

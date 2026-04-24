@@ -33,11 +33,14 @@
 
 ## 本地 HTTP 路由
 
+- `OPTIONS /api/knowledge/*`（浏览器插件预检）
 - `GET /api/knowledge/health`
 - `POST /api/knowledge/entries`
 - `POST /api/knowledge/document-sources`
 - `POST /api/knowledge/media-assets`
 - `POST /api/knowledge/batch-ingest`
+
+本地 HTTP 响应会附带浏览器插件所需的 CORS / Private Network Access 响应头，避免出现 `health` 可访问但 `POST` 被浏览器预检拦截的情况。
 
 ## 当前 ingest 类型
 

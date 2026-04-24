@@ -487,7 +487,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [embeddingSourceId, setEmbeddingSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
   const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
-  const [isTesting, setIsTesting] = useState(false);
+  const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [testMsg, setTestMsg] = useState('');
   const [imageAvailableModels, setImageAvailableModels] = useState<Array<{ id: string; source: 'remote' | 'suggested' }>>([]);
@@ -685,7 +685,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     setRedclawProfileMessage(null);
     setStatus('idle');
   }, [savedRedclawProfileDraft.creatorProfile, savedRedclawProfileDraft.user, setRedclawProfileDirtyState]);
-  const fetchModelsRequestRef = useRef(0);
+
+  const fetchModelsRequestRef = useRef<Record<string, number>>({});
   const fetchImageModelsRequestRef = useRef(0);
   const settingsLoadRequestRef = useRef(0);
   const debugLogsLoadRequestRef = useRef(0);
@@ -1481,6 +1482,15 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       delete next[sourceId];
       return next;
     });
+    setFetchingModelsBySourceId((prev) => {
+      if (!prev[sourceId]) return prev;
+      const next = { ...prev };
+      delete next[sourceId];
+      return next;
+    });
+    fetchModelsRequestRef.current = Object.fromEntries(
+      Object.entries(fetchModelsRequestRef.current).filter(([id]) => id !== sourceId),
+    );
     setSourceModelDrafts((prev) => {
       const next = { ...prev };
       delete next[sourceId];
@@ -1585,11 +1595,18 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     source: AiSourceConfig,
     options?: { manual?: boolean }
   ) => {
+    const sourceId = String(source.id || '').trim();
     const baseURL = source.baseURL.trim();
     const apiKey = source.apiKey.trim();
     const allowEmptyKey = isLocalAiSource(source);
     if (!baseURL || (!apiKey && !allowEmptyKey)) {
       setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
+      setFetchingModelsBySourceId((prev) => {
+        if (!prev[source.id]) return prev;
+        const next = { ...prev };
+        delete next[source.id];
+        return next;
+      });
       if (options?.manual) {
         setTestStatus('error');
         setTestMsg(allowEmptyKey ? '请先填写 Endpoint' : '请先填写 Endpoint 与 API Key');
@@ -1600,8 +1617,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       return;
     }
 
-    const requestId = ++fetchModelsRequestRef.current;
-    setIsTesting(true);
+    const requestId = (fetchModelsRequestRef.current[sourceId] || 0) + 1;
+    fetchModelsRequestRef.current = {
+      ...fetchModelsRequestRef.current,
+      [sourceId]: requestId,
+    };
+    setFetchingModelsBySourceId((prev) => ({ ...prev, [source.id]: true }));
     if (options?.manual) {
       setTestStatus('idle');
       setTestMsg('');
@@ -1615,7 +1636,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
 
       const protocol = detectResult?.protocol || source.protocol || 'openai';
-      if (requestId !== fetchModelsRequestRef.current) return;
+      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
 
       if (source.protocol !== protocol) {
         updateAiSource(source.id, (prev) => ({ ...prev, protocol }));
@@ -1630,7 +1651,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         presetId: source.presetId,
         protocol,
       });
-      if (requestId !== fetchModelsRequestRef.current) return;
+      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
 
       const deduped = Array.from(new Map(
         ((models || []) as unknown[])
@@ -1676,14 +1697,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           : `候选模型已更新（${deduped.length} 个），请在“添加模型”中手动加入需要的模型`
       );
     } catch (e: unknown) {
-      if (requestId !== fetchModelsRequestRef.current) return;
+      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
       setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
       setTestStatus('error');
       const message = e instanceof Error ? e.message : '拉取模型列表失败';
       setTestMsg(message);
     } finally {
-      if (requestId === fetchModelsRequestRef.current) {
-        setIsTesting(false);
+      if (requestId === (fetchModelsRequestRef.current[sourceId] || 0)) {
+        setFetchingModelsBySourceId((prev) => {
+          if (!prev[source.id]) return prev;
+          const next = { ...prev };
+          delete next[source.id];
+          return next;
+        });
       }
     }
   }, [activeAiSourceId, isLocalAiSource, isOfficialManagedSource, updateAiSource]);
@@ -2928,6 +2954,15 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
             Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
           );
         });
+        setFetchingModelsBySourceId((prev) => {
+          if (!preserveRemoteModels) {
+            return {};
+          }
+          const validSourceIds = new Set(sourceList.map((source) => source.id));
+          return Object.fromEntries(
+            Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
+          );
+        });
         setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
         setMcpServers(parseMcpServers(settings.mcp_servers_json));
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
@@ -3021,6 +3056,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           return 'redbox_official_auto';
         });
         setModelsBySource((prev) => (preserveRemoteModels ? prev : {}));
+        setFetchingModelsBySourceId((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
         clearAiSourceDraftDirty();
@@ -4551,10 +4587,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                             setActiveAiSourceId(source.id);
                                             void fetchModelsForSource(source, { manual: true });
                                           }}
-                                          disabled={isTesting}
+                                          disabled={Boolean(fetchingModelsBySourceId[source.id])}
                                           className="flex items-center gap-1 px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                                         >
-                                          <RefreshCw className={clsx('w-3 h-3', isTesting && activeAiSourceId === source.id && 'animate-spin')} />
+                                          <RefreshCw className={clsx('w-3 h-3', fetchingModelsBySourceId[source.id] && 'animate-spin')} />
                                           拉取候选
                                         </button>
                                       </div>
@@ -4968,7 +5004,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                     </div>
                   </div>
 
-
                   {redclawProfileMessage && (
                     <div className={clsx(
                       'rounded-xl border px-4 py-3 text-sm',
@@ -5324,10 +5359,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         setActiveAiSourceId(addModelModalSource.id);
                         void fetchModelsForSource(addModelModalSource, { manual: true });
                       }}
-                      disabled={isTesting}
+                      disabled={Boolean(fetchingModelsBySourceId[addModelModalSource.id])}
                       className="px-3 py-2 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                     >
-                      {isTesting && activeAiSourceId === addModelModalSource.id ? '拉取中...' : '刷新候选'}
+                      {fetchingModelsBySourceId[addModelModalSource.id] ? '拉取中...' : '刷新候选'}
                     </button>
                   </div>
                   <div className="max-h-40 overflow-auto rounded border border-border bg-surface-secondary/20 p-2">

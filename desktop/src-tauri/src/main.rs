@@ -26,6 +26,7 @@ pub(crate) mod logging;
 mod manuscript_package;
 mod mcp;
 mod media_generation;
+mod media_runtime;
 mod memory;
 mod memory_maintenance;
 mod official_support;
@@ -44,6 +45,7 @@ mod tools;
 mod workspace_loaders;
 
 use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
+use base64::Engine;
 use commands::chat_state::{
     ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
     resolve_runtime_mode_for_session, update_chat_runtime_state,
@@ -80,7 +82,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64},
     Arc, Mutex, OnceLock,
 };
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -712,6 +714,7 @@ struct AppState {
     assistant_runtime: Mutex<Option<AssistantRuntime>>,
     assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
     redclaw_runtime: Mutex<Option<RedclawRuntime>>,
+    media_generation_runtime: Mutex<Option<media_runtime::MediaGenerationRuntime>>,
     runtime_warm: Mutex<RuntimeWarmState>,
     approval_runtime: Mutex<ApprovalRuntimeState>,
     skill_watch: Mutex<skills::SkillWatcherSnapshot>,
@@ -3857,17 +3860,174 @@ struct StreamingChatCompletion {
     saw_eof: bool,
 }
 
+const INTERACTIVE_DIRECT_IMAGE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const INTERACTIVE_DIRECT_FILE_MAX_BYTES: u64 = 20 * 1024 * 1024;
+
+fn interactive_attachment_string_field(attachment: &Value, key: &str) -> Option<String> {
+    attachment
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn interactive_attachment_delivery_mode(attachment: &Value) -> String {
+    interactive_attachment_string_field(attachment, "deliveryMode")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn interactive_attachment_kind(attachment: &Value) -> String {
+    interactive_attachment_string_field(attachment, "kind")
+        .unwrap_or_else(|| "binary".to_string())
+        .to_ascii_lowercase()
+}
+
+fn interactive_transport_supports_direct_attachment(protocol: &str, attachment_kind: &str) -> bool {
+    match protocol {
+        "openai" | "anthropic" => attachment_kind == "image",
+        "gemini" => matches!(
+            attachment_kind,
+            "image" | "audio" | "video" | "text" | "binary"
+        ),
+        _ => false,
+    }
+}
+
+fn interactive_direct_attachment_max_bytes(protocol: &str, attachment_kind: &str) -> u64 {
+    match (protocol, attachment_kind) {
+        ("openai", "image") | ("anthropic", "image") => INTERACTIVE_DIRECT_IMAGE_MAX_BYTES,
+        ("gemini", "image") => INTERACTIVE_DIRECT_IMAGE_MAX_BYTES,
+        ("gemini", _) => INTERACTIVE_DIRECT_FILE_MAX_BYTES,
+        _ => 0,
+    }
+}
+
+fn interactive_attachment_direct_input_payload(
+    attachment: &Value,
+    protocol: &str,
+) -> Result<Option<Value>, String> {
+    if interactive_attachment_delivery_mode(attachment) != "direct-input" {
+        return Ok(None);
+    }
+    let attachment_kind = interactive_attachment_kind(attachment);
+    if !interactive_transport_supports_direct_attachment(protocol, &attachment_kind) {
+        return Ok(None);
+    }
+    let absolute_path = interactive_attachment_string_field(attachment, "absolutePath")
+        .or_else(|| interactive_attachment_string_field(attachment, "originalAbsolutePath"));
+    let Some(absolute_path) = absolute_path else {
+        return Ok(None);
+    };
+    let mime_type = interactive_attachment_string_field(attachment, "mimeType")
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let metadata = fs::metadata(&absolute_path).map_err(|error| error.to_string())?;
+    let max_bytes = interactive_direct_attachment_max_bytes(protocol, &attachment_kind);
+    if max_bytes == 0 || metadata.len() == 0 || metadata.len() > max_bytes {
+        return Ok(None);
+    }
+    let bytes = fs::read(&absolute_path).map_err(|error| error.to_string())?;
+    Ok(Some(json!({
+        "kind": attachment_kind,
+        "mimeType": mime_type,
+        "name": interactive_attachment_string_field(attachment, "name").unwrap_or_else(|| "attachment".to_string()),
+        "base64Data": base64::engine::general_purpose::STANDARD.encode(bytes),
+    })))
+}
+
+fn interactive_attachment_tool_read_note(attachment: &Value) -> Option<String> {
+    let name = interactive_attachment_string_field(attachment, "name")
+        .unwrap_or_else(|| "attachment".to_string());
+    let kind = interactive_attachment_kind(attachment);
+    if let Some(relative_path) =
+        interactive_attachment_string_field(attachment, "workspaceRelativePath")
+    {
+        return Some(format!(
+            "本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`。如果任务依赖它的真实内容，先调用 `redbox_fs(action=\"workspace.read\", path=\"{relative_path}\")` 或相关 workspace 工具读取，再基于读取结果回答。不要假装已经看过文件内容。"
+        ));
+    }
+    interactive_attachment_string_field(attachment, "absolutePath").map(|absolute_path| {
+        format!(
+            "本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，本地路径 `{absolute_path}`。当前 runtime 若不能直接访问该路径，必须先明确说明需要把文件纳入工作区或改用支持直传的输入链路；不要假装已经读取内容。"
+        )
+    })
+}
+
+fn interactive_history_attachment_note(
+    attachment: &Value,
+    embedded_directly: bool,
+) -> Option<String> {
+    let name = interactive_attachment_string_field(attachment, "name")
+        .unwrap_or_else(|| "attachment".to_string());
+    let kind = interactive_attachment_kind(attachment);
+    let mode_label = if embedded_directly {
+        "已直接输入给模型"
+    } else {
+        "需通过工具读取"
+    };
+    Some(format!("附件：`{name}`（{kind}，{mode_label}）"))
+}
+
+fn compose_user_message_text(base_message: &str, note: Option<&str>) -> String {
+    let trimmed = base_message.trim();
+    match note.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(note) if trimmed.is_empty() => note.to_string(),
+        Some(note) => format!("{trimmed}\n\n{note}"),
+        None => trimmed.to_string(),
+    }
+}
+
+fn build_interactive_user_turn_messages(
+    message: &str,
+    attachment: Option<&Value>,
+    protocol: &str,
+) -> Result<(Value, Value), String> {
+    let Some(attachment) = attachment else {
+        let text = message.trim().to_string();
+        let user_message = canonical_text_message("user", text);
+        return Ok((user_message.clone(), user_message));
+    };
+
+    if let Some(direct_input) = interactive_attachment_direct_input_payload(attachment, protocol)? {
+        let prompt_message = json!({
+            "role": "user",
+            "content": message.trim(),
+            "input_attachment": direct_input,
+        });
+        let history_text = compose_user_message_text(
+            message,
+            interactive_history_attachment_note(attachment, true).as_deref(),
+        );
+        return Ok((prompt_message, canonical_text_message("user", history_text)));
+    }
+
+    let tool_read_note = interactive_attachment_tool_read_note(attachment);
+    let prompt_text = compose_user_message_text(message, tool_read_note.as_deref());
+    let history_text = compose_user_message_text(
+        message,
+        interactive_history_attachment_note(attachment, false).as_deref(),
+    );
+    Ok((
+        canonical_text_message("user", prompt_text),
+        canonical_text_message("user", history_text),
+    ))
+}
+
 fn interactive_runtime_message_bundle(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
     message: &str,
+    attachment: Option<&Value>,
+    protocol: &str,
 ) -> Result<(Vec<Value>, Vec<Value>), String> {
     let history_messages = load_runtime_history_messages(state, session_id)?;
     let mut prompt_messages = collect_recent_chat_messages(state, session_id, 10);
-    let user_message = canonical_text_message("user", message.to_string());
-    prompt_messages.push(user_message.clone());
+    let (prompt_user_message, history_user_message) =
+        build_interactive_user_turn_messages(message, attachment, protocol)?;
+    prompt_messages.push(prompt_user_message);
     let mut full_history_messages = history_messages;
-    full_history_messages.push(user_message);
+    full_history_messages.push(history_user_message);
     Ok((prompt_messages, full_history_messages))
 }
 
@@ -3953,10 +4113,43 @@ fn canonical_messages_to_openai_messages(messages: &[Value]) -> Vec<Value> {
         .filter_map(|message| {
             let role = message.get("role").and_then(Value::as_str).unwrap_or("");
             match role {
-                "user" => Some(json!({
-                    "role": "user",
-                    "content": message.get("content").and_then(Value::as_str).unwrap_or("")
-                })),
+                "user" => {
+                    if let Some(attachment) = message.get("input_attachment") {
+                        let text = message.get("content").and_then(Value::as_str).unwrap_or("").trim();
+                        let mut parts = Vec::<Value>::new();
+                        if !text.is_empty() {
+                            parts.push(json!({
+                                "type": "text",
+                                "text": text,
+                            }));
+                        }
+                        let mime_type = attachment
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream");
+                        let base64_data = attachment
+                            .get("base64Data")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if !base64_data.trim().is_empty() {
+                            parts.push(json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{mime_type};base64,{base64_data}")
+                                }
+                            }));
+                        }
+                        Some(json!({
+                            "role": "user",
+                            "content": Value::Array(parts),
+                        }))
+                    } else {
+                        Some(json!({
+                            "role": "user",
+                            "content": message.get("content").and_then(Value::as_str).unwrap_or("")
+                        }))
+                    }
+                }
                 "assistant" => {
                     let mut value = json!({
                         "role": "assistant",
@@ -3988,10 +4181,47 @@ fn canonical_messages_to_anthropic_messages(messages: &[Value]) -> Vec<Value> {
         .filter_map(|message| {
             let role = message.get("role").and_then(Value::as_str).unwrap_or("");
             match role {
-                "user" => Some(json!({
-                    "role": "user",
-                    "content": message.get("content").and_then(Value::as_str).unwrap_or("").to_string()
-                })),
+                "user" => {
+                    if let Some(attachment) = message.get("input_attachment") {
+                        let mut blocks = Vec::<Value>::new();
+                        let text = message
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if !text.is_empty() {
+                            blocks.push(json!({ "type": "text", "text": text }));
+                        }
+                        let mime_type = attachment
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream");
+                        let base64_data = attachment
+                            .get("base64Data")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if !base64_data.trim().is_empty() {
+                            blocks.push(json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": mime_type,
+                                    "data": base64_data,
+                                }
+                            }));
+                        }
+                        Some(json!({
+                            "role": "user",
+                            "content": blocks
+                        }))
+                    } else {
+                        Some(json!({
+                            "role": "user",
+                            "content": message.get("content").and_then(Value::as_str).unwrap_or("").to_string()
+                        }))
+                    }
+                }
                 "assistant" => {
                     let mut blocks = Vec::<Value>::new();
                     let text = message
@@ -4053,12 +4283,34 @@ fn canonical_messages_to_gemini_contents(messages: &[Value]) -> Vec<Value> {
                         .unwrap_or("")
                         .trim()
                         .to_string();
-                    if text.is_empty() {
+                    let mut parts = Vec::<Value>::new();
+                    if !text.is_empty() {
+                        parts.push(json!({ "text": text }));
+                    }
+                    if let Some(attachment) = message.get("input_attachment") {
+                        let mime_type = attachment
+                            .get("mimeType")
+                            .and_then(Value::as_str)
+                            .unwrap_or("application/octet-stream");
+                        let base64_data = attachment
+                            .get("base64Data")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if !base64_data.trim().is_empty() {
+                            parts.push(json!({
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": base64_data,
+                                }
+                            }));
+                        }
+                    }
+                    if parts.is_empty() {
                         None
                     } else {
                         Some(json!({
                             "role": "user",
-                            "parts": [{ "text": text }]
+                            "parts": parts
                         }))
                     }
                 }
@@ -5090,12 +5342,13 @@ fn run_anthropic_interactive_chat_runtime(
     session_id: Option<&str>,
     config: &ResolvedChatConfig,
     message: &str,
+    attachment: Option<&Value>,
     runtime_mode: &str,
 ) -> Result<String, String> {
     use std::process::Stdio;
 
     let (mut prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, message)?;
+        interactive_runtime_message_bundle(state, session_id, message, attachment, "anthropic")?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -5674,12 +5927,13 @@ fn run_gemini_interactive_chat_runtime(
     session_id: Option<&str>,
     config: &ResolvedChatConfig,
     message: &str,
+    attachment: Option<&Value>,
     runtime_mode: &str,
 ) -> Result<String, String> {
     use std::process::Stdio;
 
     let (mut prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, message)?;
+        interactive_runtime_message_bundle(state, session_id, message, attachment, "gemini")?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -6247,10 +6501,11 @@ fn run_openai_interactive_chat_runtime(
     session_id: Option<&str>,
     config: &ResolvedChatConfig,
     message: &str,
+    attachment: Option<&Value>,
     runtime_mode: &str,
 ) -> Result<String, String> {
     let (mut prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, message)?;
+        interactive_runtime_message_bundle(state, session_id, message, attachment, "openai")?;
     let is_wander = runtime_mode == "wander";
     let provider_profile = provider_profile_from_config(config);
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -7173,6 +7428,11 @@ fn handle_channel(
         return result;
     }
     if let Some(result) =
+        commands::media_jobs::handle_media_jobs_channel(app, state, channel, &payload)
+    {
+        return result;
+    }
+    if let Some(result) =
         commands::workspace_data::handle_workspace_data_channel(app, state, channel, &payload)
     {
         return result;
@@ -7335,55 +7595,87 @@ async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Re
 
 const OFFICIAL_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
-fn run_official_cache_refresher(app: AppHandle) -> JoinHandle<()> {
-    thread::spawn(move || loop {
-        let state = app.state::<AppState>();
-        if auth::should_run_background_refresh(&state) {
-            let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
+fn run_official_auth_bootstrap_once(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if let Err(error) =
+        commands::official::bootstrap_official_auth_session(&app, &state, "app-setup")
+    {
+        if error != "官方账号未登录" {
+            logging::emit_legacy_line(
+                logging::event::LogSource::Host,
+                logging::event::LogLevel::Warn,
+                "auth",
+                "startup.official_auth_bootstrap_failed",
+                format!("[RedBox official auth bootstrap] {error}"),
+                json!({ "error": error }),
+                None,
+            );
         }
-        thread::sleep(OFFICIAL_CACHE_REFRESH_INTERVAL);
-    })
+    }
 }
 
-fn run_ytdlp_auto_updater(app: AppHandle) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let state = app.state::<AppState>();
-        if !desktop_io::should_auto_update_ytdlp(&state.store_path) {
-            return;
+fn run_ytdlp_auto_update_once(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if !desktop_io::should_auto_update_ytdlp(&state.store_path) {
+        return;
+    }
+    let outcome = match desktop_io::detect_ytdlp() {
+        Some((path, version)) => match desktop_io::ensure_ytdlp_installed(true) {
+            Ok((updated_path, updated_version)) => {
+                let _ = app.emit(
+                    "youtube:ytdlp-auto-update",
+                    json!({
+                        "success": true,
+                        "previousPath": path,
+                        "previousVersion": version,
+                        "path": updated_path,
+                        "version": updated_version
+                    }),
+                );
+                format!("updated:{updated_path}:{updated_version}")
+            }
+            Err(error) => {
+                eprintln!("[RedBox yt-dlp auto update] {error}");
+                let _ = app.emit(
+                    "youtube:ytdlp-auto-update",
+                    json!({
+                        "success": false,
+                        "path": path,
+                        "version": version,
+                        "error": error
+                    }),
+                );
+                format!("error:{error}")
+            }
+        },
+        None => "skipped:not-installed".to_string(),
+    };
+    desktop_io::record_ytdlp_update_check(&state.store_path, &outcome);
+}
+
+fn run_startup_background_housekeeping(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let bootstrap_app = app.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            run_official_auth_bootstrap_once(bootstrap_app);
+        })
+        .await;
+
+        let ytdlp_app = app.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            run_ytdlp_auto_update_once(ytdlp_app);
+        })
+        .await;
+
+        let mut interval = tokio::time::interval(OFFICIAL_CACHE_REFRESH_INTERVAL);
+        loop {
+            interval.tick().await;
+            let state = app.state::<AppState>();
+            if auth::should_run_background_refresh(&state) {
+                let _ = commands::official::trigger_official_cached_data_refresh(app.clone());
+            }
         }
-        let outcome = match desktop_io::detect_ytdlp() {
-            Some((path, version)) => match desktop_io::ensure_ytdlp_installed(true) {
-                Ok((updated_path, updated_version)) => {
-                    let _ = app.emit(
-                        "youtube:ytdlp-auto-update",
-                        json!({
-                            "success": true,
-                            "previousPath": path,
-                            "previousVersion": version,
-                            "path": updated_path,
-                            "version": updated_version
-                        }),
-                    );
-                    format!("updated:{updated_path}:{updated_version}")
-                }
-                Err(error) => {
-                    eprintln!("[RedBox yt-dlp auto update] {error}");
-                    let _ = app.emit(
-                        "youtube:ytdlp-auto-update",
-                        json!({
-                            "success": false,
-                            "path": path,
-                            "version": version,
-                            "error": error
-                        }),
-                    );
-                    format!("error:{error}")
-                }
-            },
-            None => "skipped:not-installed".to_string(),
-        };
-        desktop_io::record_ytdlp_update_check(&state.store_path, &outcome);
-    })
+    });
 }
 
 fn main() {
@@ -7454,6 +7746,7 @@ fn main() {
             assistant_runtime: Mutex::new(None),
             assistant_sidecar: Mutex::new(None),
             redclaw_runtime: Mutex::new(None),
+            media_generation_runtime: Mutex::new(None),
             runtime_warm: Mutex::new(RuntimeWarmState::default()),
             approval_runtime: Mutex::new(ApprovalRuntimeState::default()),
             skill_watch: Mutex::new(skills::SkillWatcherSnapshot::default()),
@@ -7531,6 +7824,19 @@ fn main() {
                     None,
                 );
             }
+            if let Err(error) =
+                media_runtime::ensure_media_generation_runtime_running(app.handle(), &state)
+            {
+                logging::emit_legacy_line(
+                    logging::event::LogSource::Host,
+                    logging::event::LogLevel::Warn,
+                    "daemon",
+                    "startup.media_generation_runtime_restore_failed",
+                    format!("[RedBox media generation runtime restore] {error}"),
+                    json!({ "error": error }),
+                    None,
+                );
+            }
             if let Err(error) = commands::assistant_daemon::ensure_assistant_daemon_running(
                 app.handle(),
                 &state,
@@ -7570,40 +7876,22 @@ fn main() {
                     None,
                 );
             }
-            {
-                let auth_bootstrap_app = app.handle().clone();
-                thread::spawn(move || {
-                    let state = auth_bootstrap_app.state::<AppState>();
-                    if let Err(error) = commands::official::bootstrap_official_auth_session(
-                        &auth_bootstrap_app,
-                        &state,
-                        "app-setup",
-                    ) {
-                        if error != "官方账号未登录" {
-                            logging::emit_legacy_line(
-                                logging::event::LogSource::Host,
-                                logging::event::LogLevel::Warn,
-                                "auth",
-                                "startup.official_auth_bootstrap_failed",
-                                format!("[RedBox official auth bootstrap] {error}"),
-                                json!({ "error": error }),
-                                None,
-                            );
-                        }
-                    }
-                });
-            }
-            let _ = run_official_cache_refresher(app.handle().clone());
-            let _ = run_ytdlp_auto_updater(app.handle().clone());
+            run_startup_background_housekeeping(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("failed to build RedBox")
-        .run(|_, event| {
+        .run(|app, event| {
             if matches!(
                 event,
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
             ) {
+                let state = app.state::<AppState>();
+                if let Ok(mut guard) = state.media_generation_runtime.lock() {
+                    if let Some(mut runtime) = guard.take() {
+                        media_runtime::stop_media_generation_runtime(&mut runtime);
+                    }
+                }
                 logging::mark_clean_shutdown_global();
             }
         });

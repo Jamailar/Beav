@@ -1169,6 +1169,21 @@ declare global {
           updatedAt: number;
         }>;
       };
+      generation: {
+        submitImage: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        submitVideo: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        listJobs: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
+        getJob: (jobId: string) => Promise<Record<string, unknown> | null>;
+        getJobArtifacts: (jobId: string) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
+        awaitJob: (payload: { jobId: string; timeoutMs?: number }) => Promise<Record<string, unknown> | null>;
+        cancelJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; error?: string }>;
+        retryJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; attemptNo?: number; error?: string }>;
+        getRuntimeStatus: () => Promise<{ success?: boolean; runtimeReady?: boolean; runtimeRunning?: boolean }>;
+        onJobUpdated: (listener: (...args: any[]) => void) => void;
+        offJobUpdated: (listener: (...args: any[]) => void) => void;
+        onJobLog: (listener: (...args: any[]) => void) => void;
+        offJobLog: (listener: (...args: any[]) => void) => void;
+      };
       redclawRunner: {
         getStatus: () => Promise<{
           enabled: boolean;

@@ -302,13 +302,13 @@ mod tests {
     }
 
     #[test]
-    fn build_skill_runtime_state_lists_turn_scoped_image_skill_in_chatroom_and_redclaw_catalog() {
+    fn build_skill_runtime_state_lists_multi_image_director_in_chatroom_and_redclaw_catalog() {
         let state = build_skill_runtime_state(
             &[SkillRecord {
-                name: "image-prompt-optimizer".to_string(),
+                name: "redbox-image-director".to_string(),
                 description: "image desc".to_string(),
-                location: "redbox://skills/image-prompt-optimizer".to_string(),
-                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
+                location: "redbox://skills/redbox-image-director".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -320,20 +320,20 @@ mod tests {
         assert!(state.active_skills.is_empty());
         assert!(state
             .skills_section
-            .contains("image-prompt-optimizer: image desc"));
+            .contains("redbox-image-director: image desc"));
         assert!(state
             .skills_section
-            .contains("Before any `app_cli(action=\"image.generate\", payload={ ... })`"));
+            .contains("Before any multi-image `app_cli(action=\"image.generate\", payload={ \"count\": N, ... })`"));
         assert!(state.skills_section.contains(
             "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
         ));
 
         let redclaw_state = build_skill_runtime_state(
             &[SkillRecord {
-                name: "image-prompt-optimizer".to_string(),
+                name: "redbox-image-director".to_string(),
                 description: "image desc".to_string(),
-                location: "redbox://skills/image-prompt-optimizer".to_string(),
-                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Image Prompt Optimizer\n\nBody".to_string(),
+                location: "redbox://skills/redbox-image-director".to_string(),
+                body: "---\nallowedRuntimeModes: [chatroom, redclaw]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -345,9 +345,9 @@ mod tests {
         assert!(redclaw_state.active_skills.is_empty());
         assert!(redclaw_state
             .skills_section
-            .contains("image-prompt-optimizer: image desc"));
+            .contains("redbox-image-director: image desc"));
         assert!(redclaw_state
             .skills_section
-            .contains("Before any `app_cli(action=\"image.generate\", payload={ ... })`"));
+            .contains("Before any multi-image `app_cli(action=\"image.generate\", payload={ \"count\": N, ... })`"));
     }
 }

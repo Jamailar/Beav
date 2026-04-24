@@ -785,6 +785,12 @@ fn image_generate_input_schema() -> Value {
                 }),
             ),
             ("generationMode", string_schema("Generation mode.")),
+            (
+                "waitForCompletion",
+                bool_schema(
+                    "Whether to block until the generation job completes. Defaults to false.",
+                ),
+            ),
         ],
         &["prompt"],
         None,
@@ -811,6 +817,12 @@ fn video_generate_input_schema() -> Value {
             (
                 "videoProjectPath",
                 string_schema("Optional bound video project path."),
+            ),
+            (
+                "waitForCompletion",
+                bool_schema(
+                    "Whether to block until the generation job completes. Defaults to false.",
+                ),
             ),
         ],
         &["prompt"],

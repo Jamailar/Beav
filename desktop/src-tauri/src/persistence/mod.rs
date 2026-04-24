@@ -838,7 +838,7 @@ fn schedule_store_persist(state: &State<'_, AppState>, store: AppStore) {
         .fetch_add(1, Ordering::SeqCst)
         .saturating_add(1);
     let latest = state.store_persist_version.clone();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let mut snapshot = store.clone();
         crate::session_manager::enforce_default_retention(&mut snapshot);
         crate::auth::sanitize_store_for_persist(&mut snapshot);

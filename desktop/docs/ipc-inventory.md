@@ -153,6 +153,7 @@
 | `generation:await-job` | 1 |
 | `generation:cancel-job` | 1 |
 | `generation:get-job` | 1 |
+| `generation:get-job-artifacts` | 1 |
 | `generation:get-runtime-status` | 1 |
 | `generation:job-log` | 1 |
 | `generation:job-updated` | 1 |
@@ -162,7 +163,7 @@
 | `generation:submit-video` | 1 |
 | `group-chat` | 2 |
 | `hybrid` | 1 |
-| `image-gen:generate` | 4 |
+| `image-gen:generate` | 2 |
 | `ipc_invoke` | 1 |
 | `ipc_send` | 1 |
 | `knowledge:catalog-updated` | 1 |
@@ -370,7 +371,7 @@
 | `tools:hooks:remove` | 1 |
 | `video-1` | 10 |
 | `video-2` | 1 |
-| `video-gen:generate` | 3 |
+| `video-gen:generate` | 1 |
 | `video-left` | 1 |
 | `video-track` | 5 |
 | `wander:brainstorm` | 1 |
@@ -646,6 +647,7 @@
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:await-job` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:cancel-job` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:get-job` | 1 |
+| `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:get-job-artifacts` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:get-runtime-status` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:list-jobs` | 1 |
 | `/Users/Jam/LocalDev/GitHub/RedConvert/desktop/src-tauri/src/commands/media_jobs.rs:generation:retry-job` | 1 |
