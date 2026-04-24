@@ -84,9 +84,17 @@ pub fn handle_redclaw_channel(
         "redclaw:list-projects" => Ok(json!([])),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
+            let active_space_id = crate::with_store(state, |store| Ok(store.active_space_id.clone()))?;
             Ok(json!({
                 "success": true,
+                "activeSpaceId": active_space_id,
                 "profileRoot": bundle.profile_root.display().to_string(),
+                "agent": bundle.agent,
+                "soul": bundle.soul,
+                "identity": bundle.identity,
+                "user": bundle.user,
+                "creatorProfile": bundle.creator_profile,
+                "bootstrap": bundle.bootstrap,
                 "files": {
                     "agent": bundle.agent,
                     "soul": bundle.soul,
