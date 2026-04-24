@@ -2,14 +2,14 @@ use crate::persistence::{
     apply_chatrooms_hydration_snapshot, load_chatrooms_hydration_snapshot, with_store,
     with_store_mut,
 };
-use crate::runtime::tool_results_for_session;
+use crate::runtime::{remove_session_bundle, tool_results_for_session};
 use crate::*;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 use crate::commands::runtime_query::handle_runtime_query;
 use crate::events::emit_creative_chat_checkpoint;
-use crate::session_manager::ensure_context_session;
+use crate::session_manager::{clear_session_runtime_artifacts, ensure_context_session};
 use std::fs;
 use std::path::PathBuf;
 
@@ -604,6 +604,19 @@ fn clear_chatroom_cancel(state: &State<'_, AppState>, room_id: &str) {
     }
 }
 
+fn reset_chatroom_runtime_session(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<(), String> {
+    let had_artifacts = with_store_mut(state, |store| {
+        Ok(clear_session_runtime_artifacts(store, session_id))
+    })?;
+    if had_artifacts {
+        let _ = remove_session_bundle(state, session_id);
+    }
+    Ok(())
+}
+
 fn request_chatroom_cancel(state: &State<'_, AppState>, room_id: &str) {
     if let Ok(mut guard) = state.creative_chat_cancellations.lock() {
         guard.insert(room_id.to_string());
@@ -992,10 +1005,22 @@ pub fn handle_chatrooms_channel(
                                 continue;
                             }
                         };
-                        let previous_tool_count = with_store(&managed_state, |store| {
-                            Ok(tool_results_for_session(&store, &session.id).len())
-                        })
-                        .unwrap_or_default();
+                        if let Err(error) =
+                            reset_chatroom_runtime_session(&managed_state, &session.id)
+                        {
+                            emit_creative_chat_checkpoint(
+                                &app_handle,
+                                &room_id_for_task,
+                                "creative_chat.error",
+                                json!({
+                                    "roomId": room_id_for_task.clone(),
+                                    "advisorId": advisor_id,
+                                    "message": error
+                                }),
+                            );
+                            continue;
+                        }
+                        let previous_tool_count = 0usize;
                         let runtime_payload = json!({
                             "sessionId": session.id,
                             "message": runtime_message,

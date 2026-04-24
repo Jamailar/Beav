@@ -1459,8 +1459,9 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        guess_mime_and_kind, interactive_execution_progress_observe_success,
-        interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
+        decode_command_json_stdout, guess_mime_and_kind,
+        interactive_execution_progress_observe_success, interactive_tool_panic_message,
+        json_value_to_path_list, manuscript_save_result_path,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
         structured_tool_error_code, validate_runtime_tool_message_sequence,
         InteractiveExecutionContract, InteractiveExecutionProgress,
@@ -1592,6 +1593,22 @@ mod tests {
     }
 
     #[test]
+    fn decode_command_json_stdout_accepts_utf8_json() {
+        let decoded = decode_command_json_stdout(br#"["C:\\RedBox\\cover.png"]"#);
+        assert_eq!(decoded, r#"["C:\\RedBox\\cover.png"]"#);
+    }
+
+    #[test]
+    fn decode_command_json_stdout_accepts_utf16le_json() {
+        let utf16 = r#"["C:\\RedBox\\cover.png"]"#
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect::<Vec<_>>();
+        let decoded = decode_command_json_stdout(&utf16);
+        assert_eq!(decoded, r#"["C:\\RedBox\\cover.png"]"#);
+    }
+
+    #[test]
     fn validate_runtime_tool_message_sequence_accepts_paired_messages() {
         let messages = vec![
             json!({
@@ -1675,7 +1692,9 @@ fn run_powershell_json(script: &str) -> Result<Value, String> {
             stderr
         });
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = decode_command_json_stdout(&output.stdout)
+        .trim()
+        .to_string();
     if stdout.is_empty() {
         return Ok(json!([]));
     }
@@ -1685,6 +1704,56 @@ fn run_powershell_json(script: &str) -> Result<Value, String> {
 #[cfg(target_os = "windows")]
 fn escape_powershell_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn decode_command_json_stdout(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return decode_utf16_stdout(&bytes[2..], true);
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return decode_utf16_stdout(&bytes[2..], false);
+    }
+
+    if bytes.len() >= 2 {
+        let even_nuls = bytes.iter().step_by(2).filter(|byte| **byte == 0).count();
+        let odd_nuls = bytes
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .filter(|byte| **byte == 0)
+            .count();
+        let pair_count = bytes.len() / 2;
+        if pair_count > 0 {
+            if odd_nuls * 2 >= pair_count {
+                return decode_utf16_stdout(bytes, true);
+            }
+            if even_nuls * 2 >= pair_count {
+                return decode_utf16_stdout(bytes, false);
+            }
+        }
+    }
+
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn decode_utf16_stdout(bytes: &[u8], little_endian: bool) -> String {
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| {
+            if little_endian {
+                u16::from_le_bytes([chunk[0], chunk[1]])
+            } else {
+                u16::from_be_bytes([chunk[0], chunk[1]])
+            }
+        })
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&units)
 }
 
 fn json_value_to_path_list(value: &Value) -> Vec<PathBuf> {
