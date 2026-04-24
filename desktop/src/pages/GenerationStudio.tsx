@@ -19,6 +19,7 @@ import {
 import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import type { GenerationIntent, PendingChatMessage } from '../App';
+import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
@@ -1869,14 +1870,33 @@ export function GenerationStudio({
         && !isAgentSessionLoading
         && !agentExecutionActive
         && imagePrompt.trim().length > 0;
-    const handleSendAgentMessage = useCallback(() => {
+    const handleSendAgentMessage = useCallback(async () => {
         const content = imagePrompt.trim();
         if (!content || !agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
+        let attachment: UploadedFileAttachment | undefined;
+        if (imageReferences.length > 0) {
+            try {
+                const lead = imageReferences[0];
+                const result = await window.ipcRenderer.chat.createInlineAttachment({
+                    dataUrl: lead.dataUrl,
+                    fileName: lead.name,
+                    sessionId: agentSessionId,
+                }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
+                if (!result?.success || !result.attachment) {
+                    throw new Error(result?.error || '参考图附件创建失败');
+                }
+                attachment = result.attachment;
+            } catch (error) {
+                console.error('Failed to create inline agent attachment:', error);
+                setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
+                return;
+            }
+        }
         setAgentConversationStarted(true);
-        setAgentPendingMessage({ content });
+        setAgentPendingMessage({ content, attachment });
         setImagePrompt('');
         setImageError('');
-    }, [agentExecutionActive, agentSessionId, imagePrompt, isAgentSessionLoading]);
+    }, [agentExecutionActive, agentSessionId, imagePrompt, imageReferences, isAgentSessionLoading]);
     const studioToolbar = (
         <div className="flex items-center gap-2.5">
             <button

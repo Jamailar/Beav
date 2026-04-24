@@ -902,8 +902,15 @@ export function Chat({
       } else {
         try {
           // 使用视频标题作为会话标题
-          const sessionTitle = pendingMessage.attachment?.title
-            ? `AI 脑爆: ${pendingMessage.attachment.title.substring(0, 30)}${pendingMessage.attachment.title.length > 30 ? '...' : ''}`
+          const attachmentTitle = pendingMessage.attachment
+            ? ('title' in pendingMessage.attachment
+              ? String(pendingMessage.attachment.title || '').trim()
+              : ('name' in pendingMessage.attachment
+                ? String(pendingMessage.attachment.name || '').trim()
+                : ''))
+            : '';
+          const sessionTitle = attachmentTitle
+            ? `AI 脑爆: ${attachmentTitle.substring(0, 30)}${attachmentTitle.length > 30 ? '...' : ''}`
             : 'AI 脑爆';
           const session = await window.ipcRenderer.chat.createSession(sessionTitle);
 
