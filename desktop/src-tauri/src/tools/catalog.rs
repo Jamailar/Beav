@@ -276,6 +276,130 @@ fn redclaw_runner_mutation_input_schema() -> Value {
     )
 }
 
+fn redclaw_task_preview_input_schema() -> Value {
+    object_schema(
+        &[
+            ("kind", string_schema("Task kind: scheduled or long_cycle.")),
+            ("intent", string_schema("Stable agent intent ref.")),
+            ("name", string_schema("Task title.")),
+            (
+                "cron",
+                string_schema("5-field cron, @every Xm/Xh/Xd, or @once RFC3339."),
+            ),
+            ("goal", string_schema("Optional user-facing task goal.")),
+            (
+                "actionType",
+                string_schema("Typed action id for policy evaluation."),
+            ),
+            (
+                "ownerScope",
+                string_schema("Conversation or owner scope for dedupe."),
+            ),
+            ("prompt", string_schema("Prompt for scheduled tasks.")),
+            (
+                "objective",
+                string_schema("Objective for long-cycle tasks."),
+            ),
+            (
+                "stepPrompt",
+                string_schema("Per-round instruction for long-cycle tasks."),
+            ),
+            (
+                "metadata",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                }),
+            ),
+        ],
+        &["name", "actionType", "ownerScope"],
+        None,
+    )
+}
+
+fn redclaw_task_create_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "previewToken",
+                string_schema("Preview token returned by redclaw.task.preview."),
+            ),
+            (
+                "intent",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                }),
+            ),
+        ],
+        &["previewToken", "intent"],
+        None,
+    )
+}
+
+fn redclaw_task_confirm_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "draftId",
+                string_schema("Draft id returned by redclaw.task.create."),
+            ),
+            ("confirm", bool_schema("Whether to activate the draft.")),
+        ],
+        &["draftId", "confirm"],
+        None,
+    )
+}
+
+fn redclaw_task_update_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "jobDefinitionId",
+                string_schema("Target job definition id."),
+            ),
+            (
+                "patch",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                }),
+            ),
+            ("reason", string_schema("Required reason for the update.")),
+        ],
+        &["jobDefinitionId", "patch", "reason"],
+        None,
+    )
+}
+
+fn redclaw_task_cancel_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "jobDefinitionId",
+                string_schema("Target job definition id."),
+            ),
+            ("reason", string_schema("Optional cancellation reason.")),
+        ],
+        &["jobDefinitionId"],
+        None,
+    )
+}
+
+fn redclaw_task_list_input_schema() -> Value {
+    object_schema(
+        &[
+            ("ownerScope", string_schema("Optional owner scope filter.")),
+            (
+                "includeDrafts",
+                bool_schema("Whether to include pending drafts."),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
 fn generic_state_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -624,11 +748,40 @@ fn image_generate_input_schema() -> Value {
         &[
             ("prompt", string_schema("Image generation prompt.")),
             (
+                "count",
+                integer_schema("Number of images to generate.", 1, 4),
+            ),
+            (
+                "planConfirmed",
+                bool_schema("Whether the user has confirmed the multi-image plan."),
+            ),
+            (
+                "sharedStyleGuide",
+                string_schema("Shared style anchor for a coordinated multi-image batch."),
+            ),
+            (
                 "referenceImages",
                 json!({
                     "type": "array",
                     "items": { "type": "string" },
                     "maxItems": 5,
+                }),
+            ),
+            (
+                "imagePlanItems",
+                json!({
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" },
+                            "prompt": { "type": "string" },
+                            "copy": { "type": "string" },
+                            "compiledPrompt": { "type": "string" }
+                        },
+                        "additionalProperties": false
+                    }
                 }),
             ),
             ("generationMode", string_schema("Generation mode.")),
@@ -1012,7 +1165,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.runner.start",
@@ -1023,7 +1176,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.runner.stop",
@@ -1034,7 +1187,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "redclaw.runner.setConfig",
@@ -1044,6 +1197,83 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "redclaw.task.preview",
+        namespace: "redclaw.task",
+        description: "Preview a RedClaw task definition, run policy checks, and detect conflicts before creation.",
+        input_schema: redclaw_task_preview_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "redclaw.task.create",
+        namespace: "redclaw.task",
+        description: "Create a pending RedClaw task draft from a validated preview token.",
+        input_schema: redclaw_task_create_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "redclaw.task.confirm",
+        namespace: "redclaw.task",
+        description: "Confirm or discard a pending RedClaw task draft.",
+        input_schema: redclaw_task_confirm_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "redclaw.task.update",
+        namespace: "redclaw.task",
+        description: "Update an existing RedClaw task definition with an explicit reason.",
+        input_schema: redclaw_task_update_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "redclaw.task.cancel",
+        namespace: "redclaw.task",
+        description: "Disable or discard a RedClaw task definition.",
+        input_schema: redclaw_task_cancel_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "redclaw.task.list",
+        namespace: "redclaw.task",
+        description: "List RedClaw task definitions with policy and latest execution state.",
+        input_schema: redclaw_task_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "redclaw.task.stats",
+        namespace: "redclaw.task",
+        description: "Read RedClaw task definition and execution counters.",
+        input_schema: no_payload_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -1373,7 +1603,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         input_schema: image_generate_input_schema,
         output_schema: media_output_schema,
         mutating: true,
-        concurrency_safe: false,
+        concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -1384,7 +1614,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         input_schema: video_generate_input_schema,
         output_schema: media_output_schema,
         mutating: true,
-        concurrency_safe: false,
+        concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },

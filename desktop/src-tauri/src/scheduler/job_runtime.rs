@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use serde_json::{json, Value};
 
 use crate::commands::redclaw_runtime::execute_redclaw_run;
+use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::persistence::with_store_mut;
 use crate::runtime::{RedclawJobDefinitionRecord, RedclawJobExecutionRecord};
 use crate::scheduler::dead_letter::mark_dead_lettered;
@@ -12,7 +13,10 @@ use crate::scheduler::lease::lease_execution;
 use crate::scheduler::retry::{retry_delay_ms, should_dead_letter, DEFAULT_HEARTBEAT_TIMEOUT_MS};
 use crate::{make_id, now_i64, now_iso, redclaw_state_value, AppState, AppStore};
 
-use super::{next_long_cycle_timestamp, next_scheduled_timestamp, parse_millis_string};
+use super::{
+    clear_definition_cooldown, next_long_cycle_timestamp, next_scheduled_timestamp,
+    parse_millis_string,
+};
 
 #[derive(Debug, Clone)]
 pub struct PreparedJobExecution {
@@ -25,6 +29,10 @@ pub struct PreparedJobExecution {
     pub prompt: String,
     pub source_label: String,
 }
+
+const MAX_CATCHUP_EXECUTIONS_PER_SWEEP: usize = 24;
+const MAX_SCHEDULE_ADVANCE_GUARD: usize = 4096;
+const COOLDOWN_FAILURE_THRESHOLD: usize = 3;
 
 fn background_status_from_execution_status(status: &str) -> &'static str {
     match status {
@@ -148,10 +156,10 @@ fn definition_source_label(definition: &RedclawJobDefinitionRecord) -> &'static 
     }
 }
 
-fn next_definition_due_at(
+fn next_definition_due_after(
     store: &AppStore,
     definition: &RedclawJobDefinitionRecord,
-    now: i64,
+    after_ms: i64,
 ) -> Option<String> {
     match definition.source_kind.as_deref() {
         Some("scheduled") => store
@@ -159,7 +167,9 @@ fn next_definition_due_at(
             .scheduled_tasks
             .iter()
             .find(|task| definition.source_task_id.as_deref() == Some(task.id.as_str()))
-            .and_then(|task| next_scheduled_timestamp(task, now)),
+            .and_then(|task| {
+                next_scheduled_timestamp(task, after_ms, definition.timezone.as_deref())
+            }),
         Some("long_cycle") => store
             .redclaw_state
             .long_cycle_tasks
@@ -169,10 +179,80 @@ fn next_definition_due_at(
                 if task.completed_rounds >= task.total_rounds {
                     None
                 } else {
-                    next_long_cycle_timestamp(task, now)
+                    next_long_cycle_timestamp(task, after_ms)
                 }
             }),
         _ => None,
+    }
+}
+
+fn normalize_missed_run_policy(value: Option<&str>) -> &'static str {
+    match value.unwrap_or("single").trim().to_lowercase().as_str() {
+        "drop" => "drop",
+        "catchup" => "catchup",
+        _ => "single",
+    }
+}
+
+fn next_future_due_at(
+    store: &AppStore,
+    definition: &RedclawJobDefinitionRecord,
+    from_ms: i64,
+    now: i64,
+) -> Option<String> {
+    let mut cursor = from_ms;
+    for _ in 0..MAX_SCHEDULE_ADVANCE_GUARD {
+        let next_due_at = next_definition_due_after(store, definition, cursor)?;
+        let next_ms = parse_millis_string(Some(next_due_at.as_str()))?;
+        if next_ms > now {
+            return Some(next_due_at);
+        }
+        cursor = next_ms;
+    }
+    None
+}
+
+fn due_execution_plan(
+    store: &AppStore,
+    definition: &RedclawJobDefinitionRecord,
+    now: i64,
+) -> (Vec<String>, Option<String>) {
+    let Some(first_due_at) = definition.next_due_at.clone() else {
+        return (Vec::new(), None);
+    };
+    let Some(first_due_ms) = parse_millis_string(Some(first_due_at.as_str())) else {
+        return (Vec::new(), None);
+    };
+    match normalize_missed_run_policy(definition.missed_run_policy.as_deref()) {
+        "drop" => (
+            Vec::new(),
+            next_future_due_at(store, definition, first_due_ms, now),
+        ),
+        "catchup" => {
+            let mut anchors = vec![first_due_at];
+            let mut cursor = first_due_ms;
+            let mut next_due_at = next_definition_due_after(store, definition, cursor);
+            for _ in 0..MAX_CATCHUP_EXECUTIONS_PER_SWEEP {
+                let Some(candidate) = next_due_at.clone() else {
+                    break;
+                };
+                let Some(candidate_ms) = parse_millis_string(Some(candidate.as_str())) else {
+                    next_due_at = None;
+                    break;
+                };
+                if candidate_ms > now {
+                    break;
+                }
+                anchors.push(candidate);
+                cursor = candidate_ms;
+                next_due_at = next_definition_due_after(store, definition, cursor);
+            }
+            (anchors, next_due_at)
+        }
+        _ => (
+            vec![first_due_at],
+            next_future_due_at(store, definition, first_due_ms, now),
+        ),
     }
 }
 
@@ -212,17 +292,28 @@ fn update_source_task_after_enqueue(
 fn create_execution_record(
     definition: &RedclawJobDefinitionRecord,
     now: &str,
+    scheduled_for_at: Option<String>,
+    trigger: Option<String>,
     input_snapshot: Option<Value>,
 ) -> RedclawJobExecutionRecord {
+    let scheduled_anchor = scheduled_for_at
+        .clone()
+        .or_else(|| definition.next_due_at.clone())
+        .unwrap_or_else(|| now.to_string());
     let mut execution = RedclawJobExecutionRecord {
         id: make_id("jobexec"),
         definition_id: definition.id.clone(),
+        run_id: Some(make_id("run")),
         status: "queued".to_string(),
         attempt_count: 0,
+        attempt_no: 0,
         worker_id: None,
         worker_mode: "main-process".to_string(),
         session_id: None,
         runtime_task_id: None,
+        scheduled_for_at: Some(scheduled_anchor.clone()),
+        idempotency_key: Some(format!("{}:{scheduled_anchor}", definition.id)),
+        trigger,
         started_at: None,
         last_heartbeat_at: None,
         heartbeat_timeout_ms: Some(DEFAULT_HEARTBEAT_TIMEOUT_MS),
@@ -233,6 +324,7 @@ fn create_execution_record(
         artifacts: Vec::new(),
         checkpoints: Vec::new(),
         retry_not_before_at: None,
+        retry_bucket: Some("initial".to_string()),
         cancel_requested_at: None,
         cancel_reason: None,
         dead_lettered_at: None,
@@ -242,6 +334,22 @@ fn create_execution_record(
     };
     append_execution_turn(&mut execution, now, "system", "Execution queued");
     execution
+}
+
+fn duplicate_execution_anchor_exists(
+    store: &AppStore,
+    definition_id: &str,
+    scheduled_for_at: &str,
+) -> Option<String> {
+    store
+        .redclaw_job_executions
+        .iter()
+        .find(|item| {
+            item.archived_at.is_none()
+                && item.definition_id == definition_id
+                && item.scheduled_for_at.as_deref() == Some(scheduled_for_at)
+        })
+        .map(|item| item.id.clone())
 }
 
 fn ensure_unique_execution_id(store: &AppStore, execution: &mut RedclawJobExecutionRecord) {
@@ -272,21 +380,46 @@ pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String>
         if active_execution_exists(store, &definition.id) {
             continue;
         }
-        let next_due_at = next_definition_due_at(store, &definition, now);
-        let execution = create_execution_record(
-            &definition,
-            &now_iso,
-            Some(json!({
-                "trigger": "scheduler",
-                "definitionId": definition.id,
-                "prompt": definition_prompt(&definition),
-                "sourceKind": definition.source_kind,
-                "sourceTaskId": definition.source_task_id,
-            })),
-        );
-        let mut execution = execution;
-        ensure_unique_execution_id(store, &mut execution);
-        let execution_id = execution.id.clone();
+        let (scheduled_anchors, next_due_at) = due_execution_plan(store, &definition, now);
+        if scheduled_anchors.is_empty() {
+            if let Some(current_definition) = store
+                .redclaw_job_definitions
+                .iter_mut()
+                .find(|item| item.id == definition.id)
+            {
+                current_definition.next_due_at = next_due_at.clone();
+                current_definition.updated_at = now_iso.clone();
+            }
+            update_source_task_after_enqueue(store, &definition, next_due_at, &now_iso);
+            continue;
+        }
+        for scheduled_for_at in &scheduled_anchors {
+            if let Some(existing_execution_id) =
+                duplicate_execution_anchor_exists(store, &definition.id, scheduled_for_at)
+            {
+                enqueued.push(existing_execution_id);
+                continue;
+            }
+            let execution = create_execution_record(
+                &definition,
+                &now_iso,
+                Some(scheduled_for_at.clone()),
+                Some("scheduler".to_string()),
+                Some(json!({
+                    "trigger": "scheduler",
+                    "definitionId": definition.id,
+                    "prompt": definition_prompt(&definition),
+                    "sourceKind": definition.source_kind,
+                    "sourceTaskId": definition.source_task_id,
+                    "scheduledForAt": scheduled_for_at,
+                })),
+            );
+            let mut execution = execution;
+            ensure_unique_execution_id(store, &mut execution);
+            let execution_id = execution.id.clone();
+            store.redclaw_job_executions.push(execution);
+            enqueued.push(execution_id);
+        }
         if let Some(current_definition) = store
             .redclaw_job_definitions
             .iter_mut()
@@ -297,8 +430,6 @@ pub fn enqueue_due_job_executions(store: &mut AppStore, now: i64) -> Vec<String>
             current_definition.updated_at = now_iso.clone();
         }
         update_source_task_after_enqueue(store, &definition, next_due_at, &now_iso);
-        store.redclaw_job_executions.push(execution);
-        enqueued.push(execution_id);
     }
     enqueued
 }
@@ -314,6 +445,7 @@ pub fn requeue_retrying_job_executions(store: &mut AppStore, now: i64) {
         }
         if transition_execution_status(execution, "queued", &now_iso).is_ok() {
             execution.retry_not_before_at = None;
+            execution.retry_bucket = Some("retry-ready".to_string());
             append_execution_turn(&mut *execution, &now_iso, "system", "Retry re-queued");
         }
     }
@@ -321,6 +453,7 @@ pub fn requeue_retrying_job_executions(store: &mut AppStore, now: i64) {
 
 pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
     let now_iso = now_iso();
+    let mut cooldown_candidates = Vec::new();
     for execution in store.redclaw_job_executions.iter_mut() {
         if !matches!(execution.status.as_str(), "leased" | "running") {
             continue;
@@ -335,6 +468,7 @@ pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
             continue;
         }
         let reason = "Execution heartbeat expired".to_string();
+        let definition_id = execution.definition_id.clone();
         execution.last_error = Some(reason.clone());
         if should_dead_letter(execution.attempt_count) {
             mark_dead_lettered(execution, Some(reason.clone()), &now_iso);
@@ -344,6 +478,7 @@ pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
             let _ = transition_execution_status(execution, "retrying", &now_iso);
             execution.retry_not_before_at =
                 Some((now + retry_delay_ms(execution.attempt_count)).to_string());
+            execution.retry_bucket = Some("heartbeat-timeout".to_string());
             execution.completed_at = None;
             append_execution_turn(
                 &mut *execution,
@@ -351,6 +486,27 @@ pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
                 "system",
                 "Heartbeat timeout; retry scheduled",
             );
+        }
+        cooldown_candidates.push(definition_id);
+    }
+
+    for definition_id in cooldown_candidates {
+        if let Some(prepared) = store
+            .redclaw_job_definitions
+            .iter()
+            .find(|item| item.id == definition_id)
+            .map(|definition| PreparedJobExecution {
+                execution_id: String::new(),
+                definition_id: definition.id.clone(),
+                source_kind: definition.source_kind.clone(),
+                source_task_id: definition.source_task_id.clone(),
+                kind: definition.kind.clone(),
+                title: definition.title.clone(),
+                prompt: String::new(),
+                source_label: String::new(),
+            })
+        {
+            activate_definition_cooldown(store, &prepared, "Execution heartbeat expired", &now_iso);
         }
     }
 }
@@ -374,15 +530,24 @@ pub fn enqueue_manual_job_execution_for_source(
     if active_execution_exists(store, &definition.id) {
         return Err("任务已有执行实例".to_string());
     }
+    let scheduled_for_at = now_iso.clone();
+    if let Some(existing_execution_id) =
+        duplicate_execution_anchor_exists(store, &definition.id, &scheduled_for_at)
+    {
+        return Ok(existing_execution_id);
+    }
     let execution = create_execution_record(
         &definition,
         &now_iso,
+        Some(scheduled_for_at.clone()),
+        Some(trigger.to_string()),
         Some(json!({
             "trigger": trigger,
             "definitionId": definition.id,
             "prompt": definition_prompt(&definition),
             "sourceKind": definition.source_kind,
             "sourceTaskId": definition.source_task_id,
+            "scheduledForAt": scheduled_for_at,
         })),
     );
     let mut execution = execution;
@@ -468,7 +633,9 @@ fn claim_execution(
             &now_iso,
         );
         execution.attempt_count += 1;
+        execution.attempt_no = execution.attempt_count;
         execution.retry_not_before_at = None;
+        execution.retry_bucket = Some("claimed".to_string());
         append_execution_turn(&mut *execution, &now_iso, "system", "Execution leased");
     }
 
@@ -486,6 +653,7 @@ fn mark_execution_running(store: &mut AppStore, execution_id: &str) -> Result<()
     transition_execution_status(execution, "running", &now_iso)?;
     execution.started_at.get_or_insert_with(|| now_iso.clone());
     execution.last_heartbeat_at = Some(now_iso.clone());
+    execution.retry_bucket = Some("running".to_string());
     append_execution_turn(execution, &now_iso, "system", "Execution started");
     Ok(())
 }
@@ -510,6 +678,85 @@ fn mark_execution_cancelled(
     execution.last_error = Some(reason.to_string());
     append_execution_turn(execution, &now_iso, "system", reason.to_string());
     Ok(())
+}
+
+fn consecutive_failure_count(store: &AppStore, definition_id: &str) -> usize {
+    let mut executions = store
+        .redclaw_job_executions
+        .iter()
+        .filter(|item| item.definition_id == definition_id && item.archived_at.is_none())
+        .collect::<Vec<_>>();
+    executions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    let mut consecutive = 0;
+    for execution in executions {
+        match execution.status.as_str() {
+            "failed" | "dead_lettered" => consecutive += 1,
+            "succeeded" | "completed" | "cancelled" => break,
+            _ => {}
+        }
+    }
+    consecutive
+}
+
+fn activate_definition_cooldown(
+    store: &mut AppStore,
+    prepared: &PreparedJobExecution,
+    error: &str,
+    now_iso: &str,
+) {
+    let consecutive = consecutive_failure_count(store, &prepared.definition_id);
+    if consecutive < COOLDOWN_FAILURE_THRESHOLD {
+        return;
+    }
+
+    if let Some(definition) = store
+        .redclaw_job_definitions
+        .iter_mut()
+        .find(|item| item.id == prepared.definition_id)
+    {
+        definition.enabled = false;
+        definition.updated_at = now_iso.to_string();
+        if let Some(object) = definition.payload.as_object_mut() {
+            object.insert(
+                "cooldown".to_string(),
+                json!({
+                    "state": "active",
+                    "activatedAt": now_iso,
+                    "consecutiveFailures": consecutive,
+                    "reason": error,
+                }),
+            );
+        }
+    }
+
+    match prepared.source_kind.as_deref() {
+        Some("scheduled") => {
+            if let Some(task) = store
+                .redclaw_state
+                .scheduled_tasks
+                .iter_mut()
+                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
+            {
+                task.enabled = false;
+                task.last_error = Some(error.to_string());
+                task.updated_at = now_iso.to_string();
+            }
+        }
+        Some("long_cycle") => {
+            if let Some(task) = store
+                .redclaw_state
+                .long_cycle_tasks
+                .iter_mut()
+                .find(|item| prepared.source_task_id.as_deref() == Some(item.id.as_str()))
+            {
+                task.enabled = false;
+                task.status = "paused".to_string();
+                task.last_error = Some(error.to_string());
+                task.updated_at = now_iso.to_string();
+            }
+        }
+        _ => {}
+    }
 }
 
 fn mark_execution_succeeded(
@@ -556,6 +803,15 @@ fn mark_execution_succeeded(
             .clone()
             .unwrap_or_else(|| "Execution completed".to_string()),
     );
+    execution.retry_bucket = Some("succeeded".to_string());
+    if let Some(definition) = store
+        .redclaw_job_definitions
+        .iter_mut()
+        .find(|item| item.id == prepared.definition_id)
+    {
+        clear_definition_cooldown(definition);
+        definition.updated_at = now_iso.clone();
+    }
 
     match prepared.source_kind.as_deref() {
         Some("scheduled") => {
@@ -619,6 +875,7 @@ fn mark_execution_failed(
     append_execution_turn(execution, &now_iso, "system", error.to_string());
     if should_dead_letter(execution.attempt_count) {
         mark_dead_lettered(execution, Some(error.to_string()), &now_iso);
+        execution.retry_bucket = Some("dead-letter".to_string());
         append_execution_turn(
             execution,
             &now_iso,
@@ -630,6 +887,7 @@ fn mark_execution_failed(
         execution.completed_at = None;
         execution.retry_not_before_at =
             Some((now + retry_delay_ms(execution.attempt_count)).to_string());
+        execution.retry_bucket = Some("retry-scheduled".to_string());
         append_execution_turn(execution, &now_iso, "system", "Retry scheduled");
     }
 
@@ -662,6 +920,8 @@ fn mark_execution_failed(
         _ => {}
     }
 
+    activate_definition_cooldown(store, prepared, error, &now_iso);
+
     Ok(())
 }
 
@@ -689,6 +949,19 @@ pub fn run_job_queue_once(
     with_store_mut(state, |store| {
         mark_execution_running(store, &prepared.execution_id)
     })?;
+    emit_runtime_task_checkpoint_saved(
+        app,
+        Some(&prepared.execution_id),
+        None,
+        "task.start",
+        "Scheduled task execution started",
+        Some(json!({
+            "executionId": prepared.execution_id,
+            "definitionId": prepared.definition_id,
+            "title": prepared.title,
+            "kind": prepared.kind,
+        })),
+    );
     emit_scheduler_snapshot(app, state);
 
     let heartbeat =
@@ -701,6 +974,20 @@ pub fn run_job_queue_once(
             with_store_mut(state, |store| {
                 mark_execution_succeeded(store, &prepared, &value)
             })?;
+            emit_runtime_task_checkpoint_saved(
+                app,
+                Some(&prepared.execution_id),
+                None,
+                "task.finish",
+                "Scheduled task execution finished",
+                Some(json!({
+                    "executionId": prepared.execution_id,
+                    "definitionId": prepared.definition_id,
+                    "status": "succeeded",
+                    "title": prepared.title,
+                    "kind": prepared.kind,
+                })),
+            );
             emit_scheduler_snapshot(app, state);
             Ok(Some(json!({
                 "success": true,
@@ -717,6 +1004,21 @@ pub fn run_job_queue_once(
             with_store_mut(state, |store| {
                 mark_execution_failed(store, &prepared, &error)
             })?;
+            emit_runtime_task_checkpoint_saved(
+                app,
+                Some(&prepared.execution_id),
+                None,
+                "task.finish",
+                "Scheduled task execution failed",
+                Some(json!({
+                    "executionId": prepared.execution_id,
+                    "definitionId": prepared.definition_id,
+                    "status": "failed",
+                    "title": prepared.title,
+                    "kind": prepared.kind,
+                    "error": error,
+                })),
+            );
             emit_scheduler_snapshot(app, state);
             Err(error)
         }
@@ -852,6 +1154,8 @@ pub fn retry_job_execution(
     let execution = create_execution_record(
         &definition,
         &now_iso,
+        Some(now_iso.clone()),
+        Some("retry".to_string()),
         Some(json!({
             "trigger": "retry",
             "definitionId": definition.id,

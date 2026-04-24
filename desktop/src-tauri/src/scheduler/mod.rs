@@ -3,6 +3,7 @@ mod heartbeat;
 mod job_runtime;
 mod lease;
 mod retry;
+pub mod task_policy;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -10,13 +11,19 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
+use chrono::{NaiveTime, Timelike};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
 };
 use crate::{AppState, AppStore};
+use task_policy::{
+    fingerprint_for_definition_payload, next_daily_timestamp_in_timezone,
+    next_weekly_timestamp_in_timezone,
+};
 
 pub use job_runtime::{
     archive_job_execution, background_status, cancel_job_execution, emit_scheduler_snapshot,
@@ -29,12 +36,45 @@ pub fn parse_millis_string(value: Option<&str>) -> Option<i64> {
     value.and_then(|item| item.trim().parse::<i64>().ok())
 }
 
-pub fn next_scheduled_timestamp(task: &RedclawScheduledTaskRecord, now: i64) -> Option<String> {
+fn parse_time_parts(value: Option<&str>) -> Option<(u32, u32)> {
+    let raw = value?.trim();
+    let parsed = NaiveTime::parse_from_str(raw, "%H:%M").ok()?;
+    Some((parsed.hour(), parsed.minute()))
+}
+
+fn weekday_flags(values: &[i64]) -> [bool; 7] {
+    let mut weekdays = [false; 7];
+    for value in values {
+        weekdays[value.rem_euclid(7) as usize] = true;
+    }
+    weekdays
+}
+
+pub fn next_scheduled_timestamp(
+    task: &RedclawScheduledTaskRecord,
+    now: i64,
+    timezone: Option<&str>,
+) -> Option<String> {
     let next_ms = match task.mode.as_str() {
-        "interval" => now + task.interval_minutes.unwrap_or(60) * 60_000,
-        "daily" => now + 24 * 60 * 60_000,
-        "weekly" => now + 7 * 24 * 60 * 60_000,
-        "once" => return None,
+        "interval" => now + task.interval_minutes.unwrap_or(60).max(1) * 60_000,
+        "daily" => {
+            let (hour, minute) = parse_time_parts(task.time.as_deref())?;
+            next_daily_timestamp_in_timezone(hour, minute, now, timezone).ok()?
+        }
+        "weekly" => {
+            let (hour, minute) = parse_time_parts(task.time.as_deref())?;
+            let weekdays = task.weekdays.clone().unwrap_or_else(|| vec![1]);
+            next_weekly_timestamp_in_timezone(hour, minute, weekday_flags(&weekdays), now, timezone)
+                .ok()?
+        }
+        "once" => {
+            let run_at = parse_millis_string(task.run_at.as_deref())?;
+            if run_at > now {
+                run_at
+            } else {
+                return None;
+            }
+        }
         _ => now + 60 * 60_000,
     };
     Some(next_ms.to_string())
@@ -52,6 +92,26 @@ fn build_scheduled_job_definition(
     task: &RedclawScheduledTaskRecord,
     existing: Option<&RedclawJobDefinitionRecord>,
 ) -> RedclawJobDefinitionRecord {
+    let mut payload = existing
+        .and_then(|item| item.payload.as_object().cloned())
+        .unwrap_or_default();
+    payload.insert("prompt".to_string(), json!(task.prompt));
+    payload.insert("intervalMinutes".to_string(), json!(task.interval_minutes));
+    payload.insert("time".to_string(), json!(task.time));
+    payload.insert("weekdays".to_string(), json!(task.weekdays));
+    payload.insert("runAt".to_string(), json!(task.run_at));
+    payload.insert("lastRunAt".to_string(), json!(task.last_run_at));
+    payload.insert("lastResult".to_string(), json!(task.last_result));
+    payload.insert("lastError".to_string(), json!(task.last_error));
+    payload
+        .entry("actionType".to_string())
+        .or_insert_with(|| json!("redclaw_prompt"));
+    payload
+        .entry("taskContractVersion".to_string())
+        .or_insert_with(|| json!("task-contract/v1"));
+    payload
+        .entry("policyDecision".to_string())
+        .or_insert_with(|| json!("allow"));
     RedclawJobDefinitionRecord {
         id: existing
             .map(|item| item.id.clone())
@@ -65,18 +125,52 @@ fn build_scheduled_job_definition(
         runtime_mode: "redclaw".to_string(),
         trigger_kind: task.mode.clone(),
         progression_kind: "single_run".to_string(),
-        payload: json!({
-            "prompt": task.prompt,
-            "intervalMinutes": task.interval_minutes,
-            "time": task.time,
-            "weekdays": task.weekdays,
-            "runAt": task.run_at,
-            "lastRunAt": task.last_run_at,
-            "lastResult": task.last_result,
-            "lastError": task.last_error,
-        }),
+        payload: Value::Object(payload),
         next_due_at: task.next_run_at.clone(),
         last_enqueued_at: existing.and_then(|item| item.last_enqueued_at.clone()),
+        definition_fingerprint: existing
+            .and_then(|item| item.definition_fingerprint.clone())
+            .or_else(|| {
+                Some(fingerprint_for_definition_payload(
+                    "scheduled",
+                    &task.name,
+                    "manual:redclaw",
+                    task.mode.as_str(),
+                    &json!({
+                        "prompt": task.prompt,
+                        "intervalMinutes": task.interval_minutes,
+                        "time": task.time,
+                        "weekdays": task.weekdays,
+                        "runAt": task.run_at,
+                    }),
+                ))
+            }),
+        task_contract_version: existing
+            .and_then(|item| item.task_contract_version.clone())
+            .or_else(|| Some("task-contract/v1".to_string())),
+        agent_intent_ref: existing.and_then(|item| item.agent_intent_ref.clone()),
+        policy_signature: existing
+            .and_then(|item| item.policy_signature.clone())
+            .or_else(|| Some("legacy-ui-direct".to_string())),
+        owner_scope: existing
+            .and_then(|item| item.owner_scope.clone())
+            .or_else(|| Some("manual:redclaw".to_string())),
+        created_by: existing
+            .and_then(|item| item.created_by.clone())
+            .or_else(|| Some("redclaw-panel".to_string())),
+        creator_mode: existing
+            .and_then(|item| item.creator_mode.clone())
+            .or_else(|| Some("ui-manual".to_string())),
+        requires_confirmation: existing
+            .map(|item| item.requires_confirmation)
+            .unwrap_or(false),
+        draft_id: existing.and_then(|item| item.draft_id.clone()),
+        timezone: existing
+            .and_then(|item| item.timezone.clone())
+            .or_else(|| Some("local".to_string())),
+        missed_run_policy: existing
+            .and_then(|item| item.missed_run_policy.clone())
+            .or_else(|| Some("single".to_string())),
         created_at: task.created_at.clone(),
         updated_at: task.updated_at.clone(),
     }
@@ -86,6 +180,27 @@ fn build_long_cycle_job_definition(
     task: &RedclawLongCycleTaskRecord,
     existing: Option<&RedclawJobDefinitionRecord>,
 ) -> RedclawJobDefinitionRecord {
+    let mut payload = existing
+        .and_then(|item| item.payload.as_object().cloned())
+        .unwrap_or_default();
+    payload.insert("objective".to_string(), json!(task.objective));
+    payload.insert("stepPrompt".to_string(), json!(task.step_prompt));
+    payload.insert("intervalMinutes".to_string(), json!(task.interval_minutes));
+    payload.insert("totalRounds".to_string(), json!(task.total_rounds));
+    payload.insert("completedRounds".to_string(), json!(task.completed_rounds));
+    payload.insert("status".to_string(), json!(task.status));
+    payload.insert("lastRunAt".to_string(), json!(task.last_run_at));
+    payload.insert("lastResult".to_string(), json!(task.last_result));
+    payload.insert("lastError".to_string(), json!(task.last_error));
+    payload
+        .entry("actionType".to_string())
+        .or_insert_with(|| json!("long_cycle"));
+    payload
+        .entry("taskContractVersion".to_string())
+        .or_insert_with(|| json!("task-contract/v1"));
+    payload
+        .entry("policyDecision".to_string())
+        .or_insert_with(|| json!("allow"));
     RedclawJobDefinitionRecord {
         id: existing
             .map(|item| item.id.clone())
@@ -99,19 +214,51 @@ fn build_long_cycle_job_definition(
         runtime_mode: "redclaw".to_string(),
         trigger_kind: "interval".to_string(),
         progression_kind: "multi_round".to_string(),
-        payload: json!({
-            "objective": task.objective,
-            "stepPrompt": task.step_prompt,
-            "intervalMinutes": task.interval_minutes,
-            "totalRounds": task.total_rounds,
-            "completedRounds": task.completed_rounds,
-            "status": task.status,
-            "lastRunAt": task.last_run_at,
-            "lastResult": task.last_result,
-            "lastError": task.last_error,
-        }),
+        payload: Value::Object(payload),
         next_due_at: task.next_run_at.clone(),
         last_enqueued_at: existing.and_then(|item| item.last_enqueued_at.clone()),
+        definition_fingerprint: existing
+            .and_then(|item| item.definition_fingerprint.clone())
+            .or_else(|| {
+                Some(fingerprint_for_definition_payload(
+                    "long_cycle",
+                    &task.name,
+                    "manual:redclaw",
+                    "interval",
+                    &json!({
+                        "objective": task.objective,
+                        "stepPrompt": task.step_prompt,
+                        "intervalMinutes": task.interval_minutes,
+                        "totalRounds": task.total_rounds,
+                    }),
+                ))
+            }),
+        task_contract_version: existing
+            .and_then(|item| item.task_contract_version.clone())
+            .or_else(|| Some("task-contract/v1".to_string())),
+        agent_intent_ref: existing.and_then(|item| item.agent_intent_ref.clone()),
+        policy_signature: existing
+            .and_then(|item| item.policy_signature.clone())
+            .or_else(|| Some("legacy-ui-direct".to_string())),
+        owner_scope: existing
+            .and_then(|item| item.owner_scope.clone())
+            .or_else(|| Some("manual:redclaw".to_string())),
+        created_by: existing
+            .and_then(|item| item.created_by.clone())
+            .or_else(|| Some("redclaw-panel".to_string())),
+        creator_mode: existing
+            .and_then(|item| item.creator_mode.clone())
+            .or_else(|| Some("ui-manual".to_string())),
+        requires_confirmation: existing
+            .map(|item| item.requires_confirmation)
+            .unwrap_or(false),
+        draft_id: existing.and_then(|item| item.draft_id.clone()),
+        timezone: existing
+            .and_then(|item| item.timezone.clone())
+            .or_else(|| Some("local".to_string())),
+        missed_run_policy: existing
+            .and_then(|item| item.missed_run_policy.clone())
+            .or_else(|| Some("single".to_string())),
         created_at: task.created_at.clone(),
         updated_at: task.updated_at.clone(),
     }
@@ -143,6 +290,12 @@ pub fn sync_redclaw_job_definitions(store: &mut AppStore) {
 
     next.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     store.redclaw_job_definitions = next;
+}
+
+pub fn clear_definition_cooldown(definition: &mut RedclawJobDefinitionRecord) {
+    if let Some(object) = definition.payload.as_object_mut() {
+        object.remove("cooldown");
+    }
 }
 
 fn background_phase_from_status(status: &str) -> &str {
@@ -325,13 +478,14 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
             let state = app.state::<AppState>();
             let now = crate::now_i64();
             let mut should_run_maintenance = false;
+            let mut enqueued_execution_ids = Vec::new();
 
             if crate::persistence::with_store_mut(&state, |store| {
                 sync_redclaw_job_definitions(store);
                 if store.redclaw_state.enabled && store.redclaw_state.is_ticking {
                     recover_stale_job_executions(store, now);
                     requeue_retrying_job_executions(store, now);
-                    let _ = enqueue_due_job_executions(store, now);
+                    enqueued_execution_ids = enqueue_due_job_executions(store, now);
                     should_run_maintenance =
                         parse_millis_string(store.redclaw_state.next_maintenance_at.as_deref())
                             .unwrap_or(0)
@@ -345,6 +499,19 @@ pub fn run_redclaw_scheduler(app: AppHandle, stop: Arc<AtomicBool>) -> JoinHandl
             .is_ok()
             {
                 emit_scheduler_snapshot(&app, &state);
+                for execution_id in enqueued_execution_ids {
+                    emit_runtime_task_checkpoint_saved(
+                        &app,
+                        Some(&execution_id),
+                        None,
+                        "task.enqueued",
+                        "Scheduled task enqueued",
+                        Some(json!({
+                            "executionId": execution_id,
+                            "trigger": "scheduler",
+                        })),
+                    );
+                }
             }
 
             if should_run_maintenance {
