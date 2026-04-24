@@ -75,6 +75,7 @@ interface ChatProps {
   messageWorkflowPlacement?: 'top' | 'bottom';
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
+  messageWorkflowDisplayMode?: 'all' | 'thoughts-only';
   embeddedTheme?: 'default' | 'dark' | 'auto';
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
@@ -400,6 +401,7 @@ export function Chat({
   messageWorkflowPlacement = 'bottom',
   messageWorkflowVariant = 'compact',
   messageWorkflowEmphasis = 'default',
+  messageWorkflowDisplayMode = 'all',
   embeddedTheme = 'default',
   showWelcomeHeader = true,
   emptyStateComposerPlacement = 'inline',
@@ -3147,6 +3149,7 @@ export function Chat({
                           workflowPlacement={messageWorkflowPlacement}
                           workflowVariant={messageWorkflowVariant}
                           workflowEmphasis={messageWorkflowEmphasis}
+                          workflowDisplayMode={messageWorkflowDisplayMode}
                         />
                       </ErrorBoundary>
                     ))}
