@@ -14,6 +14,7 @@ use crate::skills::{build_skill_prompt_bundle, normalize_skill_logical_path, res
 use crate::tools::registry::{
     base_tool_names_for_session_metadata, openai_schemas_for_runtime_mode,
     openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
+    tool_plan_snapshot_for_session,
 };
 use crate::{
     compact_host_runtime_context, current_host_runtime_context, load_redbox_prompt,
@@ -752,6 +753,8 @@ pub(crate) fn interactive_runtime_tools_for_mode(
     session_id: Option<&str>,
 ) -> Value {
     with_store(state, |store| {
+        let snapshot = tool_plan_snapshot_for_session(&store, runtime_mode, session_id);
+        eprintln!("[tools][plan] {snapshot}");
         Ok(openai_schemas_for_session(&store, runtime_mode, session_id))
     })
     .unwrap_or_else(|_| openai_schemas_for_runtime_mode(runtime_mode))
