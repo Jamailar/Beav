@@ -728,6 +728,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["execute".to_string()];
                 self.handle_cli_runtime(&tokens, payload)
             }
+            "cliruntimeexecutionget" | "cliruntimegetexecution" => {
+                let tokens = vec!["execution".to_string(), "get".to_string()];
+                self.handle_cli_runtime(&tokens, payload)
+            }
             "cliruntimeverify" => {
                 let tokens = vec!["verify".to_string()];
                 self.handle_cli_runtime(&tokens, payload)
@@ -2091,6 +2095,39 @@ impl<'a> AppCliExecutor<'a> {
                     "env": payload_field(payload, "env").cloned().unwrap_or_else(|| json!({})),
                 }),
             ),
+            "get" => self.call_channel(
+                "cli-runtime:get-execution",
+                json!({
+                    "executionId": args
+                        .string(&["execution-id", "executionId", "id"])
+                        .or_else(|| payload_string(payload, "executionId"))
+                        .or_else(|| payload_string(payload, "id"))
+                        .ok_or_else(|| "cli_runtime get requires --execution-id".to_string())?,
+                    "maxChars": args
+                        .i64(&["max-chars", "maxChars"])
+                        .or_else(|| payload_field(payload, "maxChars").and_then(Value::as_i64)),
+                }),
+            ),
+            "execution" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("get");
+                let nested_args = parse_cli_args(&tokens[2..])?;
+                match sub {
+                    "get" | "poll" => self.call_channel(
+                        "cli-runtime:get-execution",
+                        json!({
+                            "executionId": nested_args
+                                .string(&["execution-id", "executionId", "id"])
+                                .or_else(|| payload_string(payload, "executionId"))
+                                .or_else(|| payload_string(payload, "id"))
+                                .ok_or_else(|| "cli_runtime execution.get requires --execution-id".to_string())?,
+                            "maxChars": nested_args
+                                .i64(&["max-chars", "maxChars"])
+                                .or_else(|| payload_field(payload, "maxChars").and_then(Value::as_i64)),
+                        }),
+                    ),
+                    _ => Err(format!("unsupported cli_runtime execution action: {sub}")),
+                }
+            }
             "verify" => self.call_channel(
                 "cli-runtime:verify",
                 json!({
