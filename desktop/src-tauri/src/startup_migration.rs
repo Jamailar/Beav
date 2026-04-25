@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::scheduler::sync_redclaw_job_definitions;
@@ -684,7 +683,7 @@ pub(crate) fn start_startup_migration(
     }
 
     let app_handle = app.clone();
-    thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = execute_startup_migration(app_handle.clone()) {
             let state = app_handle.state::<AppState>();
             let legacy_db_path = state
