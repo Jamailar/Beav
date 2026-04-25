@@ -11,8 +11,8 @@ use crate::{
         catalog::{replace_catalog, KnowledgeCatalogSummary},
         citation_anchors::{build_anchors_for_blocks, replace_anchors, replace_anchors_for_source},
         document_blocks::{
-            block_records_from_document, build_blocks_for_source, replace_blocks,
-            replace_blocks_for_source,
+            block_records_from_document, build_blocks_for_source_with_cache_policy, replace_blocks,
+            replace_blocks_for_source, CanonicalCachePolicy,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
@@ -298,6 +298,21 @@ fn finalize_item_hash(items: &mut [KnowledgeCatalogSummary], rows: &[IndexedFile
 }
 
 pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
+    rebuild_catalog_with_cache_policy(app, state, CanonicalCachePolicy::CurrentParserOnly)
+}
+
+pub(crate) fn rebuild_catalog_reusing_unchanged_canonical(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    rebuild_catalog_with_cache_policy(app, state, CanonicalCachePolicy::ReuseUnchangedFingerprint)
+}
+
+fn rebuild_catalog_with_cache_policy(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    cache_policy: CanonicalCachePolicy,
+) -> Result<(), String> {
     let knowledge_root = workspace_root(state)?.join("knowledge");
     let mut items = Vec::new();
     let mut files = Vec::new();
@@ -318,12 +333,13 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
     for source in crate::load_document_sources_from_fs(&knowledge_root) {
         let root_path = PathBuf::from(&source.root_path);
         if root_path.exists() {
-            let indexed = build_blocks_for_source(
+            let indexed = build_blocks_for_source_with_cache_policy(
                 state,
                 &source.id,
                 &source.name,
                 &root_path,
                 &source.updated_at,
+                cache_policy,
             )?;
             anchors.extend(build_anchors_for_blocks(&indexed.blocks));
             blocks.extend(indexed.blocks);
@@ -339,12 +355,13 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
         if !root_path.exists() {
             continue;
         }
-        let indexed = build_blocks_for_source(
+        let indexed = build_blocks_for_source_with_cache_policy(
             state,
             &advisor_source_id(&advisor.id),
             &advisor.name,
             &root_path,
             &now_iso(),
+            cache_policy,
         )?;
         anchors.extend(build_anchors_for_blocks(&indexed.blocks));
         blocks.extend(indexed.blocks);

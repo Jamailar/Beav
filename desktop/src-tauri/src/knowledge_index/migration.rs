@@ -54,6 +54,7 @@ fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
 pub(crate) fn plan_migration(state: &State<'_, AppState>) -> Result<MigrationDecision, String> {
     let conn = connection(state)?;
     let existing_blocks = count_rows(&conn, "knowledge_document_blocks")?;
+    let existing_items = count_rows(&conn, "knowledge_items")?;
     let schema_version = meta_value(&conn, META_SCHEMA_VERSION)?;
     let index_format_version = meta_value(&conn, META_INDEX_FORMAT_VERSION)?;
     let canonical_schema_version = meta_value(&conn, META_CANONICAL_SCHEMA_VERSION)?;
@@ -61,40 +62,83 @@ pub(crate) fn plan_migration(state: &State<'_, AppState>) -> Result<MigrationDec
     let chunk_anchor_rule_version = meta_value(&conn, META_CHUNK_ANCHOR_RULE_VERSION)?;
     let rerank_policy_version = meta_value(&conn, META_RERANK_POLICY_VERSION)?;
 
-    let decision = if canonical_schema_version
-        .as_deref()
-        .is_some_and(|value| value != CURRENT_CANONICAL_SCHEMA_VERSION)
-        || parser_pipeline_version
-            .as_deref()
-            .is_some_and(|value| value != CURRENT_PARSER_PIPELINE_VERSION)
-    {
-        MigrationDecision::CanonicalReparse
-    } else if chunk_anchor_rule_version
-        .as_deref()
-        .is_some_and(|value| value != CURRENT_CHUNK_ANCHOR_RULE_VERSION)
-    {
-        MigrationDecision::BlockAnchorRebuild
-    } else if index_format_version.as_deref() != Some(CURRENT_INDEX_FORMAT_VERSION)
-        && existing_blocks > 0
-    {
-        MigrationDecision::FtsRebuild
-    } else if schema_version.as_deref() != Some(CURRENT_SCHEMA_VERSION)
-        || rerank_policy_version.as_deref() != Some(CURRENT_RERANK_POLICY_VERSION)
-        || canonical_schema_version.as_deref().is_none()
-        || parser_pipeline_version.as_deref().is_none()
-        || chunk_anchor_rule_version.as_deref().is_none()
-        || index_format_version.as_deref().is_none()
-    {
-        MigrationDecision::SchemaOnly
-    } else {
-        MigrationDecision::Current
-    };
+    let decision = plan_migration_from_versions(MigrationVersionState {
+        existing_blocks,
+        existing_items,
+        schema_version: schema_version.as_deref(),
+        index_format_version: index_format_version.as_deref(),
+        canonical_schema_version: canonical_schema_version.as_deref(),
+        parser_pipeline_version: parser_pipeline_version.as_deref(),
+        chunk_anchor_rule_version: chunk_anchor_rule_version.as_deref(),
+        rerank_policy_version: rerank_policy_version.as_deref(),
+    });
     if decision == MigrationDecision::Current {
         clear_pending_migration(&conn)?;
     } else {
         set_meta_value(&conn, META_PENDING_MIGRATION, decision.label())?;
     }
     Ok(decision)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MigrationVersionState<'a> {
+    existing_blocks: i64,
+    existing_items: i64,
+    schema_version: Option<&'a str>,
+    index_format_version: Option<&'a str>,
+    canonical_schema_version: Option<&'a str>,
+    parser_pipeline_version: Option<&'a str>,
+    chunk_anchor_rule_version: Option<&'a str>,
+    rerank_policy_version: Option<&'a str>,
+}
+
+fn plan_migration_from_versions(state: MigrationVersionState<'_>) -> MigrationDecision {
+    let has_catalog_without_blocks = state.existing_items > 0 && state.existing_blocks == 0;
+    let canonical_or_parser_changed = state
+        .canonical_schema_version
+        .is_some_and(|value| value != CURRENT_CANONICAL_SCHEMA_VERSION)
+        || state
+            .parser_pipeline_version
+            .is_some_and(|value| value != CURRENT_PARSER_PIPELINE_VERSION);
+    if canonical_or_parser_changed {
+        return if has_catalog_without_blocks {
+            MigrationDecision::FullRebuild
+        } else {
+            MigrationDecision::CanonicalReparse
+        };
+    }
+    if state
+        .chunk_anchor_rule_version
+        .is_some_and(|value| value != CURRENT_CHUNK_ANCHOR_RULE_VERSION)
+    {
+        return if state.existing_blocks > 0 {
+            MigrationDecision::BlockAnchorRebuild
+        } else if state.existing_items > 0 {
+            MigrationDecision::FullRebuild
+        } else {
+            MigrationDecision::SchemaOnly
+        };
+    }
+    if state.index_format_version != Some(CURRENT_INDEX_FORMAT_VERSION) {
+        return if state.existing_blocks > 0 {
+            MigrationDecision::FtsRebuild
+        } else if state.existing_items > 0 {
+            MigrationDecision::FullRebuild
+        } else {
+            MigrationDecision::SchemaOnly
+        };
+    }
+    if state.schema_version != Some(CURRENT_SCHEMA_VERSION)
+        || state.rerank_policy_version != Some(CURRENT_RERANK_POLICY_VERSION)
+        || state.canonical_schema_version.is_none()
+        || state.parser_pipeline_version.is_none()
+        || state.chunk_anchor_rule_version.is_none()
+        || state.index_format_version.is_none()
+    {
+        MigrationDecision::SchemaOnly
+    } else {
+        MigrationDecision::Current
+    }
 }
 
 pub(crate) fn mark_schema_current(state: &State<'_, AppState>) -> Result<(), String> {
@@ -251,5 +295,50 @@ mod tests {
             "canonical_reparse"
         );
         assert_eq!(MigrationDecision::FullRebuild.label(), "full_rebuild");
+    }
+
+    #[test]
+    fn rerank_policy_change_is_schema_only() {
+        let decision = plan_migration_from_versions(MigrationVersionState {
+            existing_blocks: 10,
+            existing_items: 2,
+            schema_version: Some(CURRENT_SCHEMA_VERSION),
+            index_format_version: Some(CURRENT_INDEX_FORMAT_VERSION),
+            canonical_schema_version: Some(CURRENT_CANONICAL_SCHEMA_VERSION),
+            parser_pipeline_version: Some(CURRENT_PARSER_PIPELINE_VERSION),
+            chunk_anchor_rule_version: Some(CURRENT_CHUNK_ANCHOR_RULE_VERSION),
+            rerank_policy_version: Some("old"),
+        });
+        assert_eq!(decision, MigrationDecision::SchemaOnly);
+    }
+
+    #[test]
+    fn index_format_change_rebuilds_fts_without_parser_when_blocks_exist() {
+        let decision = plan_migration_from_versions(MigrationVersionState {
+            existing_blocks: 10,
+            existing_items: 2,
+            schema_version: Some(CURRENT_SCHEMA_VERSION),
+            index_format_version: Some("old"),
+            canonical_schema_version: Some(CURRENT_CANONICAL_SCHEMA_VERSION),
+            parser_pipeline_version: Some(CURRENT_PARSER_PIPELINE_VERSION),
+            chunk_anchor_rule_version: Some(CURRENT_CHUNK_ANCHOR_RULE_VERSION),
+            rerank_policy_version: Some(CURRENT_RERANK_POLICY_VERSION),
+        });
+        assert_eq!(decision, MigrationDecision::FtsRebuild);
+    }
+
+    #[test]
+    fn catalog_without_blocks_requires_full_rebuild() {
+        let decision = plan_migration_from_versions(MigrationVersionState {
+            existing_blocks: 0,
+            existing_items: 2,
+            schema_version: Some(CURRENT_SCHEMA_VERSION),
+            index_format_version: Some("old"),
+            canonical_schema_version: Some(CURRENT_CANONICAL_SCHEMA_VERSION),
+            parser_pipeline_version: Some(CURRENT_PARSER_PIPELINE_VERSION),
+            chunk_anchor_rule_version: Some(CURRENT_CHUNK_ANCHOR_RULE_VERSION),
+            rerank_policy_version: Some(CURRENT_RERANK_POLICY_VERSION),
+        });
+        assert_eq!(decision, MigrationDecision::FullRebuild);
     }
 }

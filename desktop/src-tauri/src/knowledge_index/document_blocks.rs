@@ -9,7 +9,8 @@ use time::OffsetDateTime;
 
 use crate::{
     document_parse::{
-        CanonicalDocument, LegalMetadata, OcrProvider, OcrProviderConfig, ParserProviderConfig,
+        CanonicalDocument, LegalMetadata, OcrProvider, OcrProviderConfig, ParserInfo,
+        ParserProviderConfig, PARSER_NAME, PARSER_VERSION,
     },
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
@@ -107,6 +108,12 @@ pub(crate) struct DocumentBlockHit {
 pub(crate) struct BuildSourceBlocksResult {
     pub blocks: Vec<DocumentBlockRecord>,
     pub canonical_rows: Vec<CanonicalDocumentRow>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CanonicalCachePolicy {
+    CurrentParserOnly,
+    ReuseUnchangedFingerprint,
 }
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
@@ -823,12 +830,13 @@ fn row_to_document_block(row: &rusqlite::Row<'_>) -> Result<DocumentBlockRecord,
     })
 }
 
-pub(crate) fn build_blocks_for_source(
+pub(crate) fn build_blocks_for_source_with_cache_policy(
     state: &State<'_, AppState>,
     source_id: &str,
     source_name: &str,
     root_path: &Path,
     updated_at: &str,
+    cache_policy: CanonicalCachePolicy,
 ) -> Result<BuildSourceBlocksResult, String> {
     let mut blocks = Vec::new();
     let mut canonical_rows = Vec::new();
@@ -840,6 +848,7 @@ pub(crate) fn build_blocks_for_source(
             root_path.parent().unwrap_or(root_path),
             root_path,
             updated_at,
+            cache_policy,
             &mut blocks,
             &mut canonical_rows,
         )?;
@@ -855,6 +864,7 @@ pub(crate) fn build_blocks_for_source(
         root_path,
         root_path,
         updated_at,
+        cache_policy,
         &mut blocks,
         &mut canonical_rows,
     )?;
@@ -871,6 +881,7 @@ fn collect_blocks_recursive(
     root_path: &Path,
     current: &Path,
     updated_at: &str,
+    cache_policy: CanonicalCachePolicy,
     blocks: &mut Vec<DocumentBlockRecord>,
     canonical_rows: &mut Vec<CanonicalDocumentRow>,
 ) -> Result<(), String> {
@@ -889,6 +900,7 @@ fn collect_blocks_recursive(
                 root_path,
                 &path,
                 updated_at,
+                cache_policy,
                 blocks,
                 canonical_rows,
             )?;
@@ -904,6 +916,7 @@ fn collect_blocks_recursive(
             root_path,
             &path,
             updated_at,
+            cache_policy,
             blocks,
             canonical_rows,
         )?;
@@ -918,6 +931,7 @@ fn build_blocks_for_file(
     root_path: &Path,
     file_path: &Path,
     updated_at: &str,
+    cache_policy: CanonicalCachePolicy,
     blocks: &mut Vec<DocumentBlockRecord>,
     canonical_rows: &mut Vec<CanonicalDocumentRow>,
 ) -> Result<(), String> {
@@ -927,9 +941,12 @@ fn build_blocks_for_file(
     }
     let absolute_path = file_path.display().to_string();
     let fingerprint = fingerprint_file(file_path)?;
-    let canonical = if let Some(cached) =
-        canonical_store::load_cached_document(state, &absolute_path, &fingerprint.content_hash)?
-    {
+    let canonical = if let Some(cached) = load_cached_for_policy(
+        state,
+        &absolute_path,
+        &fingerprint.content_hash,
+        cache_policy,
+    )? {
         cached
     } else {
         let ocr_config = resolve_ocr_provider_config(state)?;
@@ -981,6 +998,37 @@ fn build_blocks_for_file(
         updated_at,
     )?);
     Ok(())
+}
+
+fn load_cached_for_policy(
+    state: &State<'_, AppState>,
+    absolute_path: &str,
+    content_hash: &str,
+    cache_policy: CanonicalCachePolicy,
+) -> Result<Option<CanonicalDocument>, String> {
+    let cached = match cache_policy {
+        CanonicalCachePolicy::CurrentParserOnly => {
+            canonical_store::load_cached_document(state, absolute_path, content_hash)?
+        }
+        CanonicalCachePolicy::ReuseUnchangedFingerprint => {
+            canonical_store::load_unchanged_cached_document(state, absolute_path, content_hash)?
+        }
+    };
+    Ok(cached.map(normalize_cached_canonical_parser_info))
+}
+
+fn normalize_cached_canonical_parser_info(mut document: CanonicalDocument) -> CanonicalDocument {
+    if document.parser_info.parser_name != PARSER_NAME
+        || document.parser_info.parser_version != PARSER_VERSION
+    {
+        document.parser_info = ParserInfo {
+            parser_name: PARSER_NAME.to_string(),
+            parser_version: PARSER_VERSION.to_string(),
+            strategy: format!("{}:fingerprint-cache", document.parser_info.strategy),
+            fallback_used: true,
+        };
+    }
+    document
 }
 
 fn resolve_parser_provider_config(
@@ -1369,12 +1417,36 @@ fn extract_query_terms(normalized_query: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(|part| part.to_string())
         .collect::<Vec<_>>();
+    for token in normalized_query.split_whitespace() {
+        terms.extend(cjk_bigrams(token));
+    }
     if terms.is_empty() && !normalized_query.is_empty() {
         terms.push(normalized_query.to_string());
     }
     terms.sort();
     terms.dedup();
     terms
+}
+
+fn cjk_bigrams(token: &str) -> Vec<String> {
+    let chars = token.chars().collect::<Vec<_>>();
+    if chars.len() < 2
+        || !chars
+            .iter()
+            .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch))
+    {
+        return Vec::new();
+    }
+    chars
+        .windows(2)
+        .filter_map(|pair| {
+            if pair.iter().all(|ch| ('\u{4e00}'..='\u{9fff}').contains(ch)) {
+                Some(pair.iter().collect::<String>())
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn lexical_match_score(
@@ -1566,6 +1638,15 @@ mod tests {
     fn multilingual_query_terms_are_preserved() {
         let value = extract_query_terms(&normalize_text("合同 breach"));
         assert_eq!(value, vec!["breach".to_string(), "合同".to_string()]);
+    }
+
+    #[test]
+    fn cjk_query_terms_include_bigrams_for_analyzer_fallback() {
+        let value = extract_query_terms(&normalize_text("劳动合同法"));
+        assert!(value.iter().any(|item| item == "劳动"));
+        assert!(value.iter().any(|item| item == "动合"));
+        assert!(value.iter().any(|item| item == "合同"));
+        assert!(value.iter().any(|item| item == "同法"));
     }
 
     #[test]
