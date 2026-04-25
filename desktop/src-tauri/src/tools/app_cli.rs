@@ -21,6 +21,7 @@ use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
+use crate::tools::action_search::{search_actions, ActionSearchParams};
 use crate::tools::plan::build_tool_registry_plan_for_session;
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{
@@ -224,56 +225,6 @@ fn app_cli_error_json(
     object.insert("error".to_string(), Value::Object(error));
     serde_json::to_string_pretty(&Value::Object(object))
         .unwrap_or_else(|_| format!(r#"{{"ok":false,"error":{{"code":"{code}","message":"{message}","retryable":{retryable}}}}}"#))
-}
-
-fn action_text_matches(
-    query: &str,
-    namespace: Option<&str>,
-    action: &str,
-    ns: &str,
-    description: &str,
-) -> bool {
-    let namespace_matches = namespace
-        .map(|filter| ns == filter || ns.starts_with(&(filter.to_string() + ".")))
-        .unwrap_or(true);
-    if !namespace_matches {
-        return false;
-    }
-    let query = query.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-    action.to_ascii_lowercase().contains(&query)
-        || ns.to_ascii_lowercase().contains(&query)
-        || description.to_ascii_lowercase().contains(&query)
-}
-
-fn action_descriptor_matches(
-    query: &str,
-    namespace: Option<&str>,
-    descriptor: &crate::tools::catalog::ActionDescriptor,
-) -> bool {
-    action_text_matches(
-        query,
-        namespace,
-        descriptor.action,
-        descriptor.namespace,
-        descriptor.description,
-    )
-}
-
-fn action_search_entry_matches(
-    query: &str,
-    namespace: Option<&str>,
-    entry: &crate::tools::plan::DeferredActionEntry,
-) -> bool {
-    action_text_matches(
-        query,
-        namespace,
-        &entry.action,
-        &entry.namespace,
-        &entry.description,
-    )
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -899,41 +850,25 @@ impl<'a> AppCliExecutor<'a> {
                 self.session_id,
             ))
         })?;
-        let deferred_actions = plan
-            .deferred_app_cli_actions
-            .iter()
-            .filter(|entry| action_search_entry_matches(&query, namespace.as_deref(), entry))
-            .take(limit)
-            .map(|entry| {
-                json!({
-                    "action": entry.action,
-                    "namespace": entry.namespace,
-                    "description": entry.description,
-                    "mutating": entry.mutating,
-                    "concurrencySafe": entry.concurrency_safe,
-                    "runtimeModes": entry.runtime_modes,
-                })
-            })
-            .collect::<Vec<_>>();
-        let direct_actions = if include_direct {
-            plan.direct_app_cli_actions
-                .iter()
-                .filter(|entry| action_descriptor_matches(&query, namespace.as_deref(), entry))
-                .take(limit)
-                .map(|entry| {
-                    json!({
-                        "action": entry.action,
-                        "namespace": entry.namespace,
-                        "description": entry.description,
-                        "mutating": entry.mutating,
-                        "concurrencySafe": entry.concurrency_safe,
-                        "runtimeModes": entry.runtime_modes,
-                    })
-                })
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let results = search_actions(
+            &plan.direct_app_cli_actions,
+            &plan.deferred_app_cli_actions,
+            ActionSearchParams {
+                query: &query,
+                namespace: namespace.as_deref(),
+                limit,
+                include_direct,
+            },
+        );
+        let (direct_actions, deferred_actions): (Vec<_>, Vec<_>) = results
+            .into_iter()
+            .map(|entry| serde_json::to_value(entry).unwrap_or_else(|_| json!({})))
+            .partition(|entry| {
+                entry
+                    .get("availableThisTurn")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            });
         Ok(json!({
             "success": true,
             "runtimeMode": plan.runtime_mode,
