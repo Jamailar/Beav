@@ -287,6 +287,14 @@ pub fn execute_mcp_tool_value(
     })
 }
 
+pub fn run_external_member_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    crate::agent_hub::start_external_acp_member_run(app, state, payload)
+}
+
 pub fn list_agent_backends_value(state: &State<'_, AppState>) -> Result<Value, String> {
     with_store(state, |store| {
         Ok(json!(crate::agent_hub::list_agent_backends(&store)))
