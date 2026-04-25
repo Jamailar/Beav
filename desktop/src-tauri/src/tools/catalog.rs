@@ -85,7 +85,13 @@ const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
     "audio-editor",
     "diagnostics",
 ];
-const REDCLAW_RUNTIME_MODES: &[&str] = &["chatroom", "default", "knowledge", "redclaw"];
+const REDCLAW_RUNTIME_MODES: &[&str] = &[
+    "chatroom",
+    "default",
+    "image-generation",
+    "knowledge",
+    "redclaw",
+];
 const DIAGNOSTIC_RUNTIME_MODES: &[&str] = &["background-maintenance", "diagnostics"];
 
 fn string_schema(description: &str) -> Value {
@@ -3329,6 +3335,22 @@ mod tests {
         assert!(actions.contains(&"cli_runtime.execution.get"));
         assert!(actions.contains(&"mcp.list"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
+    }
+
+    #[test]
+    fn image_generation_schema_exposes_media_generation_actions() {
+        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("image-generation"))
+            .expect("image-generation schema should exist");
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(actions.contains(&"image.generate"));
+        assert!(actions.contains(&"video.generate"));
+        assert!(actions.contains(&"tools.search"));
     }
 
     #[test]
