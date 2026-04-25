@@ -426,6 +426,19 @@ fn bundled_resource_roots_for_install_root(install_root: &Path) -> Vec<PathBuf> 
     push(install_root.join("resources"));
     push(install_root.join("_up_"));
     push(install_root.join("_up_").join("resources"));
+    if install_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|name| name == "MacOS")
+    {
+        if let Some(contents_root) = install_root.parent() {
+            let resource_root = contents_root.join("Resources");
+            push(resource_root.clone());
+            push(resource_root.join("_up_"));
+            push(resource_root.join("resources"));
+            push(resource_root.join("_up_").join("resources"));
+        }
+    }
 
     roots
 }
@@ -1046,6 +1059,19 @@ mod tests {
                 PathBuf::from("/tmp/RedBox/_up_/resources"),
             ]
         );
+    }
+
+    #[test]
+    fn bundled_resource_roots_for_install_root_covers_tauri_macos_app_layout() {
+        let roots = bundled_resource_roots_for_install_root(Path::new(
+            "/Applications/RedBox.app/Contents/MacOS",
+        ));
+        assert!(roots.contains(&PathBuf::from(
+            "/Applications/RedBox.app/Contents/Resources"
+        )));
+        assert!(roots.contains(&PathBuf::from(
+            "/Applications/RedBox.app/Contents/Resources/_up_"
+        )));
     }
 
     #[test]

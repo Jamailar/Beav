@@ -12,8 +12,25 @@ mod tests {
     #[test]
     fn builtin_skill_records_are_loaded_from_builtin_skills_directory() {
         let skills = builtin_skill_records();
-        assert!(skills.iter().any(|item| item.name == "cover-builder"));
-        assert!(skills.iter().any(|item| item.name == "writing-style"));
+        let names = skills
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            names,
+            std::collections::BTreeSet::from([
+                "cover-builder",
+                "image-prompt-optimizer",
+                "longform-layout-designer",
+                "redbox-image-director",
+                "redbox-video-director",
+                "remotion-best-practices",
+                "richpost-layout-designer",
+                "richpost-theme-editor",
+                "skill-creator",
+                "writing-style",
+            ])
+        );
         assert!(skills.iter().all(|item| item.is_builtin == Some(true)));
         assert!(skills
             .iter()
