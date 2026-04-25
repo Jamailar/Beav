@@ -1844,6 +1844,9 @@ impl<'a> AppCliExecutor<'a> {
                     "execute-mcp-tool" => {
                         self.call_channel("team-runtime:execute-mcp-tool", merged())
                     }
+                    "run-external-member" | "run-acp-member" => {
+                        self.call_channel("team-runtime:run-external-member", merged())
+                    }
                     _ => Err(format!("unsupported runtime team action: {sub}")),
                 }
             }
@@ -4944,6 +4947,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "runtime team mcp-contract",
             "runtime team mcp-bridge-config [payload.sessionId/memberId/taskId/command]",
             "runtime team execute-mcp-tool [payload.toolName/arguments]",
+            "runtime team run-external-member [payload.sessionId/backend/memberId/taskId/prompt/command/args]",
             "runtime session-enter-diagnostics [--title <title>]",
             "runtime session-bridge status",
             "runtime session-bridge list-sessions",

@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+mod acp_runner;
+
+pub use acp_runner::start_external_acp_member_run;
+
 use crate::cli_runtime::{detect_tool_with_managed_paths, CliToolHealth};
 use crate::AppStore;
 
