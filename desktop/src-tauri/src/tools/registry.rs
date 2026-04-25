@@ -254,6 +254,7 @@ fn capability_summary_for_plan_tool(tool_name: &str, plan: &ToolRegistryPlan) ->
         if !plan.deferred_action_namespaces.is_empty() {
             summary.push_str(" | deferred=");
             summary.push_str(&plan.deferred_action_namespaces.join(","));
+            summary.push_str(" | discover=Redbox(resource=tools, operation=search)");
         }
         return Some(summary);
     }
