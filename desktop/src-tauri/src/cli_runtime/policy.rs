@@ -19,6 +19,7 @@ pub struct CliPolicyCheckResult {
     pub allowed: bool,
     pub escalation: Option<CliEscalationRequestRecord>,
     pub approved_by_existing_grant: bool,
+    pub permissions: CliPermissionGrantSet,
 }
 
 #[derive(Debug, Clone)]
@@ -610,8 +611,10 @@ pub fn authorize_cli_execution(
             allowed: true,
             escalation: None,
             approved_by_existing_grant: false,
+            permissions: CliPermissionGrantSet::default(),
         });
     };
+    let permissions = finding.permissions.clone();
 
     let session_id = session_id_for_request(request);
     if let Some(existing) =
@@ -622,6 +625,7 @@ pub fn authorize_cli_execution(
             allowed: true,
             escalation: Some(consumed),
             approved_by_existing_grant: true,
+            permissions,
         });
     }
 
@@ -651,7 +655,20 @@ pub fn authorize_cli_execution(
         allowed: false,
         escalation: Some(escalation),
         approved_by_existing_grant: false,
+        permissions,
     })
+}
+
+pub fn collect_cli_requested_permissions(
+    state: &State<'_, AppState>,
+    request: &CliExecuteRequest,
+    environment: &CliEnvironmentRecord,
+    cwd: &Path,
+) -> CliPermissionGrantSet {
+    let workspace_root = active_policy_workspace_root(state, environment);
+    build_policy_finding(request, workspace_root.as_deref(), cwd)
+        .map(|finding| finding.permissions)
+        .unwrap_or_default()
 }
 
 fn update_execution_for_resolution(

@@ -478,7 +478,13 @@ pub fn execute_cli_command<RT: Runtime>(
         &resolution.environment,
         Path::new(&cwd),
     )?;
-    let sandbox = build_cli_sandbox_spec(&request, &resolution.environment, Path::new(&cwd));
+    let sandbox = build_cli_sandbox_spec(
+        &request,
+        &resolution.environment,
+        Path::new(&cwd),
+        &merged_env,
+        &policy.permissions,
+    );
 
     let mut record = CliExecutionRecord {
         id: execution_id,

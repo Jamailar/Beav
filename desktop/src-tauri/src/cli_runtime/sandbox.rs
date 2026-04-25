@@ -1,10 +1,14 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cli_runtime::{CliEnvironmentRecord, CliExecuteRequest};
+use crate::cli_runtime::{
+    find_executable, CliEnvironmentRecord, CliExecuteRequest, CliExecutionMode,
+    CliPermissionGrantSet,
+};
 
 const MACOS_SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
 
@@ -59,6 +63,85 @@ fn canonical_read_paths(spec: &CliSandboxSpec, env: &BTreeMap<String, String>) -
     paths
 }
 
+fn push_unique_path(paths: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    if value.trim().is_empty() || paths.iter().any(|item| item == &value) {
+        return;
+    }
+    paths.push(value);
+}
+
+fn push_node_package_roots(paths: &mut Vec<String>, path: &Path) {
+    let text = path.to_string_lossy();
+    let Some((prefix, suffix)) = text.split_once("/node_modules/") else {
+        if path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            == Some("bin")
+        {
+            if let Some(root) = path.parent().and_then(Path::parent) {
+                let node_modules = root.join("lib").join("node_modules");
+                if node_modules.exists() {
+                    push_unique_path(paths, node_modules.to_string_lossy().to_string());
+                }
+            }
+        }
+        return;
+    };
+    let mut parts = suffix.split('/').filter(|part| !part.is_empty());
+    let Some(first) = parts.next() else {
+        return;
+    };
+    let mut package_root = format!("{prefix}/node_modules/{first}");
+    if first.starts_with('@') {
+        if let Some(second) = parts.next() {
+            package_root.push('/');
+            package_root.push_str(second);
+        }
+    }
+    push_unique_path(paths, format!("{prefix}/node_modules"));
+    push_unique_path(paths, package_root);
+}
+
+fn push_path_and_canonical(paths: &mut Vec<String>, path: &Path) {
+    if let Some(parent) = path.parent() {
+        push_unique_path(paths, parent.to_string_lossy().to_string());
+    }
+    if path.is_dir() {
+        push_unique_path(paths, path.to_string_lossy().to_string());
+    }
+    if let Ok(canonical) = fs::canonicalize(path) {
+        if canonical.is_dir() {
+            push_unique_path(paths, canonical.to_string_lossy().to_string());
+        } else if let Some(parent) = canonical.parent() {
+            push_unique_path(paths, parent.to_string_lossy().to_string());
+        }
+        push_node_package_roots(paths, &canonical);
+    }
+    push_node_package_roots(paths, path);
+}
+
+fn host_tool_read_paths(argv: &[String], env: &BTreeMap<String, String>) -> Vec<String> {
+    let Some(command) = argv
+        .first()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+    else {
+        return Vec::new();
+    };
+    let resolved = if command.contains('/') || command.contains('\\') {
+        Some(std::path::PathBuf::from(command))
+    } else {
+        find_executable(command, env)
+    };
+    let mut paths = Vec::new();
+    if let Some(path) = resolved {
+        push_path_and_canonical(&mut paths, &path);
+    }
+    paths
+}
+
 fn build_macos_sandbox_profile(spec: &CliSandboxSpec, env: &BTreeMap<String, String>) -> String {
     let mut lines = vec![
         "(version 1)".to_string(),
@@ -92,24 +175,41 @@ pub fn build_cli_sandbox_spec(
     request: &CliExecuteRequest,
     environment: &CliEnvironmentRecord,
     cwd: &Path,
+    env: &BTreeMap<String, String>,
+    permissions: &CliPermissionGrantSet,
 ) -> CliSandboxSpec {
-    let allow_network = request.argv.iter().any(|arg| {
-        let lower = arg.trim().to_ascii_lowercase();
-        lower.starts_with("http://") || lower.starts_with("https://")
-    });
+    let execution_mode = request.execution_mode.clone().unwrap_or_default();
+    let allow_network = permissions.network
+        || request.argv.iter().any(|arg| {
+            let lower = arg.trim().to_ascii_lowercase();
+            lower.starts_with("http://") || lower.starts_with("https://")
+        });
     let mut allow_read_paths = vec![environment.root_path.clone()];
     let cwd_text = cwd.to_string_lossy().to_string();
     if !allow_read_paths.iter().any(|item| item == &cwd_text) {
         allow_read_paths.push(cwd_text.clone());
     }
-    let allow_write_paths = vec![environment.root_path.clone(), cwd_text];
+    if execution_mode == CliExecutionMode::HostCompatible {
+        allow_read_paths.extend(host_tool_read_paths(&request.argv, env));
+    }
+    allow_read_paths.sort();
+    allow_read_paths.dedup();
+    let mut allow_write_paths = vec![environment.root_path.clone(), cwd_text];
+    allow_write_paths.extend(permissions.paths.iter().cloned());
+    allow_write_paths.sort();
+    allow_write_paths.dedup();
     CliSandboxSpec {
-        backend: if macos_sandbox_available() {
+        backend: if execution_mode == CliExecutionMode::Unrestricted {
+            "none".to_string()
+        } else if macos_sandbox_available() {
             "sandbox-exec".to_string()
         } else {
             "policy".to_string()
         },
-        mode: "managed".to_string(),
+        mode: serde_json::to_value(&execution_mode)
+            .ok()
+            .and_then(|value| value.as_str().map(ToString::to_string))
+            .unwrap_or_else(|| "host_compatible".to_string()),
         root_path: environment.root_path.clone(),
         allow_read_paths,
         allow_write_paths,
@@ -165,7 +265,9 @@ pub fn prepare_cli_launch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli_runtime::{CliEnvironmentRecord, CliEnvironmentScope, CliRuntimeInventory};
+    use crate::cli_runtime::{
+        CliEnvironmentRecord, CliEnvironmentScope, CliPermissionGrantSet, CliRuntimeInventory,
+    };
 
     #[test]
     fn build_cli_sandbox_spec_tracks_environment_root() {
@@ -185,8 +287,14 @@ mod tests {
             &CliExecuteRequest::default(),
             &environment,
             Path::new("/tmp/redbox-env/project"),
+            &BTreeMap::new(),
+            &CliPermissionGrantSet::default(),
         );
-        assert_eq!(spec.backend, "policy");
+        if cfg!(target_os = "macos") {
+            assert_eq!(spec.backend, "sandbox-exec");
+        } else {
+            assert_eq!(spec.backend, "policy");
+        }
         assert!(spec
             .allow_write_paths
             .iter()

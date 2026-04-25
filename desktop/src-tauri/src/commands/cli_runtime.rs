@@ -1,31 +1,42 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
-    add_installed_tool_to_environment, approve_cli_escalation, build_cli_tool_manifest,
-    cancel_cli_execution, create_task_ephemeral_environment, default_detect_commands,
-    deny_cli_escalation, detect_tool, detect_tool_with_managed_paths, discover_all_commands,
-    emit_cli_escalation_resolved, emit_cli_execution_status, emit_cli_install_finished,
-    emit_cli_install_started, emit_cli_verification_finished, ensure_app_global_environment,
-    ensure_workspace_environment, ensure_workspace_environment_for_active_space,
-    execute_cli_command, find_cli_environment_by_id, find_cli_execution_by_id,
-    find_cli_tool_by_command, find_cli_tool_by_id, find_cli_tool_manifest_by_tool_id,
-    list_cli_environments, list_cli_tool_records, load_cli_execution_snapshot, load_host_shell_env,
-    merge_execution_env, prepare_cli_install, refresh_cli_execution, run_cli_verification,
+    add_installed_tool_to_environment, approve_cli_escalation, build_cli_sandbox_spec,
+    build_cli_tool_manifest, cancel_cli_execution, collect_cli_requested_permissions,
+    create_task_ephemeral_environment, default_detect_commands, deny_cli_escalation, detect_tool,
+    detect_tool_with_managed_paths, discover_all_commands, emit_cli_escalation_resolved,
+    emit_cli_execution_status, emit_cli_install_finished, emit_cli_install_started,
+    emit_cli_verification_finished, ensure_app_global_environment, ensure_workspace_environment,
+    ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_environment_by_id,
+    find_cli_execution_by_id, find_cli_tool_by_command, find_cli_tool_by_id,
+    find_cli_tool_manifest_by_tool_id, list_cli_environments, list_cli_tool_records,
+    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, prepare_cli_install,
+    refresh_cli_execution, resolve_cli_environment, run_cli_verification, sandbox_metadata,
     upsert_cli_tool_manifest, upsert_cli_tool_record, CliApproveEscalationRequest,
     CliCreateEnvironmentRequest, CliDenyEscalationRequest, CliDiscoverRequest,
-    CliEnvironmentRecord, CliEnvironmentScope, CliExecuteRequest, CliExecutionStatus,
-    CliInstallRequest, CliInstallResult, CliToolHealth, CliToolManifestRecord, CliToolRecord,
-    CliToolSource, CliVerifyExecutionRequest, CliVerifyResult,
+    CliEnvironmentRecord, CliEnvironmentResolveRequest, CliEnvironmentScope, CliExecuteRequest,
+    CliExecutionMode, CliExecutionStatus, CliInstallRequest, CliInstallResult, CliToolHealth,
+    CliToolManifestRecord, CliToolRecord, CliToolSource, CliVerifyExecutionRequest,
+    CliVerifyResult,
 };
 use crate::{make_id, payload_string, AppState};
 
 fn load_host_env() -> std::collections::BTreeMap<String, String> {
     load_host_shell_env().unwrap_or_else(|_| std::env::vars().collect())
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct CliDiagnoseRequest {
+    command: String,
+    environment_id: Option<String>,
+    cwd: Option<String>,
+    execution_mode: Option<CliExecutionMode>,
 }
 
 fn cli_runtime_execution_status_label(status: &CliExecutionStatus) -> String {
@@ -326,15 +337,59 @@ fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let limit = request.limit.unwrap_or(100).clamp(1, 500);
-    let mut discovered = discover_all_commands(&host_env, query, limit);
+    let mut discovered = Vec::<CliToolRecord>::new();
+    let mut seen = BTreeSet::<String>::new();
+    for environment in list_cli_environments(state)? {
+        let merged_env = merge_execution_env(&host_env, &environment, None);
+        for mut tool in discover_all_commands(&merged_env, query, limit) {
+            let key = format!(
+                "{}:{}",
+                tool.executable,
+                tool.resolved_path.clone().unwrap_or_default()
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            tool.environment_id = Some(environment.id.clone());
+            tool.source = tool_source_for_environment(&environment);
+            discovered.push(tool);
+            if discovered.len() >= limit {
+                break;
+            }
+        }
+        if discovered.len() >= limit {
+            break;
+        }
+    }
+    if discovered.len() < limit {
+        for tool in discover_all_commands(&host_env, query, limit) {
+            let key = format!(
+                "{}:{}",
+                tool.executable,
+                tool.resolved_path.clone().unwrap_or_default()
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            discovered.push(tool);
+            if discovered.len() >= limit {
+                break;
+            }
+        }
+    }
     let discovered_len = discovered.len();
     for tool in &mut discovered {
         if let Some(stored) = find_cli_tool_by_command(state, &tool.executable)? {
             let manifest = find_cli_tool_manifest_by_tool_id(state, &stored.id)?;
+            let environment = tool.environment_id.as_deref().and_then(|environment_id| {
+                find_cli_environment_by_id(state, environment_id)
+                    .ok()
+                    .flatten()
+            });
             *tool = merge_detected_tool_with_stored(
                 tool.clone(),
                 Some(&stored),
-                None,
+                environment.as_ref(),
                 manifest.as_ref(),
             );
         }
@@ -391,6 +446,80 @@ fn inspect_tool_value(
     }
     let tool = upsert_cli_tool_record(state, tool)?;
     Ok(Some(to_cli_runtime_ipc_value(tool)?))
+}
+
+fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    let request: CliDiagnoseRequest = parse_cli_runtime_payload(payload)?;
+    let command = request.command.trim();
+    if command.is_empty() {
+        return Err("cli diagnose requires command".to_string());
+    }
+
+    let resolution = resolve_cli_environment(
+        state,
+        &CliEnvironmentResolveRequest {
+            requested_environment_id: request.environment_id.clone(),
+            tool_id: Some(command.to_string()),
+            ..Default::default()
+        },
+    )?;
+    let host_env = load_host_env();
+    let merged_env = merge_execution_env(&host_env, &resolution.environment, None);
+    let cwd = request
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&resolution.environment.root_path)
+        .to_string();
+    let tool = detect_tool_with_managed_paths(
+        command,
+        &merged_env,
+        Some(&resolution.environment.path_entries),
+        false,
+    );
+    let execution_request = CliExecuteRequest {
+        environment_id: Some(resolution.environment.id.clone()),
+        tool_id: Some(command.to_string()),
+        execution_mode: request.execution_mode.clone(),
+        argv: vec![command.to_string(), "--version".to_string()],
+        cwd: Some(cwd.clone()),
+        ..Default::default()
+    };
+    let permissions = collect_cli_requested_permissions(
+        state,
+        &execution_request,
+        &resolution.environment,
+        Path::new(&cwd),
+    );
+    let sandbox = build_cli_sandbox_spec(
+        &execution_request,
+        &resolution.environment,
+        Path::new(&cwd),
+        &merged_env,
+        &permissions,
+    );
+    let summary = if tool.health == CliToolHealth::Ready {
+        format!("{command} 将以 {} 模式运行", sandbox.mode)
+    } else {
+        format!("未在当前执行环境 PATH 中找到 {command}")
+    };
+    Ok(json!({
+        "success": true,
+        "command": command,
+        "tool": tool,
+        "environment": resolution.environment,
+        "environmentResolution": {
+            "reason": resolution.reason,
+            "reusedExisting": resolution.reused_existing,
+        },
+        "cwd": cwd,
+        "permissions": permissions,
+        "sandbox": sandbox_metadata(&sandbox),
+        "canResolve": tool.health == CliToolHealth::Ready,
+        "willUseSandbox": sandbox.backend == "sandbox-exec",
+        "summary": summary,
+    }))
 }
 
 fn create_environment_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
@@ -498,6 +627,65 @@ fn install_summary(
     }
 }
 
+fn managed_install_env(environment: &CliEnvironmentRecord) -> BTreeMap<String, String> {
+    let root = Path::new(&environment.root_path);
+    BTreeMap::from([
+        ("HOME".to_string(), environment.root_path.clone()),
+        (
+            "XDG_CACHE_HOME".to_string(),
+            root.join(".cache").to_string_lossy().to_string(),
+        ),
+        (
+            "XDG_CONFIG_HOME".to_string(),
+            root.join(".config").to_string_lossy().to_string(),
+        ),
+        (
+            "npm_config_cache".to_string(),
+            root.join(".npm-cache").to_string_lossy().to_string(),
+        ),
+        ("npm_config_audit".to_string(), "false".to_string()),
+        ("npm_config_fund".to_string(), "false".to_string()),
+        (
+            "npm_config_update_notifier".to_string(),
+            "false".to_string(),
+        ),
+        (
+            "PIP_CACHE_DIR".to_string(),
+            root.join(".cache")
+                .join("pip")
+                .to_string_lossy()
+                .to_string(),
+        ),
+        (
+            "UV_CACHE_DIR".to_string(),
+            root.join(".cache").join("uv").to_string_lossy().to_string(),
+        ),
+        (
+            "CARGO_HOME".to_string(),
+            root.join(".cargo").to_string_lossy().to_string(),
+        ),
+        (
+            "GOPATH".to_string(),
+            root.join("go").to_string_lossy().to_string(),
+        ),
+        (
+            "GOMODCACHE".to_string(),
+            root.join("go")
+                .join("pkg")
+                .join("mod")
+                .to_string_lossy()
+                .to_string(),
+        ),
+        (
+            "GOCACHE".to_string(),
+            root.join(".cache")
+                .join("go-build")
+                .to_string_lossy()
+                .to_string(),
+        ),
+    ])
+}
+
 fn install_value(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -530,7 +718,10 @@ fn install_value(
     );
 
     let install_plan = prepare_cli_install(&request, &environment, &tool_name)?;
-    let mut execution_env = install_plan.env.clone();
+    let mut execution_env = managed_install_env(&environment);
+    for (key, value) in install_plan.env.clone() {
+        execution_env.insert(key, value);
+    }
     for (key, value) in &request.env {
         execution_env.insert(key.clone(), value.clone());
     }
@@ -544,6 +735,7 @@ fn install_value(
             runtime_id: request.runtime_id.clone(),
             environment_id: Some(environment.id.clone()),
             tool_id: Some(tool_name.clone()),
+            execution_mode: request.execution_mode.clone(),
             argv: install_plan.argv.clone(),
             cwd: Some(environment.root_path.clone()),
             use_pty: false,
@@ -738,6 +930,7 @@ pub fn handle_cli_runtime_channel(
         "cli-runtime:inspect" => {
             inspect_tool_value(state, payload).map(|value| value.unwrap_or(Value::Null))
         }
+        "cli-runtime:diagnose" => diagnose_tool_value(state, payload),
         "cli-runtime:discover" => discover_tools_value(state, payload),
         "cli-runtime:list-environments" => {
             list_cli_environments(state).and_then(to_cli_runtime_ipc_value)

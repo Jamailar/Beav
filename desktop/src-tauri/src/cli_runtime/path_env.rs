@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -124,6 +125,12 @@ pub fn discover_extra_bin_paths_with_env(env: &BTreeMap<String, String>) -> Vec<
         items.push(home.join(".bun").join("bin"));
         items.push(home.join(".deno").join("bin"));
         items.push(home.join("go").join("bin"));
+        let nvm_versions_dir = home.join(".nvm").join("versions").join("node");
+        if let Ok(entries) = fs::read_dir(&nvm_versions_dir) {
+            for entry in entries.flatten() {
+                items.push(entry.path().join("bin"));
+            }
+        }
 
         if let Some(nvm_dir) = env
             .get("NVM_BIN")
