@@ -12,6 +12,7 @@ pub mod migration;
 pub mod query_profile;
 pub mod retrieval_audit;
 pub mod schema;
+pub mod tantivy_index;
 pub mod watcher;
 
 use std::path::PathBuf;

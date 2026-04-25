@@ -435,7 +435,7 @@ Status: Current
 ### Progress Notes
 
 - 已新增 hybrid planner：`knowledge.search` 默认走 `hybrid`，并可用 `retrievalMode=lexical` 关闭增强链路
-- lexical lane 已从纯 `LIKE` 候选升级为 SQLite FTS5 `bm25()` 主召回，`LIKE` 仅作为兼容兜底；后续仍按架构方案迁移到 `Tantivy + SQLite`
+- lexical lane 已升级为 `Tantivy + SQLite FTS5 BM25` 双倒排召回，`LIKE` 仅作为兼容兜底；query plan 通过 `lexicalEngine=tantivy+sqlite-fts5-bm25` 暴露当前主底座
 - block 索引已持久化本地 dense 向量缓存，检索时执行 `sparse expansion + semantic lane + weighted RRF`
 - rerank 已接入 `legal-aware + citation-aware + confidence-aware` 规则，结果返回 `retrievalLanes` 和完整 ranking breakdown
 - indexed `knowledge.search` 已写入 retrieval run / hit 审计表，并在响应中返回 `auditRunId`，用于回放 query plan、ranking 和 evidence pack
@@ -598,6 +598,7 @@ Status: Current
 - 已补 `canonical_reparse` migration decision；canonical schema 或 parser pipeline 版本变化时进入独立状态，并禁用旧 canonical cache。
 - index status 已补 `rebuildProgress`；迁移失败会写入 `knowledge_index_errors` 与 `last_migration_error`。
 - 删除 document source 会立即清理 canonical、blocks、anchors、FTS/BM25 与 retrieval audit 关联数据。
+- FTS-only 与 block/anchor rebuild 已同步重建 Tantivy block index，避免双索引不一致。
 
 ## Phase Dependencies
 
