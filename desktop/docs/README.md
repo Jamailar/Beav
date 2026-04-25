@@ -24,6 +24,7 @@
 - [migration-architecture.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/migration-architecture.md)
 - [ai-runtime-maintenance-overview.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/ai-runtime-maintenance-overview.md)
 - [agent-collaboration-upgrade-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/agent-collaboration-upgrade-plan.md)
+- [acp-team-workboard-collaboration-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/acp-team-workboard-collaboration-plan.md)
 - [skill-runtime-v2.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/skill-runtime-v2.md)
 
 ### Archive

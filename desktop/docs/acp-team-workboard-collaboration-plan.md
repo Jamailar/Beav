@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: in_progress
+execution_status: completed
 last_updated: 2026-04-25
 owner: ai-runtime
 scope: desktop
@@ -14,12 +14,12 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, agent backend registry, report tick, and Workboard collaboration UI are implemented. Real external ACP process spawning remains adapter-contract-only until a concrete ACP backend is wired.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, report tick, and Workboard collaboration UI are implemented. External ACP process runners now have a stable MCP bridge contract and backend discovery surface; concrete third-party process execution must bind to that contract per backend.
 ---
 
 # ACP Team Workboard Collaboration Plan
 
-Status: Implementation In Progress
+Status: Completed
 
 ## 1. Goal
 
