@@ -1697,7 +1697,12 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         )}
 
                                         <button
-                                            onClick={() => void window.ipcRenderer.knowledge.rebuildCatalog().then(() => refreshIndexStatus())}
+                                            onClick={() => {
+                                                if (!window.confirm('全量重建可能触发 OCR API 调用或 Apple Vision 识别，确认继续？')) {
+                                                    return;
+                                                }
+                                                void window.ipcRenderer.knowledge.rebuildCatalog({ includeOcr: true }).then(() => refreshIndexStatus());
+                                            }}
                                             className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-border/70 bg-surface-secondary/75 px-3.5 text-[12px] font-bold text-text-primary hover:bg-surface-tertiary/80 transition-all active:scale-95"
                                             title="全量重建知识索引，按当前 OCR 配置解析需要 OCR 的文件"
                                         >

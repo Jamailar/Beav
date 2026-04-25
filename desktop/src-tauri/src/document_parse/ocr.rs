@@ -121,10 +121,10 @@ fn run_configured_ocr(
 ) -> Result<Vec<SwiftOcrPage>, String> {
     match config.provider {
         OcrProvider::Disabled => Ok(Vec::new()),
-        OcrProvider::Local => run_vision_ocr(paths),
+        OcrProvider::Local => run_apple_vision_ocr(paths),
         OcrProvider::Api => run_api_ocr(paths, source_type, config).or_else(|error| {
             if config.local_fallback {
-                return run_vision_ocr(paths);
+                return run_apple_vision_ocr(paths);
             }
             Err(error)
         }),
@@ -136,12 +136,12 @@ fn run_configured_ocr(
             {
                 return run_api_ocr(paths, source_type, config).or_else(|error| {
                     if config.local_fallback {
-                        return run_vision_ocr(paths);
+                        return run_apple_vision_ocr(paths);
                     }
                     Err(error)
                 });
             }
-            run_vision_ocr(paths)
+            run_apple_vision_ocr(paths)
         }
     }
 }
@@ -293,9 +293,15 @@ fn mime_type_for_path(path: &Path) -> &'static str {
     }
 }
 
-fn run_vision_ocr(paths: &[PathBuf]) -> Result<Vec<SwiftOcrPage>, String> {
+fn run_apple_vision_ocr(paths: &[PathBuf]) -> Result<Vec<SwiftOcrPage>, String> {
     if paths.is_empty() {
         return Ok(Vec::new());
+    }
+    if !apple_vision_ocr_is_allowed() {
+        return Err(
+            "local OCR is disabled; configure an OCR API endpoint or run Apple Vision on macOS"
+                .to_string(),
+        );
     }
     let swift = command_path("swift").ok_or_else(|| "swift is not available".to_string())?;
     let script_path = write_temp_swift_script()?;
@@ -309,6 +315,10 @@ fn run_vision_ocr(paths: &[PathBuf]) -> Result<Vec<SwiftOcrPage>, String> {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
     serde_json::from_slice::<Vec<SwiftOcrPage>>(&output.stdout).map_err(|error| error.to_string())
+}
+
+fn apple_vision_ocr_is_allowed() -> bool {
+    cfg!(target_os = "macos")
 }
 
 fn map_ocr_pages_to_sections(
@@ -436,7 +446,10 @@ mod tests {
 
     #[test]
     fn parses_image_only_pdf_via_ocr_when_tools_are_available() {
-        if command_path("swift").is_none() || command_path("pdftoppm").is_none() {
+        if !apple_vision_ocr_is_allowed()
+            || command_path("swift").is_none()
+            || command_path("pdftoppm").is_none()
+        {
             return;
         }
 
