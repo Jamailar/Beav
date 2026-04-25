@@ -1928,6 +1928,28 @@ impl<'a> AppCliExecutor<'a> {
                         .or_else(|| payload_string(payload, "name")),
                 }),
             ),
+            "diagnose" => self.call_channel(
+                "cli-runtime:diagnose",
+                json!({
+                    "command": args
+                        .string(&["command", "executable", "name"])
+                        .or_else(|| payload_string(payload, "command"))
+                        .or_else(|| payload_string(payload, "executable"))
+                        .or_else(|| payload_string(payload, "name"))
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "cli_runtime diagnose requires --command".to_string())?,
+                    "environmentId": args
+                        .string(&["environment-id", "environmentId"])
+                        .or_else(|| payload_string(payload, "environmentId")),
+                    "cwd": args
+                        .string(&["cwd"])
+                        .or_else(|| payload_string(payload, "cwd")),
+                    "executionMode": args
+                        .string(&["execution-mode", "executionMode", "mode"])
+                        .or_else(|| payload_string(payload, "executionMode"))
+                        .or_else(|| payload_string(payload, "mode")),
+                }),
+            ),
             "environment" => {
                 let sub = tokens.get(1).map(String::as_str).unwrap_or("list");
                 let nested_args = parse_cli_args(&tokens[2..])?;
@@ -1978,6 +2000,10 @@ impl<'a> AppCliExecutor<'a> {
                         .string(&["tool-name", "toolName"])
                         .or_else(|| payload_string(payload, "toolName"))
                         .or_else(|| payload_string(payload, "name")),
+                    "executionMode": args
+                        .string(&["execution-mode", "executionMode", "mode"])
+                        .or_else(|| payload_string(payload, "executionMode"))
+                        .or_else(|| payload_string(payload, "mode")),
                     "sessionId": payload_string(payload, "sessionId"),
                     "taskId": payload_string(payload, "taskId"),
                     "runtimeId": payload_string(payload, "runtimeId"),
@@ -2009,6 +2035,10 @@ impl<'a> AppCliExecutor<'a> {
                     "sessionId": payload_string(payload, "sessionId"),
                     "taskId": payload_string(payload, "taskId"),
                     "runtimeId": payload_string(payload, "runtimeId"),
+                    "executionMode": args
+                        .string(&["execution-mode", "executionMode", "mode"])
+                        .or_else(|| payload_string(payload, "executionMode"))
+                        .or_else(|| payload_string(payload, "mode")),
                     "usePty": payload_field(payload, "usePty").cloned().unwrap_or_else(|| json!(false)),
                     "verificationRules": payload_field(payload, "verificationRules")
                         .cloned()

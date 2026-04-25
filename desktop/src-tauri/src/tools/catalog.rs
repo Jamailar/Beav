@@ -638,6 +638,38 @@ fn cli_runtime_inspect_input_schema() -> Value {
     )
 }
 
+fn cli_runtime_execution_mode_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "enum": ["managed", "host_compatible", "unrestricted"],
+        "description": description,
+    })
+}
+
+fn cli_runtime_diagnose_input_schema() -> Value {
+    object_schema(
+        &[
+            ("command", string_schema("CLI executable name to diagnose.")),
+            (
+                "environmentId",
+                string_schema("Optional target CLI environment id."),
+            ),
+            (
+                "cwd",
+                string_schema("Optional working directory for the diagnostic plan."),
+            ),
+            (
+                "executionMode",
+                cli_runtime_execution_mode_schema(
+                    "Execution safety mode. Defaults to host_compatible.",
+                ),
+            ),
+        ],
+        &["command"],
+        None,
+    )
+}
+
 fn cli_runtime_environment_create_input_schema() -> Value {
     object_schema(
         &[
@@ -684,6 +716,12 @@ fn cli_runtime_install_input_schema() -> Value {
                 string_schema("Expected executable name after installation."),
             ),
             (
+                "executionMode",
+                cli_runtime_execution_mode_schema(
+                    "Execution safety mode for the installer command. Defaults to host_compatible.",
+                ),
+            ),
+            (
                 "sessionId",
                 string_schema("Optional session id for lineage."),
             ),
@@ -722,6 +760,12 @@ fn cli_runtime_execute_input_schema() -> Value {
             (
                 "runtimeId",
                 string_schema("Optional runtime id for lineage."),
+            ),
+            (
+                "executionMode",
+                cli_runtime_execution_mode_schema(
+                    "Execution safety mode. Use unrestricted only after explicit user approval.",
+                ),
             ),
             ("usePty", bool_schema("Whether to request PTY execution.")),
             (
@@ -1671,6 +1715,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "cli_runtime",
         description: "Inspect one CLI executable and refresh its detection record.",
         input_schema: cli_runtime_inspect_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "cli_runtime.diagnose",
+        namespace: "cli_runtime",
+        description: "Diagnose how one CLI command will resolve and which sandbox profile will be used.",
+        input_schema: cli_runtime_diagnose_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,

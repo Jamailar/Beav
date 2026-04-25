@@ -284,7 +284,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'cli-runtime:list-tools' || channel === 'cli-runtime:list-environments') {
     return [];
   }
-  if (channel === 'cli-runtime:inspect' || channel === 'cli-runtime:poll-execution') {
+  if (channel === 'cli-runtime:inspect' || channel === 'cli-runtime:diagnose' || channel === 'cli-runtime:poll-execution') {
     return null;
   }
   if (
@@ -796,6 +796,8 @@ function createIpcRenderer() {
       discover: (payload?: { query?: string; limit?: number }) => invokeChannel('cli-runtime:discover', payload || {}),
       listTools: () => invokeChannel('cli-runtime:list-tools'),
       inspect: (payload: { toolId?: string; command?: string; executable?: string }) => invokeChannel('cli-runtime:inspect', payload),
+      diagnose: (payload: { command: string; environmentId?: string; cwd?: string; executionMode?: string }) =>
+        invokeChannel('cli-runtime:diagnose', payload),
       listEnvironments: () => invokeChannel('cli-runtime:list-environments'),
       createEnvironment: (payload: {
         scope: 'app-global' | 'workspace-local' | 'task-ephemeral';
@@ -807,12 +809,14 @@ function createIpcRenderer() {
         installMethod: string;
         spec: string;
         toolName?: string;
+        executionMode?: string;
       }) => invokeChannel('cli-runtime:install', payload),
       execute: (payload: {
         environmentId: string;
         toolId?: string;
         argv: string[];
         cwd: string;
+        executionMode?: string;
         usePty?: boolean;
         verificationRules?: unknown[];
       }) => invokeChannel('cli-runtime:execute', payload),

@@ -58,6 +58,15 @@ pub enum CliEnvironmentScope {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum CliExecutionMode {
+    Managed,
+    #[default]
+    HostCompatible,
+    Unrestricted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum CliOutputParser {
     #[default]
     Text,
@@ -312,6 +321,7 @@ pub struct CliExecuteRequest {
     pub runtime_id: Option<String>,
     pub environment_id: Option<String>,
     pub tool_id: Option<String>,
+    pub execution_mode: Option<CliExecutionMode>,
     pub argv: Vec<String>,
     pub cwd: Option<String>,
     pub use_pty: bool,
@@ -326,6 +336,7 @@ pub struct CliInstallRequest {
     pub task_id: Option<String>,
     pub runtime_id: Option<String>,
     pub environment_id: Option<String>,
+    pub execution_mode: Option<CliExecutionMode>,
     pub install_method: CliInstallMethod,
     pub spec: String,
     pub tool_name: Option<String>,
