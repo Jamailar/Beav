@@ -260,24 +260,26 @@ fn finalize_background_execution<RT: Runtime>(
 }
 
 fn spawn_background_reaper<RT: Runtime>(app: AppHandle<RT>, execution_id: String) {
-    thread::spawn(move || loop {
-        match refresh_cli_execution(&app, &execution_id) {
-            Ok(Some(_)) => break,
-            Ok(None) => match get_background_execution(&execution_id) {
-                Ok(Some(_)) => thread::sleep(Duration::from_millis(100)),
-                Ok(None) => break,
-                Err(error) => {
-                    eprintln!(
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match refresh_cli_execution(&app, &execution_id) {
+                Ok(Some(_)) => break,
+                Ok(None) => match get_background_execution(&execution_id) {
+                    Ok(Some(_)) => tokio::time::sleep(Duration::from_millis(100)).await,
+                    Ok(None) => break,
+                    Err(error) => {
+                        eprintln!(
                         "[cli runtime] failed to inspect background execution {execution_id}: {error}"
                     );
-                    break;
-                }
-            },
-            Err(error) => {
-                eprintln!(
+                        break;
+                    }
+                },
+                Err(error) => {
+                    eprintln!(
                     "[cli runtime] failed to refresh background execution {execution_id}: {error}"
                 );
-                break;
+                    break;
+                }
             }
         }
     });
