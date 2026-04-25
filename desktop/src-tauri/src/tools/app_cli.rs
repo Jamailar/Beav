@@ -1956,27 +1956,31 @@ impl<'a> AppCliExecutor<'a> {
                 json!({
                     "toolId": args
                         .string(&["tool-id", "toolId"])
-                        .or_else(|| payload_string(payload, "toolId")),
+                        .or_else(|| payload_string(payload, "toolId"))
+                        .or_else(|| payload_string(payload, "id")),
                     "command": args
-                        .string(&["command", "executable", "name"])
+                        .string(&["command", "executable", "name", "id"])
                         .or_else(|| payload_string(payload, "command"))
                         .or_else(|| payload_string(payload, "executable"))
-                        .or_else(|| payload_string(payload, "name")),
+                        .or_else(|| payload_string(payload, "name"))
+                        .or_else(|| payload_string(payload, "id")),
                     "executable": args
-                        .string(&["executable", "command", "name"])
+                        .string(&["executable", "command", "name", "id"])
                         .or_else(|| payload_string(payload, "executable"))
                         .or_else(|| payload_string(payload, "command"))
-                        .or_else(|| payload_string(payload, "name")),
+                        .or_else(|| payload_string(payload, "name"))
+                        .or_else(|| payload_string(payload, "id")),
                 }),
             ),
             "diagnose" => self.call_channel(
                 "cli-runtime:diagnose",
                 json!({
                     "command": args
-                        .string(&["command", "executable", "name"])
+                        .string(&["command", "executable", "name", "id"])
                         .or_else(|| payload_string(payload, "command"))
                         .or_else(|| payload_string(payload, "executable"))
                         .or_else(|| payload_string(payload, "name"))
+                        .or_else(|| payload_string(payload, "id"))
                         .or_else(|| args.positionals.first().cloned())
                         .ok_or_else(|| "cli_runtime diagnose requires --command".to_string())?,
                     "environmentId": args
