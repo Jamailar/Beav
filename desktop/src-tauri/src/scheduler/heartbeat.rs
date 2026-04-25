@@ -2,8 +2,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
 use crate::persistence::with_store_mut;
@@ -18,7 +18,7 @@ impl ExecutionHeartbeat {
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            join.abort();
         }
     }
 }
@@ -31,9 +31,9 @@ pub fn start_execution_heartbeat(
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = stop.clone();
     let app_handle = app.clone();
-    let join = thread::spawn(move || {
+    let join = tauri::async_runtime::spawn(async move {
         while !thread_stop.load(Ordering::Relaxed) {
-            thread::sleep(interval);
+            tokio::time::sleep(interval).await;
             if thread_stop.load(Ordering::Relaxed) {
                 break;
             }
