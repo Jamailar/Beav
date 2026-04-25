@@ -1,3 +1,5 @@
+use base64::Engine;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -53,20 +55,242 @@ struct SwiftOcrPage {
     confidence: Option<f64>,
 }
 
-pub(crate) fn ocr_image_to_sections(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
-    let pages = run_vision_ocr(&[path.to_path_buf()])?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OcrProvider {
+    Auto,
+    Api,
+    Local,
+    Disabled,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OcrProviderConfig {
+    pub provider: OcrProvider,
+    pub endpoint: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub timeout_seconds: u64,
+    pub local_fallback: bool,
+}
+
+impl Default for OcrProviderConfig {
+    fn default() -> Self {
+        Self {
+            provider: OcrProvider::Auto,
+            endpoint: None,
+            api_key: None,
+            model: None,
+            timeout_seconds: 60,
+            local_fallback: true,
+        }
+    }
+}
+
+pub(crate) fn ocr_image_to_sections(
+    path: &Path,
+    config: &OcrProviderConfig,
+) -> Result<Option<Vec<ParsedSection>>, String> {
+    let pages = run_configured_ocr(&[path.to_path_buf()], "image", config)?;
     Ok(map_ocr_pages_to_sections(&pages, "ocr-image", "image-ocr"))
 }
 
-pub(crate) fn ocr_pdf_to_sections(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+pub(crate) fn ocr_pdf_to_sections(
+    path: &Path,
+    config: &OcrProviderConfig,
+) -> Result<Option<Vec<ParsedSection>>, String> {
     let rendered = render_pdf_pages(path)?;
     if rendered.is_empty() {
         return Ok(None);
     }
-    let pages = run_vision_ocr(&rendered)?;
+    let pages = match run_configured_ocr(&rendered, "pdf", config) {
+        Ok(pages) => pages,
+        Err(error) => {
+            let _ = cleanup_temp_artifacts(&rendered);
+            return Err(error);
+        }
+    };
     let sections = map_ocr_pages_to_sections(&pages, "ocr-page", "pdf-ocr");
     let _ = cleanup_temp_artifacts(&rendered);
     Ok(sections)
+}
+
+fn run_configured_ocr(
+    paths: &[PathBuf],
+    source_type: &str,
+    config: &OcrProviderConfig,
+) -> Result<Vec<SwiftOcrPage>, String> {
+    match config.provider {
+        OcrProvider::Disabled => Ok(Vec::new()),
+        OcrProvider::Local => run_vision_ocr(paths),
+        OcrProvider::Api => run_api_ocr(paths, source_type, config).or_else(|error| {
+            if config.local_fallback {
+                return run_vision_ocr(paths);
+            }
+            Err(error)
+        }),
+        OcrProvider::Auto => {
+            if config
+                .endpoint
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                return run_api_ocr(paths, source_type, config).or_else(|error| {
+                    if config.local_fallback {
+                        return run_vision_ocr(paths);
+                    }
+                    Err(error)
+                });
+            }
+            run_vision_ocr(paths)
+        }
+    }
+}
+
+fn run_api_ocr(
+    paths: &[PathBuf],
+    source_type: &str,
+    config: &OcrProviderConfig,
+) -> Result<Vec<SwiftOcrPage>, String> {
+    let endpoint = config
+        .endpoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "ocr api endpoint is not configured".to_string())?;
+    let images = paths
+        .iter()
+        .map(|path| {
+            let bytes = fs::read(path).map_err(|error| error.to_string())?;
+            Ok(json!({
+                "fileName": path.file_name().and_then(|value| value.to_str()).unwrap_or("page"),
+                "mimeType": mime_type_for_path(path),
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(bytes),
+            }))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let body = json!({
+        "model": config.model.clone(),
+        "sourceType": source_type,
+        "images": images,
+    });
+    let response = crate::run_curl_json_with_timeout(
+        "POST",
+        endpoint,
+        config.api_key.as_deref(),
+        &[],
+        Some(body),
+        Some(config.timeout_seconds),
+    )?;
+    parse_api_ocr_response(&response)
+}
+
+fn parse_api_ocr_response(value: &Value) -> Result<Vec<SwiftOcrPage>, String> {
+    if let Some(pages) = parse_api_ocr_pages(value) {
+        return Ok(pages);
+    }
+    if let Some(text) = extract_response_text(value).filter(|text| !text.trim().is_empty()) {
+        return Ok(vec![SwiftOcrPage {
+            text,
+            confidence: extract_confidence(value),
+        }]);
+    }
+    Err("ocr api response does not contain text".to_string())
+}
+
+fn parse_api_ocr_pages(value: &Value) -> Option<Vec<SwiftOcrPage>> {
+    ["pages", "results", "data", "items"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_array))
+        .find_map(|items| {
+            let pages = items
+                .iter()
+                .filter_map(|item| {
+                    extract_response_text(item)
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| SwiftOcrPage {
+                            text,
+                            confidence: extract_confidence(item),
+                        })
+                })
+                .collect::<Vec<_>>();
+            if pages.is_empty() {
+                None
+            } else {
+                Some(pages)
+            }
+        })
+}
+
+fn extract_response_text(value: &Value) -> Option<String> {
+    ["text", "output_text", "markdown", "content", "result"]
+        .into_iter()
+        .find_map(|key| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(ToString::to_string)
+        })
+        .or_else(|| {
+            value
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|choices| {
+                    choices.first().and_then(|choice| {
+                        choice
+                            .get("message")
+                            .and_then(|message| message.get("content"))
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                            .map(ToString::to_string)
+                    })
+                })
+        })
+        .or_else(|| {
+            value
+                .get("output")
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items.iter().find_map(|item| {
+                        item.get("content")
+                            .and_then(Value::as_array)
+                            .and_then(|content| {
+                                content.iter().find_map(|part| {
+                                    ["text", "output_text"].into_iter().find_map(|key| {
+                                        part.get(key)
+                                            .and_then(Value::as_str)
+                                            .map(str::trim)
+                                            .filter(|text| !text.is_empty())
+                                            .map(ToString::to_string)
+                                    })
+                                })
+                            })
+                    })
+                })
+        })
+}
+
+fn extract_confidence(value: &Value) -> Option<f64> {
+    ["confidence", "score", "ocrConfidence"]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(Value::as_f64))
+}
+
+fn mime_type_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("tif") | Some("tiff") => "image/tiff",
+        Some("heic") => "image/heic",
+        Some("bmp") => "image/bmp",
+        _ => "image/png",
+    }
 }
 
 fn run_vision_ocr(paths: &[PathBuf]) -> Result<Vec<SwiftOcrPage>, String> {
@@ -224,7 +448,9 @@ mod tests {
         write_test_png(&png_path, "Scanned Clause 123");
         write_image_pdf(&png_path, &pdf_path);
 
-        let sections = ocr_pdf_to_sections(&pdf_path).unwrap().unwrap();
+        let sections = ocr_pdf_to_sections(&pdf_path, &OcrProviderConfig::default())
+            .unwrap()
+            .unwrap();
         let text = sections
             .iter()
             .map(|section| section.text.clone())
@@ -235,6 +461,34 @@ mod tests {
         assert_eq!(sections[0].page, Some(1));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parses_api_ocr_page_response() {
+        let response = json!({
+            "pages": [
+                { "text": "First page", "confidence": 0.91 },
+                { "markdown": "Second page", "score": 0.82 }
+            ]
+        });
+        let pages = parse_api_ocr_response(&response).unwrap();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].text, "First page");
+        assert_eq!(pages[0].confidence, Some(0.91));
+        assert_eq!(pages[1].text, "Second page");
+        assert_eq!(pages[1].confidence, Some(0.82));
+    }
+
+    #[test]
+    fn parses_api_ocr_single_text_response() {
+        let response = json!({
+            "output_text": "Single document text",
+            "confidence": 0.77
+        });
+        let pages = parse_api_ocr_response(&response).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].text, "Single document text");
+        assert_eq!(pages[0].confidence, Some(0.77));
     }
 
     fn write_test_png(path: &Path, text: &str) {

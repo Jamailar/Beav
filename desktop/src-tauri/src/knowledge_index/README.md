@@ -11,7 +11,7 @@
 - `document_blocks.rs`: block 级索引构建与查询
 - `indexer.rs`: 索引构建
 - `document_parse/legal_metadata.rs`: 法律元数据抽取与日期/法域识别
-- `document_parse/ocr.rs`: 扫描 PDF / 图片 OCR 解析
+- `document_parse/ocr.rs`: 扫描 PDF / 图片 OCR 解析，支持 API / 本地 / 禁用 provider
 - `hybrid.rs`: sparse expansion、dense lane、RRF 融合与离线评测
 - `evaluation.rs` (test-only): release gate fixture、grounding audit、发布阈值校验
 - `query_profile.rs`: 法律查询画像、检索粒度和默认 retrieval mode 推荐
@@ -30,6 +30,8 @@
 - 已失效/废止文档需要在结果里显式标记，不能只做隐藏降权
 - Stage 5 起 OCR block 会显式带 `contentOrigin=ocr` 和 `ocrConfidence`
 - 扫描 PDF 先走原生文本抽取；失败或为空时才回退到 OCR，避免把 native PDF 和 OCR PDF 混为一类
+- OCR provider 不能硬编码：默认 `auto`，配置 `ocr_endpoint`/`ocr_api_endpoint` 时优先远程 API，失败后按 `ocr_local_fallback` 回退本地 Vision；也可显式设为 `local` 或 `disabled`
+- 远程 OCR API 接口必须保持可替换：索引器只发送页图 base64、sourceType、model，不依赖具体供应商响应，只读取 `pages/results/data/items` 或顶层文本字段
 - Stage 6 起 `knowledge.search` 默认走 hybrid，可通过 `retrievalMode=lexical` 关闭增强链路
 - hybrid 排序输出需要显式带 `retrievalLanes` 和 ranking breakdown，不能把 fusion / rerank 变成黑盒
 - Stage 7 起 release gate 依赖固定 fixture 测试；任一阈值不达标都应直接阻塞发布
