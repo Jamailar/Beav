@@ -1,8 +1,10 @@
 mod legal_metadata;
 mod ocr;
 
+use base64::Engine;
 use calamine::{open_workbook_auto, Data, Reader};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -11,11 +13,20 @@ pub(crate) use legal_metadata::LegalMetadata;
 pub(crate) use ocr::{OcrProvider, OcrProviderConfig};
 
 pub(crate) const PARSER_NAME: &str = "redbox-canonical";
-pub(crate) const PARSER_VERSION: &str = "stage5-v1";
+pub(crate) const PARSER_VERSION: &str = "stage8-v2";
 const MAX_CANONICAL_BLOCK_CHARS: usize = 1600;
 const MAX_CANONICAL_BLOCK_LINES: usize = 24;
 const MAX_ZIP_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_ZIP_ENTRIES: usize = 32;
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ParserProviderConfig {
+    pub docling_endpoint: Option<String>,
+    pub tika_endpoint: Option<String>,
+    pub unstructured_endpoint: Option<String>,
+    pub api_key: Option<String>,
+    pub timeout_seconds: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +83,7 @@ pub(crate) fn parse_path(
     root_path: &Path,
     path: &Path,
     ocr_config: &OcrProviderConfig,
+    parser_config: &ParserProviderConfig,
 ) -> Result<Option<CanonicalDocument>, String> {
     let extension = path
         .extension()
@@ -89,32 +101,36 @@ pub(crate) fn parse_path(
         .and_then(|value| value.to_str())
         .map(|value| value.to_string());
 
-    let parsed = match extension.as_str() {
-        "txt" | "md" | "markdown" | "json" | "yaml" | "yml" | "xml" => {
-            read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
+    let parsed = if let Some(external) = parse_external_pipeline(path, &extension, parser_config)? {
+        Some(external)
+    } else {
+        match extension.as_str() {
+            "txt" | "md" | "markdown" | "json" | "yaml" | "yml" | "xml" => {
+                read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
+            }
+            "html" | "htm" => {
+                read_utf8_sections(path, "html", vec!["body".to_string()])?.map(|value| {
+                    value
+                        .into_iter()
+                        .map(|section| ParsedSection {
+                            text: strip_xml_tags(&section.text),
+                            ..section
+                        })
+                        .collect()
+                })
+            }
+            "csv" | "tsv" => parse_delimited_file(path)?,
+            "pdf" => parse_pdf(path, ocr_config)?,
+            "docx" => parse_docx(path)?,
+            "pptx" => parse_pptx(path)?,
+            "xlsx" => parse_xlsx(path)?,
+            "eml" => parse_eml(path)?,
+            "zip" => parse_zip(path)?,
+            "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" => {
+                parse_image_ocr(path, ocr_config)?
+            }
+            _ => read_utf8_sections(path, "plain-text-fallback", vec!["body".to_string()])?,
         }
-        "html" | "htm" => {
-            read_utf8_sections(path, "html", vec!["body".to_string()])?.map(|value| {
-                value
-                    .into_iter()
-                    .map(|section| ParsedSection {
-                        text: strip_xml_tags(&section.text),
-                        ..section
-                    })
-                    .collect()
-            })
-        }
-        "csv" | "tsv" => parse_delimited_file(path)?,
-        "pdf" => parse_pdf(path, ocr_config)?,
-        "docx" => parse_docx(path)?,
-        "pptx" => parse_pptx(path)?,
-        "xlsx" => parse_xlsx(path)?,
-        "eml" => parse_eml(path)?,
-        "zip" => parse_zip(path)?,
-        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" => {
-            parse_image_ocr(path, ocr_config)?
-        }
-        _ => read_utf8_sections(path, "plain-text-fallback", vec!["body".to_string()])?,
     };
 
     let Some(parsed) = parsed else {
@@ -183,6 +199,202 @@ pub(crate) fn parse_path(
         blocks,
         attachments,
     }))
+}
+
+fn parse_external_pipeline(
+    path: &Path,
+    source_type: &str,
+    config: &ParserProviderConfig,
+) -> Result<Option<Vec<ParsedSection>>, String> {
+    for (provider, endpoint, fallback_used) in [
+        ("docling", config.docling_endpoint.as_deref(), false),
+        ("tika", config.tika_endpoint.as_deref(), true),
+        (
+            "unstructured",
+            config.unstructured_endpoint.as_deref(),
+            true,
+        ),
+    ] {
+        let Some(endpoint) = endpoint.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        match run_external_parser(path, source_type, provider, endpoint, config, fallback_used) {
+            Ok(Some(sections)) if !sections.is_empty() => return Ok(Some(sections)),
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("[RedBox document parser] {provider} failed: {error}");
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn run_external_parser(
+    path: &Path,
+    source_type: &str,
+    provider: &str,
+    endpoint: &str,
+    config: &ParserProviderConfig,
+    fallback_used: bool,
+) -> Result<Option<Vec<ParsedSection>>, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    let body = json!({
+        "provider": provider,
+        "fileName": path.file_name().and_then(|value| value.to_str()).unwrap_or("document"),
+        "sourceType": source_type,
+        "mimeType": mime_type_for_path(path),
+        "dataBase64": base64::engine::general_purpose::STANDARD.encode(bytes),
+    });
+    let response = crate::run_curl_json_with_timeout(
+        "POST",
+        endpoint,
+        config.api_key.as_deref(),
+        &[],
+        Some(body),
+        Some(config.timeout_seconds.clamp(10, 300)),
+    )?;
+    parse_external_parser_response(provider, fallback_used, &response)
+}
+
+fn parse_external_parser_response(
+    provider: &str,
+    fallback_used: bool,
+    value: &Value,
+) -> Result<Option<Vec<ParsedSection>>, String> {
+    if let Some(blocks) = value.get("blocks").and_then(Value::as_array) {
+        let sections = blocks
+            .iter()
+            .filter_map(|block| {
+                extract_response_text(block).map(|text| ParsedSection {
+                    strategy: provider.to_string(),
+                    block_type: block
+                        .get("blockType")
+                        .or_else(|| block.get("type"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("document-block")
+                        .to_string(),
+                    section_path: block
+                        .get("sectionPath")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|items| !items.is_empty())
+                        .unwrap_or_else(|| vec![provider.to_string()]),
+                    page: block.get("page").and_then(Value::as_i64),
+                    language: block
+                        .get("language")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                        .or_else(|| detect_language(&text)),
+                    text,
+                    content_origin: block
+                        .get("contentOrigin")
+                        .and_then(Value::as_str)
+                        .unwrap_or("native")
+                        .to_string(),
+                    ocr_confidence: block
+                        .get("ocrConfidence")
+                        .or_else(|| block.get("confidence"))
+                        .and_then(Value::as_f64),
+                    fallback_used,
+                    attachment_path: block
+                        .get("attachmentPath")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !sections.is_empty() {
+            return Ok(Some(sections));
+        }
+    }
+    if let Some(pages) = value.get("pages").and_then(Value::as_array) {
+        let sections = pages
+            .iter()
+            .enumerate()
+            .filter_map(|(index, page)| {
+                extract_response_text(page).map(|text| ParsedSection {
+                    strategy: provider.to_string(),
+                    block_type: "page".to_string(),
+                    section_path: vec!["page".to_string(), (index + 1).to_string()],
+                    page: page
+                        .get("page")
+                        .and_then(Value::as_i64)
+                        .or(Some(index as i64 + 1)),
+                    language: page
+                        .get("language")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                        .or_else(|| detect_language(&text)),
+                    text,
+                    content_origin: page
+                        .get("contentOrigin")
+                        .and_then(Value::as_str)
+                        .unwrap_or("native")
+                        .to_string(),
+                    ocr_confidence: page
+                        .get("ocrConfidence")
+                        .or_else(|| page.get("confidence"))
+                        .and_then(Value::as_f64),
+                    fallback_used,
+                    attachment_path: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        if !sections.is_empty() {
+            return Ok(Some(sections));
+        }
+    }
+    if let Some(text) = extract_response_text(value).filter(|text| !text.trim().is_empty()) {
+        return Ok(Some(vec![ParsedSection {
+            strategy: provider.to_string(),
+            block_type: "document".to_string(),
+            section_path: vec![provider.to_string()],
+            page: Some(1),
+            language: detect_language(&text),
+            text,
+            content_origin: "native".to_string(),
+            ocr_confidence: None,
+            fallback_used,
+            attachment_path: None,
+        }]));
+    }
+    Ok(None)
+}
+
+fn extract_response_text(value: &Value) -> Option<String> {
+    ["text", "content", "markdown", "body"]
+        .into_iter()
+        .find_map(|key| value.get(key).and_then(Value::as_str))
+        .map(ToString::to_string)
+}
+
+fn mime_type_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("pdf") => "application/pdf",
+        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        Some("html") | Some("htm") => "text/html",
+        Some("csv") => "text/csv",
+        Some("txt") | Some("md") | Some("markdown") => "text/plain",
+        Some("eml") => "message/rfc822",
+        Some("zip") => "application/zip",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("tif") | Some("tiff") => "image/tiff",
+        _ => "application/octet-stream",
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -980,9 +1192,15 @@ mod tests {
         )
         .unwrap();
 
-        let parsed = parse_path("source-1", &root, &path, &OcrProviderConfig::default())
-            .unwrap()
-            .unwrap();
+        let parsed = parse_path(
+            "source-1",
+            &root,
+            &path,
+            &OcrProviderConfig::default(),
+            &ParserProviderConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(parsed.language.as_deref(), Some("multilingual"));
         assert_eq!(parsed.legal_metadata.document_type.as_deref(), Some("law"));
         assert_eq!(
@@ -994,5 +1212,27 @@ mod tests {
             Some("2021-01-01")
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn external_parser_response_maps_blocks_to_sections() {
+        let response = json!({
+            "blocks": [{
+                "text": "第一条 合同解除。",
+                "blockType": "article",
+                "sectionPath": ["民法典", "合同编"],
+                "page": 3,
+                "language": "zh"
+            }]
+        });
+        let sections = parse_external_parser_response("docling", false, &response)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(sections[0].strategy, "docling");
+        assert_eq!(sections[0].block_type, "article");
+        assert_eq!(sections[0].section_path, vec!["民法典", "合同编"]);
+        assert_eq!(sections[0].page, Some(3));
+        assert!(!sections[0].fallback_used);
     }
 }

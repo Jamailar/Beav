@@ -7,7 +7,9 @@ use tauri::State;
 use time::OffsetDateTime;
 
 use crate::{
-    document_parse::{CanonicalDocument, LegalMetadata, OcrProvider, OcrProviderConfig},
+    document_parse::{
+        CanonicalDocument, LegalMetadata, OcrProvider, OcrProviderConfig, ParserProviderConfig,
+    },
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
         catalog_db_path,
@@ -795,8 +797,14 @@ fn build_blocks_for_file(
         cached
     } else {
         let ocr_config = resolve_ocr_provider_config(state)?;
-        let Some(parsed) =
-            crate::document_parse::parse_path(source_id, root_path, file_path, &ocr_config)?
+        let parser_config = resolve_parser_provider_config(state)?;
+        let Some(parsed) = crate::document_parse::parse_path(
+            source_id,
+            root_path,
+            file_path,
+            &ocr_config,
+            &parser_config,
+        )?
         else {
             return Ok(());
         };
@@ -837,6 +845,32 @@ fn build_blocks_for_file(
         updated_at,
     )?);
     Ok(())
+}
+
+fn resolve_parser_provider_config(
+    state: &State<'_, AppState>,
+) -> Result<ParserProviderConfig, String> {
+    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let timeout_seconds = payload_field(&settings, "parser_timeout_seconds")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(90)
+        .clamp(10, 300);
+    Ok(ParserProviderConfig {
+        docling_endpoint: payload_string(&settings, "docling_endpoint")
+            .or_else(|| payload_string(&settings, "parser_docling_endpoint")),
+        tika_endpoint: payload_string(&settings, "tika_endpoint")
+            .or_else(|| payload_string(&settings, "parser_tika_endpoint")),
+        unstructured_endpoint: payload_string(&settings, "unstructured_endpoint")
+            .or_else(|| payload_string(&settings, "parser_unstructured_endpoint")),
+        api_key: payload_string(&settings, "parser_api_key"),
+        timeout_seconds,
+    })
 }
 
 fn resolve_ocr_provider_config(state: &State<'_, AppState>) -> Result<OcrProviderConfig, String> {

@@ -217,6 +217,7 @@ Status: Current
 
 - 已引入统一 `CanonicalDocument` 结构和 parser info
 - 已支持 `pptx / xlsx / csv / eml / zip` 的 canonical 解析
+- 已接入可插拔外部 parser pipeline：按 `Docling -> Tika -> Unstructured -> 内置 parser` 顺序尝试，外部 parser 可通过 endpoint 配置为 sidecar / API，失败会显式 fallback
 - block 索引已建立在 canonical 层之上，不再直接依赖原始文件扫描
 - 已增加 canonical cache，文件内容哈希未变化时优先复用解析结果
 
