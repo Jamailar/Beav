@@ -1776,6 +1776,62 @@ impl<'a> AppCliExecutor<'a> {
                     _ => Err(format!("unsupported runtime background action: {sub}")),
                 }
             }
+            "team" => {
+                let sub = tokens.get(1).map(String::as_str).unwrap_or("list-sessions");
+                let nested_args = parse_cli_args(&tokens[2..])?;
+                let merged = || merge_payload(&nested_args.options, payload);
+                let session_payload = || {
+                    json!({
+                        "sessionId": nested_args
+                            .string(&["session-id", "sessionId"])
+                            .or_else(|| payload_string(payload, "sessionId"))
+                            .unwrap_or_default()
+                    })
+                };
+                match sub {
+                    "list-sessions" | "sessions" => {
+                        self.call_channel("team-runtime:list-sessions", json!({}))
+                    }
+                    "create-session" => self.call_channel("team-runtime:create-session", merged()),
+                    "get-session" => self.call_channel("team-runtime:get-session", session_payload()),
+                    "pause-session" => {
+                        self.call_channel("team-runtime:pause-session", session_payload())
+                    }
+                    "resume-session" => {
+                        self.call_channel("team-runtime:resume-session", session_payload())
+                    }
+                    "archive-session" => {
+                        self.call_channel("team-runtime:archive-session", session_payload())
+                    }
+                    "list-members" | "members" => {
+                        self.call_channel("team-runtime:list-members", session_payload())
+                    }
+                    "add-member" | "spawn-member" => {
+                        self.call_channel("team-runtime:add-member", merged())
+                    }
+                    "list-tasks" | "tasks" => {
+                        self.call_channel("team-runtime:list-tasks", session_payload())
+                    }
+                    "create-task" => self.call_channel("team-runtime:create-task", merged()),
+                    "update-task" => self.call_channel("team-runtime:update-task", merged()),
+                    "send-message" => self.call_channel("team-runtime:send-message", merged()),
+                    "read-mailbox" => self.call_channel("team-runtime:read-mailbox", merged()),
+                    "request-report" => {
+                        self.call_channel("team-runtime:request-report", merged())
+                    }
+                    "submit-report" => self.call_channel("team-runtime:submit-report", merged()),
+                    "list-reports" => self.call_channel("team-runtime:list-reports", merged()),
+                    "tick-reports" => {
+                        self.call_channel("team-runtime:tick-reports", session_payload())
+                    }
+                    "list-agent-backends" | "backends" => {
+                        self.call_channel("team-runtime:list-agent-backends", json!({}))
+                    }
+                    "list-tools" => self.call_channel("team-runtime:list-tools", json!({})),
+                    "execute-tool" => self.call_channel("team-runtime:execute-tool", merged()),
+                    _ => Err(format!("unsupported runtime team action: {sub}")),
+                }
+            }
             "session-enter-diagnostics" => self.call_channel(
                 "chat:create-diagnostics-session",
                 json!({
@@ -4702,7 +4758,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "work list|ready|get|update",
             "memory list|search|add|delete",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
-            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
+            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
             "skills list|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
@@ -4829,6 +4885,17 @@ fn help_response(namespace: Option<&str>) -> Value {
             "runtime background list",
             "runtime background get --task-id <taskId>",
             "runtime background cancel --task-id <taskId>",
+            "runtime team list-sessions",
+            "runtime team create-session [payload.objective/title/runtimeMode]",
+            "runtime team get-session --session-id <collabSessionId>",
+            "runtime team add-member [payload.sessionId/displayName/roleId/sourceKind]",
+            "runtime team create-task [payload.sessionId/title/objective/memberId]",
+            "runtime team update-task [payload.taskId/status/memberId]",
+            "runtime team send-message [payload.sessionId/toMemberId/body]",
+            "runtime team request-report [payload.sessionId/toMemberId/taskId]",
+            "runtime team submit-report [payload.sessionId/memberId/taskId/summary/status]",
+            "runtime team tick-reports --session-id <collabSessionId>",
+            "runtime team list-agent-backends",
             "runtime session-enter-diagnostics [--title <title>]",
             "runtime session-bridge status",
             "runtime session-bridge list-sessions",
