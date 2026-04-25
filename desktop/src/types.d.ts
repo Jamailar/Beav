@@ -226,6 +226,7 @@ export interface CollabMemberRecord {
   lastReportAt?: number | null;
   lastActivityAt?: number | null;
   lastError?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface CollabTaskRecord {
@@ -880,6 +881,7 @@ declare global {
         listAgentBackends: () => Promise<Array<Record<string, unknown>>>;
         listTools: () => Promise<Array<Record<string, unknown>>>;
         executeTool: (payload: { action: string; payload?: Record<string, unknown> }) => Promise<unknown>;
+        runExternalMember: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
       };
       collab: Window['ipcRenderer']['teamRuntime'];
       toolHooks: {
