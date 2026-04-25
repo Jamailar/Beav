@@ -723,7 +723,7 @@ function GeneralSettingsSectionInner({
                     <div>
                         <h3 className="text-sm font-medium text-text-primary">文件检索 OCR</h3>
                         <p className="text-xs text-text-tertiary mt-1">
-                            用于扫描 PDF 和图片入库。默认 auto：配置远程接口时优先网络 OCR，失败后可回退本地 OCR。
+                            用于扫描 PDF 和图片入库。默认 auto：配置远程接口时优先网络 OCR，仅允许回退到 macOS Apple Vision。
                         </p>
                     </div>
                     <label className="flex items-center gap-2 text-xs text-text-secondary">
@@ -733,7 +733,7 @@ function GeneralSettingsSectionInner({
                             onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_local_fallback: e.target.checked }))}
                             className="rounded border-border"
                         />
-                        远程失败回退本地
+                        远程失败回退 Apple Vision
                     </label>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
@@ -744,9 +744,9 @@ function GeneralSettingsSectionInner({
                             onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_provider: e.target.value }))}
                             className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
                         >
-                            <option value="auto">auto：远程优先，本地兜底</option>
-                            <option value="api">api：只用远程，按 fallback 设置兜底</option>
-                            <option value="local">local：只用本地 OCR</option>
+                            <option value="auto">auto：远程优先，Apple Vision 兜底</option>
+                            <option value="api">api：远程 OCR，按 fallback 设置兜底</option>
+                            <option value="local">local：仅 Apple Vision</option>
                             <option value="disabled">disabled：禁用 OCR</option>
                         </select>
                     </div>
