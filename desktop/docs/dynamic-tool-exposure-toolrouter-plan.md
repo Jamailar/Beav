@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: in_progress
+execution_status: completed
 last_updated: 2026-04-25
 owner: codex
 scope:
@@ -61,12 +61,18 @@ success_metrics:
 - `image-generation` runtime 已补齐 `image.generate` / `video.generate` action 覆盖。
 - 每次生成 provider tools 时会在 app 日志输出 `[tools][plan]` 快照，包含 fingerprint、visible tools、direct actions、deferred namespace 和 deferred count。
 
-尚未完成：
+2026-04-25 第二轮已补齐底层闭环：
 
-- `catalog.rs` 按 family 文件拆分。
-- 独立 `tools/router.rs` 类型化封装。
-- `runtime/turn_context.rs` typed turn context。
-- UI 消费 ToolRegistryPlan 快照。
+- 新增 `desktop/src-tauri/src/tools/action_search.rs`，从 `app_cli.rs` 抽出 action discovery，搜索数据包含 action、namespace、description 和 input schema 字段摘要。
+- 新增 `desktop/src-tauri/src/tools/router.rs`，`InteractiveToolExecutor::prepare_tool_call` 已切到 turn-scoped `ToolRouter`，统一处理 compat normalization、可见工具校验、direct/deferred action 校验和结构化路由错误。
+- 新增 `desktop/src-tauri/src/runtime/turn_context.rs`，提供 typed `RedboxTurnContext`，集中保存 runtime mode、session metadata、active skills、allowed tools、bound context、task intent 和 model capabilities。
+- Tool result envelope 会写入 `meta.toolPlanFingerprint`，可直接回溯允许该工具调用的 plan。
+- `interactive_runtime_tools_for_mode` 会持久化 `tool_plan` checkpoint，不再只是日志输出。
+- 新增 `desktop/src-tauri/src/tools/families/*`，把 action family taxonomy 和默认曝光策略从 `plan.rs` 拆出。
+- `directActionFamilies` / `allowedActionFamilies` / `maxDirectActions` session metadata 已接入 ToolRegistryPlan，用于结构化控制本轮 action 曝光。
+- prompt 工具摘要会明确提示 deferred actions 通过 `Redbox(resource=tools, operation=search)` 发现。
+
+本计划约定“不做 UI 改造”，因此 UI 消费 ToolRegistryPlan 快照不属于本轮底层完成范围。当前底层已经输出 checkpoint / log / schema，可供后续 UI 直接读取。
 
 ## 2. Current Problem
 
