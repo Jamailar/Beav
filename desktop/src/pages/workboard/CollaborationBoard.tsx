@@ -211,12 +211,16 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const tasks = snapshot?.tasks || [];
   const reports = snapshot?.reports || [];
   const acpBackends = useMemo(() => {
-    const external = agentBackends.filter((backend) => stringField(backend, 'sourceKind') === 'external_acp');
-    return [
-      { id: 'external-acp-fake', label: 'Fake ACP Runner', backend: 'fake', status: 'available' },
-      ...external,
-    ];
+    return agentBackends.filter((backend) => (
+      stringField(backend, 'sourceKind') === 'external_acp'
+      && stringField(backend, 'status') === 'available'
+    ));
   }, [agentBackends]);
+
+  useEffect(() => {
+    if (acpBackends.some((backend) => stringField(backend, 'backend') === selectedBackend)) return;
+    setSelectedBackend(stringField(acpBackends[0], 'backend'));
+  }, [acpBackends, selectedBackend]);
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) || tasks[0] || null,
     [selectedTaskId, tasks],
@@ -275,6 +279,10 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const addExternalMember = useCallback(async () => {
     if (!snapshot?.session?.id) return;
     const backend = acpBackends.find((item) => stringField(item, 'backend') === selectedBackend) || acpBackends[0];
+    if (!backend) {
+      setError('没有发现可用的本地 agent CLI。请先安装或在 CLI runtime 中登记一个 agent/AI/LLM CLI。');
+      return;
+    }
     const backendName = stringField(backend, 'backend') || selectedBackend || 'acp';
     const displayName = draftExternalMember.trim() || `${backendName} agent`;
     setBusy('add-external-member');
@@ -640,9 +648,12 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                     <select
                       value={selectedBackend}
                       onChange={(event) => setSelectedBackend(event.currentTarget.value)}
+                      disabled={acpBackends.length === 0}
                       className="w-full rounded-full border border-[#dde7da] bg-white px-3 py-1.5 text-[12px] outline-none"
                     >
-                      {acpBackends.map((backend) => {
+                      {acpBackends.length === 0 ? (
+                        <option value="">未发现可用 agent CLI</option>
+                      ) : acpBackends.map((backend) => {
                         const backendName = stringField(backend, 'backend') || stringField(backend, 'id');
                         return (
                           <option key={stringField(backend, 'id') || backendName} value={backendName}>
@@ -660,10 +671,10 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                     <input
                       value={draftExternalCommand}
                       onChange={(event) => setDraftExternalCommand(event.currentTarget.value)}
-                      placeholder="命令覆盖，可空；fake 可直接测试"
+                      placeholder="命令覆盖，可空；默认使用已发现 CLI"
                       className="w-full rounded-full border border-[#dde7da] px-3 py-1.5 text-[12px] outline-none"
                     />
-                    <button onClick={() => void addExternalMember()} disabled={busy === 'add-external-member'} className="rounded-full border border-[#b8d2b8] bg-[#eef7ef] px-3 py-1.5 text-[12px] text-[#37563d]">
+                    <button onClick={() => void addExternalMember()} disabled={busy === 'add-external-member' || acpBackends.length === 0} className="rounded-full border border-[#b8d2b8] bg-[#eef7ef] px-3 py-1.5 text-[12px] text-[#37563d] disabled:cursor-not-allowed disabled:opacity-60">
                       添加外部成员
                     </button>
                   </div>
