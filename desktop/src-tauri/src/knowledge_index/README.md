@@ -27,6 +27,7 @@
 - block 索引建立在 canonical document 层之上，不直接依赖原始文件扫描
 - 文件未变更时优先复用 canonical cache，避免重复解析
 - Stage 4 起 block 命中会附带 `legalMetadata`，并使用 `lexical score + legal score` 排序
+- 当前 lexical 主通道使用 SQLite FTS5 `bm25()` 召回与排序，保留 SQLite `LIKE` 兜底；最终目标仍是架构方案中的 `Tantivy + SQLite`
 - 已失效/废止文档需要在结果里显式标记，不能只做隐藏降权
 - Stage 5 起 OCR block 会显式带 `contentOrigin=ocr` 和 `ocrConfidence`
 - 扫描 PDF 先走原生文本抽取；失败或为空时才回退到 OCR，避免把 native PDF 和 OCR PDF 混为一类

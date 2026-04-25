@@ -435,6 +435,7 @@ Status: Current
 ### Progress Notes
 
 - 已新增 hybrid planner：`knowledge.search` 默认走 `hybrid`，并可用 `retrievalMode=lexical` 关闭增强链路
+- lexical lane 已从纯 `LIKE` 候选升级为 SQLite FTS5 `bm25()` 主召回，`LIKE` 仅作为兼容兜底；后续仍按架构方案迁移到 `Tantivy + SQLite`
 - block 索引已持久化本地 dense 向量缓存，检索时执行 `sparse expansion + semantic lane + weighted RRF`
 - rerank 已接入 `legal-aware + citation-aware + confidence-aware` 规则，结果返回 `retrievalLanes` 和完整 ranking breakdown
 - 已新增离线对比报告：[hybrid-retrieval-evaluation-report.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/hybrid-retrieval-evaluation-report.md)

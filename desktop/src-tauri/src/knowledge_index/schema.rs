@@ -117,6 +117,15 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             ON knowledge_document_blocks(source_id, relative_path, block_index);
         CREATE INDEX IF NOT EXISTS idx_knowledge_document_blocks_document
             ON knowledge_document_blocks(document_id, block_index);
+        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_document_blocks_fts USING fts5(
+            block_id UNINDEXED,
+            source_id UNINDEXED,
+            title,
+            text,
+            normalized_text,
+            relative_path,
+            tokenize='unicode61'
+        );
         CREATE TABLE IF NOT EXISTS knowledge_citation_anchors (
             anchor_id TEXT PRIMARY KEY,
             block_id TEXT NOT NULL,
