@@ -106,6 +106,13 @@ fn active_background_executions() -> &'static Mutex<HashMap<String, Arc<Backgrou
     ACTIVE_BACKGROUND_EXECUTIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+pub fn active_background_execution_count() -> Result<usize, String> {
+    active_background_executions()
+        .lock()
+        .map(|executions| executions.len())
+        .map_err(|_| "active cli execution registry is poisoned".to_string())
+}
+
 fn run_local_command_capture(
     argv: &[String],
     cwd: &Path,

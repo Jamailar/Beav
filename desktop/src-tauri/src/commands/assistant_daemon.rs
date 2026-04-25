@@ -288,10 +288,9 @@ pub fn handle_assistant_daemon_channel(
                 })?;
                 Ok(result)
             }
-            "background-workers:get-pool-state" => Ok(json!({
-                "json": [],
-                "runtime": []
-            })),
+            "background-workers:get-pool-state" => {
+                Ok(crate::build_background_worker_summary(state))
+            }
             _ => unreachable!(),
         }
     })())
