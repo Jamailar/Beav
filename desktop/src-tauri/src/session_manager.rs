@@ -325,6 +325,9 @@ pub(crate) fn build_session_summary(
     session: &ChatSessionRecord,
     transcript_meta: Option<&SessionTranscriptFileMeta>,
 ) -> SessionSummary {
+    let store_message_count = chat_messages_for_session(store, &session.id).len() as i64;
+    let transcript_message_count = transcript_meta.map(|meta| meta.message_count).unwrap_or(0);
+    let store_transcript_count = transcript_count_for_session(store, &session.id);
     SessionSummary {
         chat_session: SessionChatSummary {
             id: session.id.clone(),
@@ -336,9 +339,9 @@ pub(crate) fn build_session_summary(
         model: resolve_session_model(session, transcript_meta),
         runtime_mode: resolve_runtime_mode_for_session(store, &session.id),
         context: session_context_summary(session),
-        message_count: chat_messages_for_session(store, &session.id).len() as i64,
+        message_count: store_message_count.max(transcript_message_count),
         summary: session_summary_text_for_session(store, &session.id),
-        transcript_count: transcript_count_for_session(store, &session.id),
+        transcript_count: store_transcript_count.max(transcript_message_count),
         checkpoint_count: checkpoint_count_for_session(store, &session.id),
     }
 }
@@ -764,6 +767,31 @@ mod tests {
                 .map(|value| value.context_type.as_str()),
             Some("redclaw")
         );
+    }
+
+    #[test]
+    fn build_session_summary_counts_file_backed_history() {
+        let store = AppStore::default();
+        let session = ChatSessionRecord {
+            id: "session-file-backed".to_string(),
+            title: "RedClaw".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "2".to_string(),
+            metadata: Some(json!({
+                "contextType": "redclaw",
+                "contextId": "space-a",
+                "isContextBound": true
+            })),
+        };
+        let transcript_meta = SessionTranscriptFileMeta {
+            session_id: session.id.clone(),
+            message_count: 29,
+            ..SessionTranscriptFileMeta::default()
+        };
+
+        let summary = build_session_summary(&store, &session, Some(&transcript_meta));
+        assert_eq!(summary.message_count, 29);
+        assert_eq!(summary.transcript_count, 29);
     }
 
     #[test]
