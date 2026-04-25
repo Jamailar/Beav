@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Bot, Clock3, MessageSquare, Play, Plus, RefreshCw, Send, Users } from 'lucide-react';
+import { AlertCircle, Clock3, MessageSquare, Plus, RefreshCw, Send, Users } from 'lucide-react';
 import type {
   CollabMemberRecord,
   CollabProgressReportRecord,
@@ -9,7 +9,6 @@ import type {
 } from '../../types';
 
 type BoardStatus = 'todo' | 'ready' | 'running' | 'blocked' | 'review' | 'completed';
-type AgentBackend = Record<string, unknown>;
 
 interface CollaborationBoardProps {
   isActive?: boolean;
@@ -78,16 +77,6 @@ function latestReportForTask(reports: CollabProgressReportRecord[], taskId: stri
     .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0] || null;
 }
 
-function stringField(record: Record<string, unknown> | null | undefined, key: string): string {
-  const value = record?.[key];
-  return typeof value === 'string' ? value : '';
-}
-
-function memberMetadata(member?: CollabMemberRecord | null): Record<string, unknown> {
-  const metadata = member?.metadata;
-  return metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata as Record<string, unknown> : {};
-}
-
 function fallbackObjective(): string {
   return `新协作项目 ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
 }
@@ -109,11 +98,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const [busy, setBusy] = useState('');
   const [draftObjective, setDraftObjective] = useState('');
   const [draftMember, setDraftMember] = useState('');
-  const [draftExternalMember, setDraftExternalMember] = useState('');
-  const [draftExternalCommand, setDraftExternalCommand] = useState('');
   const [draftTask, setDraftTask] = useState('');
-  const [agentBackends, setAgentBackends] = useState<AgentBackend[]>([]);
-  const [selectedBackend, setSelectedBackend] = useState('fake');
   const snapshotRef = useRef<CollabSessionSnapshot | null>(null);
   const sessionsRef = useRef<CollabSessionRecord[]>([]);
   const selectedSessionIdRef = useRef('');
@@ -162,15 +147,6 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
     }
   }, []);
 
-  const loadAgentBackends = useCallback(async () => {
-    try {
-      const backends = await window.ipcRenderer.teamRuntime.listAgentBackends();
-      setAgentBackends(Array.isArray(backends) ? backends : []);
-    } catch {
-      setAgentBackends([]);
-    }
-  }, []);
-
   const loadSnapshot = useCallback(async (sessionId = selectedSessionId) => {
     if (!sessionId) return;
     setError('');
@@ -189,8 +165,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   useEffect(() => {
     if (!isActive) return;
     void loadSessions();
-    void loadAgentBackends();
-  }, [isActive, loadAgentBackends, loadSessions]);
+  }, [isActive, loadSessions]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -210,17 +185,6 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const members = snapshot?.members || [];
   const tasks = snapshot?.tasks || [];
   const reports = snapshot?.reports || [];
-  const acpBackends = useMemo(() => {
-    return agentBackends.filter((backend) => (
-      stringField(backend, 'sourceKind') === 'external_acp'
-      && stringField(backend, 'status') === 'available'
-    ));
-  }, [agentBackends]);
-
-  useEffect(() => {
-    if (acpBackends.some((backend) => stringField(backend, 'backend') === selectedBackend)) return;
-    setSelectedBackend(stringField(acpBackends[0], 'backend'));
-  }, [acpBackends, selectedBackend]);
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) || tasks[0] || null,
     [selectedTaskId, tasks],
@@ -275,41 +239,6 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
       setBusy('');
     }
   }, [draftMember, loadSnapshot, snapshot?.session?.id]);
-
-  const addExternalMember = useCallback(async () => {
-    if (!snapshot?.session?.id) return;
-    const backend = acpBackends.find((item) => stringField(item, 'backend') === selectedBackend) || acpBackends[0];
-    if (!backend) {
-      setError('没有发现可用的本地 agent CLI。请先安装或在 CLI runtime 中登记一个 agent/AI/LLM CLI。');
-      return;
-    }
-    const backendName = stringField(backend, 'backend') || selectedBackend || 'acp';
-    const displayName = draftExternalMember.trim() || `${backendName} agent`;
-    setBusy('add-external-member');
-    try {
-      await window.ipcRenderer.teamRuntime.addMember({
-        sessionId: snapshot.session.id,
-        displayName,
-        roleId: 'external-agent',
-        sourceKind: 'external_acp',
-        adapterKind: 'acp',
-        backend: backendName,
-        status: 'idle',
-        capabilities: ['acp_process', 'team_mcp_contract'],
-        allowedTools: ['redbox-team'],
-        metadata: {
-          command: draftExternalCommand.trim() || undefined,
-          backendId: stringField(backend, 'id'),
-        },
-      });
-      setDraftExternalMember('');
-      await loadSnapshot(snapshot.session.id);
-    } catch (addError) {
-      setError(addError instanceof Error ? addError.message : String(addError));
-    } finally {
-      setBusy('');
-    }
-  }, [acpBackends, draftExternalCommand, draftExternalMember, loadSnapshot, selectedBackend, snapshot?.session?.id]);
 
   const createTask = useCallback(async () => {
     if (!snapshot?.session?.id) return;
@@ -405,37 +334,6 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
       setBusy('');
     }
   }, [loadSnapshot]);
-
-  const runExternalTask = useCallback(async (task: CollabTaskRecord) => {
-    if (!task.memberId) {
-      setError('请先把任务分配给一个外部 ACP 成员');
-      return;
-    }
-    const owner = memberById.get(task.memberId);
-    if (!owner || owner.sourceKind !== 'external_acp') {
-      setError('该任务负责人不是外部 ACP 成员');
-      return;
-    }
-    const metadata = memberMetadata(owner);
-    const backend = owner.backend || selectedBackend || 'acp';
-    const command = draftExternalCommand.trim() || (typeof metadata.command === 'string' ? metadata.command : '');
-    setBusy(`run-acp:${task.id}`);
-    try {
-      await window.ipcRenderer.teamRuntime.runExternalMember({
-        sessionId: task.sessionId,
-        memberId: owner.id,
-        taskId: task.id,
-        backend,
-        command: command || undefined,
-        prompt: `${task.title}\n\n${task.objective}\n\n${task.description || ''}`,
-      });
-      await loadSnapshot(task.sessionId);
-    } catch (runError) {
-      setError(runError instanceof Error ? runError.message : String(runError));
-    } finally {
-      setBusy('');
-    }
-  }, [draftExternalCommand, loadSnapshot, memberById, selectedBackend]);
 
   return (
     <div className="h-full min-h-0 bg-[#f8faf8] text-[#18211b]">
@@ -639,46 +537,6 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                     内部
                   </button>
                 </div>
-                <div className="rounded-[18px] border border-[#e5ece2] bg-[#f8fbf7] p-2">
-                  <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-[#526456]">
-                    <Bot className="h-3.5 w-3.5" />
-                    外部 ACP 成员
-                  </div>
-                  <div className="grid gap-1.5">
-                    <select
-                      value={selectedBackend}
-                      onChange={(event) => setSelectedBackend(event.currentTarget.value)}
-                      disabled={acpBackends.length === 0}
-                      className="w-full rounded-full border border-[#dde7da] bg-white px-3 py-1.5 text-[12px] outline-none"
-                    >
-                      {acpBackends.length === 0 ? (
-                        <option value="">未发现可用 agent CLI</option>
-                      ) : acpBackends.map((backend) => {
-                        const backendName = stringField(backend, 'backend') || stringField(backend, 'id');
-                        return (
-                          <option key={stringField(backend, 'id') || backendName} value={backendName}>
-                            {stringField(backend, 'label') || backendName} · {stringField(backend, 'status') || 'unknown'}
-                          </option>
-                        );
-                      })}
-                    </select>
-                    <input
-                      value={draftExternalMember}
-                      onChange={(event) => setDraftExternalMember(event.currentTarget.value)}
-                      placeholder="成员名，留空使用后端名"
-                      className="w-full rounded-full border border-[#dde7da] px-3 py-1.5 text-[12px] outline-none"
-                    />
-                    <input
-                      value={draftExternalCommand}
-                      onChange={(event) => setDraftExternalCommand(event.currentTarget.value)}
-                      placeholder="命令覆盖，可空；默认使用已发现 CLI"
-                      className="w-full rounded-full border border-[#dde7da] px-3 py-1.5 text-[12px] outline-none"
-                    />
-                    <button onClick={() => void addExternalMember()} disabled={busy === 'add-external-member' || acpBackends.length === 0} className="rounded-full border border-[#b8d2b8] bg-[#eef7ef] px-3 py-1.5 text-[12px] text-[#37563d] disabled:cursor-not-allowed disabled:opacity-60">
-                      添加外部成员
-                    </button>
-                  </div>
-                </div>
               </div>
             )}
 
@@ -749,16 +607,6 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                       className="rounded-full border border-[#b8d2b8] bg-[#eef7ef] px-2 py-1 text-[10px] text-[#37563d]"
                     >
                       请求负责人汇报
-                    </button>
-                  )}
-                  {selectedTask.memberId && memberById.get(selectedTask.memberId)?.sourceKind === 'external_acp' && (
-                    <button
-                      onClick={() => void runExternalTask(selectedTask)}
-                      disabled={busy === `run-acp:${selectedTask.id}`}
-                      className="rounded-full border border-[#95c2a2] bg-[#e9f7ee] px-2 py-1 text-[10px] text-[#31583c]"
-                    >
-                      <Play className="mr-1 inline h-3 w-3" />
-                      运行 ACP
                     </button>
                   )}
                 </div>

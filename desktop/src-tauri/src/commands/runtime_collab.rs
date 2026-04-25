@@ -271,10 +271,6 @@ pub fn mcp_contract_value() -> Value {
     })
 }
 
-pub fn mcp_bridge_config_value(payload: &Value) -> Value {
-    json!(crate::mcp::build_team_mcp_bridge_config(payload))
-}
-
 pub fn execute_mcp_tool_value(
     state: &State<'_, AppState>,
     payload: &Value,
@@ -285,14 +281,6 @@ pub fn execute_mcp_tool_value(
     with_store_mut(state, |store| {
         crate::mcp::execute_team_mcp_tool(store, &tool_name, arguments)
     })
-}
-
-pub fn run_external_member_value(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    crate::agent_hub::start_external_acp_member_run(app, state, payload)
 }
 
 pub fn list_agent_backends_value(state: &State<'_, AppState>) -> Result<Value, String> {
