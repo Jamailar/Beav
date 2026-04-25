@@ -2,6 +2,8 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     compatible_workspace_base_dir, configured_workspace_dir, copy_dir_recursive, file_url_for_path,
@@ -10,6 +12,8 @@ use crate::{
     SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SpaceRecord,
     UserMemoryRecord, WanderHistoryRecord,
 };
+
+static LEGACY_IMPORT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn legacy_db_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
@@ -49,6 +53,242 @@ pub(crate) fn run_sqlite_json_lines(db_path: &Path, sql: &str) -> Result<Vec<Val
         }
     }
     Ok(rows)
+}
+
+struct PreparedLegacyImportDb {
+    path: PathBuf,
+}
+
+impl PreparedLegacyImportDb {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PreparedLegacyImportDb {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+fn quote_sql_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn prepare_legacy_import_db(source: &Path) -> Result<PreparedLegacyImportDb, String> {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let sequence = LEGACY_IMPORT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "redbox-legacy-import-{}-{unique}-{sequence}.db",
+        std::process::id()
+    ));
+    fs::copy(source, &path).map_err(|error| error.to_string())?;
+
+    let conn = Connection::open(&path).map_err(|error| error.to_string())?;
+    conn.execute_batch(
+        "
+        create table if not exists settings (id integer primary key check (id = 1));
+        create table if not exists spaces (id text primary key);
+        create table if not exists chat_sessions (id text primary key);
+        create table if not exists chat_messages (id text primary key);
+        create table if not exists session_transcript_records (id text primary key);
+        create table if not exists session_checkpoints (id text primary key);
+        create table if not exists session_tool_results (id text primary key);
+        create table if not exists wander_history (id text primary key);
+        create table if not exists user_memories (id text primary key);
+        create table if not exists archive_profiles (id text primary key);
+        create table if not exists archive_samples (id text primary key);
+        ",
+    )
+    .map_err(|error| error.to_string())?;
+
+    for (table, columns) in [
+        (
+            "settings",
+            &[
+                ("api_endpoint", "text"),
+                ("api_key", "text"),
+                ("model_name", "text"),
+                ("role_mapping", "text"),
+                ("workspace_dir", "text"),
+                ("transcription_model", "text"),
+                ("transcription_endpoint", "text"),
+                ("transcription_key", "text"),
+                ("embedding_endpoint", "text"),
+                ("embedding_key", "text"),
+                ("embedding_model", "text"),
+                ("active_space_id", "text"),
+                ("image_provider", "text"),
+                ("image_endpoint", "text"),
+                ("image_api_key", "text"),
+                ("image_model", "text"),
+                ("image_size", "text"),
+                ("image_quality", "text"),
+                ("ai_sources_json", "text"),
+                ("default_ai_source_id", "text"),
+                ("mcp_servers_json", "text"),
+                ("redclaw_compact_target_tokens", "integer"),
+                ("image_provider_template", "text"),
+                ("image_aspect_ratio", "text"),
+                ("wander_deep_think_enabled", "integer"),
+                ("chat_max_tokens_default", "integer"),
+                ("chat_max_tokens_deepseek", "integer"),
+                ("model_name_wander", "text"),
+                ("model_name_chatroom", "text"),
+                ("model_name_knowledge", "text"),
+                ("model_name_redclaw", "text"),
+                ("debug_log_enabled", "integer"),
+                ("developer_mode_enabled", "integer"),
+                ("developer_mode_unlocked_at", "text"),
+                ("search_provider", "text"),
+                ("search_endpoint", "text"),
+                ("search_api_key", "text"),
+                ("video_endpoint", "text"),
+                ("video_api_key", "text"),
+                ("video_model", "text"),
+                ("proxy_enabled", "integer"),
+                ("proxy_url", "text"),
+                ("proxy_bypass", "text"),
+            ][..],
+        ),
+        (
+            "spaces",
+            &[
+                ("name", "text"),
+                ("created_at", "integer"),
+                ("updated_at", "integer"),
+            ][..],
+        ),
+        (
+            "chat_sessions",
+            &[
+                ("title", "text"),
+                ("created_at", "integer"),
+                ("updated_at", "integer"),
+                ("metadata", "text"),
+            ][..],
+        ),
+        (
+            "chat_messages",
+            &[
+                ("session_id", "text"),
+                ("role", "text"),
+                ("content", "text"),
+                ("timestamp", "integer"),
+            ][..],
+        ),
+        (
+            "session_transcript_records",
+            &[
+                ("session_id", "text"),
+                ("record_type", "text"),
+                ("role", "text"),
+                ("content", "text"),
+                ("payload_json", "text"),
+                ("created_at", "integer"),
+            ][..],
+        ),
+        (
+            "session_checkpoints",
+            &[
+                ("session_id", "text"),
+                ("checkpoint_type", "text"),
+                ("summary", "text"),
+                ("payload_json", "text"),
+                ("created_at", "integer"),
+            ][..],
+        ),
+        (
+            "session_tool_results",
+            &[
+                ("session_id", "text"),
+                ("call_id", "text"),
+                ("tool_name", "text"),
+                ("command", "text"),
+                ("success", "integer"),
+                ("result_text", "text"),
+                ("summary_text", "text"),
+                ("prompt_text", "text"),
+                ("original_chars", "integer"),
+                ("prompt_chars", "integer"),
+                ("truncated", "integer"),
+                ("payload_json", "text"),
+                ("created_at", "integer"),
+                ("updated_at", "integer"),
+            ][..],
+        ),
+        (
+            "wander_history",
+            &[
+                ("items", "text"),
+                ("result", "text"),
+                ("created_at", "integer"),
+            ][..],
+        ),
+        (
+            "user_memories",
+            &[
+                ("content", "text"),
+                ("type", "text"),
+                ("tags", "text"),
+                ("created_at", "integer"),
+                ("updated_at", "integer"),
+                ("last_accessed", "integer"),
+            ][..],
+        ),
+        (
+            "archive_profiles",
+            &[
+                ("name", "text"),
+                ("platform", "text"),
+                ("goal", "text"),
+                ("domain", "text"),
+                ("audience", "text"),
+                ("tone_tags", "text"),
+                ("created_at", "integer"),
+                ("updated_at", "integer"),
+            ][..],
+        ),
+        (
+            "archive_samples",
+            &[
+                ("profile_id", "text"),
+                ("title", "text"),
+                ("content", "text"),
+                ("excerpt", "text"),
+                ("tags", "text"),
+                ("images", "text"),
+                ("platform", "text"),
+                ("source_url", "text"),
+                ("sample_date", "text"),
+                ("is_featured", "integer"),
+                ("created_at", "integer"),
+            ][..],
+        ),
+    ] {
+        for (column, definition) in columns {
+            let _ = conn.execute(
+                &format!("alter table {table} add column {column} {definition}"),
+                [],
+            );
+        }
+    }
+
+    conn.execute_batch(
+        "
+        update chat_sessions set metadata = null where metadata is not null and not json_valid(metadata);
+        update session_transcript_records set payload_json = null where payload_json is not null and not json_valid(payload_json);
+        update session_checkpoints set payload_json = null where payload_json is not null and not json_valid(payload_json);
+        update session_tool_results set payload_json = null where payload_json is not null and not json_valid(payload_json);
+        ",
+    )
+    .map_err(|error| error.to_string())?;
+
+    Ok(PreparedLegacyImportDb { path })
 }
 
 pub(crate) fn sqlite_count(db_path: &Path, table: &str) -> i64 {
@@ -274,14 +514,17 @@ pub(crate) fn maybe_import_legacy_store(
     store: &mut AppStore,
     store_path: &Path,
 ) -> Result<(), String> {
-    let db_path = detect_best_legacy_db().ok_or_else(|| "legacy database not found".to_string())?;
+    let source_db_path =
+        detect_best_legacy_db().ok_or_else(|| "legacy database not found".to_string())?;
+    let prepared_db = prepare_legacy_import_db(&source_db_path)?;
+    let db_path = prepared_db.path();
 
     if !store.settings.is_object() {
         store.settings = json!({});
     }
 
     let settings_rows = run_sqlite_json_lines(
-        &db_path,
+        db_path,
         "select json_object('api_endpoint', api_endpoint, 'api_key', api_key, 'model_name', model_name, 'role_mapping', role_mapping, 'workspace_dir', workspace_dir, 'transcription_model', transcription_model, 'transcription_endpoint', transcription_endpoint, 'transcription_key', transcription_key, 'embedding_endpoint', embedding_endpoint, 'embedding_key', embedding_key, 'embedding_model', embedding_model, 'active_space_id', active_space_id, 'image_provider', image_provider, 'image_endpoint', image_endpoint, 'image_api_key', image_api_key, 'image_model', image_model, 'image_size', image_size, 'image_quality', image_quality, 'ai_sources_json', ai_sources_json, 'default_ai_source_id', default_ai_source_id, 'mcp_servers_json', mcp_servers_json, 'redclaw_compact_target_tokens', redclaw_compact_target_tokens, 'image_provider_template', image_provider_template, 'image_aspect_ratio', image_aspect_ratio, 'wander_deep_think_enabled', wander_deep_think_enabled, 'chat_max_tokens_default', chat_max_tokens_default, 'chat_max_tokens_deepseek', chat_max_tokens_deepseek, 'model_name_wander', model_name_wander, 'model_name_chatroom', model_name_chatroom, 'model_name_knowledge', model_name_knowledge, 'model_name_redclaw', model_name_redclaw, 'debug_log_enabled', debug_log_enabled, 'developer_mode_enabled', developer_mode_enabled, 'developer_mode_unlocked_at', developer_mode_unlocked_at, 'search_provider', search_provider, 'search_endpoint', search_endpoint, 'search_api_key', search_api_key, 'video_endpoint', video_endpoint, 'video_api_key', video_api_key, 'video_model', video_model, 'proxy_enabled', proxy_enabled, 'proxy_url', proxy_url, 'proxy_bypass', proxy_bypass) from settings limit 1;",
     )?;
     if let Some(first) = settings_rows.into_iter().next() {
@@ -305,7 +548,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.spaces.len() <= 1 {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'name', name, 'created_at', cast(created_at as text), 'updated_at', cast(updated_at as text)) from spaces order by updated_at desc;",
         )?;
         let mut imported_spaces = Vec::new();
@@ -345,7 +588,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.chat_sessions.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'title', coalesce(title, 'New Chat'), 'created_at', cast(created_at as text), 'updated_at', cast(updated_at as text), 'metadata', json(metadata)) from chat_sessions order by updated_at desc;",
         )?;
         for value in rows {
@@ -378,7 +621,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.chat_messages.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'session_id', session_id, 'role', role, 'content', content, 'timestamp', timestamp) from chat_messages order by timestamp asc;",
         )?;
         for value in rows {
@@ -416,7 +659,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.session_transcript_records.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'session_id', session_id, 'record_type', record_type, 'role', role, 'content', content, 'payload', json(payload_json), 'created_at', created_at) from session_transcript_records order by created_at asc;",
         )?;
         for value in rows {
@@ -459,7 +702,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.session_checkpoints.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'session_id', session_id, 'checkpoint_type', checkpoint_type, 'summary', summary, 'payload', json(payload_json), 'created_at', created_at) from session_checkpoints order by created_at asc;",
         )?;
         for value in rows {
@@ -498,7 +741,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.session_tool_results.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'session_id', session_id, 'call_id', call_id, 'tool_name', tool_name, 'command', command, 'success', success, 'result_text', result_text, 'summary_text', summary_text, 'prompt_text', prompt_text, 'original_chars', original_chars, 'prompt_chars', prompt_chars, 'truncated', truncated, 'payload', json(payload_json), 'created_at', created_at, 'updated_at', updated_at) from session_tool_results order by created_at asc;",
         )?;
         for value in rows {
@@ -561,7 +804,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.wander_history.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'items', items, 'result', result, 'created_at', created_at) from wander_history order by created_at desc;",
         )?;
         for value in rows {
@@ -591,7 +834,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.memories.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'content', content, 'type', type, 'tags', coalesce(tags, '[]'), 'created_at', created_at, 'updated_at', updated_at, 'last_accessed', last_accessed) from user_memories order by updated_at desc;",
         )?;
         for value in rows {
@@ -636,7 +879,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.archive_profiles.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'name', name, 'platform', platform, 'goal', goal, 'domain', domain, 'audience', audience, 'tone_tags', coalesce(tone_tags, '[]'), 'created_at', created_at, 'updated_at', updated_at) from archive_profiles order by updated_at desc;",
         )?;
         for value in rows {
@@ -687,7 +930,7 @@ pub(crate) fn maybe_import_legacy_store(
 
     if store.archive_samples.is_empty() {
         let rows = run_sqlite_json_lines(
-            &db_path,
+            db_path,
             "select json_object('id', id, 'profile_id', profile_id, 'title', title, 'content', content, 'excerpt', excerpt, 'tags', coalesce(tags, '[]'), 'images', coalesce(images, '[]'), 'platform', platform, 'source_url', source_url, 'sample_date', sample_date, 'is_featured', is_featured, 'created_at', created_at) from archive_samples order by created_at desc;",
         )?;
         for value in rows {
@@ -762,7 +1005,163 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     store.legacy_imported_at = Some(now_iso());
-    store.legacy_import_source = Some(db_path.display().to_string());
+    store.legacy_import_source = Some(source_db_path.display().to_string());
+    let imported_memories = store.memories.clone();
     let _ = hydrate_store_from_workspace_files(store, store_path);
+    if store.memories.is_empty() && !imported_memories.is_empty() {
+        store.memories = imported_memories;
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db_path(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("redbox-legacy-import-{label}-{unique}.db"))
+    }
+
+    #[test]
+    fn prepared_legacy_import_db_adds_missing_new_settings_columns() {
+        let db_path = temp_db_path("settings");
+        {
+            let connection = Connection::open(&db_path).expect("test db should open");
+            connection
+                .execute_batch(
+                    "
+                    create table settings (
+                        id integer primary key,
+                        api_endpoint text,
+                        api_key text,
+                        model_name text,
+                        workspace_dir text
+                    );
+                    insert into settings (id, api_endpoint, api_key, model_name, workspace_dir)
+                    values (1, 'https://api.example.test', 'secret', 'legacy-model', '/tmp/legacy-workspace');
+                    ",
+                )
+                .expect("legacy settings fixture should be created");
+        }
+
+        let prepared =
+            prepare_legacy_import_db(&db_path).expect("legacy db should be prepared for import");
+        let rows = run_sqlite_json_lines(
+            prepared.path(),
+            "select json_object('api_endpoint', api_endpoint, 'model_name', model_name, 'model_name_wander', model_name_wander) from settings limit 1;",
+        )
+        .expect("prepared settings should be queryable");
+        let _ = fs::remove_file(&db_path);
+
+        let first = rows.first().expect("settings row should be returned");
+        assert_eq!(
+            first.get("api_endpoint").and_then(|value| value.as_str()),
+            Some("https://api.example.test")
+        );
+        assert_eq!(
+            first.get("model_name").and_then(|value| value.as_str()),
+            Some("legacy-model")
+        );
+        assert!(first.get("model_name_wander").is_some_and(Value::is_null));
+    }
+
+    #[test]
+    fn prepared_legacy_import_db_adds_missing_optional_tables_and_columns() {
+        let db_path = temp_db_path("partial-schema");
+        {
+            let connection = Connection::open(&db_path).expect("test db should open");
+            connection
+                .execute_batch(
+                    "
+                    create table archive_samples (
+                        id text primary key,
+                        profile_id text not null,
+                        title text,
+                        created_at integer not null
+                    );
+                    insert into archive_samples (id, profile_id, title, created_at)
+                    values ('sample-1', 'profile-1', 'Title', 123);
+                    ",
+                )
+                .expect("partial archive sample fixture should be created");
+        }
+
+        let prepared =
+            prepare_legacy_import_db(&db_path).expect("legacy db should be prepared for import");
+        let rows = run_sqlite_json_lines(
+            prepared.path(),
+            "select json_object('id', id, 'images', coalesce(images, '[]'), 'created_at', created_at) from archive_samples order by created_at desc;",
+        )
+        .expect("prepared archive samples should be queryable");
+        let missing_table_rows = run_sqlite_json_lines(
+            prepared.path(),
+            "select json_object('count', count(*)) from session_tool_results;",
+        )
+        .expect("missing optional tables should be created");
+        let _ = fs::remove_file(&db_path);
+
+        let first = rows.first().expect("archive sample row should be returned");
+        assert_eq!(
+            first.get("images").and_then(|value| value.as_str()),
+            Some("[]")
+        );
+        assert_eq!(
+            missing_table_rows
+                .first()
+                .and_then(|value| value.get("count"))
+                .and_then(Value::as_i64),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn prepared_legacy_import_db_clears_invalid_json_fields_in_copy_only() {
+        let db_path = temp_db_path("invalid-json");
+        {
+            let connection = Connection::open(&db_path).expect("test db should open");
+            connection
+                .execute_batch(
+                    "
+                    create table chat_sessions (id text primary key, metadata text);
+                    insert into chat_sessions (id, metadata) values ('session-1', 'not-json');
+                    create table session_tool_results (id text primary key, payload_json text);
+                    insert into session_tool_results (id, payload_json) values ('tool-1', 'not-json');
+                    ",
+                )
+                .expect("invalid json fixture should be created");
+        }
+
+        let prepared =
+            prepare_legacy_import_db(&db_path).expect("legacy db should be prepared for import");
+        let prepared_rows = run_sqlite_json_lines(
+            prepared.path(),
+            "select json_object('metadata', json(metadata)) from chat_sessions;",
+        )
+        .expect("prepared invalid metadata should be nullable and queryable");
+        let original_rows = run_sqlite_json_lines(
+            &db_path,
+            &format!(
+                "select json_object('metadata', {}) from chat_sessions;",
+                quote_sql_string("not-json")
+            ),
+        )
+        .expect("source db should remain readable");
+        let _ = fs::remove_file(&db_path);
+
+        assert!(prepared_rows
+            .first()
+            .and_then(|value| value.get("metadata"))
+            .is_some_and(Value::is_null));
+        assert_eq!(
+            original_rows
+                .first()
+                .and_then(|value| value.get("metadata"))
+                .and_then(Value::as_str),
+            Some("not-json")
+        );
+    }
 }
