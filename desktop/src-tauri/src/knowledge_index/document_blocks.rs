@@ -90,6 +90,7 @@ pub(crate) struct DocumentBlockHit {
     pub snippet: String,
     pub lexical_score: f64,
     pub semantic_score: f64,
+    pub bm25_score: f64,
     pub fusion_score: f64,
     pub rerank_score: f64,
     pub legal_score: f64,
@@ -116,6 +117,8 @@ pub(crate) fn replace_blocks(
     let tx = conn.transaction().map_err(|error| error.to_string())?;
     tx.execute("DELETE FROM knowledge_document_blocks", [])
         .map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM knowledge_document_blocks_fts", [])
+        .map_err(|error| error.to_string())?;
     {
         let mut stmt = tx
             .prepare(
@@ -134,6 +137,15 @@ pub(crate) fn replace_blocks(
                     ?19, ?20, ?21, ?22, ?23, ?24,
                     ?25, ?26, ?27, ?28, ?29
                 )
+                "#,
+            )
+            .map_err(|error| error.to_string())?;
+        let mut fts_stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO knowledge_document_blocks_fts (
+                    block_id, source_id, title, text, normalized_text, relative_path
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                 "#,
             )
             .map_err(|error| error.to_string())?;
@@ -170,6 +182,16 @@ pub(crate) fn replace_blocks(
                 block.updated_at
             ])
             .map_err(|error| error.to_string())?;
+            fts_stmt
+                .execute(params![
+                    block.block_id,
+                    block.source_id,
+                    block.title,
+                    block.text,
+                    block.normalized_text,
+                    block.relative_path
+                ])
+                .map_err(|error| error.to_string())?;
         }
     }
     tx.commit().map_err(|error| error.to_string())
@@ -206,51 +228,11 @@ pub(crate) fn search_blocks(
     let expanded_query = expand_query(&normalized_query, lexical_terms.clone());
     let candidate_limit = (limit * 24).max(limit);
     let lower_query = query.to_lowercase();
-    let mut params = vec![SqlValue::Text(source_id.to_string())];
-    let mut fragments = Vec::new();
-    let mut next_param = 2usize;
     let sparse_terms = if retrieval_mode == RetrievalMode::Hybrid {
         &expanded_query.sparse_terms
     } else {
         &expanded_query.lexical_terms
     };
-    for term in sparse_terms {
-        let like = format!("%{term}%");
-        fragments.push(format!(
-            "(normalized_text LIKE ?{start} OR lower(COALESCE(title, '')) LIKE ?{mid} OR lower(relative_path) LIKE ?{end})",
-            start = next_param,
-            mid = next_param + 1,
-            end = next_param + 2
-        ));
-        params.push(SqlValue::Text(like.clone()));
-        params.push(SqlValue::Text(like.clone()));
-        params.push(SqlValue::Text(like));
-        next_param += 3;
-    }
-    params.push(SqlValue::Integer(candidate_limit as i64));
-    let mut stmt = conn
-        .prepare(&format!(
-            r#"
-            SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
-                   relative_path, file_extension, title, language, content_origin,
-                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-                   expiry_date, document_type, is_superseded, page, block_type,
-                   section_path_json, block_index, line_start, line_end, text,
-                   semantic_vector_json
-            FROM knowledge_document_blocks
-            WHERE source_id = ?1
-              AND ({})
-            LIMIT ?{}
-            "#,
-            fragments.join(" OR "),
-            next_param
-        ))
-        .map_err(|error| error.to_string())?;
-    let candidates = stmt
-        .query_map(params_from_iter(params.iter()), |row| {
-            row_to_search_tuple(row)
-        })
-        .map_err(|error| error.to_string())?;
 
     let today = current_iso_date();
     let query_embedding = if retrieval_mode == RetrievalMode::Hybrid {
@@ -261,85 +243,46 @@ pub(crate) fn search_blocks(
     } else {
         None
     };
-    let mut lexical_hits = Vec::new();
-    for row in candidates {
-        let (
-            block_id,
-            document_id,
+
+    let mut lexical_candidates =
+        fts_candidates_for_source(&conn, source_id, sparse_terms, candidate_limit)?;
+    if lexical_candidates.len() < candidate_limit {
+        lexical_candidates.extend(like_candidates_for_source(
+            &conn,
             source_id,
-            source_name,
-            root_path,
-            absolute_path,
-            relative_path,
-            file_extension,
-            title,
-            language,
-            content_origin,
-            ocr_confidence,
-            jurisdiction,
-            authority,
-            authority_level,
-            effective_date,
-            expiry_date,
-            document_type,
-            is_superseded,
-            page,
-            block_type,
-            section_path_json,
-            block_index,
-            line_start,
-            line_end,
-            text,
-            semantic_vector_json,
-        ) = row.map_err(|error| error.to_string())?;
-        if !pattern.matches_path_with(Path::new(&relative_path), glob_match_options()) {
+            sparse_terms,
+            candidate_limit,
+        )?);
+    }
+
+    let mut lexical_hits_by_id = std::collections::HashMap::<String, SearchCandidate>::new();
+    for mut candidate in lexical_candidates {
+        if !pattern.matches_path_with(Path::new(&candidate.path), glob_match_options()) {
             continue;
         }
         let lexical_score = lexical_match_score(
-            &text,
-            title.as_deref(),
-            &relative_path,
+            &candidate.text,
+            candidate.title.as_deref(),
+            &candidate.path,
             &normalized_query,
             &lower_query,
             &expanded_query.lexical_terms,
-            language.as_deref(),
+            candidate.language.as_deref(),
         );
-        if lexical_score <= 0.0 {
+        if lexical_score <= 0.0 && candidate.bm25_score <= 0.0 {
             continue;
         }
-        lexical_hits.push(SearchCandidate {
-            block_id,
-            document_id,
-            source_id,
-            source_name,
-            root_path,
-            path: relative_path,
-            absolute_path,
-            file_extension,
-            title,
-            language,
-            content_origin,
-            ocr_confidence,
-            jurisdiction,
-            authority,
-            authority_level,
-            effective_date,
-            expiry_date,
-            document_type,
-            is_superseded,
-            page,
-            block_type,
-            section_path_json,
-            block_index,
-            line_start,
-            line_end,
-            text,
-            semantic_vector_json,
-            lexical_score,
-        });
+        candidate.lexical_score = lexical_score + candidate.bm25_score;
+        match lexical_hits_by_id.get(&candidate.block_id) {
+            Some(existing) if existing.lexical_score >= candidate.lexical_score => {}
+            _ => {
+                lexical_hits_by_id.insert(candidate.block_id.clone(), candidate);
+            }
+        }
     }
 
-    let mut merged = lexical_hits
+    let mut merged = lexical_hits_by_id
+        .into_values()
         .into_iter()
         .map(|candidate| (candidate.block_id.clone(), candidate))
         .collect::<std::collections::HashMap<_, _>>();
@@ -472,6 +415,7 @@ pub(crate) fn search_blocks(
             snippet: build_snippet(&candidate.text, query, snippet_chars),
             lexical_score: candidate.lexical_score,
             semantic_score,
+            bm25_score: candidate.bm25_score,
             fusion_score,
             rerank_score,
             legal_score,
@@ -827,10 +771,132 @@ struct SearchCandidate {
     text: String,
     semantic_vector_json: String,
     lexical_score: f64,
+    bm25_score: f64,
 }
 
 fn decode_section_path(raw: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+fn fts_candidates_for_source(
+    conn: &Connection,
+    source_id: &str,
+    terms: &[String],
+    limit: usize,
+) -> Result<Vec<SearchCandidate>, String> {
+    let Some(match_query) = build_fts_match_query(terms) else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT b.block_id, b.document_id, b.source_id, b.source_name, b.root_path,
+                   b.absolute_path, b.relative_path, b.file_extension, b.title, b.language,
+                   b.content_origin, b.ocr_confidence, b.jurisdiction, b.authority,
+                   b.authority_level, b.effective_date, b.expiry_date, b.document_type,
+                   b.is_superseded, b.page, b.block_type, b.section_path_json,
+                   b.block_index, b.line_start, b.line_end, b.text, b.semantic_vector_json,
+                   bm25(knowledge_document_blocks_fts) AS bm25_rank
+            FROM knowledge_document_blocks_fts
+            JOIN knowledge_document_blocks b ON b.block_id = knowledge_document_blocks_fts.block_id
+            WHERE knowledge_document_blocks_fts MATCH ?1
+              AND knowledge_document_blocks_fts.source_id = ?2
+            ORDER BY bm25_rank ASC
+            LIMIT ?3
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(params![match_query, source_id, limit as i64], |row| {
+            let mut candidate = row_to_search_candidate(row)?;
+            let bm25_rank: f64 = row.get(27)?;
+            candidate.bm25_score = bm25_rank_score(bm25_rank);
+            Ok(candidate)
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn like_candidates_for_source(
+    conn: &Connection,
+    source_id: &str,
+    terms: &[String],
+    limit: usize,
+) -> Result<Vec<SearchCandidate>, String> {
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut params = vec![SqlValue::Text(source_id.to_string())];
+    let mut fragments = Vec::new();
+    let mut next_param = 2usize;
+    for term in terms {
+        let like = format!("%{term}%");
+        fragments.push(format!(
+            "(normalized_text LIKE ?{start} OR lower(COALESCE(title, '')) LIKE ?{mid} OR lower(relative_path) LIKE ?{end})",
+            start = next_param,
+            mid = next_param + 1,
+            end = next_param + 2
+        ));
+        params.push(SqlValue::Text(like.clone()));
+        params.push(SqlValue::Text(like.clone()));
+        params.push(SqlValue::Text(like));
+        next_param += 3;
+    }
+    params.push(SqlValue::Integer(limit as i64));
+    let mut stmt = conn
+        .prepare(&format!(
+            r#"
+            SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
+                   relative_path, file_extension, title, language, content_origin,
+                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+                   expiry_date, document_type, is_superseded, page, block_type,
+                   section_path_json, block_index, line_start, line_end, text,
+                   semantic_vector_json
+            FROM knowledge_document_blocks
+            WHERE source_id = ?1
+              AND ({})
+            LIMIT ?{}
+            "#,
+            fragments.join(" OR "),
+            next_param
+        ))
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(params_from_iter(params.iter()), row_to_search_candidate)
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn build_fts_match_query(terms: &[String]) -> Option<String> {
+    let mut phrases = terms
+        .iter()
+        .map(|term| term.trim())
+        .filter(|term| !term.is_empty())
+        .map(quote_fts_phrase)
+        .collect::<Vec<_>>();
+    phrases.sort();
+    phrases.dedup();
+    if phrases.is_empty() {
+        None
+    } else {
+        Some(phrases.join(" OR "))
+    }
+}
+
+fn quote_fts_phrase(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn bm25_rank_score(rank: f64) -> f64 {
+    if !rank.is_finite() {
+        return 0.0;
+    }
+    if rank < 0.0 {
+        return (rank.abs() * 1_000_000.0).clamp(0.0, 12.0);
+    }
+    (1.0 / (1.0 + rank)).clamp(0.0, 1.0) * 6.0
 }
 
 fn semantic_candidates_for_source(
@@ -885,6 +951,7 @@ fn semantic_candidates_for_source(
                 text: row.get(25)?,
                 semantic_vector_json: row.get(26)?,
                 lexical_score: 0.0,
+                bm25_score: 0.0,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -1039,70 +1106,38 @@ fn current_iso_date() -> String {
     OffsetDateTime::now_utc().date().to_string()
 }
 
-#[allow(clippy::type_complexity)]
-fn row_to_search_tuple(
-    row: &rusqlite::Row<'_>,
-) -> Result<
-    (
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        String,
-        Option<f64>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        bool,
-        Option<i64>,
-        String,
-        String,
-        i64,
-        i64,
-        i64,
-        String,
-        String,
-    ),
-    rusqlite::Error,
-> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-        row.get(7)?,
-        row.get(8)?,
-        row.get(9)?,
-        row.get(10)?,
-        row.get(11)?,
-        row.get(12)?,
-        row.get(13)?,
-        row.get(14)?,
-        row.get(15)?,
-        row.get(16)?,
-        row.get(17)?,
-        row.get(18)?,
-        row.get(19)?,
-        row.get(20)?,
-        row.get(21)?,
-        row.get(22)?,
-        row.get(23)?,
-        row.get(24)?,
-        row.get(25)?,
-        row.get(26)?,
-    ))
+fn row_to_search_candidate(row: &rusqlite::Row<'_>) -> Result<SearchCandidate, rusqlite::Error> {
+    Ok(SearchCandidate {
+        block_id: row.get(0)?,
+        document_id: row.get(1)?,
+        source_id: row.get(2)?,
+        source_name: row.get(3)?,
+        root_path: row.get(4)?,
+        absolute_path: row.get(5)?,
+        path: row.get(6)?,
+        file_extension: row.get(7)?,
+        title: row.get(8)?,
+        language: row.get(9)?,
+        content_origin: row.get(10)?,
+        ocr_confidence: row.get(11)?,
+        jurisdiction: row.get(12)?,
+        authority: row.get(13)?,
+        authority_level: row.get(14)?,
+        effective_date: row.get(15)?,
+        expiry_date: row.get(16)?,
+        document_type: row.get(17)?,
+        is_superseded: row.get(18)?,
+        page: row.get(19)?,
+        block_type: row.get(20)?,
+        section_path_json: row.get(21)?,
+        block_index: row.get(22)?,
+        line_start: row.get(23)?,
+        line_end: row.get(24)?,
+        text: row.get(25)?,
+        semantic_vector_json: row.get(26)?,
+        lexical_score: 0.0,
+        bm25_score: 0.0,
+    })
 }
 
 fn build_snippet(text: &str, query: &str, max_chars: usize) -> String {
@@ -1149,6 +1184,99 @@ mod tests {
     fn multilingual_query_terms_are_preserved() {
         let value = extract_query_terms(&normalize_text("合同 breach"));
         assert_eq!(value, vec!["breach".to_string(), "合同".to_string()]);
+    }
+
+    #[test]
+    fn fts_candidates_use_bm25_scores() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE knowledge_document_blocks (
+                block_id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                source_name TEXT NOT NULL DEFAULT '',
+                root_path TEXT NOT NULL,
+                absolute_path TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                file_extension TEXT,
+                title TEXT,
+                language TEXT,
+                content_origin TEXT NOT NULL DEFAULT 'native',
+                ocr_confidence REAL,
+                jurisdiction TEXT,
+                authority TEXT,
+                authority_level INTEGER,
+                effective_date TEXT,
+                expiry_date TEXT,
+                document_type TEXT,
+                is_superseded INTEGER NOT NULL DEFAULT 0,
+                page INTEGER,
+                block_type TEXT NOT NULL DEFAULT '',
+                section_path_json TEXT NOT NULL DEFAULT '[]',
+                block_index INTEGER NOT NULL,
+                line_start INTEGER NOT NULL,
+                line_end INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                normalized_text TEXT NOT NULL,
+                semantic_vector_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE VIRTUAL TABLE knowledge_document_blocks_fts USING fts5(
+                block_id UNINDEXED,
+                source_id UNINDEXED,
+                title,
+                text,
+                normalized_text,
+                relative_path,
+                tokenize='unicode61'
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO knowledge_document_blocks (
+                block_id, document_id, source_id, source_name, root_path, absolute_path,
+                relative_path, file_extension, title, language, content_origin,
+                ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+                expiry_date, document_type, is_superseded, page, block_type,
+                section_path_json, block_index, line_start, line_end, text,
+                normalized_text, semantic_vector_json, updated_at
+            ) VALUES (
+                'block-1', 'doc-1', 'source-1', 'Source', '/tmp', '/tmp/doc.txt',
+                'doc.txt', 'txt', 'Breach Remedy', 'en', 'native',
+                NULL, NULL, NULL, NULL, NULL,
+                NULL, 'contract', 0, 1, 'paragraph',
+                '[]', 0, 1, 1, 'Material breach remedy clause.',
+                'material breach remedy clause', '[]', '2026-04-25'
+            )
+            "#,
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO knowledge_document_blocks_fts (
+                block_id, source_id, title, text, normalized_text, relative_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+            rusqlite::params![
+                "block-1",
+                "source-1",
+                "Breach Remedy",
+                "Material breach remedy clause.",
+                "material breach remedy clause",
+                "doc.txt"
+            ],
+        )
+        .unwrap();
+
+        let candidates =
+            fts_candidates_for_source(&conn, "source-1", &["breach".to_string()], 10).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].block_id, "block-1");
+        assert!(candidates[0].bm25_score > 0.0);
     }
 
     #[test]
