@@ -124,12 +124,42 @@ pub(crate) fn tick_media_followups(
             .and_then(Value::as_array)
             .map(|items| items.len())
             .unwrap_or(0);
+        let expected_count = candidate.image_count.max(1);
 
-        if artifact_count > candidate.progress_notified_count
-            && candidate.progress_notification_status != "sending"
-            && now_i64() >= candidate.progress_retry_not_before
-        {
-            let delivered_count = artifact_count.min(candidate.image_count.max(1));
+        if artifact_count >= expected_count {
+            let artifacts = projection
+                .get("artifacts")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if !artifacts.is_empty()
+                && mark_media_followup_notifying(
+                    state,
+                    &candidate.task_id,
+                    "图片已生成完成，准备回传聊天。",
+                )?
+            {
+                let bridge_message = build_success_bridge_message(&candidate.job_id, &artifacts);
+                dispatch_media_followup_notification(
+                    app,
+                    candidate,
+                    bridge_message,
+                    None,
+                    Some(projection),
+                );
+            }
+            continue;
+        }
+
+        if should_send_incremental_progress(
+            artifact_count,
+            expected_count,
+            candidate.progress_notified_count,
+            candidate.progress_notification_status.as_str(),
+            candidate.progress_retry_not_before,
+            now_i64(),
+        ) {
+            let delivered_count = artifact_count.min(expected_count);
             if mark_media_followup_progress_notifying(
                 state,
                 &candidate.task_id,
@@ -238,6 +268,20 @@ pub(crate) fn tick_media_followups(
     }
 
     Ok(())
+}
+
+fn should_send_incremental_progress(
+    artifact_count: usize,
+    expected_count: usize,
+    progress_notified_count: usize,
+    progress_notification_status: &str,
+    progress_retry_not_before: i64,
+    now: i64,
+) -> bool {
+    artifact_count > progress_notified_count
+        && artifact_count < expected_count.max(1)
+        && progress_notification_status != "sending"
+        && now >= progress_retry_not_before
 }
 
 fn create_media_followup_task(
@@ -762,4 +806,22 @@ fn projection_terminal_error(projection: &Value) -> String {
 
 fn sanitize_markdown_label(label: &str) -> String {
     label.replace('[', " ").replace(']', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_notifications_stop_when_expected_count_is_reached() {
+        assert!(!should_send_incremental_progress(4, 4, 3, "idle", 0, 10));
+    }
+
+    #[test]
+    fn progress_notifications_still_send_for_partial_artifacts() {
+        assert!(should_send_incremental_progress(2, 4, 1, "idle", 0, 10));
+        assert!(!should_send_incremental_progress(2, 4, 2, "idle", 0, 10));
+        assert!(!should_send_incremental_progress(2, 4, 1, "sending", 0, 10));
+        assert!(!should_send_incremental_progress(2, 4, 1, "idle", 20, 10));
+    }
 }

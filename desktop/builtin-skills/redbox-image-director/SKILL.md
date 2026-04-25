@@ -298,6 +298,33 @@ The plan must make these things explicit:
 - which subject features and visual details must stay unchanged
 - what must stay consistent across all images
 
+## Visible Text Boundary
+
+Card planning labels are not image content.
+When planning or executing a card set, keep three fields mentally separate:
+
+- `顺序`: internal ordering only, such as `1`, `2`, `3`, `4`.
+- `图片标题`: internal asset label only, used for discussion and file/result identification.
+- `文字与位置`: the only source of text that may appear inside the generated image.
+
+Never let internal labels leak into the image.
+Forbidden as visible text unless the user explicitly wrote it as the actual card copy:
+
+- `第1页` / `第2页` / `第 1 页` / `第 2 页`
+- `卡片1` / `第二张` / `封面页` / `冲突页` / `反转页` / `方法页` / `行动页`
+- `冲突模型` / `方法模型` / `连续视觉` / `2/4` / `storyboard`
+- `thinking_process` / `direction_frame` / `framework` / `prompt` / `layout`
+- Markdown table headers, planning section names, page labels, or any explanation of your reasoning process
+
+For Xiaohongshu card sets, visible text should be consumer-facing copy only:
+
+- a short headline
+- an optional subtitle
+- short bullets, labels, button text, or diagram labels that belong to the content itself
+
+If a phrase is only used to organize the plan, do not put it in `copy`, `visibleText`, or `compiledPrompt`.
+If a phrase should be visible, write it explicitly in `文字与位置` and later in `copy` / `visibleText`.
+
 ## Shared Style Guide
 
 The shared style guide should lock the batch-level constants, but stay concise.
@@ -365,17 +392,27 @@ Recommended `imagePlanItems` shape:
 ```json
 [
   {
-    "title": "封面",
+    "title": "cover",
+    "copy": "主标题：7天养成冷白皮；副标题：真实实测；角标：干货版",
     "prompt": "人物正面主视觉，突出产品和主题钩子，主体服装和产品外观必须与全套保持一致，标题在左上，卖点角标在右上",
-    "copy": "主标题：7天养成冷白皮；副标题：真实实测；角标：干货版"
+    "compiledPrompt": "只渲染这些可见文字：主标题：7天养成冷白皮；副标题：真实实测；角标：干货版。人物正面主视觉，突出产品和主题钩子，主体服装和产品外观必须与全套保持一致，标题在左上，卖点角标在右上。不要渲染页码、卡片编号、规划标签、表格字段名或思考过程。"
   },
   {
-    "title": "第二张",
+    "title": "detail-ingredients",
+    "copy": "标题：先看成分；正文短句：这3种成分更关键",
     "prompt": "补充核心卖点或步骤画面，继续使用同一主体和同一色彩系统，产品放在画面下方偏右，保留统一标题样式",
-    "copy": "标题：先看成分；正文短句：这3种成分更关键"
+    "compiledPrompt": "只渲染这些可见文字：标题：先看成分；正文短句：这3种成分更关键。补充核心卖点或步骤画面，继续使用同一主体和同一色彩系统，产品放在画面下方偏右，保留统一标题样式。不要渲染页码、卡片编号、规划标签、表格字段名或思考过程。"
   }
 ]
 ```
+
+Important payload rules:
+
+- `title` must be a short internal slug or neutral asset label. Prefer `cover`, `problem`, `method`, `action`, not `第2页冲突`.
+- `copy` / `visibleText` is the consumer-facing text that may appear on the image.
+- `compiledPrompt` is preferred for every item. It must combine exact visible copy, layout, visual details, and a short negative instruction against page labels / planning labels / reasoning text.
+- Do not rely on `title` to carry visible card copy. The generation tool may treat it as metadata, not image text.
+- Do not pass `thinking_process`, outline notes, table headers, or page-plan summaries into any image item.
 
 When reference images exist, still pass them through `referenceImages` or `subjectIds`.
 
@@ -387,6 +424,10 @@ When reference images exist, still pass them through `referenceImages` or `subje
 - Do not infer approval from context, urgency, runtime mode, or previous similar tasks.
 - Do not auto-submit a multi-image batch after planning, even if the plan is strong and complete.
 - If the user has not approved the plan yet, stop after the plan and ask for confirmation.
+- Do not render page numbers, card numbers, planning labels, table headers, framework labels, or reasoning/process text inside generated images.
+- Do not use `第N页 + 规划角色` as an image item title, because models may misread it as visible text. Use neutral internal labels and put only final audience-facing text in `copy` / `visibleText`.
+- Do not put sequence labels such as `冲突`, `反转`, `方法`, `行动` on the image unless the user explicitly wants those exact words as consumer-facing copy.
+- Do not expose `thinking_process`, `direction_frame`, page plans, content outlines, or internal framework names in visible text.
 - Do not collapse a multi-image request into one generic prompt repeated N times.
 - Do not choose image order randomly; sequence must match the user's motive and set type.
 - Do not let one batch image drift into a different subject, color system, outfit, product shape, or rendering style.
