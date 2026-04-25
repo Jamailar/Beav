@@ -233,6 +233,82 @@ pub(crate) fn ensure_media_runtime_ready(state: &State<'_, AppState>) -> Result<
     Ok(())
 }
 
+pub(crate) fn media_runtime_pressure_snapshot(
+    state: &State<'_, AppState>,
+) -> Result<Value, String> {
+    let conn = open_media_runtime_connection(state)?;
+    let mut by_kind_status = Vec::<Value>::new();
+    {
+        let mut statement = conn
+            .prepare(
+                r#"
+                SELECT kind, status, COUNT(*) AS count
+                FROM media_jobs
+                GROUP BY kind, status
+                ORDER BY kind ASC, status ASC
+                "#,
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(json!({
+                    "kind": row.get::<_, String>(0)?,
+                    "status": row.get::<_, String>(1)?,
+                    "count": row.get::<_, i64>(2)?,
+                }))
+            })
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            by_kind_status.push(row.map_err(|error| error.to_string())?);
+        }
+    }
+
+    let now = now_i64();
+    let due_video_polls = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM media_jobs j
+            JOIN media_job_attempts a
+              ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
+            WHERE j.kind = 'video'
+              AND j.status = 'polling'
+              AND COALESCE(a.next_poll_at, 0) <= ?1
+              AND COALESCE(a.retry_not_before_at, 0) <= ?1
+              AND COALESCE(a.lease_expires_at, 0) <= ?1
+            "#,
+            params![now],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let leased_jobs = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM media_jobs j
+            JOIN media_job_attempts a
+              ON a.job_id = j.job_id AND a.attempt_no = j.current_attempt_no
+            WHERE COALESCE(a.lease_expires_at, 0) > ?1
+            "#,
+            params![now],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(json!({
+        "byKindStatus": by_kind_status,
+        "dueVideoPolls": due_video_polls,
+        "leasedJobs": leased_jobs,
+        "limits": {
+            "imageSubmitPerProvider": IMAGE_SUBMIT_LIMIT_PER_PROVIDER,
+            "videoSubmitPerProvider": VIDEO_SUBMIT_LIMIT_PER_PROVIDER,
+            "videoDownloadPerProvider": VIDEO_DOWNLOAD_LIMIT_PER_PROVIDER,
+            "videoPollGlobal": VIDEO_POLL_LIMIT_GLOBAL,
+            "dispatchTickMs": DISPATCH_TICK_MS,
+        }
+    }))
+}
+
 fn media_runtime_http_client() -> Result<&'static Client, String> {
     if let Some(client) = MEDIA_RUNTIME_HTTP_CLIENT.get() {
         return Ok(client);

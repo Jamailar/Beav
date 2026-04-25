@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::persistence::with_store;
 use crate::runtime::{runtime_approval_snapshot, RuntimeWarmEntry, SessionToolResultRecord};
-use crate::{now_i64, payload_string, AppState};
+use crate::{cli_runtime, media_runtime, now_i64, payload_string, AppState};
 
 const DIAGNOSTIC_HISTORY_LIMIT: usize = 100;
 const RECENT_PREVIEW_LIMIT: usize = 12;
@@ -68,6 +68,17 @@ pub struct DiagnosticsState {
     pub advisor_knowledge_ingests: Vec<AdvisorKnowledgeIngestMetric>,
     pub runtime_queries: Vec<RuntimeQueryMetric>,
     pub skill_invocations: Vec<SkillInvocationMetric>,
+}
+
+fn count_values<I>(values: I) -> HashMap<String, i64>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut counts = HashMap::<String, i64>::new();
+    for value in values {
+        *counts.entry(value).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn push_bounded<T>(items: &mut Vec<T>, item: T) {
@@ -599,6 +610,7 @@ pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<
         "runtimeWarm": build_runtime_warm_summary(runtime_warm_entries, runtime_warm_last_warmed_at),
         "approvals": approvals,
         "phase0": {
+            "backgroundWorkers": build_background_worker_summary(state),
             "personaGeneration": build_persona_summary(&diagnostics.advisor_persona_runs, &advisor_names),
             "knowledgeIngest": build_knowledge_ingest_summary(&diagnostics.advisor_knowledge_ingests, &advisor_names),
             "runtimeQueries": build_runtime_query_summary(&diagnostics.runtime_queries, &advisor_names),
@@ -607,6 +619,125 @@ pub fn build_runtime_diagnostics_summary(state: &State<'_, AppState>) -> Result<
             "redclawTasks": redclaw_task_summary,
         }
     }))
+}
+
+pub fn build_background_worker_summary(state: &State<'_, AppState>) -> Value {
+    let media_runtime_running = state
+        .media_generation_runtime
+        .lock()
+        .map(|runtime| runtime.is_some())
+        .unwrap_or(false);
+    let redclaw_runtime_running = state
+        .redclaw_runtime
+        .lock()
+        .map(|runtime| runtime.is_some())
+        .unwrap_or(false);
+    let assistant_runtime = state
+        .assistant_runtime
+        .lock()
+        .map(|runtime| {
+            runtime.as_ref().map(|item| {
+                json!({
+                    "running": true,
+                    "host": item.host.clone(),
+                    "port": item.port,
+                })
+            })
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| json!({ "running": false }));
+    let assistant_sidecar_running = state
+        .assistant_sidecar
+        .lock()
+        .map(|runtime| runtime.is_some())
+        .unwrap_or(false);
+    let knowledge_index = state
+        .knowledge_index_state
+        .lock()
+        .map(|runtime| {
+            json!({
+                "isBuilding": runtime.is_building,
+                "pendingRebuild": runtime.pending_rebuild,
+                "pendingCount": runtime.pending_count,
+                "failedCount": runtime.failed_count,
+                "watchedRootCount": runtime.watched_roots.len(),
+            })
+        })
+        .unwrap_or_else(|_| json!({ "error": "knowledge index state lock is poisoned" }));
+    let store_persist = json!({
+        "scheduled": state.store_persist_scheduled.load(std::sync::atomic::Ordering::SeqCst),
+        "version": state.store_persist_version.load(std::sync::atomic::Ordering::SeqCst),
+    });
+    let media_pressure = media_runtime::media_runtime_pressure_snapshot(state)
+        .unwrap_or_else(|error| json!({ "error": error }));
+    let active_cli_processes = cli_runtime::active_background_execution_count().unwrap_or(0);
+
+    let store_summary = with_store(state, |store| {
+        let redclaw_execution_status = count_values(
+            store
+                .redclaw_job_executions
+                .iter()
+                .map(|item| item.status.clone()),
+        );
+        let redclaw_definition_status =
+            count_values(store.redclaw_job_definitions.iter().map(|item| {
+                if item.enabled {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                }
+            }));
+        let cli_status = count_values(store.cli_executions.iter().map(|item| {
+            serde_json::to_value(&item.status)
+                .ok()
+                .and_then(|value| value.as_str().map(ToString::to_string))
+                .unwrap_or_else(|| format!("{:?}", item.status))
+        }));
+        Ok(json!({
+            "redclaw": {
+                "definitionsByStatus": redclaw_definition_status,
+                "executionsByStatus": redclaw_execution_status,
+                "runtimeRunning": redclaw_runtime_running,
+            },
+            "cliRuntime": {
+                "activeProcesses": active_cli_processes,
+                "executionsByStatus": cli_status,
+            }
+        }))
+    })
+    .unwrap_or_else(|error| json!({ "error": error }));
+
+    json!({
+        "generatedAt": now_i64(),
+        "dedicatedWorkers": {
+            "logSink": { "running": true },
+            "knowledgeWatcher": {
+                "running": true,
+                "state": knowledge_index,
+            },
+            "assistantListener": assistant_runtime,
+            "assistantSidecar": { "running": assistant_sidecar_running },
+        },
+        "coordinators": {
+            "mediaRuntime": {
+                "running": media_runtime_running,
+                "pressure": media_pressure,
+            },
+            "redclawRuntime": {
+                "running": redclaw_runtime_running,
+            },
+            "storePersist": store_persist,
+            "officialCacheRefresh": {
+                "inflight": state.official_cache_refresh_inflight.load(std::sync::atomic::Ordering::SeqCst),
+            }
+        },
+        "domains": store_summary,
+        "notes": [
+            "phase0 snapshot is observational only",
+            "counts may include completed historical records from durable stores"
+        ]
+    })
 }
 
 #[cfg(test)]
