@@ -17,6 +17,7 @@ use crate::{
             semantic_vector_json, weighted_rrf, RetrievalMode,
         },
         schema::ensure_catalog_ready,
+        tantivy_index,
     },
     payload_field, payload_string,
     persistence::with_store,
@@ -194,7 +195,8 @@ pub(crate) fn replace_blocks(
                 .map_err(|error| error.to_string())?;
         }
     }
-    tx.commit().map_err(|error| error.to_string())
+    tx.commit().map_err(|error| error.to_string())?;
+    crate::knowledge_index::tantivy_index::rebuild_index(state, blocks)
 }
 
 pub(crate) fn replace_blocks_for_source(
@@ -266,7 +268,8 @@ pub(crate) fn replace_blocks_for_source(
         }
     }
     tx.commit().map_err(|error| error.to_string())?;
-    rebuild_fts_index(state)
+    rebuild_fts_index(state)?;
+    rebuild_tantivy_from_db(state)
 }
 
 pub(crate) fn delete_blocks_for_source(
@@ -285,7 +288,8 @@ pub(crate) fn delete_blocks_for_source(
         params![source_id],
     )
     .map_err(|error| error.to_string())?;
-    tx.commit().map_err(|error| error.to_string())
+    tx.commit().map_err(|error| error.to_string())?;
+    rebuild_tantivy_from_db(state)
 }
 
 pub(crate) fn count_blocks_for_source(
@@ -317,7 +321,8 @@ pub(crate) fn rebuild_fts_index(state: &State<'_, AppState>) -> Result<(), Strin
         [],
     )
     .map_err(|error| error.to_string())?;
-    tx.commit().map_err(|error| error.to_string())
+    tx.commit().map_err(|error| error.to_string())?;
+    rebuild_tantivy_from_db(state)
 }
 
 pub(crate) fn rebuild_fts_index_for_source(
@@ -346,7 +351,38 @@ pub(crate) fn rebuild_fts_index_for_source(
         params![source_id],
     )
     .map_err(|error| error.to_string())?;
-    tx.commit().map_err(|error| error.to_string())
+    tx.commit().map_err(|error| error.to_string())?;
+    rebuild_tantivy_from_db(state)
+}
+
+fn rebuild_tantivy_from_db(state: &State<'_, AppState>) -> Result<(), String> {
+    let blocks = load_blocks_for_index(state)?;
+    crate::knowledge_index::tantivy_index::rebuild_index(state, &blocks)
+}
+
+pub(crate) fn load_blocks_for_index(
+    state: &State<'_, AppState>,
+) -> Result<Vec<DocumentBlockRecord>, String> {
+    let conn = connection(state)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
+                   relative_path, file_extension, title, language, content_origin,
+                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+                   expiry_date, document_type, is_superseded, page, block_type,
+                   section_path_json, block_index, line_start, line_end, text,
+                   normalized_text, semantic_vector_json, updated_at
+            FROM knowledge_document_blocks
+            ORDER BY source_id ASC, relative_path ASC, block_index ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map([], row_to_document_block)
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn search_blocks(
@@ -392,6 +428,18 @@ pub(crate) fn search_blocks(
             sparse_terms,
             candidate_limit,
         )?);
+    }
+    if let Ok(tantivy_hits) =
+        tantivy_index::search_block_ids(state, source_id, query, candidate_limit)
+    {
+        for hit in tantivy_hits {
+            if let Some(mut candidate) = candidate_for_block_id(&conn, source_id, &hit.block_id)? {
+                candidate.bm25_score = candidate
+                    .bm25_score
+                    .max((hit.score as f64).clamp(0.0, 12.0));
+                lexical_candidates.push(candidate);
+            }
+        }
     }
 
     let mut lexical_hits_by_id = std::collections::HashMap::<String, SearchCandidate>::new();
@@ -597,42 +645,44 @@ pub(crate) fn read_block(
         WHERE block_id = ?1
         "#,
         params![block_id],
-        |row| {
-            Ok(DocumentBlockRecord {
-                block_id: row.get(0)?,
-                document_id: row.get(1)?,
-                source_id: row.get(2)?,
-                source_name: row.get(3)?,
-                root_path: row.get(4)?,
-                absolute_path: row.get(5)?,
-                relative_path: row.get(6)?,
-                file_extension: row.get(7)?,
-                title: row.get(8)?,
-                language: row.get(9)?,
-                content_origin: row.get(10)?,
-                ocr_confidence: row.get(11)?,
-                jurisdiction: row.get(12)?,
-                authority: row.get(13)?,
-                authority_level: row.get(14)?,
-                effective_date: row.get(15)?,
-                expiry_date: row.get(16)?,
-                document_type: row.get(17)?,
-                is_superseded: row.get(18)?,
-                page: row.get(19)?,
-                block_type: row.get(20)?,
-                section_path_json: row.get(21)?,
-                block_index: row.get(22)?,
-                line_start: row.get(23)?,
-                line_end: row.get(24)?,
-                text: row.get(25)?,
-                normalized_text: row.get(26)?,
-                semantic_vector_json: row.get(27)?,
-                updated_at: row.get(28)?,
-            })
-        },
+        row_to_document_block,
     )
     .optional()
     .map_err(|error| error.to_string())
+}
+
+fn row_to_document_block(row: &rusqlite::Row<'_>) -> Result<DocumentBlockRecord, rusqlite::Error> {
+    Ok(DocumentBlockRecord {
+        block_id: row.get(0)?,
+        document_id: row.get(1)?,
+        source_id: row.get(2)?,
+        source_name: row.get(3)?,
+        root_path: row.get(4)?,
+        absolute_path: row.get(5)?,
+        relative_path: row.get(6)?,
+        file_extension: row.get(7)?,
+        title: row.get(8)?,
+        language: row.get(9)?,
+        content_origin: row.get(10)?,
+        ocr_confidence: row.get(11)?,
+        jurisdiction: row.get(12)?,
+        authority: row.get(13)?,
+        authority_level: row.get(14)?,
+        effective_date: row.get(15)?,
+        expiry_date: row.get(16)?,
+        document_type: row.get(17)?,
+        is_superseded: row.get(18)?,
+        page: row.get(19)?,
+        block_type: row.get(20)?,
+        section_path_json: row.get(21)?,
+        block_index: row.get(22)?,
+        line_start: row.get(23)?,
+        line_end: row.get(24)?,
+        text: row.get(25)?,
+        normalized_text: row.get(26)?,
+        semantic_vector_json: row.get(27)?,
+        updated_at: row.get(28)?,
+    })
 }
 
 pub(crate) fn build_blocks_for_source(
@@ -1006,6 +1056,29 @@ fn like_candidates_for_source(
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
+}
+
+fn candidate_for_block_id(
+    conn: &Connection,
+    source_id: &str,
+    block_id: &str,
+) -> Result<Option<SearchCandidate>, String> {
+    conn.query_row(
+        r#"
+        SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
+               relative_path, file_extension, title, language, content_origin,
+               ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+               expiry_date, document_type, is_superseded, page, block_type,
+               section_path_json, block_index, line_start, line_end, text,
+               semantic_vector_json
+        FROM knowledge_document_blocks
+        WHERE source_id = ?1 AND block_id = ?2
+        "#,
+        params![source_id, block_id],
+        row_to_search_candidate,
+    )
+    .optional()
+    .map_err(|error| error.to_string())
 }
 
 fn build_fts_match_query(terms: &[String]) -> Option<String> {
