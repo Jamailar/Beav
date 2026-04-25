@@ -600,6 +600,14 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list".to_string()];
                 self.handle_manuscripts(&tokens, payload)
             }
+            "manuscriptsread" => {
+                let path = payload_string(payload, "path")
+                    .or_else(|| payload_string(payload, "filePath"))
+                    .ok_or_else(|| "manuscripts.read requires payload.path".to_string())?;
+                let tokens = vec!["read".to_string(), path];
+                self.handle_manuscripts(&tokens, payload)
+            }
+            "manuscriptsreadcurrent" => self.handle_manuscript_read_current(),
             "manuscriptscreateproject" => {
                 self.handle_manuscript_create_project(&CliArgs::default(), payload)
             }
@@ -715,6 +723,10 @@ impl<'a> AppCliExecutor<'a> {
             "videogenerate" => {
                 let tokens = vec!["generate".to_string()];
                 self.handle_video(&tokens, payload)
+            }
+            "videoprojectcreate" => {
+                let args = CliArgs::default();
+                self.handle_video_project_create(&args, payload)
             }
             other => {
                 return Err(app_cli_error_json(
@@ -3480,6 +3492,13 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             "savedBytes": saved_bytes,
             "result": saved,
         }))
+    }
+
+    fn handle_manuscript_read_current(&self) -> Result<Value, String> {
+        let target = self.current_authoring_session_target().ok_or_else(|| {
+            "manuscripts read-current requires an active authoring project".to_string()
+        })?;
+        self.call_channel("manuscripts:read", json!(target.project_path))
     }
 
     fn normalize_manuscript_target_path(&self, requested_path: &str) -> String {

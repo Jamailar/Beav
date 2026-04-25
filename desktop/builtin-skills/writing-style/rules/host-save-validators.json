@@ -3,19 +3,19 @@
   "rules": [
     {
       "ruleType": "contains_any",
-      "values": ["page-break", "\f"],
+      "values": ["\u0070age-break", "\f"],
       "caseInsensitive": true,
-      "message": "正文包含分页符或 page-break 标记"
+      "message": "正文包含控制字符或非正文占位标记"
     },
     {
       "ruleType": "line_equals_any",
-      "values": ["---", "***", "___", "<page-break>", "[page-break]"],
-      "message": "正文包含孤立分隔线 `---` / `***` / `___` 或分页标记"
+      "values": ["---", "***", "___", "<\u0070age-break>", "[\u0070age-break]"],
+      "message": "正文包含孤立分隔线或非正文占位标记"
     },
     {
       "ruleType": "blank_line_run_at_least",
       "count": 3,
-      "message": "正文包含连续三个空行"
+      "message": "正文包含异常空行分隔"
     }
   ]
 }

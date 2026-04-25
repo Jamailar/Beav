@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-04-24
+last_updated: 2026-04-25
 owner: product-engineering
 scope: desktop
 source_of_truth: true
@@ -152,6 +152,7 @@ Status: Current
 | WS2-05 | AI Runtime | 内置 vLLM 运行时与本地模型托管 | P1 | planned | 0% | WS1-02 | 本地模型拉起、切换、回退验证 |
 | WS2-06 | AI Runtime | 记忆模块升级重做 | P0 | planned | 0% | WS2-01 | recall、maintenance、写回验证 |
 | WS2-07 | AI Runtime | 记忆 dreaming 自动整理能力 | P0 | planned | 0% | WS2-06 | 记忆整理任务可调度、可回溯、可恢复 |
+| WS2-08 | AI Runtime | 简化工具调用复杂度 | P0 | planned | 0% | WS2-01, WS2-02 | 工具链路可观测性、失败率下降、调用延迟下降 |
 | WS3-01 | 知识与检索 | 文档摄取 pipeline 统一切片和元数据结构 | P1 | planned | 0% | WS1-04 | 多格式导入验证 |
 | WS3-02 | 知识与检索 | 检索结果加引用、来源与重排序策略 | P1 | planned | 0% | WS3-01 | grounded answer 验证 |
 | WS3-03 | 知识与检索 | 索引重建改为增量任务和后台调度 | P1 | planned | 0% | WS3-01 | 大库重建耗时验证 |
@@ -388,6 +389,23 @@ Status: Current
 | Verification | `dreaming` 任务可手动/自动触发；任务状态可查；整理前后 recall 一致性不降低且延迟下降 |
 | Cleanup | 禁止记忆整理逻辑在会话实时链路直接运行，避免阻塞与结果抖动 |
 | Last Update | 2026-04-24 新增 |
+
+#### Task Card: WS2-08
+
+| Field | Detail |
+| --- | --- |
+| Task | 简化工具调用复杂度 |
+| Status | planned |
+| Progress | 0% |
+| Entry Points | `desktop/src-tauri/src/tools/*`, `desktop/src-tauri/src/commands/*`, `desktop/src-tauri/src/runtime/*`, `desktop/src/bridge/ipcRenderer.ts` |
+| Why | 当前工具链路散落多个入口、参数约定不统一，导致重复适配、排障链路长、调用抖动不可控 |
+| Implementation | 统一工具调用入口与 payload schema：建立 `tool invocation graph`，按 capability 映射到最小 tool；统一工具输入校验、错误码、超时与重试；对旧入口保留兼容 adapter，逐步收敛到单一 typed 调用层 |
+| Existing Libraries | serde、Tauri invoke、现有 host command / tool registry |
+| Must Self Build | tool graph 定义、统一错误语义、trace-id 链路、兼容 adapter |
+| Performance Strategy | 缩短调用链，减少中间转换层；高频工具走缓存/批处理；失败重试采用抖动退避避免雪崩 |
+| Verification | 真实任务下对齐 tool 使用路径；可观察到单一 trace-id；常见工具错误返回统一且可解析 |
+| Cleanup | 清理页面或 runtime 的 ad hoc 工具拼包逻辑，删除重复解析与重复 fallback |
+| Last Update | 2026-04-25 新增 |
 
 ### WS3 知识与检索
 
@@ -792,19 +810,20 @@ Status: Current
 4. `WS2-01` 收口 context bundle / skills / tools
 5. `WS2-06` 重做记忆模块边界与 recall pipeline
 6. `WS2-07` 落地记忆 dreaming 自动整理闭环
-7. `WS2-02` 收口 approval runtime / tool policy
-8. `WS4-01` 收口 manuscript canonical state
-9. `WS4-02` 做时间线虚拟化与交互性能治理
-10. `WS4-03` 收口预览与导出编排
-11. `WS3-04` 建立新闻源接入与时效化知识更新链路
-12. `WS4-05` 建立自动剪视频工作流
-13. `WS5-01` 统一 RedClaw execution model
-14. `WS5-04` 升级统一定时任务平台
-15. `WS8-01` 升级 Team 模块为协作控制台
-16. `WS8-02` 升级 ACP 协作模块
-17. `WS2-05` 内置 vLLM 运行时
-18. `WS4-06` 建立 AI 生成动画工作流
-19. `WS6-01` 建立统一 diagnostics summary
+7. `WS2-08` 简化工具调用复杂度
+8. `WS2-02` 收口 approval runtime / tool policy
+9. `WS4-01` 收口 manuscript canonical state
+10. `WS4-02` 做时间线虚拟化与交互性能治理
+11. `WS4-03` 收口预览与导出编排
+12. `WS3-04` 建立新闻源接入与时效化知识更新链路
+13. `WS4-05` 建立自动剪视频工作流
+14. `WS5-01` 统一 RedClaw execution model
+15. `WS5-04` 升级统一定时任务平台
+16. `WS8-01` 升级 Team 模块为协作控制台
+17. `WS8-02` 升级 ACP 协作模块
+18. `WS2-05` 内置 vLLM 运行时
+19. `WS4-06` 建立 AI 生成动画工作流
+20. `WS6-01` 建立统一 diagnostics summary
 
 这个顺序是当前最优解，因为它先解决基础稳定与 AI 可控性，再解决创作主链路，最后补自动化和运维观测。反过来做会导致每个功能线都反复返工。
 

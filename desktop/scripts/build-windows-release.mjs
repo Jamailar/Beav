@@ -38,6 +38,18 @@ function remoteCommand(parts) {
   return parts.filter(Boolean).join(' ');
 }
 
+function remoteNsisDirForTarget(remoteWorkdir, target) {
+  return path.posix.join(
+    remoteWorkdir,
+    'src-tauri',
+    'target',
+    target,
+    'release',
+    'bundle',
+    'nsis',
+  );
+}
+
 function windowsTargetArchLabel(target) {
   if (target.startsWith('aarch64-')) {
     return 'arm64';
@@ -393,6 +405,11 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
     remoteEnv.push('REDBOX_REQUIRE_WINDOWS_SIGN=1');
   }
 
+  const remoteCleanupNsisDirs = targets
+    .map((target) => remoteNsisDirForTarget(remoteWorkdir, target))
+    .map((nsisDir) => `rm -rf ${shellQuote(nsisDir)}`)
+    .join(' && ');
+
   const remoteBuild = remoteCommand([
     'bash -lc',
     shellQuote(
@@ -402,6 +419,7 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
         'node ./scripts/tauri-preflight.mjs',
         'pnpm install --frozen-lockfile',
         'rustup target add aarch64-pc-windows-msvc x86_64-pc-windows-msvc i686-pc-windows-msvc',
+        remoteCleanupNsisDirs,
         `env ${remoteEnv.join(' ')} node ${shellQuote(remoteScriptPath)}`,
       ].join(' && '),
     ),
@@ -413,15 +431,7 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
   await fs.rm(localWinDir, { recursive: true, force: true });
   await fs.mkdir(localWinDir, { recursive: true });
   for (const target of targets) {
-    const remoteNsisDir = `${remoteHost}:${path.posix.join(
-      remoteWorkdir,
-      'src-tauri',
-      'target',
-      target,
-      'release',
-      'bundle',
-      'nsis',
-    )}/`;
+    const remoteNsisDir = `${remoteHost}:${remoteNsisDirForTarget(remoteWorkdir, target)}/`;
     logStep(`Fetching Windows artifacts for ${target} to ${localWinDir}`);
     await runCommand(
       'rsync',

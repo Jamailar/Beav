@@ -3,6 +3,7 @@ import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Pl
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
+import type { PendingChatMessage } from '../App';
 import {
   AUTHORING_ALLOWED_APP_CLI_ACTIONS,
   AUTHORING_ALLOWED_TOOLS,
@@ -83,23 +84,7 @@ interface WanderProps {
   isActive?: boolean;
   onExecutionStateChange?: (active: boolean) => void;
   onNavigateToManuscript?: (filePath: string) => void;
-  onNavigateToRedClaw?: (payload: {
-    content: string;
-    displayContent?: string;
-    taskHints?: AuthoringTaskHints;
-    attachment?: {
-      type: 'wander-references';
-      title?: string;
-      items: Array<{
-        title: string;
-        itemType: 'note' | 'video';
-        tag?: string;
-        folderPath?: string;
-        summary?: string;
-        cover?: string;
-      }>;
-    };
-  }) => void;
+  onNavigateToRedClaw?: (payload: PendingChatMessage) => void;
 }
 
 export function Wander({ isActive = true, onExecutionStateChange, onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
@@ -539,10 +524,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       '开始写作前必须先激活 `writing-style` 技能；不要假定它已经预加载。先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，然后再继续读取素材、读取档案和写正文。',
       '再次强调：这是写作任务，不要跳过 `writing-style`。开始写作前必须先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`。',
       '最后再强调一次：先激活 `writing-style`，再写作；先激活 `writing-style`，再写作；先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，再继续后续步骤。',
-      '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md 再基于素材完成标题候选、正文、标签建议和封面文案，避免模板化表达。',
+      '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md，再基于素材完成最终标题和正文，避免模板化表达。',
       '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
       '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
-      '写正文时禁止输出分页符、`page-break`、单独一行的 `---` / `***` / `___`，也不要故意插入连续三个空行；正文只保留正常段落结构。',
+      '写正文时不要插入控制字符、占位分隔线或额外格式标记；正文只保留正常段落结构。',
       '完稿前自行做一次风格与事实自检，再保存。',
       '',
       '## 灵感选题',
@@ -553,11 +538,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       materialText,
       '',
       '## 输出要求',
-      '1. 先给出标题候选（至少5个，含强钩子）。',
-      '2. 给出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。',
+      '1. 只输出一个最终标题，不要再输出标题候选、备选标题或标题列表。',
+      '2. 只输出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。不要额外输出推荐 tag、标签建议、封面文案或其它附加栏目。',
       '3. 这是小红书图文任务，必须保存成 `.redpost` 工程。',
       '4. 如目标工程不存在，先调用 `app_cli(action="manuscripts.createProject", payload={ "kind": "redpost", "parent": "wander", "title": "<最终标题>" })` 获取规范工程路径。不要把标题直接当成工程文件名。',
-      '5. 创建成功后，宿主会把该工程绑定为当前写稿目标，正文内容由宿主写入工程内部的 `content.md`，不要自己管理其他工程文件。',
+      '5. 创建成功后，宿主会把该工程绑定为当前写稿目标；你只需要生成最终标题和完整正文，不要展开描述工程内部文件结构，也不要自己管理其他工程文件。',
       '6. 完成后必须调用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "<完整正文>" })` 保存完整稿件；不要重新创建工程，也不要再重复传 path。',
       '7. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
     ].join('\n');
@@ -565,6 +550,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     onNavigateToRedClaw({
       content,
       displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
+      sessionRouting: 'new',
       taskHints: {
         intent: 'manuscript_creation',
         allowedTools: AUTHORING_ALLOWED_TOOLS,

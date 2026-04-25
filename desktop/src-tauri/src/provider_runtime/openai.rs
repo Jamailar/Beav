@@ -12,6 +12,18 @@ use crate::{
     ResolvedChatConfig,
 };
 
+pub(crate) fn should_prefer_non_streaming_openai_turn(
+    runtime_mode: &str,
+    config: &ResolvedChatConfig,
+) -> bool {
+    runtime_mode == "redclaw"
+        && config
+            .model_name
+            .trim()
+            .to_ascii_lowercase()
+            .contains("qwen")
+}
+
 fn provider_error_from_transport(error: &LlmTransportError) -> ProviderError {
     if error.http_status == Some(401) {
         return ProviderError::new(ProviderErrorKind::Auth, false, error.to_string());
@@ -233,8 +245,12 @@ pub(crate) fn run_openai_provider_turn(
 
 #[cfg(test)]
 mod tests {
-    use super::{openai_tool_arguments_value, should_attempt_json_fallback};
+    use super::{
+        openai_tool_arguments_value, should_attempt_json_fallback,
+        should_prefer_non_streaming_openai_turn,
+    };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
+    use crate::runtime::ResolvedChatConfig;
     use serde_json::json;
 
     #[test]
@@ -260,5 +276,32 @@ mod tests {
             openai_tool_arguments_value(Some(&json!({ "path": "wander/a.redpost" }))),
             Some(json!({ "path": "wander/a.redpost" }))
         );
+    }
+
+    #[test]
+    fn redclaw_qwen_turns_prefer_non_streaming() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            base_url: "https://api.ziz.hk/redbox/v1".to_string(),
+            api_key: Some("rbx-live-1".to_string()),
+            model_name: "qwen3.5-plus".to_string(),
+        };
+
+        assert!(should_prefer_non_streaming_openai_turn("redclaw", &config));
+        assert!(!should_prefer_non_streaming_openai_turn(
+            "chatroom", &config
+        ));
+    }
+
+    #[test]
+    fn non_qwen_models_keep_streaming_behavior() {
+        let config = ResolvedChatConfig {
+            protocol: "openai".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: Some("sk-test".to_string()),
+            model_name: "gpt-5.4".to_string(),
+        };
+
+        assert!(!should_prefer_non_streaming_openai_turn("redclaw", &config));
     }
 }

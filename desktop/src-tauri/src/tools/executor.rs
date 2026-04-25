@@ -38,15 +38,24 @@ impl<'a> InteractiveToolExecutor<'a> {
         name: &str,
         arguments: &Value,
     ) -> Result<PreparedToolCall, String> {
-        let normalized_call = crate::tools::compat::normalize_tool_call(name, arguments);
-        let normalized_name = normalized_call.name;
-        let normalized_arguments = normalized_call.arguments;
-        crate::tools::guards::ensure_tool_allowed_for_session(
+        let original_allowed = crate::tools::guards::ensure_tool_allowed_for_session(
             self.state,
             self.runtime_mode,
             self.session_id,
-            normalized_name,
-        )?;
+            name,
+        )
+        .is_ok();
+        let normalized_call = crate::tools::compat::normalize_tool_call(name, arguments);
+        let normalized_name = normalized_call.name;
+        let normalized_arguments = normalized_call.arguments;
+        if !original_allowed {
+            crate::tools::guards::ensure_tool_allowed_for_session(
+                self.state,
+                self.runtime_mode,
+                self.session_id,
+                normalized_name,
+            )?;
+        }
         Ok(PreparedToolCall {
             name: normalized_name,
             arguments: normalized_arguments,

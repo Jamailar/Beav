@@ -90,6 +90,11 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     return sessionId || null;
 }
 
+function canReuseAsFreshSession(sessionItem: ContextChatSessionListItem | null | undefined): boolean {
+    if (!sessionItem) return false;
+    return Number(sessionItem.messageCount || 0) === 0;
+}
+
 export function RedClaw({
     pendingMessage,
     onPendingMessageConsumed,
@@ -127,6 +132,7 @@ export function RedClaw({
     const [automationMessage, setAutomationMessage] = useState('');
     const [onboardingState, setOnboardingState] = useState<Record<string, unknown> | null>(null);
     const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
+    const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
 
     const [runnerIntervalMinutes, setRunnerIntervalMinutes] = useState<number>(20);
     const [runnerMaxAutomationPerTick, setRunnerMaxAutomationPerTick] = useState<number>(2);
@@ -152,6 +158,7 @@ export function RedClaw({
     const hasSessionSnapshotRef = useRef(false);
     const hasRunnerSnapshotRef = useRef(false);
     const hasSkillsSnapshotRef = useRef(false);
+    const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
 
     useEffect(() => {
         activeSessionIdRef.current = activeSessionId;
@@ -166,6 +173,95 @@ export function RedClaw({
     useEffect(() => {
         sessionListRef.current = sessionList;
     }, [sessionList]);
+
+    useEffect(() => {
+        if (!pendingMessage) {
+            routedPendingMessageRef.current = null;
+            setResolvedPendingMessage(null);
+            return;
+        }
+
+        if (routedPendingMessageRef.current === pendingMessage) {
+            setResolvedPendingMessage(pendingMessage);
+            return;
+        }
+
+        const routing = pendingMessage.sessionRouting || 'current';
+        if (routing !== 'new') {
+            routedPendingMessageRef.current = pendingMessage;
+            setResolvedPendingMessage(pendingMessage);
+            return;
+        }
+
+        if (!hasSessionSnapshotRef.current || isSessionLoading) {
+            setResolvedPendingMessage(null);
+            return;
+        }
+
+        const activeSession = activeSessionIdRef.current
+            ? sessionListRef.current.find((item) => item.id === activeSessionIdRef.current) || null
+            : null;
+        if (canReuseAsFreshSession(activeSession)) {
+            routedPendingMessageRef.current = pendingMessage;
+            setResolvedPendingMessage(pendingMessage);
+            return;
+        }
+
+        let cancelled = false;
+        setResolvedPendingMessage(null);
+
+        const prepareFreshSession = async () => {
+            const nextActiveSpaceId = activeSpaceId || 'default';
+            const nextSpaceName = activeSpaceName || nextActiveSpaceId;
+            const contextId = buildRedClawContextId(nextActiveSpaceId);
+            try {
+                const session = await uiMeasure('redclaw', 'sessions:create_for_pending_message', async () => (
+                    window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                        contextId,
+                        contextType: REDCLAW_CONTEXT_TYPE,
+                        title: buildRedClawSessionTitle(nextSpaceName),
+                        initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                    }, {
+                        timeoutMs: 3200,
+                        fallback: null,
+                    })
+                ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
+
+                if (!session) {
+                    throw new Error('create context session timed out');
+                }
+                if (cancelled) return;
+
+                const nextItem = createContextSessionListItem(session);
+                setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
+                setActiveSessionId(session.id);
+                hasSessionSnapshotRef.current = true;
+                routedPendingMessageRef.current = pendingMessage;
+                setResolvedPendingMessage(pendingMessage);
+                debugUi('sessions:create_for_pending_message_done', {
+                    sessionId: session.id,
+                    activeSpaceId: nextActiveSpaceId,
+                });
+            } catch (error) {
+                console.error('Failed to create RedClaw context session for pending message:', error);
+                if (!cancelled) {
+                    setChatActionMessage('为创作任务创建新对话失败，请稍后重试');
+                }
+            }
+        };
+
+        void prepareFreshSession();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        activeSpaceId,
+        activeSpaceName,
+        debugUi,
+        isSessionLoading,
+        pendingMessage,
+    ]);
 
     const loadContextSessions = useCallback(async (
         nextActiveSpaceId: string,
@@ -1068,13 +1164,13 @@ export function RedClaw({
                                 onExecutionStateChange={onExecutionStateChange}
                                 key={`redclaw:${chatRefreshKey}`}
                                 fixedSessionId={activeSessionId}
-                                pendingMessage={pendingMessage}
+                                pendingMessage={resolvedPendingMessage}
                                 onMessageConsumed={onPendingMessageConsumed}
                                 defaultCollapsed={true}
                                 showClearButton={false}
                                 fixedSessionBannerText=""
-                                showWelcomeShortcuts={false}
-                                showComposerShortcuts={false}
+                                showWelcomeShortcuts={true}
+                                showComposerShortcuts={true}
                                 fixedSessionContextIndicatorMode="corner-ring"
                                 shortcuts={REDCLAW_SHORTCUTS}
                                 welcomeShortcuts={REDCLAW_WELCOME_SHORTCUTS}

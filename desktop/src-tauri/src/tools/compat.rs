@@ -7,6 +7,8 @@ pub struct NormalizedToolCall {
 
 pub fn canonical_tool_name(name: &str) -> &str {
     match name.trim() {
+        "Read" | "List" | "Search" => "redbox_fs",
+        "Write" | "Redbox" => "app_cli",
         "app_cli"
         | "redbox_app_query"
         | "redbox_profile_doc"
@@ -23,7 +25,7 @@ pub fn canonical_tool_name(name: &str) -> &str {
         | "redbox_list_redclaw_projects"
         | "redclaw_update_profile_doc"
         | "redclaw_update_creator_profile" => "app_cli",
-        "bash" => "bash",
+        "bash" | "Bash" => "bash",
         "redbox_fs"
         | "redbox_list_directory"
         | "redbox_read_path"
@@ -37,8 +39,13 @@ pub fn canonical_tool_name(name: &str) -> &str {
 
 pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall {
     match name {
+        "Read" => normalize_read_call(arguments),
+        "List" => normalize_list_call(arguments),
+        "Search" => normalize_search_call(arguments),
+        "Write" => normalize_write_call(arguments),
+        "Redbox" => normalize_redbox_call(arguments),
         "app_cli" => normalize_app_cli_call(arguments),
-        "bash" => passthrough("bash", arguments),
+        "bash" | "Bash" => passthrough("bash", arguments),
         "redbox_list_spaces" => app_query("spaces.list", arguments),
         "redbox_list_advisors" => app_query("advisors.list", arguments),
         "redbox_search_knowledge" => app_query("knowledge.search", arguments),
@@ -218,6 +225,588 @@ fn normalize_redbox_fs_call(arguments: &Value) -> NormalizedToolCall {
     NormalizedToolCall {
         name: "redbox_fs",
         arguments: Value::Object(normalized),
+    }
+}
+
+fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
+    let object = normalized_universal_arguments(arguments);
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let (scheme, resource_path) = split_virtual_path(path);
+    match scheme.as_str() {
+        "editor" => {
+            let action = match editor_resource_name(&resource_path).as_str() {
+                "project" => "project_read",
+                "remotion" => "remotion_read",
+                _ => "script_read",
+            };
+            universal_editor_call(action, &object, Some("Read"), Some(path))
+        }
+        "profiles" | "profile" => {
+            if resource_path.trim().is_empty() || resource_path == "bundle" {
+                app_cli_action_call(
+                    "redclaw.profile.bundle",
+                    json!({}),
+                    Some("Read"),
+                    Some(path),
+                )
+            } else {
+                app_cli_action_call(
+                    "redclaw.profile.read",
+                    json!({ "docType": profile_doc_type(&resource_path) }),
+                    Some("Read"),
+                    Some(path),
+                )
+            }
+        }
+        "knowledge" => universal_fs_call("knowledge.read", resource_path, &object, Some("Read")),
+        "manuscripts" if resource_path == "current" => app_cli_action_call(
+            "manuscripts.readCurrent",
+            json!({}),
+            Some("Read"),
+            Some(path),
+        ),
+        "manuscripts" => app_cli_action_call(
+            "manuscripts.read",
+            json!({ "path": resource_path }),
+            Some("Read"),
+            Some(path),
+        ),
+        _ => universal_fs_call("workspace.read", resource_path, &object, Some("Read")),
+    }
+}
+
+fn normalize_list_call(arguments: &Value) -> NormalizedToolCall {
+    let object = normalized_universal_arguments(arguments);
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("workspace://");
+    let (scheme, resource_path) = split_virtual_path(path);
+    match scheme.as_str() {
+        "knowledge" => universal_fs_call("knowledge.list", resource_path, &object, Some("List")),
+        "manuscripts" => {
+            app_cli_action_call("manuscripts.list", json!({}), Some("List"), Some(path))
+        }
+        "profiles" | "profile" => app_cli_action_call(
+            "redclaw.profile.bundle",
+            json!({}),
+            Some("List"),
+            Some(path),
+        ),
+        "memory" => app_cli_action_call("memory.list", json!({}), Some("List"), Some(path)),
+        _ => universal_fs_call("workspace.list", resource_path, &object, Some("List")),
+    }
+}
+
+fn normalize_search_call(arguments: &Value) -> NormalizedToolCall {
+    let object = normalized_universal_arguments(arguments);
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("workspace://");
+    let (scheme, resource_path) = split_virtual_path(path);
+    match scheme.as_str() {
+        "knowledge" => {
+            universal_fs_call("knowledge.search", resource_path, &object, Some("Search"))
+        }
+        "subjects" | "subject" => {
+            let mut payload = Map::new();
+            copy_universal(&mut payload, &object, "query");
+            copy_universal_as(&mut payload, &object, "limit", "limit");
+            app_cli_action_call(
+                "subjects.search",
+                Value::Object(payload),
+                Some("Search"),
+                Some(path),
+            )
+        }
+        "memory" => {
+            let mut payload = Map::new();
+            copy_universal(&mut payload, &object, "query");
+            app_cli_action_call(
+                "memory.search",
+                Value::Object(payload),
+                Some("Search"),
+                Some(path),
+            )
+        }
+        _ => universal_fs_call("workspace.search", resource_path, &object, Some("Search")),
+    }
+}
+
+fn normalize_write_call(arguments: &Value) -> NormalizedToolCall {
+    let object = normalized_universal_arguments(arguments);
+    let path = object
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let content = object.get("content").cloned().unwrap_or_else(|| json!(""));
+    let (scheme, resource_path) = split_virtual_path(path);
+    match scheme.as_str() {
+        "editor" => {
+            let action = match editor_resource_name(&resource_path).as_str() {
+                "remotion" => "remotion_save",
+                _ => "script_update",
+            };
+            let mut payload = Map::new();
+            payload.insert(
+                if action == "remotion_save" {
+                    "scene"
+                } else {
+                    "content"
+                }
+                .to_string(),
+                content,
+            );
+            copy_universal(&mut payload, &object, "source");
+            NormalizedToolCall {
+                name: "redbox_editor",
+                arguments: Value::Object(with_action_payload(
+                    action,
+                    payload,
+                    Some("Write"),
+                    Some(path),
+                )),
+            }
+        }
+        "profiles" | "profile" => app_cli_action_call(
+            "redclaw.profile.update",
+            json!({
+                "docType": profile_doc_type(&resource_path),
+                "markdown": content
+            }),
+            Some("Write"),
+            Some(path),
+        ),
+        "manuscripts" if resource_path.trim().is_empty() || resource_path == "current" => {
+            app_cli_action_call(
+                "manuscripts.writeCurrent",
+                json!({ "content": content }),
+                Some("Write"),
+                Some(path),
+            )
+        }
+        _ => app_cli_legacy_command_call(
+            "help write",
+            json!({ "path": path, "content": content }),
+            Some("Write"),
+            Some(path),
+        ),
+    }
+}
+
+fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
+    let object = normalized_universal_arguments(arguments);
+    let resource = object
+        .get("resource")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let operation = object
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let mut input = object
+        .get("input")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(id) = object.get("id").cloned() {
+        input.entry("id".to_string()).or_insert(id);
+    }
+    let payload = Value::Object(input);
+    match (resource.as_str(), operation.as_str()) {
+        ("manuscript" | "manuscripts", "list") => app_cli_action_call(
+            "manuscripts.list",
+            payload,
+            Some("Redbox"),
+            Some("manuscript.list"),
+        ),
+        ("manuscript" | "manuscripts", "create") => app_cli_action_call(
+            "manuscripts.createProject",
+            payload,
+            Some("Redbox"),
+            Some("manuscript.create"),
+        ),
+        ("manuscript" | "manuscripts", "get") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            if let Some(id) = map.remove("id") {
+                map.entry("path".to_string()).or_insert(id);
+            }
+            let action = if map.get("path").and_then(Value::as_str) == Some("current") {
+                "manuscripts.readCurrent"
+            } else {
+                "manuscripts.read"
+            };
+            app_cli_action_call(
+                action,
+                Value::Object(map),
+                Some("Redbox"),
+                Some("manuscript.get"),
+            )
+        }
+        ("manuscript" | "manuscripts", "update" | "run" | "write") => app_cli_action_call(
+            "manuscripts.writeCurrent",
+            payload,
+            Some("Redbox"),
+            Some("manuscript.update"),
+        ),
+        ("profile" | "profiles", "list" | "get") => {
+            if payload.get("docType").is_some() || payload.get("id").is_some() {
+                let mut map = payload.as_object().cloned().unwrap_or_default();
+                if let Some(id) = map.remove("id") {
+                    map.entry("docType".to_string()).or_insert(id);
+                }
+                app_cli_action_call(
+                    "redclaw.profile.read",
+                    Value::Object(map),
+                    Some("Redbox"),
+                    Some("profile.get"),
+                )
+            } else {
+                app_cli_action_call(
+                    "redclaw.profile.bundle",
+                    payload,
+                    Some("Redbox"),
+                    Some("profile.list"),
+                )
+            }
+        }
+        ("profile" | "profiles", "update") => app_cli_action_call(
+            "redclaw.profile.update",
+            payload,
+            Some("Redbox"),
+            Some("profile.update"),
+        ),
+        ("memory", "list") => {
+            app_cli_action_call("memory.list", payload, Some("Redbox"), Some("memory.list"))
+        }
+        ("memory", "search" | "get") => app_cli_action_call(
+            "memory.search",
+            payload,
+            Some("Redbox"),
+            Some("memory.search"),
+        ),
+        ("memory", "create" | "update") => {
+            app_cli_action_call("memory.add", payload, Some("Redbox"), Some("memory.add"))
+        }
+        ("subject" | "subjects", "search" | "list") => app_cli_action_call(
+            "subjects.search",
+            payload,
+            Some("Redbox"),
+            Some("subject.search"),
+        ),
+        ("subject" | "subjects", "get") => {
+            let payload = normalize_id_payload(payload, "id");
+            app_cli_action_call("subjects.get", payload, Some("Redbox"), Some("subject.get"))
+        }
+        ("image", "generate" | "create" | "run") => app_cli_action_call(
+            "image.generate",
+            payload,
+            Some("Redbox"),
+            Some("image.generate"),
+        ),
+        ("video", "generate" | "run") => app_cli_action_call(
+            "video.generate",
+            payload,
+            Some("Redbox"),
+            Some("video.generate"),
+        ),
+        ("video", "create") => app_cli_action_call(
+            "video.projectCreate",
+            payload,
+            Some("Redbox"),
+            Some("video.projectCreate"),
+        ),
+        ("task" | "redclaw.task", "list") => app_cli_action_call(
+            "redclaw.task.list",
+            payload,
+            Some("Redbox"),
+            Some("task.list"),
+        ),
+        ("task" | "redclaw.task", "get") => app_cli_action_call(
+            "redclaw.task.stats",
+            payload,
+            Some("Redbox"),
+            Some("task.get"),
+        ),
+        ("task" | "redclaw.task", "create") => {
+            let action = if payload.get("previewToken").is_some() {
+                "redclaw.task.create"
+            } else {
+                "redclaw.task.preview"
+            };
+            app_cli_action_call(action, payload, Some("Redbox"), Some("task.create"))
+        }
+        ("task" | "redclaw.task", "confirm") => app_cli_action_call(
+            "redclaw.task.confirm",
+            payload,
+            Some("Redbox"),
+            Some("task.confirm"),
+        ),
+        ("task" | "redclaw.task", "update") => app_cli_action_call(
+            "redclaw.task.update",
+            payload,
+            Some("Redbox"),
+            Some("task.update"),
+        ),
+        ("task" | "redclaw.task", "delete" | "cancel") => app_cli_action_call(
+            "redclaw.task.cancel",
+            payload,
+            Some("Redbox"),
+            Some("task.cancel"),
+        ),
+        ("skill" | "skills", "list") => {
+            app_cli_action_call("skills.list", payload, Some("Redbox"), Some("skill.list"))
+        }
+        ("skill" | "skills", "run" | "create" | "confirm") => app_cli_action_call(
+            "skills.invoke",
+            payload,
+            Some("Redbox"),
+            Some("skill.invoke"),
+        ),
+        ("mcp", "list") => {
+            app_cli_action_call("mcp.list", payload, Some("Redbox"), Some("mcp.list"))
+        }
+        ("mcp", "run" | "call") => {
+            app_cli_action_call("mcp.call", payload, Some("Redbox"), Some("mcp.call"))
+        }
+        ("editor", "run" | "update" | "generate" | "export") => {
+            normalize_redbox_editor_operation(&operation, payload)
+        }
+        ("runtime", "get" | "list") => app_cli_action_call(
+            "runtime.query",
+            payload,
+            Some("Redbox"),
+            Some("runtime.query"),
+        ),
+        ("runtime", "create") => app_cli_action_call(
+            "runtime.tasks.create",
+            payload,
+            Some("Redbox"),
+            Some("runtime.create"),
+        ),
+        ("runtime", "resume") => app_cli_action_call(
+            "runtime.tasks.resume",
+            payload,
+            Some("Redbox"),
+            Some("runtime.resume"),
+        ),
+        ("runtime", "cancel") => app_cli_action_call(
+            "runtime.tasks.cancel",
+            payload,
+            Some("Redbox"),
+            Some("runtime.cancel"),
+        ),
+        ("cli_runtime", "list") => app_cli_action_call(
+            "cli_runtime.environment.list",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.list"),
+        ),
+        ("cli_runtime", "install") => app_cli_action_call(
+            "cli_runtime.install",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.install"),
+        ),
+        ("cli_runtime", "run") => app_cli_action_call(
+            "cli_runtime.execute",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.run"),
+        ),
+        ("cli_runtime", "verify") => app_cli_action_call(
+            "cli_runtime.verify",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.verify"),
+        ),
+        _ => app_cli_legacy_command_call(
+            "help",
+            json!({ "resource": resource, "operation": operation, "input": payload }),
+            Some("Redbox"),
+            Some("unknown"),
+        ),
+    }
+}
+
+fn normalize_redbox_editor_operation(operation: &str, payload: Value) -> NormalizedToolCall {
+    let workflow = payload
+        .get("workflow")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .replace('-', "_");
+    let action = match (operation, workflow.as_str()) {
+        ("export", _) => "export",
+        (_, "ffmpeg.edit" | "ffmpeg_edit") => "ffmpeg_edit",
+        (_, "remotion.save" | "remotion_save") => "remotion_save",
+        (_, "remotion.read" | "remotion_read") => "remotion_read",
+        (_, "script.update" | "script_update") => "script_update",
+        (_, "script.confirm" | "script_confirm") => "script_confirm",
+        (_, "project.read" | "project_read") => "project_read",
+        _ => "remotion_generate",
+    };
+    let payload = payload.as_object().cloned().unwrap_or_default();
+    NormalizedToolCall {
+        name: "redbox_editor",
+        arguments: Value::Object(with_action_payload(
+            action,
+            payload,
+            Some("Redbox"),
+            Some("editor.run"),
+        )),
+    }
+}
+
+fn normalized_universal_arguments(arguments: &Value) -> Map<String, Value> {
+    arguments
+        .as_object()
+        .map(flatten_payload_fields)
+        .unwrap_or_default()
+}
+
+fn split_virtual_path(path: &str) -> (String, String) {
+    let trimmed = path.trim();
+    if let Some((scheme, rest)) = trimmed.split_once("://") {
+        return (
+            scheme.trim().to_ascii_lowercase(),
+            rest.trim_start_matches('/').to_string(),
+        );
+    }
+    ("workspace".to_string(), trimmed.to_string())
+}
+
+fn editor_resource_name(path: &str) -> String {
+    let normalized = path.trim_matches('/').to_ascii_lowercase();
+    let without_current = normalized.strip_prefix("current/").unwrap_or(&normalized);
+    without_current
+        .split('/')
+        .next()
+        .unwrap_or("script")
+        .replace('-', "_")
+}
+
+fn profile_doc_type(path: &str) -> String {
+    match path.trim_matches('/').to_ascii_lowercase().as_str() {
+        "creator" | "creator-profile" | "creator_profile" | "creatorprofile" => {
+            "creator_profile".to_string()
+        }
+        "soul" => "soul".to_string(),
+        "agent" => "agent".to_string(),
+        _ => "user".to_string(),
+    }
+}
+
+fn universal_fs_call(
+    action: &'static str,
+    resource_path: String,
+    source: &Map<String, Value>,
+    legacy_tool_name: Option<&str>,
+) -> NormalizedToolCall {
+    let mut payload = Map::new();
+    payload.insert("action".to_string(), json!(action));
+    if action.starts_with("knowledge.") {
+        payload.insert("scope".to_string(), json!("knowledge"));
+    }
+    if !resource_path.trim().is_empty() {
+        payload.insert("path".to_string(), json!(resource_path));
+    }
+    for key in [
+        "query",
+        "pattern",
+        "glob",
+        "advisorId",
+        "sourceId",
+        "rootPath",
+        "blockId",
+        "anchorId",
+        "offset",
+        "limit",
+        "maxChars",
+        "snippetChars",
+    ] {
+        copy_universal(&mut payload, source, key);
+    }
+    if let Some(value) = payload.remove("glob") {
+        payload.entry("pattern".to_string()).or_insert(value);
+    }
+    if let Some(metadata) = compat_metadata_value(legacy_tool_name, None, Some(action)) {
+        payload.insert("__compat".to_string(), metadata);
+    }
+    NormalizedToolCall {
+        name: "redbox_fs",
+        arguments: Value::Object(payload),
+    }
+}
+
+fn universal_editor_call(
+    action: &'static str,
+    source: &Map<String, Value>,
+    legacy_tool_name: Option<&str>,
+    legacy_command: Option<&str>,
+) -> NormalizedToolCall {
+    let mut payload = Map::new();
+    for key in ["filePath", "offset", "limit", "maxChars"] {
+        copy_universal(&mut payload, source, key);
+    }
+    NormalizedToolCall {
+        name: "redbox_editor",
+        arguments: Value::Object(with_action_payload(
+            action,
+            payload,
+            legacy_tool_name,
+            legacy_command,
+        )),
+    }
+}
+
+fn with_action_payload(
+    action: &str,
+    payload: Map<String, Value>,
+    legacy_tool_name: Option<&str>,
+    legacy_command: Option<&str>,
+) -> Map<String, Value> {
+    let mut arguments = Map::new();
+    arguments.insert("action".to_string(), json!(action));
+    for (key, value) in payload {
+        arguments.insert(key, value);
+    }
+    if let Some(metadata) = compat_metadata_value(legacy_tool_name, legacy_command, Some(action)) {
+        arguments.insert("__compat".to_string(), metadata);
+    }
+    arguments
+}
+
+fn normalize_id_payload(payload: Value, id_key: &str) -> Value {
+    let mut map = payload.as_object().cloned().unwrap_or_default();
+    if let Some(id) = map.remove("id") {
+        map.entry(id_key.to_string()).or_insert(id);
+    }
+    Value::Object(map)
+}
+
+fn copy_universal(target: &mut Map<String, Value>, source: &Map<String, Value>, key: &str) {
+    if let Some(value) = source.get(key) {
+        target.insert(key.to_string(), value.clone());
+    }
+}
+
+fn copy_universal_as(
+    target: &mut Map<String, Value>,
+    source: &Map<String, Value>,
+    key: &str,
+    target_key: &str,
+) {
+    if let Some(value) = source.get(key) {
+        target.insert(target_key.to_string(), value.clone());
     }
 }
 
@@ -645,6 +1234,7 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         }
         ["image", "generate", ..] => Some("image.generate"),
         ["video", "generate", ..] => Some("video.generate"),
+        ["video", "project-create", ..] => Some("video.projectCreate"),
         _ => None,
     };
     match translated_action {
@@ -853,5 +1443,100 @@ mod tests {
         );
         assert_eq!(normalized.arguments.get("query"), Some(&json!("creator")));
         assert_eq!(normalized.arguments.get("path"), Some(&json!("docs")));
+    }
+
+    #[test]
+    fn normalizes_universal_read_to_existing_fs_tool() {
+        let normalized = normalize_tool_call(
+            "Read",
+            &json!({ "path": "knowledge://notes/demo.md", "limit": 40 }),
+        );
+        assert_eq!(normalized.name, "redbox_fs");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("knowledge.read"))
+        );
+        assert_eq!(
+            normalized.arguments.get("path"),
+            Some(&json!("notes/demo.md"))
+        );
+    }
+
+    #[test]
+    fn normalizes_universal_read_current_manuscript_to_app_cli_action() {
+        let normalized = normalize_tool_call("Read", &json!({ "path": "manuscripts://current" }));
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("manuscripts.readCurrent"))
+        );
+    }
+
+    #[test]
+    fn normalizes_universal_write_to_bound_manuscript_save() {
+        let normalized = normalize_tool_call(
+            "Write",
+            &json!({ "path": "manuscripts://current", "content": "body" }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("manuscripts.writeCurrent"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("content")),
+            Some(&json!("body"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_image_generate_to_app_cli_action() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "image",
+                "operation": "generate",
+                "input": { "prompt": "cover" }
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("image.generate"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("prompt")),
+            Some(&json!("cover"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_video_create_to_project_create_action() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "video",
+                "operation": "create",
+                "input": { "explicitProjectWorkflow": true, "title": "Launch" }
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("video.projectCreate"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("explicitProjectWorkflow")),
+            Some(&json!(true))
+        );
     }
 }
