@@ -617,6 +617,13 @@ pub(crate) fn maybe_import_legacy_store(
                     .unwrap_or("general")
                     .to_string(),
                 tags,
+                entities: Vec::new(),
+                scope: Some("user".to_string()),
+                space_id: None,
+                project_id: None,
+                session_id: None,
+                source: Some(json!({ "kind": "legacy_import" })),
+                confidence: Some(0.75),
                 created_at: value
                     .get("created_at")
                     .and_then(|v| v.as_i64())
