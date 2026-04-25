@@ -732,6 +732,7 @@ App 升级后不能假设用户会手动清空索引。检索数据库、canonic
 - 已落地 `Tantivy + SQLite FTS5 BM25` 双倒排底座；后台分层 job 会同步重建 FTS/BM25 与 Tantivy block index。
 - 已落地 Docling / Tika / Unstructured 可插拔解析入口：外部 sidecar / API 可配置，不配置时保留内置 parser，失败时按顺序 fallback。
 - 已落地可插拔 cross-encoder rerank 入口：配置 `rerank_endpoint` 后参与排序，不配置时使用本地 legal/citation/confidence rerank。
+- Settings 页面已暴露 parser 与 rerank endpoint/model/key/timeout 配置，弱性能客户端可直接使用网络解析与重排服务。
 - 已落地手动重建入口：`knowledge:rebuild-catalog` 支持 `mode=full | fts | canonicalBlocks` 和可选 `sourceId`。
 - canonical cache 命中必须匹配当前 parser name/version，避免 parser pipeline 升级后继续复用旧解析结果。
 - OCR 重建保持可控：`fts` 与 `canonicalBlocks` 不触发 OCR；只有 `full` 路径会按当前可插拔 OCR provider 配置解析需要 OCR 的文件。

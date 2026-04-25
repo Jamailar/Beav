@@ -595,6 +595,7 @@ Status: Current
 - 已完成 `block_anchor_rebuild` migration decision：chunk/anchor 规则变化时复用 `knowledge_canonical_documents.canonical_json` 重建 blocks、anchors、FTS/BM25，不重新 OCR 或 parser。
 - 已完成 source-level rebuild 参数：`knowledge:rebuild-catalog` 支持 `sourceId`，可按 source 触发 `fts` 或 `canonicalBlocks` 重建。
 - 已完成手动重建参数：`mode=full | fts | canonicalBlocks`；OCR 只在 `full` 且 parser 按当前 OCR provider 需要时发生，低成本重建路径不触发 OCR。
+- Settings 已暴露 Docling / Tika / Unstructured parser endpoint、parser API key、cross-encoder rerank endpoint/model/key，便于弱性能客户端使用网络 sidecar。
 - canonical cache 已纳入 parser name/version 校验；parser pipeline 升级后的 full rebuild 不会误用旧 canonical JSON。
 - Knowledge 页面已暴露“全量重建 / 重建引用 / 全文索引”三种入口；index status 已展示 `migrationStatus` 与 `pendingRebuildReason`。
 - 已补 `canonical_reparse` migration decision；canonical schema 或 parser pipeline 版本变化时进入独立状态，并禁用旧 canonical cache。

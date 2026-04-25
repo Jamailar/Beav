@@ -485,6 +485,15 @@ export function Settings({
     ocr_model: '',
     ocr_timeout_seconds: '60',
     ocr_local_fallback: true,
+    docling_endpoint: '',
+    tika_endpoint: '',
+    unstructured_endpoint: '',
+    parser_api_key: '',
+    parser_timeout_seconds: '90',
+    rerank_endpoint: '',
+    rerank_api_key: '',
+    rerank_model: '',
+    rerank_timeout_seconds: '30',
     image_provider: 'openai-compatible',
     image_endpoint: '',
     image_api_key: '',
@@ -3084,6 +3093,15 @@ export function Settings({
           ocr_model: settings.ocr_model || '',
           ocr_timeout_seconds: String(settings.ocr_timeout_seconds || 60),
           ocr_local_fallback: settings.ocr_local_fallback !== false,
+          docling_endpoint: settings.docling_endpoint || settings.parser_docling_endpoint || '',
+          tika_endpoint: settings.tika_endpoint || settings.parser_tika_endpoint || '',
+          unstructured_endpoint: settings.unstructured_endpoint || settings.parser_unstructured_endpoint || '',
+          parser_api_key: settings.parser_api_key || '',
+          parser_timeout_seconds: String(settings.parser_timeout_seconds || 90),
+          rerank_endpoint: settings.rerank_endpoint || settings.cross_encoder_rerank_endpoint || '',
+          rerank_api_key: settings.rerank_api_key || '',
+          rerank_model: settings.rerank_model || '',
+          rerank_timeout_seconds: String(settings.rerank_timeout_seconds || 30),
           image_provider: settings.image_provider || 'openai-compatible',
           image_endpoint: settings.image_endpoint || resolveDefaultImageEndpoint(
             settings.image_provider || 'openai-compatible',
@@ -4221,6 +4239,14 @@ export function Settings({
       if (normalizedOcrProvider === 'api' && !normalizedOcrEndpoint) {
         throw new Error('OCR Provider 设为 api 时必须填写远程 OCR Endpoint');
       }
+      const parsedParserTimeoutSeconds = Number(formData.parser_timeout_seconds);
+      const parserTimeoutSeconds = Number.isFinite(parsedParserTimeoutSeconds)
+        ? Math.min(300, Math.max(10, Math.floor(parsedParserTimeoutSeconds)))
+        : 90;
+      const parsedRerankTimeoutSeconds = Number(formData.rerank_timeout_seconds);
+      const rerankTimeoutSeconds = Number.isFinite(parsedRerankTimeoutSeconds)
+        ? Math.min(120, Math.max(5, Math.floor(parsedRerankTimeoutSeconds)))
+        : 30;
       if (formData.proxy_enabled && !String(formData.proxy_url || '').trim()) {
         throw new Error('启用代理时必须填写代理地址，例如 http://127.0.0.1:7890');
       }
@@ -4249,6 +4275,15 @@ export function Settings({
         ocr_model: String(formData.ocr_model || '').trim(),
         ocr_timeout_seconds: ocrTimeoutSeconds,
         ocr_local_fallback: Boolean(formData.ocr_local_fallback),
+        docling_endpoint: String(formData.docling_endpoint || '').trim(),
+        tika_endpoint: String(formData.tika_endpoint || '').trim(),
+        unstructured_endpoint: String(formData.unstructured_endpoint || '').trim(),
+        parser_api_key: String(formData.parser_api_key || '').trim(),
+        parser_timeout_seconds: parserTimeoutSeconds,
+        rerank_endpoint: String(formData.rerank_endpoint || '').trim(),
+        rerank_api_key: String(formData.rerank_api_key || '').trim(),
+        rerank_model: String(formData.rerank_model || '').trim(),
+        rerank_timeout_seconds: rerankTimeoutSeconds,
         image_provider: formData.image_provider,
         image_provider_template: formData.image_provider_template,
         image_endpoint: String(resolvedImageSource?.baseURL || formData.image_endpoint || '').trim(),

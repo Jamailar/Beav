@@ -50,6 +50,15 @@ type SettingsFormData = {
     ocr_model: string;
     ocr_timeout_seconds: string;
     ocr_local_fallback: boolean;
+    docling_endpoint: string;
+    tika_endpoint: string;
+    unstructured_endpoint: string;
+    parser_api_key: string;
+    parser_timeout_seconds: string;
+    rerank_endpoint: string;
+    rerank_api_key: string;
+    rerank_model: string;
+    rerank_timeout_seconds: string;
 };
 
 type YtdlpStatus = {
@@ -787,6 +796,111 @@ function GeneralSettingsSectionInner({
                 <p className="text-[10px] text-text-tertiary">
                     远程接口接收页图 base64、sourceType 和 model；返回可用 `pages/results/data/items` 或顶层 `text/output_text/markdown` 字段。
                 </p>
+            </div>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                <div>
+                    <h3 className="text-sm font-medium text-text-primary">文件解析与重排 Sidecar</h3>
+                    <p className="text-xs text-text-tertiary mt-1">
+                        可选配置。解析按 Docling → Tika → Unstructured → 内置 parser 顺序 fallback；重排 endpoint 用于 cross-encoder / reranker 服务。
+                    </p>
+                </div>
+                <div className="grid gap-4 md:grid-cols-3">
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Docling Endpoint</label>
+                        <input
+                            type="text"
+                            value={formData.docling_endpoint}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, docling_endpoint: e.target.value }))}
+                            placeholder="https://parser.example.com/docling"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Tika Endpoint</label>
+                        <input
+                            type="text"
+                            value={formData.tika_endpoint}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, tika_endpoint: e.target.value }))}
+                            placeholder="https://parser.example.com/tika"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Unstructured Endpoint</label>
+                        <input
+                            type="text"
+                            value={formData.unstructured_endpoint}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, unstructured_endpoint: e.target.value }))}
+                            placeholder="https://parser.example.com/unstructured"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-3">
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser API Key</label>
+                        <PasswordInput
+                            value={formData.parser_api_key}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_api_key: e.target.value }))}
+                            placeholder="可留空"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser 超时秒数</label>
+                        <input
+                            type="number"
+                            min={10}
+                            max={300}
+                            value={formData.parser_timeout_seconds}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_timeout_seconds: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Endpoint</label>
+                        <input
+                            type="text"
+                            value={formData.rerank_endpoint}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_endpoint: e.target.value }))}
+                            placeholder="https://rerank.example.com/v1/rerank"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-3">
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank API Key</label>
+                        <PasswordInput
+                            value={formData.rerank_api_key}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_api_key: e.target.value }))}
+                            placeholder="可留空"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Model</label>
+                        <input
+                            type="text"
+                            value={formData.rerank_model}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_model: e.target.value }))}
+                            placeholder="例如 bge-reranker-v2.5"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank 超时秒数</label>
+                        <input
+                            type="number"
+                            min={5}
+                            max={120}
+                            value={formData.rerank_timeout_seconds}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_timeout_seconds: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                </div>
             </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
