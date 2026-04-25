@@ -61,6 +61,24 @@ pub(crate) fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
 
+pub(crate) fn normalize_anthropic_base_url(value: &str) -> String {
+    let normalized = normalize_base_url(value);
+    if normalized.is_empty() {
+        return normalized;
+    }
+    let Ok(parsed) = url::Url::parse(&normalized) else {
+        return normalized;
+    };
+    if parsed.host_str() != Some("api.anthropic.com") {
+        return normalized;
+    }
+    let path = parsed.path().trim_end_matches('/');
+    if path.is_empty() || path == "/" {
+        return format!("{normalized}/v1");
+    }
+    normalized
+}
+
 fn build_curl_json_command(
     method: &str,
     url: &str,
@@ -932,6 +950,22 @@ mod tests {
             .map(|value| value.to_string_lossy().to_string())
             .collect::<Vec<_>>();
         assert!(args.iter().any(|value| value == "--http1.1"));
+    }
+
+    #[test]
+    fn anthropic_base_url_adds_v1_for_official_root_only() {
+        assert_eq!(
+            normalize_anthropic_base_url("https://api.anthropic.com/"),
+            "https://api.anthropic.com/v1"
+        );
+        assert_eq!(
+            normalize_anthropic_base_url("https://api.anthropic.com/v1/"),
+            "https://api.anthropic.com/v1"
+        );
+        assert_eq!(
+            normalize_anthropic_base_url("https://api.kimi.com/coding"),
+            "https://api.kimi.com/coding"
+        );
     }
 
     #[test]

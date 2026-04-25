@@ -4,8 +4,8 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{
     append_debug_trace_global, escape_html, format_http_error_message, http_error_debug_line,
-    http_error_details_from_value, normalize_base_url, now_ms, payload_field, payload_string,
-    run_curl_json, run_curl_json_response,
+    http_error_details_from_value, normalize_anthropic_base_url, normalize_base_url, now_ms,
+    payload_field, payload_string, run_curl_json, run_curl_json_response,
 };
 
 pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = "https://api.ziz.hk/redbox/v1";
@@ -150,7 +150,7 @@ pub(crate) fn fetch_anthropic_models(
 ) -> Result<Vec<Value>, String> {
     let response = run_curl_json(
         "GET",
-        &format!("{}/models", normalize_base_url(base_url)),
+        &format!("{}/models", normalize_anthropic_base_url(base_url)),
         None,
         &[
             ("x-api-key", api_key.unwrap_or_default().to_string()),
@@ -300,7 +300,7 @@ pub(crate) fn invoke_anthropic_chat(
     model_name: &str,
     message: &str,
 ) -> Result<String, String> {
-    let endpoint = format!("{}/messages", normalize_base_url(base_url));
+    let endpoint = format!("{}/messages", normalize_anthropic_base_url(base_url));
     let response = run_curl_json_response(
         "POST",
         &endpoint,
@@ -348,7 +348,7 @@ pub(crate) fn invoke_anthropic_structured_chat(
     user_prompt: &str,
     _require_json: bool,
 ) -> Result<String, String> {
-    let endpoint = format!("{}/messages", normalize_base_url(base_url));
+    let endpoint = format!("{}/messages", normalize_anthropic_base_url(base_url));
     let response = run_curl_json_response(
         "POST",
         &endpoint,

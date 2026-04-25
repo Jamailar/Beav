@@ -29,7 +29,7 @@ export const DEFAULT_AI_PRESET_ID = 'openai';
 export const AI_SOURCE_PRESETS: AiSourcePreset[] = [
   { id: 'redbox-official', label: 'RedBox Official', baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL, protocol: 'openai' },
   { id: 'openai', label: 'OpenAI', baseURL: 'https://api.openai.com/v1', protocol: 'openai' },
-  { id: 'anthropic', label: 'Anthropic', baseURL: 'https://api.anthropic.com', protocol: 'anthropic' },
+  { id: 'anthropic', label: 'Anthropic', baseURL: 'https://api.anthropic.com/v1', protocol: 'anthropic' },
   { id: 'gemini', label: 'Gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta', protocol: 'gemini' },
   { id: 'ollama-local', label: 'Ollama (Local)', baseURL: 'http://127.0.0.1:11434/v1', protocol: 'openai' },
   { id: 'lmstudio-local', label: 'LM Studio (Local)', baseURL: 'http://127.0.0.1:1234/v1', protocol: 'openai' },

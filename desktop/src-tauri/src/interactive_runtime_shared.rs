@@ -268,7 +268,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("文档职责与更新规则：\n");
                 rendered.push_str("- 工作区相对路径：redclaw/profile/Agent.md | redclaw/profile/Soul.md | redclaw/profile/identity.md | redclaw/profile/user.md | redclaw/profile/CreatorProfile.md | memory/MEMORY.md\n");
                 rendered.push_str("- 查询长期档案优先使用 `app_cli(action=\"redclaw.profile.read\"|\"redclaw.profile.bundle\")`，不要先用 bash/find/PowerShell 按文件名盲扫。\n");
-                rendered.push_str("- 查询长期记忆优先使用 `app_cli(action=\"memory.list\"|\"memory.search\")`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
+                rendered.push_str("- 查询长期记忆优先使用 `app_cli(action=\"memory.list\"|\"memory.search\"|\"memory.recall\")`；写入/修订长期记忆使用 `memory.add` / `memory.update` / `memory.archive`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
                 rendered.push_str("- Agent.md：RedClaw 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n");
                 rendered.push_str("- Soul.md：RedClaw 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n");
                 rendered.push_str("- user.md：用户稳定画像与长期事实（目标、受众、赛道、节奏、指标）。用户明确给出新的长期事实时更新。\n");

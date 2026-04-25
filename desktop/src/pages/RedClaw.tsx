@@ -90,11 +90,6 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     return sessionId || null;
 }
 
-function canReuseAsFreshSession(sessionItem: ContextChatSessionListItem | null | undefined): boolean {
-    if (!sessionItem) return false;
-    return Number(sessionItem.messageCount || 0) === 0;
-}
-
 export function RedClaw({
     pendingMessage,
     onPendingMessageConsumed,
@@ -195,15 +190,6 @@ export function RedClaw({
 
         if (!hasSessionSnapshotRef.current || isSessionLoading) {
             setResolvedPendingMessage(null);
-            return;
-        }
-
-        const activeSession = activeSessionIdRef.current
-            ? sessionListRef.current.find((item) => item.id === activeSessionIdRef.current) || null
-            : null;
-        if (canReuseAsFreshSession(activeSession)) {
-            routedPendingMessageRef.current = pendingMessage;
-            setResolvedPendingMessage(pendingMessage);
             return;
         }
 
