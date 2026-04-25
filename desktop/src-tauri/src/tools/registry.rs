@@ -100,6 +100,7 @@ pub fn descriptor_by_name_for_runtime_mode(
     descriptor_by_name(tool_name)
 }
 
+#[allow(dead_code)]
 pub fn descriptor_by_name_for_session(
     store: &AppStore,
     runtime_mode: &str,

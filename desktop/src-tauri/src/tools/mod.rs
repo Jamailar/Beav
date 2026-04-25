@@ -9,4 +9,5 @@ pub mod knowledge_search;
 pub mod packs;
 pub mod plan;
 pub mod registry;
+pub mod router;
 pub mod workspace_search;
