@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::thread;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
@@ -643,7 +642,7 @@ pub fn run_real_subagent_orchestration_for_task(
             let config_clone = config.clone();
             let spawn_clone = spawn.clone();
             let user_input_owned = user_input.to_string();
-            handles.push(thread::spawn(move || {
+            handles.push(tauri::async_runtime::spawn_blocking(move || {
                 let result = execute_subagent_config(
                     app_handle.clone(),
                     spawn_clone.clone(),
@@ -656,9 +655,8 @@ pub fn run_real_subagent_orchestration_for_task(
             }));
         }
         for handle in handles {
-            let (spawn, config, result, app_handle) = handle
-                .join()
-                .map_err(|_| "subagent thread panicked".to_string())?;
+            let (spawn, config, result, app_handle) = tauri::async_runtime::block_on(handle)
+                .map_err(|error| format!("subagent worker failed: {error}"))?;
             match result {
                 Ok(output) => {
                     emit_runtime_subagent_finished(
