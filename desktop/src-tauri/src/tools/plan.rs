@@ -2,6 +2,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use crate::runtime::RedboxTurnContext;
 use crate::skills::build_skill_runtime_state;
 use crate::tools::catalog::{
     action_descriptors_for_tool, descriptor_by_name, ActionDescriptor, ActionVisibility,
@@ -83,6 +84,18 @@ pub fn build_tool_registry_plan_for_session(
         task_intent: metadata
             .and_then(|item| item.get("taskIntent"))
             .and_then(Value::as_str),
+        max_direct_app_cli_actions: None,
+    })
+}
+
+pub fn build_tool_registry_plan_for_turn_context(context: &RedboxTurnContext) -> ToolRegistryPlan {
+    build_tool_registry_plan(ToolRegistryPlanParams {
+        runtime_mode: &context.runtime_mode,
+        session_id: context.session_id.as_deref(),
+        session_metadata: context.session_metadata.as_ref(),
+        active_skills: &context.active_skills,
+        allowed_tool_names: Some(&context.allowed_tool_names),
+        task_intent: context.task_intent.as_deref(),
         max_direct_app_cli_actions: None,
     })
 }
@@ -512,5 +525,29 @@ mod tests {
         assert_ne!(first.fingerprint, second.fingerprint);
         assert_eq!(first.direct_app_cli_actions[0].action, "image.generate");
         assert_eq!(second.direct_app_cli_actions[0].action, "video.generate");
+    }
+
+    #[test]
+    fn plan_can_be_built_from_typed_turn_context() {
+        let context = RedboxTurnContext {
+            runtime_mode: "image-generation".to_string(),
+            session_id: Some("session-1".to_string()),
+            current_date: "2026-04-25".to_string(),
+            workspace_root: None,
+            session_metadata: None,
+            active_skills: Vec::new(),
+            allowed_tool_names: vec![
+                "bash".to_string(),
+                "redbox_fs".to_string(),
+                "app_cli".to_string(),
+            ],
+            bound_context: None,
+            task_intent: Some("image".to_string()),
+            model_capabilities: crate::runtime::ModelCapabilities::default(),
+        };
+        let plan = build_tool_registry_plan_for_turn_context(&context);
+
+        assert_eq!(plan.runtime_mode, "image-generation");
+        assert!(plan.has_direct_app_cli_action("image.generate"));
     }
 }
