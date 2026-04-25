@@ -7458,9 +7458,11 @@ fn run_openai_interactive_chat_runtime(
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
-            "tool_choice": tool_choice.as_api_value(),
             "stream": streaming_enabled
         });
+        if let Some(api_tool_choice) = provider_profile.api_tool_choice_value(tool_choice) {
+            body["tool_choice"] = json!(api_tool_choice);
+        }
         if include_tools {
             body["tools"] = interactive_runtime_tools_for_mode(state, runtime_mode, session_id);
         }
