@@ -9,6 +9,7 @@ use crate::tools::plan::ToolRegistryPlan;
 pub struct PreparedToolCall {
     pub name: &'static str,
     pub arguments: Value,
+    pub plan_fingerprint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +108,7 @@ impl ToolRouter {
         Ok(PreparedToolCall {
             name: normalized_name,
             arguments: normalized_call.arguments,
+            plan_fingerprint: self.plan.fingerprint.clone(),
         })
     }
 
