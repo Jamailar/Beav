@@ -122,6 +122,8 @@ pub fn build_subagent_configs(
                 runtime_mode: runtime_mode.to_string(),
                 parent_task_id: parent_task_id.to_string(),
                 parent_session_id: parent_session_id.map(ToString::to_string),
+                collab_session_id: metadata
+                    .and_then(|item| payload_string(item, "collabSessionId")),
                 parallel_group,
                 model_config: Some(merged_model_config),
                 fork_overrides: overrides.clone(),

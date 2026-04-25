@@ -18,6 +18,7 @@ pub struct SubAgentConfig {
     pub runtime_mode: String,
     pub parent_task_id: String,
     pub parent_session_id: Option<String>,
+    pub collab_session_id: Option<String>,
     pub parallel_group: usize,
     pub model_config: Option<Value>,
     pub fork_overrides: ForkOverrides,
@@ -30,6 +31,8 @@ pub struct SubAgentSpawnResult {
     pub child_session_id: String,
     pub child_runtime_id: String,
     pub role_id: String,
+    pub collab_member_id: Option<String>,
+    pub collab_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
