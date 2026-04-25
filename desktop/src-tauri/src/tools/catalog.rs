@@ -577,6 +577,33 @@ fn runtime_output_schema() -> Value {
     }))
 }
 
+fn tools_search_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "query",
+                string_schema("Free-text action, namespace, or capability query."),
+            ),
+            (
+                "namespace",
+                string_schema(
+                    "Optional action namespace filter, such as memory, mcp, or cli_runtime.",
+                ),
+            ),
+            ("limit", integer_schema("Maximum actions to return.", 1, 50)),
+            (
+                "includeDirect",
+                json!({
+                    "type": "boolean",
+                    "description": "Also include direct actions already exposed in this turn."
+                }),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
 fn team_session_create_input_schema() -> Value {
     object_schema(
         &[
@@ -1552,6 +1579,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "mcp",
             "runtime",
             "cli_runtime",
+            "tools",
         ]
         .into_iter()
         .collect::<Vec<_>>()
@@ -1605,6 +1633,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "mcp" => Some("mcp"),
         "runtime" | "team" => Some("runtime"),
         "cli_runtime" => Some("cli_runtime"),
+        "tools" => Some("tools"),
         "redclaw" if action.starts_with("redclaw.profile.") => Some("profile"),
         "redclaw" if action.starts_with("redclaw.task.") => Some("task"),
         _ => None,
@@ -1712,6 +1741,17 @@ fn redbox_input_schema() -> Value {
 }
 
 const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
+    ActionDescriptor {
+        action: "tools.search",
+        namespace: "tools",
+        description: "Search deferred app_cli actions available to the current session.",
+        input_schema: tools_search_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
     ActionDescriptor {
         action: "memory.list",
         namespace: "memory",

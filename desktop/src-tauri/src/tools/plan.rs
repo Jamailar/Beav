@@ -249,9 +249,10 @@ fn preferred_app_cli_namespaces(
     task_intent: Option<&str>,
 ) -> Vec<&'static str> {
     let mut namespaces = match normalize_runtime_mode(runtime_mode) {
-        "image-generation" => vec!["image", "subjects", "skills", "media"],
-        "knowledge" => vec!["subjects", "memory", "skills"],
+        "image-generation" => vec!["tools", "image", "subjects", "skills", "media"],
+        "knowledge" => vec!["tools", "subjects", "memory", "skills"],
         "redclaw" => vec![
+            "tools",
             "redclaw.task",
             "image",
             "video",
@@ -261,6 +262,7 @@ fn preferred_app_cli_namespaces(
             "skills",
         ],
         "background-maintenance" | "diagnostics" => vec![
+            "tools",
             "runtime",
             "runtime.tasks",
             "redclaw.task",
@@ -269,6 +271,7 @@ fn preferred_app_cli_namespaces(
             "settings",
         ],
         "video-editor" | "audio-editor" => vec![
+            "tools",
             "image",
             "video",
             "subjects",
@@ -276,7 +279,14 @@ fn preferred_app_cli_namespaces(
             "cli_runtime.execution",
             "skills",
         ],
-        _ => vec!["subjects", "memory", "skills", "image", "manuscripts"],
+        _ => vec![
+            "tools",
+            "subjects",
+            "memory",
+            "skills",
+            "image",
+            "manuscripts",
+        ],
     };
     match task_intent
         .unwrap_or("")
@@ -411,6 +421,7 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("image.generate"));
+        assert!(plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.direct_app_cli_actions.len() <= DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS);
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Redbox"));
         assert!(plan.has_deferred_app_cli_action("memory.add"));

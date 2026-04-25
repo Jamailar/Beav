@@ -21,6 +21,7 @@ use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
+use crate::tools::plan::build_tool_registry_plan_for_session;
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{
     join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
@@ -223,6 +224,56 @@ fn app_cli_error_json(
     object.insert("error".to_string(), Value::Object(error));
     serde_json::to_string_pretty(&Value::Object(object))
         .unwrap_or_else(|_| format!(r#"{{"ok":false,"error":{{"code":"{code}","message":"{message}","retryable":{retryable}}}}}"#))
+}
+
+fn action_text_matches(
+    query: &str,
+    namespace: Option<&str>,
+    action: &str,
+    ns: &str,
+    description: &str,
+) -> bool {
+    let namespace_matches = namespace
+        .map(|filter| ns == filter || ns.starts_with(&(filter.to_string() + ".")))
+        .unwrap_or(true);
+    if !namespace_matches {
+        return false;
+    }
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    action.to_ascii_lowercase().contains(&query)
+        || ns.to_ascii_lowercase().contains(&query)
+        || description.to_ascii_lowercase().contains(&query)
+}
+
+fn action_descriptor_matches(
+    query: &str,
+    namespace: Option<&str>,
+    descriptor: &crate::tools::catalog::ActionDescriptor,
+) -> bool {
+    action_text_matches(
+        query,
+        namespace,
+        descriptor.action,
+        descriptor.namespace,
+        descriptor.description,
+    )
+}
+
+fn action_search_entry_matches(
+    query: &str,
+    namespace: Option<&str>,
+    entry: &crate::tools::plan::DeferredActionEntry,
+) -> bool {
+    action_text_matches(
+        query,
+        namespace,
+        &entry.action,
+        &entry.namespace,
+        &entry.description,
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -532,6 +583,7 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list".to_string()];
                 self.handle_memory(&tokens, payload)
             }
+            "toolssearch" => self.handle_tools_search(payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
                 self.handle_memory(&tokens, payload)
@@ -797,6 +849,75 @@ impl<'a> AppCliExecutor<'a> {
         result.map_err(|message| {
             app_cli_error_json(Some(action), "ACTION_FAILED", &message, false, None)
         })
+    }
+
+    fn handle_tools_search(&self, payload: &Value) -> Result<Value, String> {
+        let query = payload_string(payload, "query")
+            .or_else(|| payload_string(payload, "q"))
+            .unwrap_or_default();
+        let namespace = payload_string(payload, "namespace")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let limit = payload_field(payload, "limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(12)
+            .clamp(1, 50) as usize;
+        let include_direct = payload_field(payload, "includeDirect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let plan = with_store(self.state, |store| {
+            Ok(build_tool_registry_plan_for_session(
+                &store,
+                self.runtime_mode,
+                self.session_id,
+            ))
+        })?;
+        let deferred_actions = plan
+            .deferred_app_cli_actions
+            .iter()
+            .filter(|entry| action_search_entry_matches(&query, namespace.as_deref(), entry))
+            .take(limit)
+            .map(|entry| {
+                json!({
+                    "action": entry.action,
+                    "namespace": entry.namespace,
+                    "description": entry.description,
+                    "mutating": entry.mutating,
+                    "concurrencySafe": entry.concurrency_safe,
+                    "runtimeModes": entry.runtime_modes,
+                })
+            })
+            .collect::<Vec<_>>();
+        let direct_actions = if include_direct {
+            plan.direct_app_cli_actions
+                .iter()
+                .filter(|entry| action_descriptor_matches(&query, namespace.as_deref(), entry))
+                .take(limit)
+                .map(|entry| {
+                    json!({
+                        "action": entry.action,
+                        "namespace": entry.namespace,
+                        "description": entry.description,
+                        "mutating": entry.mutating,
+                        "concurrencySafe": entry.concurrency_safe,
+                        "runtimeModes": entry.runtime_modes,
+                    })
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        Ok(json!({
+            "success": true,
+            "runtimeMode": plan.runtime_mode,
+            "query": query,
+            "namespace": namespace,
+            "limit": limit,
+            "deferredNamespaces": plan.deferred_action_namespaces,
+            "deferredActions": deferred_actions,
+            "directActions": direct_actions,
+            "routerPlan": plan.fingerprint,
+        }))
     }
 
     fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
