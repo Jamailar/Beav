@@ -89,18 +89,35 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const [draftMember, setDraftMember] = useState('');
   const [draftTask, setDraftTask] = useState('');
   const snapshotRef = useRef<CollabSessionSnapshot | null>(null);
+  const sessionsRef = useRef<CollabSessionRecord[]>([]);
+  const selectedSessionIdRef = useRef('');
 
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
 
-  const loadSessions = useCallback(async () => {
-    if (sessions.length === 0) setLoading(true);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    selectedSessionIdRef.current = selectedSessionId;
+  }, [selectedSessionId]);
+
+  const loadSessions = useCallback(async (preferredSessionId?: string) => {
+    if (sessionsRef.current.length === 0) setLoading(true);
     setError('');
     try {
       const nextSessions = await window.ipcRenderer.teamRuntime.listSessions();
       setSessions(Array.isArray(nextSessions) ? nextSessions : []);
-      const nextSelected = selectedSessionId || nextSessions?.[0]?.id || '';
+      const currentSelected = selectedSessionIdRef.current;
+      const nextSelected = (
+        preferredSessionId && nextSessions.some((session) => session.id === preferredSessionId)
+          ? preferredSessionId
+          : currentSelected && nextSessions.some((session) => session.id === currentSelected)
+            ? currentSelected
+            : nextSessions?.[0]?.id || ''
+      );
       setSelectedSessionId(nextSelected);
       if (nextSelected) {
         const nextSnapshot = await window.ipcRenderer.teamRuntime.getSession({
@@ -117,7 +134,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
     } finally {
       setLoading(false);
     }
-  }, [selectedSessionId, sessions.length]);
+  }, []);
 
   const loadSnapshot = useCallback(async (sessionId = selectedSessionId) => {
     if (!sessionId) return;
@@ -182,7 +199,9 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
       });
       setDraftObjective('');
       setSelectedSessionId(created.id);
-      await loadSessions();
+      await loadSessions(created.id);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
     } finally {
       setBusy('');
     }
@@ -204,6 +223,8 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
       });
       setDraftMember('');
       await loadSnapshot(snapshot.session.id);
+    } catch (addError) {
+      setError(addError instanceof Error ? addError.message : String(addError));
     } finally {
       setBusy('');
     }
@@ -225,6 +246,8 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
       });
       setDraftTask('');
       await loadSnapshot(snapshot.session.id);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : String(createError));
     } finally {
       setBusy('');
     }
@@ -239,6 +262,8 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
         taskId: member.currentTaskId,
       });
       await loadSnapshot(member.sessionId);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : String(requestError));
     } finally {
       setBusy('');
     }
@@ -249,6 +274,52 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
     try {
       await window.ipcRenderer.teamRuntime.updateTask({ taskId: task.id, status });
       await loadSnapshot(task.sessionId);
+    } catch (moveError) {
+      setError(moveError instanceof Error ? moveError.message : String(moveError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot]);
+
+  const setSessionStatus = useCallback(async (status: 'active' | 'paused' | 'archived') => {
+    if (!snapshot?.session?.id) return;
+    setBusy(`session:${status}`);
+    try {
+      if (status === 'active') {
+        await window.ipcRenderer.teamRuntime.resumeSession({ sessionId: snapshot.session.id });
+      } else if (status === 'paused') {
+        await window.ipcRenderer.teamRuntime.pauseSession({ sessionId: snapshot.session.id });
+      } else {
+        await window.ipcRenderer.teamRuntime.archiveSession({ sessionId: snapshot.session.id });
+      }
+      await loadSessions(snapshot.session.id);
+    } catch (statusError) {
+      setError(statusError instanceof Error ? statusError.message : String(statusError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSessions, snapshot?.session?.id]);
+
+  const tickReports = useCallback(async () => {
+    if (!snapshot?.session?.id) return;
+    setBusy('tick-reports');
+    try {
+      await window.ipcRenderer.teamRuntime.tickReports({ sessionId: snapshot.session.id });
+      await loadSnapshot(snapshot.session.id);
+    } catch (tickError) {
+      setError(tickError instanceof Error ? tickError.message : String(tickError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot, snapshot?.session?.id]);
+
+  const assignTaskOwner = useCallback(async (task: CollabTaskRecord, memberId: string) => {
+    setBusy(`assign:${task.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.updateTask({ taskId: task.id, memberId });
+      await loadSnapshot(task.sessionId);
+    } catch (assignError) {
+      setError(assignError instanceof Error ? assignError.message : String(assignError));
     } finally {
       setBusy('');
     }
@@ -270,6 +341,41 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
               <button onClick={onSwitchRedclaw} className="rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[12px] text-[#607166]">
                 RedClaw 任务
               </button>
+            )}
+            {snapshot?.session?.id && (
+              <>
+                <button
+                  onClick={() => void tickReports()}
+                  disabled={busy === 'tick-reports'}
+                  className="rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[12px] text-[#607166]"
+                >
+                  汇报 tick
+                </button>
+                {snapshot.session.status === 'paused' ? (
+                  <button
+                    onClick={() => void setSessionStatus('active')}
+                    disabled={busy === 'session:active'}
+                    className="rounded-full border border-[#b8d2b8] bg-[#eef7ef] px-3 py-1.5 text-[12px] text-[#37563d]"
+                  >
+                    恢复
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => void setSessionStatus('paused')}
+                    disabled={busy === 'session:paused'}
+                    className="rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[12px] text-[#607166]"
+                  >
+                    暂停
+                  </button>
+                )}
+                <button
+                  onClick={() => void setSessionStatus('archived')}
+                  disabled={busy === 'session:archived'}
+                  className="rounded-full border border-[#eed0d0] bg-[#fff8f8] px-3 py-1.5 text-[12px] text-[#9a5656]"
+                >
+                  归档
+                </button>
+              </>
             )}
             <button onClick={() => void loadSessions()} className="inline-flex items-center rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[12px] text-[#607166]">
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -450,6 +556,19 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                 <div className="text-[13px] font-medium">任务详情</div>
                 <div className="mt-2 text-[12px] font-semibold">{selectedTask.title}</div>
                 <div className="mt-1 text-[12px] leading-5 text-[#607166]">{selectedTask.description || selectedTask.objective}</div>
+                <label className="mt-3 block text-[10px] uppercase tracking-[0.14em] text-[#879184]">
+                  Owner
+                </label>
+                <select
+                  value={selectedTask.memberId || ''}
+                  onChange={(event) => void assignTaskOwner(selectedTask, event.currentTarget.value)}
+                  className="mt-1 w-full rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[12px] text-[#405246] outline-none"
+                >
+                  <option value="">未分配</option>
+                  {members.map((member) => (
+                    <option key={member.id} value={member.id}>{member.displayName}</option>
+                  ))}
+                </select>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {boardColumns.map((column) => (
                     <button
@@ -460,6 +579,14 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                       {column.label}
                     </button>
                   ))}
+                  {selectedTask.memberId && memberById.get(selectedTask.memberId) && (
+                    <button
+                      onClick={() => void requestReport(memberById.get(selectedTask.memberId) as CollabMemberRecord)}
+                      className="rounded-full border border-[#b8d2b8] bg-[#eef7ef] px-2 py-1 text-[10px] text-[#37563d]"
+                    >
+                      请求负责人汇报
+                    </button>
+                  )}
                 </div>
                 <div className="mt-3 space-y-2">
                   {reports.filter((report) => report.taskId === selectedTask.id).slice(-4).map((report) => (
