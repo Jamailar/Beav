@@ -68,60 +68,56 @@ fn refresh_advisor_videos(
     advisor_id: &str,
     limit: i64,
 ) -> Result<Value, String> {
-    with_store_mut(state, |store| {
-        let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) else {
+    let channel = with_store(state, |store| {
+        let Some(advisor) = store.advisors.iter().find(|item| item.id == advisor_id) else {
             return Ok(json!({ "success": false, "error": "成员不存在" }));
         };
-        let channel = advisor.youtube_channel.clone().unwrap_or_else(|| {
+        Ok(advisor.youtube_channel.clone().unwrap_or_else(|| {
             build_advisor_youtube_channel(None, "https://youtube.com/@redbox", "redbox")
-        });
-        let url = channel
-            .get("url")
-            .and_then(|value| value.as_str())
-            .unwrap_or("https://youtube.com/@redbox");
-        let (fallback_channel_id, fallback_channel_name) = parse_youtube_channel(url);
-        let fetched = detect_ytdlp().and_then(|_| fetch_ytdlp_channel_info(url, limit).ok());
-        let channel_id = fetched
-            .as_ref()
-            .and_then(|value| value.get("channel_id").and_then(|item| item.as_str()))
-            .map(|item| item.to_string())
-            .unwrap_or(fallback_channel_id);
-        let channel_name = fetched
-            .as_ref()
-            .and_then(|value| {
-                value
-                    .get("channel")
-                    .or_else(|| value.get("uploader"))
-                    .or_else(|| value.get("title"))
-                    .and_then(|item| item.as_str())
-            })
-            .map(|item| item.to_string())
-            .unwrap_or(fallback_channel_name);
-        let next_videos = fetched
-            .as_ref()
-            .map(|value| parse_ytdlp_videos(advisor_id, Some(&channel_id), value))
-            .unwrap_or_else(|| {
-                (0..limit)
-                    .map(|index| AdvisorVideoRecord {
-                        id: format!("{}-pending-{}", channel_id, index + 1),
-                        advisor_id: advisor_id.to_string(),
-                        title: format!("{} · 新视频 {}", channel_name, index + 1),
-                        published_at: now_iso(),
-                        status: "pending".to_string(),
-                        retry_count: 0,
-                        error_message: None,
-                        subtitle_file: None,
-                        video_url: Some(format!(
-                            "{}/videos/{}",
-                            url.trim_end_matches('/'),
-                            format!("{}-pending-{}", channel_id, index + 1)
-                        )),
-                        channel_id: Some(channel_id.clone()),
-                        created_at: now_iso(),
-                        updated_at: now_iso(),
-                    })
-                    .collect::<Vec<_>>()
-            });
+        }))
+    })?;
+    if channel
+        .get("success")
+        .and_then(|value| value.as_bool())
+        .is_some_and(|success| !success)
+    {
+        return Ok(channel);
+    }
+    let url = channel
+        .get("url")
+        .and_then(|value| value.as_str())
+        .unwrap_or("https://youtube.com/@redbox");
+    let (fallback_channel_id, fallback_channel_name) = parse_youtube_channel(url);
+    let fetched = match detect_ytdlp() {
+        Some(_) => fetch_ytdlp_channel_info(url, limit)
+            .map_err(|error| format!("获取 YouTube 频道视频失败：{error}"))?,
+        None => {
+            return Ok(json!({
+                "success": false,
+                "error": "未检测到可用的 yt-dlp，请先在设置中完成安装。"
+            }));
+        }
+    };
+    let channel_id = fetched
+        .get("channel_id")
+        .and_then(|item| item.as_str())
+        .map(|item| item.to_string())
+        .unwrap_or(fallback_channel_id);
+    let channel_name = fetched
+        .get("channel")
+        .or_else(|| fetched.get("uploader"))
+        .or_else(|| fetched.get("title"))
+        .and_then(|item| item.as_str())
+        .map(|item| item.to_string())
+        .unwrap_or(fallback_channel_name);
+    let next_videos = parse_ytdlp_videos(advisor_id, Some(&channel_id), &fetched);
+    if next_videos.is_empty() {
+        return Ok(json!({
+            "success": false,
+            "error": format!("未从 YouTube 频道 {} 获取到可下载的视频条目", channel_name)
+        }));
+    }
+    with_store_mut(state, |store| {
         for next_video in next_videos {
             if let Some(existing) = store
                 .advisor_videos
@@ -137,12 +133,14 @@ fn refresh_advisor_videos(
                 store.advisor_videos.push(next_video);
             }
         }
-        advisor.youtube_channel = Some(build_advisor_youtube_channel(
-            Some(&channel),
-            url,
-            &channel_id,
-        ));
-        advisor.updated_at = now_iso();
+        if let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) {
+            advisor.youtube_channel = Some(build_advisor_youtube_channel(
+                Some(&channel),
+                url,
+                &channel_id,
+            ));
+            advisor.updated_at = now_iso();
+        }
         let mut videos: Vec<AdvisorVideoRecord> = store
             .advisor_videos
             .iter()
@@ -815,73 +813,59 @@ pub fn handle_advisor_channel(
                 let channel_url = payload_string(payload, "channelUrl").unwrap_or_default();
                 let (fallback_channel_id, fallback_channel_name) =
                     parse_youtube_channel(&channel_url);
-                let fetched =
-                    detect_ytdlp().and_then(|_| fetch_ytdlp_channel_info(&channel_url, 6).ok());
+                let fetched = match detect_ytdlp() {
+                    Some(_) => match fetch_ytdlp_channel_info(&channel_url, 6) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return Ok(json!({
+                                "success": false,
+                                "error": format!("获取 YouTube 频道信息失败：{error}")
+                            }));
+                        }
+                    },
+                    None => {
+                        return Ok(json!({
+                            "success": false,
+                            "error": "未检测到可用的 yt-dlp，请先在设置中完成安装。"
+                        }));
+                    }
+                };
                 let channel_id = fetched
-                    .as_ref()
-                    .and_then(|value| value.get("channel_id").and_then(|item| item.as_str()))
+                    .get("channel_id")
+                    .and_then(|item| item.as_str())
                     .map(|item| item.to_string())
                     .unwrap_or(fallback_channel_id);
                 let channel_name = fetched
-                    .as_ref()
-                    .and_then(|value| {
-                        value
-                            .get("channel")
-                            .or_else(|| value.get("uploader"))
-                            .or_else(|| value.get("title"))
-                            .and_then(|item| item.as_str())
-                    })
+                    .get("channel")
+                    .or_else(|| fetched.get("uploader"))
+                    .or_else(|| fetched.get("title"))
+                    .and_then(|item| item.as_str())
                     .map(|item| item.to_string())
                     .unwrap_or(fallback_channel_name);
                 let channel_description = fetched
-                    .as_ref()
-                    .and_then(|value| value.get("description").and_then(|item| item.as_str()))
+                    .get("description")
+                    .and_then(|item| item.as_str())
                     .map(|item| item.to_string())
-                    .unwrap_or_else(|| {
-                        format!("RedBox 已根据频道链接 {} 建立本地频道画像。", channel_url)
-                    });
+                    .unwrap_or_default();
                 let avatar_url = fetched
-                    .as_ref()
-                    .and_then(|value| {
-                        value
-                            .get("thumbnails")
-                            .and_then(|item| item.as_array())
-                            .and_then(|items| items.last())
-                            .and_then(|item| item.get("url"))
-                            .and_then(|item| item.as_str())
-                    })
+                    .get("thumbnails")
+                    .and_then(|item| item.as_array())
+                    .and_then(|items| items.last())
+                    .and_then(|item| item.get("url"))
+                    .and_then(|item| item.as_str())
                     .unwrap_or("")
                     .to_string();
-                let recent_videos = fetched
-                    .as_ref()
-                    .map(|value| {
-                        value
-                            .get("entries")
-                            .and_then(|item| item.as_array())
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .take(5)
-                            .filter_map(|entry| {
-                                let id = entry.get("id").and_then(|item| item.as_str())?;
-                                let title = entry
-                                    .get("title")
-                                    .and_then(|item| item.as_str())
-                                    .unwrap_or("Untitled");
-                                Some(json!({ "id": id, "title": title }))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_else(|| {
-                        (0..5)
-                            .map(|index| {
-                                json!({
-                                    "id": format!("{}-{}", channel_id, index + 1),
-                                    "title": format!("{} · 最近视频 {}", channel_name, index + 1)
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    });
+                let recent_videos = parse_ytdlp_videos("", Some(&channel_id), &fetched)
+                    .into_iter()
+                    .take(5)
+                    .map(|video| json!({ "id": video.id, "title": video.title }))
+                    .collect::<Vec<_>>();
+                if recent_videos.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "error": format!("未从 YouTube 频道 {} 获取到可下载的视频条目", channel_name)
+                    }));
+                }
                 Ok(json!({
                     "success": true,
                     "data": {
@@ -902,92 +886,102 @@ pub fn handle_advisor_channel(
                     .max(1);
                 let (fallback_channel_id, fallback_channel_name) =
                     parse_youtube_channel(&channel_url);
-                let fetched =
-                    detect_ytdlp().and_then(|_| fetch_ytdlp_channel_info(&channel_url, count).ok());
+                let fetched = match detect_ytdlp() {
+                    Some(_) => match fetch_ytdlp_channel_info(&channel_url, count) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            return Ok(json!({
+                                "success": false,
+                                "successCount": 0,
+                                "failCount": count,
+                                "error": format!("获取 YouTube 频道视频失败：{error}")
+                            }));
+                        }
+                    },
+                    None => {
+                        return Ok(json!({
+                            "success": false,
+                            "successCount": 0,
+                            "failCount": count,
+                            "error": "未检测到可用的 yt-dlp，请先在设置中完成安装。"
+                        }));
+                    }
+                };
                 let channel_id = fetched
-                    .as_ref()
-                    .and_then(|value| value.get("channel_id").and_then(|item| item.as_str()))
+                    .get("channel_id")
+                    .and_then(|item| item.as_str())
                     .map(|item| item.to_string())
                     .unwrap_or(fallback_channel_id);
                 let channel_name = fetched
-                    .as_ref()
-                    .and_then(|value| {
-                        value
-                            .get("channel")
-                            .or_else(|| value.get("uploader"))
-                            .or_else(|| value.get("title"))
-                            .and_then(|item| item.as_str())
-                    })
+                    .get("channel")
+                    .or_else(|| fetched.get("uploader"))
+                    .or_else(|| fetched.get("title"))
+                    .and_then(|item| item.as_str())
                     .map(|item| item.to_string())
                     .unwrap_or(fallback_channel_name);
-                let real_videos = fetched
-                    .as_ref()
-                    .map(|value| parse_ytdlp_videos(&advisor_id, Some(&channel_id), value))
-                    .unwrap_or_default();
+                let real_videos = parse_ytdlp_videos(&advisor_id, Some(&channel_id), &fetched);
+                if real_videos.is_empty() {
+                    return Ok(json!({
+                        "success": false,
+                        "successCount": 0,
+                        "failCount": count,
+                        "error": format!("未从 YouTube 频道 {} 获取到可下载的视频条目", channel_name)
+                    }));
+                }
                 let knowledge_dir = advisor_knowledge_dir(state, &advisor_id)?;
                 let mut success_count = 0_i64;
-                for index in 0..count {
+                let mut fail_count = 0_i64;
+                for (index, video) in real_videos.into_iter().take(count as usize).enumerate() {
                     let _ = app.emit(
                         "advisors:download-progress",
                         json!({ "advisorId": advisor_id, "progress": format!("正在处理第 {} / {} 个视频...", index + 1, count) }),
                     );
-                    let video = real_videos.get(index as usize).cloned().unwrap_or_else(|| {
-                        AdvisorVideoRecord {
-                            id: format!("{}-{}", channel_id, index + 1),
-                            advisor_id: advisor_id.clone(),
-                            title: format!("{} · 视频 {}", channel_name, index + 1),
-                            published_at: now_iso(),
-                            status: "pending".to_string(),
-                            retry_count: 0,
-                            error_message: None,
-                            subtitle_file: None,
-                            video_url: Some(format!(
-                                "{}/videos/{}",
-                                channel_url.trim_end_matches('/'),
-                                format!("{}-{}", channel_id, index + 1)
-                            )),
-                            channel_id: Some(channel_id.clone()),
-                            created_at: now_iso(),
-                            updated_at: now_iso(),
-                        }
-                    });
                     let video_id = video.id.clone();
-                    let subtitle_path = if let Some(video_url) = video.video_url.clone() {
-                        download_ytdlp_subtitle(
-                            &video_url,
-                            &knowledge_dir,
-                            &slug_from_relative_path(&video_id),
-                        )
-                        .unwrap_or_else(|_| {
-                            let fallback = knowledge_dir.join(format!(
-                                "{}-subtitle-{}.txt",
-                                slug_from_relative_path(&channel_id),
-                                index + 1
-                            ));
-                            let _ = fs::write(
-                                &fallback,
-                                format!(
-                                    "RedBox generated subtitle fallback\n\n频道：{}\n视频：{}\n来源：{}\n",
-                                    channel_name, video_id, channel_url
-                                ),
-                            );
-                            fallback
-                        })
-                    } else {
-                        let fallback = knowledge_dir.join(format!(
-                            "{}-subtitle-{}.txt",
-                            slug_from_relative_path(&channel_id),
-                            index + 1
-                        ));
-                        fs::write(
-                            &fallback,
-                            format!(
-                                "RedBox generated subtitle fallback\n\n频道：{}\n视频：{}\n来源：{}\n",
-                                channel_name, video_id, channel_url
-                            ),
-                        )
-                        .map_err(|error| error.to_string())?;
-                        fallback
+                    let Some(video_url) = video.video_url.clone() else {
+                        fail_count += 1;
+                        continue;
+                    };
+                    let subtitle_path = match download_ytdlp_subtitle(
+                        &video_url,
+                        &knowledge_dir,
+                        &slug_from_relative_path(&video_id),
+                    ) {
+                        Ok(path) => path,
+                        Err(error) => {
+                            let video_title = video.title.clone();
+                            let video_published_at = video.published_at.clone();
+                            let video_url_saved = video.video_url.clone();
+                            with_store_mut(state, |store| {
+                                if let Some(video) = store.advisor_videos.iter_mut().find(|item| {
+                                    item.id == video_id && item.advisor_id == advisor_id
+                                }) {
+                                    video.title = video_title.clone();
+                                    video.published_at = video_published_at.clone();
+                                    video.video_url = video_url_saved.clone();
+                                    video.status = "failed".to_string();
+                                    video.error_message = Some(error.clone());
+                                    video.updated_at = now_iso();
+                                } else {
+                                    store.advisor_videos.push(AdvisorVideoRecord {
+                                        id: video_id.clone(),
+                                        advisor_id: advisor_id.clone(),
+                                        title: video_title.clone(),
+                                        published_at: video_published_at.clone(),
+                                        status: "failed".to_string(),
+                                        retry_count: 0,
+                                        error_message: Some(error.clone()),
+                                        subtitle_file: None,
+                                        video_url: video_url_saved.clone(),
+                                        channel_id: Some(channel_id.clone()),
+                                        created_at: now_iso(),
+                                        updated_at: now_iso(),
+                                    });
+                                }
+                                Ok(())
+                            })?;
+                            fail_count += 1;
+                            continue;
+                        }
                     };
                     let subtitle_name = subtitle_path
                         .file_name()
@@ -1089,10 +1083,15 @@ pub fn handle_advisor_channel(
                 }
                 let _ = app.emit(
                     "advisors:download-progress",
-                    json!({ "advisorId": advisor_id, "progress": "下载完成！" }),
+                    json!({ "advisorId": advisor_id, "progress": format!("下载完成：成功 {} 个，失败 {} 个", success_count, fail_count) }),
                 );
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
-                Ok(json!({ "success": true, "successCount": success_count, "failCount": 0 }))
+                Ok(json!({
+                    "success": fail_count == 0,
+                    "successCount": success_count,
+                    "failCount": fail_count,
+                    "error": if fail_count > 0 { Some(format!("{} 个视频字幕下载失败", fail_count)) } else { None }
+                }))
             }
             "advisors:get-videos" => {
                 let advisor_id = payload_string(payload, "advisorId").unwrap_or_default();
@@ -1127,77 +1126,77 @@ pub fn handle_advisor_channel(
                 let advisor_id = payload_string(payload, "advisorId").unwrap_or_default();
                 let video_id = payload_string(payload, "videoId").unwrap_or_default();
                 let knowledge_dir = advisor_knowledge_dir(state, &advisor_id)?;
-                let result = with_store_mut(state, |store| {
-                    let Some(video) = store
+                let video_snapshot = with_store(state, |store| {
+                    Ok(store
                         .advisor_videos
-                        .iter_mut()
+                        .iter()
                         .find(|item| item.id == video_id && item.advisor_id == advisor_id)
-                    else {
-                        return Ok(json!({ "success": false, "error": "视频不存在" }));
-                    };
-                    let subtitle_path = if let Some(video_url) = video.video_url.clone() {
-                        download_ytdlp_subtitle(
-                            &video_url,
-                            &knowledge_dir,
-                            &slug_from_relative_path(&video.id),
-                        )
-                        .unwrap_or_else(|_| {
-                            let fallback = knowledge_dir
-                                .join(format!("{}.txt", slug_from_relative_path(&video.title)));
-                            let _ = fs::write(
-                                &fallback,
-                                format!(
-                                    "RedBox subtitle fallback\n\n{}\n{}",
-                                    video.title,
-                                    video.video_url.clone().unwrap_or_default()
-                                ),
-                            );
-                            fallback
-                        })
-                    } else {
-                        let fallback = knowledge_dir
-                            .join(format!("{}.txt", slug_from_relative_path(&video.title)));
-                        fs::write(
-                            &fallback,
-                            format!(
-                                "RedBox subtitle fallback\n\n{}\n{}",
-                                video.title,
-                                video.video_url.clone().unwrap_or_default()
-                            ),
-                        )
-                        .map_err(|error| error.to_string())?;
-                        fallback
-                    };
-                    let subtitle_name = subtitle_path
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("subtitle.txt")
-                        .to_string();
-                    let subtitle_content = read_text_file_or_empty(&subtitle_path);
-                    video.status = "success".to_string();
-                    video.subtitle_file = Some(subtitle_name.clone());
-                    video.error_message = None;
-                    video.updated_at = now_iso();
-                    if let Some(advisor) =
-                        store.advisors.iter_mut().find(|item| item.id == advisor_id)
-                    {
-                        if !advisor.knowledge_files.contains(&subtitle_name) {
-                            advisor.knowledge_files.push(subtitle_name.clone());
-                        }
-                        advisor.updated_at = now_iso();
-                    }
-                    if let Some(existing) = store
-                        .youtube_videos
-                        .iter_mut()
-                        .find(|item| item.video_id == video_id)
-                    {
-                        existing.subtitle_content = Some(subtitle_content);
-                        existing.has_subtitle = true;
-                        existing.subtitle_error = None;
-                        existing.status = Some("completed".to_string());
-                    }
-                    Ok(json!({ "success": true, "subtitleFile": subtitle_name }))
+                        .cloned())
                 })?;
+                let Some(video_snapshot) = video_snapshot else {
+                    return Ok(json!({ "success": false, "error": "视频不存在" }));
+                };
+                let Some(video_url) = video_snapshot.video_url.clone() else {
+                    return Ok(json!({ "success": false, "error": "视频缺少 YouTube URL" }));
+                };
+                let subtitle_result = download_ytdlp_subtitle(
+                    &video_url,
+                    &knowledge_dir,
+                    &slug_from_relative_path(&video_snapshot.id),
+                );
+                let result =
+                    match subtitle_result {
+                        Ok(subtitle_path) => {
+                            let subtitle_name = subtitle_path
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .unwrap_or("subtitle.txt")
+                                .to_string();
+                            let subtitle_content = read_text_file_or_empty(&subtitle_path);
+                            with_store_mut(state, |store| {
+                                if let Some(video) = store.advisor_videos.iter_mut().find(|item| {
+                                    item.id == video_id && item.advisor_id == advisor_id
+                                }) {
+                                    video.status = "success".to_string();
+                                    video.subtitle_file = Some(subtitle_name.clone());
+                                    video.error_message = None;
+                                    video.updated_at = now_iso();
+                                }
+                                if let Some(advisor) =
+                                    store.advisors.iter_mut().find(|item| item.id == advisor_id)
+                                {
+                                    if !advisor.knowledge_files.contains(&subtitle_name) {
+                                        advisor.knowledge_files.push(subtitle_name.clone());
+                                    }
+                                    advisor.updated_at = now_iso();
+                                }
+                                if let Some(existing) = store
+                                    .youtube_videos
+                                    .iter_mut()
+                                    .find(|item| item.video_id == video_id)
+                                {
+                                    existing.subtitle_content = Some(subtitle_content);
+                                    existing.has_subtitle = true;
+                                    existing.subtitle_error = None;
+                                    existing.status = Some("completed".to_string());
+                                }
+                                Ok(json!({ "success": true, "subtitleFile": subtitle_name }))
+                            })?
+                        }
+                        Err(error) => {
+                            with_store_mut(state, |store| {
+                                if let Some(video) = store.advisor_videos.iter_mut().find(|item| {
+                                    item.id == video_id && item.advisor_id == advisor_id
+                                }) {
+                                    video.status = "failed".to_string();
+                                    video.error_message = Some(error.clone());
+                                    video.updated_at = now_iso();
+                                }
+                                Ok(())
+                            })?;
+                            json!({ "success": false, "error": error })
+                        }
+                    };
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
             }
