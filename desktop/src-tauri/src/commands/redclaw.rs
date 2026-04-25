@@ -42,10 +42,10 @@ pub async fn redclaw_runner_status(state: State<'_, AppState>) -> Result<Value, 
 fn stop_redclaw_runtime(runtime: &mut RedclawRuntime) {
     runtime.stop.store(true, Ordering::Relaxed);
     if let Some(join) = runtime.scheduler_join.take() {
-        let _ = join.join();
+        join.abort();
     }
     if let Some(join) = runtime.runner_join.take() {
-        let _ = join.join();
+        join.abort();
     }
 }
 
