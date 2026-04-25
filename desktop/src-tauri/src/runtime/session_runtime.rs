@@ -1120,8 +1120,9 @@ fn sanitize_runtime_history_message(message: &Value) -> Option<Value> {
 fn is_internal_runtime_history_user_message(content: &str) -> bool {
     content == "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。"
         || content.starts_with("系统状态更新：以下技能已激活并写入当前会话：")
+        || content.starts_with("系统状态更新：以下技能已激活并加入当前轮上下文：")
         || content.starts_with("当前写稿工程已创建并绑定为 `")
-        || content.starts_with("你刚才发送了空的 `app_cli` 调用。当前写稿工程已经绑定为 `")
+        || content.starts_with("你刚才发送了空的 `app_cli` 调用")
         || content.starts_with("当前任务是执行型创作任务，不要先输出计划、承诺或阶段说明。")
         || content.starts_with("当前任务还没有完成这些必需动作：")
 }
@@ -2234,6 +2235,14 @@ mod tests {
             json!({
                 "role": "user",
                 "content": "系统状态更新：以下技能已激活并写入当前会话：writing-style。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。"
+            }),
+            json!({
+                "role": "user",
+                "content": "系统状态更新：以下技能已激活并加入当前轮上下文：writing-style。不要向用户复述技能激活过程，不要输出 `<tool_call>`、`<activated_skill>` 或其他协议标签，也不要再次激活相同技能。基于更新后的技能上下文继续当前任务；如果下一步需要工具，直接发起真实工具调用。"
+            }),
+            json!({
+                "role": "user",
+                "content": "你刚才发送了空的 `app_cli` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `wander/demo.redpost`。下一步先输出完整正文。"
             }),
             json!({
                 "role": "assistant",
