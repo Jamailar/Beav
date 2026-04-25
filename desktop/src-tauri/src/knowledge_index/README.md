@@ -15,6 +15,7 @@
 - `hybrid.rs`: sparse expansion、dense lane、RRF 融合与离线评测
 - `evaluation.rs` (test-only): release gate fixture、grounding audit、发布阈值校验
 - `query_profile.rs`: 法律查询画像、检索粒度和默认 retrieval mode 推荐
+- `migration.rs`: 检索 schema/index/canonical/parser/rerank 版本键与升级决策
 - `retrieval_audit.rs`: indexed search 的 retrieval run / hit / evidence pack 审计落库
 - `jobs.rs`: 异步任务和重建调度
 - `watcher.rs`: 目录监听
@@ -37,6 +38,7 @@
 - Stage 6 起 `knowledge.search` 默认走 hybrid，可通过 `retrievalMode=lexical` 关闭增强链路
 - hybrid 排序输出需要显式带 `retrievalLanes` 和 ranking breakdown，不能把 fusion / rerank 变成黑盒
 - indexed `knowledge.search` 必须写入 `knowledge_retrieval_runs` / `knowledge_retrieval_hits`，返回 `auditRunId`，保证 evidence pack 可回放
+- App 升级必须先走 `migration.rs` 版本决策；FTS/index-only 变化不能触发默认 OCR/parser 全量重建
 - Stage 7 起 release gate 依赖固定 fixture 测试；任一阈值不达标都应直接阻塞发布
 - 对法律检索查询要先做 query profile，明确 intent、citation requirement、granularity，再决定默认 lexical/hybrid 路径
 - advisor/member knowledge 也必须进入同一套 block/anchor 索引链，不能只让 registered document source 使用 indexed retrieval

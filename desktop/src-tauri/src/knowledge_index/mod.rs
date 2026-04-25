@@ -8,6 +8,7 @@ pub mod fingerprint;
 pub mod hybrid;
 pub mod indexer;
 pub mod jobs;
+pub mod migration;
 pub mod query_profile;
 pub mod retrieval_audit;
 pub mod schema;
@@ -28,6 +29,8 @@ pub(crate) struct KnowledgeIndexRuntimeState {
     pub failed_count: usize,
     pub last_indexed_at: Option<String>,
     pub last_error: Option<String>,
+    pub migration_status: Option<String>,
+    pub pending_rebuild_reason: Option<String>,
     pub watched_roots: Vec<PathBuf>,
 }
 
@@ -40,6 +43,8 @@ pub(crate) struct KnowledgeCatalogStatus {
     pub last_indexed_at: Option<String>,
     pub is_building: bool,
     pub last_error: Option<String>,
+    pub migration_status: Option<String>,
+    pub pending_rebuild_reason: Option<String>,
 }
 
 pub(crate) fn workspace_id(state: &State<'_, AppState>) -> Result<String, String> {
@@ -75,6 +80,8 @@ pub(crate) fn index_status(state: &State<'_, AppState>) -> Result<KnowledgeCatal
         last_indexed_at: runtime.last_indexed_at,
         is_building: runtime.is_building,
         last_error: runtime.last_error,
+        migration_status: runtime.migration_status,
+        pending_rebuild_reason: runtime.pending_rebuild_reason,
     })
 }
 

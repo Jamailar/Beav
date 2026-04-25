@@ -587,6 +587,10 @@ Status: Current
 
 - 当前 `schema.rs` 已有幂等建表/补列基础，但还缺显式版本键、migration decision、分层重建和 index staleness 标注。
 - 当前 rebuild 是全量 `rebuild_catalog`，需要拆出 FTS-only、canonical-to-block、source-level rebuild。
+- 已新增 `knowledge_index/migration.rs` 的版本键与 migration decision；启动时可自动识别 `schema_only`、`fts_rebuild`、`full_rebuild`。
+- 已接入 FTS-only 后台重建：升级到 BM25/FTS 版本后，从 `knowledge_document_blocks` 重建 FTS，不触发 OCR/parser。
+- indexed `knowledge.search` 的 `queryPlan.indexStaleness` 已标注 `current | migration_pending | rebuilding | stale_fallback | unknown`。
+- 尚未完成 canonical-to-block rebuild、source-level rebuild、迁移状态 UI 和手动“仅全文索引重建”参数。
 
 ## Phase Dependencies
 
