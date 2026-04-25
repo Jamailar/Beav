@@ -909,6 +909,18 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
     let mut sources = payload_string(settings, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
         .unwrap_or_default();
+    let current_default_source_id =
+        payload_string(settings, "default_ai_source_id").unwrap_or_default();
+    let current_default_source_exists = !current_default_source_id.trim().is_empty()
+        && sources.iter().any(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .map(|value| value.trim() == current_default_source_id.trim())
+                .unwrap_or(false)
+        });
+    let should_sync_official_route = current_default_source_id.trim().is_empty()
+        || current_default_source_id.trim() == "redbox_official_auto"
+        || !current_default_source_exists;
     let existing_source = sources
         .iter()
         .find(|item| {
@@ -1000,50 +1012,64 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         "protocol": "openai"
     });
     sources.insert(0, source);
-    let next_model_name_wander = sanitize_scoped_model_override(
-        &official_model_ids,
-        payload_string(settings, "model_name_wander").as_deref(),
-    );
-    let next_model_name_chatroom = sanitize_scoped_model_override(
-        &official_model_ids,
-        payload_string(settings, "model_name_chatroom").as_deref(),
-    );
-    let next_model_name_knowledge = sanitize_scoped_model_override(
-        &official_model_ids,
-        payload_string(settings, "model_name_knowledge").as_deref(),
-    );
-    let next_model_name_redclaw = sanitize_scoped_model_override(
-        &official_model_ids,
-        payload_string(settings, "model_name_redclaw").as_deref(),
-    );
+    let official_route_scoped_models = if should_sync_official_route {
+        Some((
+            sanitize_scoped_model_override(
+                &official_model_ids,
+                payload_string(settings, "model_name_wander").as_deref(),
+            ),
+            sanitize_scoped_model_override(
+                &official_model_ids,
+                payload_string(settings, "model_name_chatroom").as_deref(),
+            ),
+            sanitize_scoped_model_override(
+                &official_model_ids,
+                payload_string(settings, "model_name_knowledge").as_deref(),
+            ),
+            sanitize_scoped_model_override(
+                &official_model_ids,
+                payload_string(settings, "model_name_redclaw").as_deref(),
+            ),
+        ))
+    } else {
+        None
+    };
     if let Some(object) = settings.as_object_mut() {
         object.insert(
             "ai_sources_json".to_string(),
             json!(serde_json::to_string(&sources).unwrap_or_else(|_| "[]".to_string())),
         );
-        object.insert(
-            "default_ai_source_id".to_string(),
-            json!("redbox_official_auto"),
-        );
-        object.insert("api_endpoint".to_string(), json!(official_base_url));
-        object.insert("api_key".to_string(), json!(api_key));
-        object.insert("model_name".to_string(), json!(chat_model));
-        object.insert(
-            "model_name_wander".to_string(),
-            json!(next_model_name_wander),
-        );
-        object.insert(
-            "model_name_chatroom".to_string(),
-            json!(next_model_name_chatroom),
-        );
-        object.insert(
-            "model_name_knowledge".to_string(),
-            json!(next_model_name_knowledge),
-        );
-        object.insert(
-            "model_name_redclaw".to_string(),
-            json!(next_model_name_redclaw),
-        );
+        if let Some((
+            next_model_name_wander,
+            next_model_name_chatroom,
+            next_model_name_knowledge,
+            next_model_name_redclaw,
+        )) = official_route_scoped_models
+        {
+            object.insert(
+                "default_ai_source_id".to_string(),
+                json!("redbox_official_auto"),
+            );
+            object.insert("api_endpoint".to_string(), json!(official_base_url));
+            object.insert("api_key".to_string(), json!(api_key));
+            object.insert("model_name".to_string(), json!(chat_model));
+            object.insert(
+                "model_name_wander".to_string(),
+                json!(next_model_name_wander),
+            );
+            object.insert(
+                "model_name_chatroom".to_string(),
+                json!(next_model_name_chatroom),
+            );
+            object.insert(
+                "model_name_knowledge".to_string(),
+                json!(next_model_name_knowledge),
+            );
+            object.insert(
+                "model_name_redclaw".to_string(),
+                json!(next_model_name_redclaw),
+            );
+        }
         object.insert(
             "video_endpoint".to_string(),
             json!(REDBOX_OFFICIAL_BASE_URL),
@@ -1061,6 +1087,125 @@ pub(crate) fn fetch_official_models_for_settings(settings: &Value) -> Vec<Value>
     run_official_ai_json_request(settings, "GET", "/models", None)
         .map(|remote| official_response_items(&remote))
         .unwrap_or_else(|_| official_settings_models(settings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn official_models_fixture() -> Vec<Value> {
+        vec![
+            json!({ "id": "gpt-5.5", "capabilities": ["chat"] }),
+            json!({ "id": "embedding-3", "capabilities": ["embedding"] }),
+        ]
+    }
+
+    #[test]
+    fn official_sync_preserves_user_selected_custom_default_route() {
+        let custom_sources = vec![json!({
+            "id": "custom-source",
+            "name": "Custom",
+            "presetId": "custom",
+            "baseURL": "https://custom.example/v1",
+            "apiKey": "custom-key",
+            "model": "custom-model",
+            "models": ["custom-model"],
+            "modelsMeta": [{ "id": "custom-model", "capabilities": ["chat"] }],
+            "protocol": "openai"
+        })];
+        let mut settings = json!({
+            "default_ai_source_id": "custom-source",
+            "api_endpoint": "https://custom.example/v1",
+            "api_key": "custom-key",
+            "model_name": "custom-model",
+            "model_name_wander": "custom-wander",
+            "ai_sources_json": serde_json::to_string(&custom_sources).unwrap(),
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+
+        official_sync_source_into_settings(&mut settings, &official_models_fixture());
+
+        assert_eq!(
+            payload_string(&settings, "default_ai_source_id").as_deref(),
+            Some("custom-source")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_endpoint").as_deref(),
+            Some("https://custom.example/v1")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_key").as_deref(),
+            Some("custom-key")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name").as_deref(),
+            Some("custom-model")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name_wander").as_deref(),
+            Some("custom-wander")
+        );
+
+        let sources = payload_string(&settings, "ai_sources_json")
+            .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+            .unwrap_or_default();
+        assert_eq!(
+            sources
+                .first()
+                .and_then(|item| item.get("id"))
+                .and_then(Value::as_str),
+            Some("redbox_official_auto")
+        );
+        assert!(sources
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some("custom-source")));
+    }
+
+    #[test]
+    fn official_sync_updates_route_when_official_is_current_default() {
+        let official_sources = vec![json!({
+            "id": "redbox_official_auto",
+            "name": "RedBox Official",
+            "presetId": "redbox-official",
+            "baseURL": REDBOX_OFFICIAL_BASE_URL,
+            "apiKey": "old-official-key",
+            "model": "old-model",
+            "models": ["old-model"],
+            "protocol": "openai"
+        })];
+        let mut settings = json!({
+            "default_ai_source_id": "redbox_official_auto",
+            "api_endpoint": "https://old.example/v1",
+            "api_key": "old-key",
+            "model_name": "old-model",
+            "model_name_wander": "missing-official-model",
+            "ai_sources_json": serde_json::to_string(&official_sources).unwrap(),
+            "redbox_auth_session_json": serde_json::to_string(&json!({ "apiKey": "official-key" })).unwrap()
+        });
+
+        official_sync_source_into_settings(&mut settings, &official_models_fixture());
+
+        assert_eq!(
+            payload_string(&settings, "default_ai_source_id").as_deref(),
+            Some("redbox_official_auto")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_endpoint").as_deref(),
+            Some(REDBOX_OFFICIAL_BASE_URL)
+        );
+        assert_eq!(
+            payload_string(&settings, "api_key").as_deref(),
+            Some("official-key")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name").as_deref(),
+            Some("gpt-5.5")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name_wander").as_deref(),
+            None
+        );
+    }
 }
 
 pub(crate) fn official_settings_json_array(settings: &Value, key: &str) -> Vec<Value> {
