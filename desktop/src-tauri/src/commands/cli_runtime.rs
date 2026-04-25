@@ -564,7 +564,32 @@ fn execute_value(
 ) -> Result<Value, String> {
     let request: CliExecuteRequest = parse_cli_runtime_payload(payload)?;
     let execution = execute_cli_command(app, state, request)?;
-    to_cli_runtime_ipc_value(execution)
+    let max_chars = payload
+        .get("maxChars")
+        .and_then(Value::as_u64)
+        .unwrap_or(4_000) as usize;
+    let mut value = to_cli_runtime_ipc_value(&execution)?;
+    if let Some(snapshot) = load_cli_execution_snapshot(state, &execution.id, max_chars)? {
+        if let Value::Object(object) = &mut value {
+            object.insert(
+                "stdoutTail".to_string(),
+                Value::String(snapshot.stdout_tail.clone()),
+            );
+            object.insert(
+                "stderrTail".to_string(),
+                Value::String(snapshot.stderr_tail.clone()),
+            );
+            object.insert(
+                "stdoutText".to_string(),
+                Value::String(snapshot.stdout_tail),
+            );
+            object.insert(
+                "stderrText".to_string(),
+                Value::String(snapshot.stderr_tail),
+            );
+        }
+    }
+    Ok(value)
 }
 
 fn infer_tool_command(spec: &str) -> Option<String> {
@@ -810,6 +835,7 @@ fn poll_execution_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let execution_id = payload_string(payload, "executionId")
+        .or_else(|| payload_string(payload, "id"))
         .ok_or_else(|| "executionId is required".to_string())?;
     let max_chars = payload
         .get("maxChars")
@@ -945,6 +971,7 @@ pub fn handle_cli_runtime_channel(
         "cli-runtime:create-environment" => create_environment_value(state, payload),
         "cli-runtime:install" => install_value(app, state, payload),
         "cli-runtime:execute" => execute_value(app, state, payload),
+        "cli-runtime:get-execution" => poll_execution_value(app, state, payload),
         "cli-runtime:poll-execution" => poll_execution_value(app, state, payload),
         "cli-runtime:cancel-execution" => cancel_execution_value(app, state, payload),
         "cli-runtime:verify" => verify_execution_value(app, state, payload),

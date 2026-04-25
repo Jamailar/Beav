@@ -970,6 +970,14 @@ fn cli_runtime_execute_input_schema() -> Value {
             ),
             ("usePty", bool_schema("Whether to request PTY execution.")),
             (
+                "maxChars",
+                integer_schema(
+                    "Maximum stdout/stderr characters to include in the immediate response.",
+                    0,
+                    100_000,
+                ),
+            ),
+            (
                 "verificationRules",
                 json!({
                     "type": "array",
@@ -985,6 +993,25 @@ fn cli_runtime_execute_input_schema() -> Value {
             ),
         ],
         &["argv"],
+        None,
+    )
+}
+
+fn cli_runtime_execution_get_input_schema() -> Value {
+    object_schema(
+        &[
+            ("executionId", string_schema("CLI execution id.")),
+            ("id", string_schema("Compatibility alias for executionId.")),
+            (
+                "maxChars",
+                integer_schema(
+                    "Maximum stdout/stderr characters to include from each output stream.",
+                    0,
+                    100_000,
+                ),
+            ),
+        ],
+        &[],
         None,
     )
 }
@@ -2099,6 +2126,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "cli_runtime.execution.get",
+        namespace: "cli_runtime.execution",
+        description: "Read one CLI execution snapshot, including stdout/stderr tails. Use this instead of reading log files directly.",
+        input_schema: cli_runtime_execution_get_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "cli_runtime.verify",
         namespace: "cli_runtime",
         description: "Run structured verification rules against one finished CLI execution.",
@@ -3138,6 +3176,7 @@ mod tests {
         assert!(actions.contains(&"runtime.query"));
         assert!(actions.contains(&"cli_runtime.detect"));
         assert!(actions.contains(&"cli_runtime.discover"));
+        assert!(actions.contains(&"cli_runtime.execution.get"));
         assert!(actions.contains(&"mcp.list"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
     }
