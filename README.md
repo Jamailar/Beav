@@ -24,6 +24,13 @@
 </p>
 
 <p align="center">
+  <strong>教程：</strong>
+  <a href="https://www.bilibili.com/video/BV1V3onBdEf9/?share_source=copy_web&vd_source=54733b01cc63209b4e5b5254537d4bab">Bilibili 视频教程</a>
+  ·
+  <a href="https://www.youtube.com/watch?v=9Glgg3naHbg">YouTube 视频教程</a>
+</p>
+
+<p align="center">
   <a href="./readme_en.md">English</a> | <strong>简体中文</strong> | <a href="./readme_tw.md">繁體中文</a> | <a href="./readme_jp.md">日本語</a> | <a href="./readme_ko.md">한국어</a> | <a href="./readme_es.md">Español</a> | <a href="./readme_pt.md">Português</a> | <a href="./readme_tr.md">Türkçe</a>
 </p>
 
@@ -60,6 +67,12 @@
 你可以直接从浏览器插件把小红书、YouTube、网页和图片送进本地知识库，再在桌面端完成漫步选题、稿件创作、RedClaw 自动化执行，以及主体 / 媒体 / 封面的统一管理。
 
 ## 核心功能
+
+### 用 GPT-image-2 做自媒体的最佳实践工具
+
+自动进行图片内容编排，批量生成套图。
+
+![GPT-image-2 Media Suite](./images/gpt-image-2-media-suite.jpg)
 
 1. **插件采集入库**：浏览器扩展支持保存小红书图文 / 视频、YouTube 视频、网页链接、图片和选中文字，内容会直接进入桌面端工作流。
 2. **本地知识库**：统一管理采集内容、文档和素材，支持标签筛选、类型筛选、搜索、封面预览和空间隔离。
