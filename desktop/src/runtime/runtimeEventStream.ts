@@ -151,6 +151,31 @@ export interface RuntimeEventStreamHandlers {
     summary: string;
     raw: UnknownRecord;
   }) => void;
+  onCollabSessionChanged?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    session: UnknownRecord;
+    raw: UnknownRecord;
+  }) => void;
+  onCollabMemberChanged?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    member: UnknownRecord;
+    raw: UnknownRecord;
+  }) => void;
+  onCollabTaskChanged?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    task: UnknownRecord;
+    raw: UnknownRecord;
+  }) => void;
+  onCollabReportSubmitted?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    report: UnknownRecord;
+    raw: UnknownRecord;
+  }) => void;
+  onCollabMessageDelivered?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    message: UnknownRecord;
+    raw: UnknownRecord;
+  }) => void;
   onCreativeChatUserMessage?: (payload: { roomId: string; message: UnknownRecord }) => void;
   onCreativeChatAdvisorStart?: (payload: {
     roomId: string;
@@ -289,6 +314,11 @@ function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventTy
     case 'runtime:cli-escalation-requested':
     case 'runtime:cli-escalation-resolved':
     case 'runtime:cli-verification-finished':
+    case 'runtime:collab-session-changed':
+    case 'runtime:collab-member-changed':
+    case 'runtime:collab-task-changed':
+    case 'runtime:collab-report-submitted':
+    case 'runtime:collab-message-delivered':
       return eventType;
     default:
       return null;
@@ -493,6 +523,61 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       executionId: toText(payload.executionId || payload.id),
       status: toText(payload.status) || (payload.success === false ? 'failed' : 'completed'),
       summary: toText(payload.summary || payload.message || payload.error),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-session-changed') {
+    handlers.onCollabSessionChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      session: toRecord(payload.session),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-member-changed') {
+    handlers.onCollabMemberChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      member: toRecord(payload.member),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-task-changed') {
+    handlers.onCollabTaskChanged?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      task: toRecord(payload.task),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-report-submitted') {
+    handlers.onCollabReportSubmitted?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      report: toRecord(payload.report),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-message-delivered') {
+    handlers.onCollabMessageDelivered?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      message: toRecord(payload.message),
       raw: payload,
     });
     return;

@@ -457,6 +457,134 @@ impl RuntimeTrace {
 
 pub type RuntimeTaskTraceRecord = RuntimeTrace;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CollabSessionRecord {
+    pub id: String,
+    pub owner_session_id: Option<String>,
+    pub coordinator_member_id: Option<String>,
+    pub workspace_root: Option<String>,
+    pub title: String,
+    pub objective: String,
+    pub status: String,
+    pub runtime_mode: String,
+    pub source: String,
+    pub metadata: Option<Value>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CollabMemberRecord {
+    pub id: String,
+    pub session_id: String,
+    pub display_name: String,
+    pub role_id: String,
+    pub source_kind: String,
+    pub backend: String,
+    pub adapter_kind: String,
+    pub status: String,
+    pub current_task_id: Option<String>,
+    pub conversation_id: Option<String>,
+    pub runtime_id: Option<String>,
+    pub capabilities: Vec<String>,
+    pub allowed_tools: Vec<String>,
+    pub desired_model_config: Option<Value>,
+    pub current_model_config: Option<Value>,
+    pub progress_interval_ms: i64,
+    pub report_interval_seconds: i64,
+    pub last_seen_at: Option<i64>,
+    pub last_report_at: Option<i64>,
+    pub last_activity_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub metadata: Option<Value>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CollabTaskRecord {
+    pub id: String,
+    pub session_id: String,
+    pub parent_task_id: Option<String>,
+    pub member_id: Option<String>,
+    pub reviewer_member_id: Option<String>,
+    pub title: String,
+    pub objective: String,
+    pub description: String,
+    pub status: String,
+    pub priority: i64,
+    pub task_type: String,
+    pub depends_on_task_ids: Vec<String>,
+    pub blocked_by_task_ids: Vec<String>,
+    pub blocks_task_ids: Vec<String>,
+    pub runtime_task_id: Option<String>,
+    pub external_task_ref: Option<String>,
+    pub result_summary: Option<String>,
+    pub progress_percent: Option<i64>,
+    pub artifacts: Vec<Value>,
+    pub artifact_ids: Vec<String>,
+    pub due_at: Option<i64>,
+    pub metadata: Option<Value>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub started_at: Option<i64>,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CollabMailboxMessageRecord {
+    pub id: String,
+    pub session_id: String,
+    pub from_member_id: Option<String>,
+    pub to_member_id: Option<String>,
+    pub from_kind: String,
+    pub task_id: Option<String>,
+    pub kind: String,
+    pub message_type: String,
+    pub status: String,
+    pub subject: Option<String>,
+    pub body: String,
+    pub attachment_refs: Vec<String>,
+    pub payload: Option<Value>,
+    pub created_at: i64,
+    pub read_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CollabProgressReportRecord {
+    pub id: String,
+    pub session_id: String,
+    pub member_id: String,
+    pub task_id: Option<String>,
+    pub report_type: String,
+    pub status: String,
+    pub summary: String,
+    pub next_action: Option<String>,
+    pub next_steps: Vec<String>,
+    pub progress_percent: Option<i64>,
+    pub blockers: Vec<String>,
+    pub artifacts: Vec<Value>,
+    pub artifact_ids: Vec<String>,
+    pub payload: Option<Value>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CollabSessionSnapshot {
+    pub session: CollabSessionRecord,
+    pub members: Vec<CollabMemberRecord>,
+    pub tasks: Vec<CollabTaskRecord>,
+    pub mailbox: Vec<CollabMailboxMessageRecord>,
+    pub reports: Vec<CollabProgressReportRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedChatConfig {
     pub protocol: String,

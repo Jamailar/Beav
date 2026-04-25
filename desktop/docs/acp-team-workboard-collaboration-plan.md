@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: not_started
+execution_status: in_progress
 last_updated: 2026-04-25
 owner: ai-runtime
 scope: desktop
@@ -14,12 +14,12 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Discussion draft for ACP-style team members, periodic progress reports, and a visible member/task workboard.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, agent backend registry, report tick, and Workboard collaboration UI are implemented. Real external ACP process spawning remains adapter-contract-only until a concrete ACP backend is wired.
 ---
 
 # ACP Team Workboard Collaboration Plan
 
-Status: Discussion Draft
+Status: Implementation In Progress
 
 ## 1. Goal
 
@@ -1182,4 +1182,3 @@ The feature is successful when:
 Build Option C, but deliver it as an internal-member MVP first.
 
 The host-owned collaboration control plane is the important part. ACP support should plug into that plane, not define it. This keeps RedConvert aligned with its existing Rust runtime, Workboard, RedClaw, approval runtime, media generation pipeline, and future external agents.
-
