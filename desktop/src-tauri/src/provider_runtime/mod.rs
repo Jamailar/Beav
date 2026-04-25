@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::InteractiveToolCall;
 
-pub(crate) use openai::run_openai_provider_turn;
+pub(crate) use openai::{run_openai_provider_turn, should_prefer_non_streaming_openai_turn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderErrorKind {

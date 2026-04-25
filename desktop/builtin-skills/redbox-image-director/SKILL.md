@@ -1,10 +1,12 @@
 ---
 name: redbox-image-director
-description: Use when planning and generating a coordinated batch of multiple images in RedBox. First identify the user's motive and final goal, then choose the right image-set type and ordering strategy, lock the batch-level subject anchor, keep the style guide concise, define text placement and image details for each card, then call app_cli(action="image.generate", payload={ ... }) with the correct execution contract for the current runtime.
+description: Use when the user wants to做一整套图片、组图、卡片图、轮播图、配图包或电商套图 in RedBox. First identify the user's motive and final goal, then choose the right image-set type and ordering strategy, lock the batch-level subject anchor, keep the style guide concise, define text placement and image details for each card, and always show the full batch plan to the user first. Only after the user explicitly agrees may you call Redbox(resource="image", operation="generate", input={ ... }) for batch generation. Never submit multi-image generation without user approval.
 allowedRuntimeModes: [chatroom, redclaw, image-generation]
-allowed-tools: app_cli
+allowed-tools: Redbox
 activationScope: turn
 autoActivate: false
+activationHint: 当用户要做文章卡片、图解卡片、演示卡片、小红书图文卡片、知识卡片、电商套图、商品套图、商品详情图、组图、轮播图、多卡配图时，先调用 `Redbox(resource="skill", operation="run", input={ "name": "redbox-image-director" })`。只要最终交付物是成套图片，而不是正文写稿，就优先本技能；不要只因为输入里出现“文章”“内容”“标题”就先启用 writing-style。
+contextNote: 这是 RedBox 的多图编排技能。凡是“把文章/内容做成卡片图、图解卡片、演示卡片、电商套图、轮播图、组图”的任务，优先由它决定套图类型、顺序、统一风格锚点与每张图的文案位置；只有当用户额外要求改写正文或重写文案时，才考虑叠加 writing-style。
 hookMode: inline
 ---
 
@@ -22,6 +24,26 @@ Use this skill when the request implies a coordinated image set, for example:
 - 小红书组图 / 轮播图 / 多卡封面
 - 连续步骤图 / 场景序列图
 - 同一主体、同一风格下的多张海报或插图
+- 把文章做成卡片 / 把内容改成图文卡片
+- 做图解卡片 / 知识卡片 / 图文卡片 / 演示卡片
+- 做电商套图 / 商品套图 / 商品详情图 / 转化配图
+
+## 中文触发词与入口词
+
+看到下面这些中文表达时，应优先判断是否进入本技能，而不是把它当成单张图片任务：
+
+- `电商套图` / `商品套图` / `商品配图` / `商品详情图` / `电商配图`
+- `文章卡片` / `文章改卡片` / `把文章做成卡片` / `图文卡片`
+- `图解卡片` / `知识卡片` / `知识图解` / `拆解卡片`
+- `演示卡片` / `小红书演示卡片` / `演示图文` / `轮播演示卡`
+- `组图` / `多张图` / `多卡` / `轮播图` / `成套配图`
+
+这些入口词的默认归类如下：
+
+- `电商套图` -> `电商配图`
+- `文章卡片` -> 优先归到 `知识卡片套图` 或 `小红书文字卡片`，根据文章是否以观点表达为主来判断
+- `图解卡片` -> 优先归到 `知识卡片套图`；如果明显要求角色化、分镜化解释，可归到 `知识图解漫画`
+- `演示卡片` -> 归到 `小红书文字卡片` 或演示型轮播卡片，重点是步骤展示、卖点演示、前后对比或操作过程
 
 ## Planning Priorities
 
@@ -49,8 +71,16 @@ The core mission of this skill is:
 
 1. Determine the exact content details of every image.
 2. Ensure the whole set stays visually unified and never feels fragmented.
+3. Produce a clear batch plan for user review before any multi-image generation call happens.
+4. Wait for explicit user approval before calling `image.generate`.
 
 If a planning choice makes the set harder to read, weaker in sequence, or more visually inconsistent, reject that choice and rebuild the plan.
+
+Approval rule, repeated on purpose:
+
+- 先出图片编排方案，再等用户明确同意，最后才能批量生成。
+- 没有用户明确同意时，不允许擅自调用 `Redbox(resource="image", operation="generate", input={ ... })`。
+- “我已经理解需求” 不算确认；必须是用户明确表示同意方案后，才能进入生成。
 
 ## Motive-Driven Planning
 
@@ -77,12 +107,23 @@ This skill should be able to organize at least these common set types:
 - 知识图解漫画
 - 知识卡片套图
 - 电商配图
+- 文章卡片（通常归入 `知识卡片套图` 或 `小红书文字卡片`）
+- 图解卡片（通常归入 `知识卡片套图` 或 `知识图解漫画`）
+- 演示卡片（通常归入 `小红书文字卡片` 的演示型变体）
+- 电商套图（归入 `电商配图`）
 
 You may also adapt to adjacent variants when needed, but do not lose the sequence logic.
 
 ## Set Type Playbooks
 
 ### 小红书文字卡片
+
+Common Chinese asks:
+
+- 文章卡片
+- 演示卡片
+- 小红书演示卡片
+- 图文卡片
 
 Best for:
 
@@ -130,6 +171,13 @@ Planning focus:
 
 ### 知识图解漫画
 
+Common Chinese asks:
+
+- 图解卡片
+- 知识图解
+- 拆解图
+- 漫画式讲解
+
 Best for:
 
 - 解释概念
@@ -151,6 +199,13 @@ Planning focus:
 - 对话框、标注、箭头、知识标签的位置必须提前写清
 
 ### 知识卡片套图
+
+Common Chinese asks:
+
+- 文章卡片
+- 图解卡片
+- 知识卡片
+- 图文拆解卡
 
 Best for:
 
@@ -175,6 +230,13 @@ Planning focus:
 
 ### 电商配图
 
+Common Chinese asks:
+
+- 电商套图
+- 商品套图
+- 商品详情图
+- 电商转化配图
+
 Best for:
 
 - 商品卖点展示
@@ -195,18 +257,25 @@ Planning focus:
 - 产品外观、比例、材质、颜色不能漂移
 - 文字必须直接服务转化，不写空泛形容词
 - 要提前写清产品在画面中的位置、大小、出镜方式和陪衬物
+- 电商套图必须绑定具体商品主体。合法来源只有用户上传的商品图，或主体库里可读取的商品主体；没有具体商品时，禁止继续生成电商套图
 
 ## Default Workflow
 
-Before any multi-image `app_cli(action="image.generate", payload={ ... })` call:
+Before any multi-image `Redbox(resource="image", operation="generate", input={ ... })` call:
 
 1. Identify the user's motive, platform, set type, required image count, intended order, and final usage.
 2. Choose the sequence strategy that best matches that motive and set type.
 3. Write one concise shared consistency guide for the whole batch.
 4. Draft an image plan as a Markdown table with explicit text placement and must-keep details.
-5. In normal runtimes, show the plan to the user and wait for confirmation.
-6. In `redclaw` runtime, if the user clearly asked for a card-set batch such as `知识卡片 / 图文卡片 / 小红书文字卡片`, do not stop for a second confirmation after planning; continue in the same turn.
-7. Then call `app_cli(action="image.generate", payload={ ... })` once for the whole batch.
+5. Show the plan to the user and wait for explicit confirmation.
+6. Do not treat silence, implied preference, or runtime mode as confirmation.
+7. Only after the user explicitly approves the plan, call `Redbox(resource="image", operation="generate", input={ ... })` once for the whole batch.
+
+After image generation:
+
+- Treat card generation and manuscript/project binding as two separate steps.
+- By default, stop after the image/card deliverable is complete.
+- Do not auto-create `.redpost` projects and do not auto-write card plans or generated card content into manuscript projects unless the user explicitly asks for project binding,稿件保存, or `.redpost` packaging as a second step.
 
 ## Required Planning Output
 
@@ -258,7 +327,7 @@ Then move the detail budget into:
 
 ## Confirmation Rule
 
-In normal runtimes, after showing the table, ask for confirmation.
+After showing the table, you must ask for confirmation before any batch generation.
 
 Example:
 
@@ -266,29 +335,26 @@ Example:
 
 If the user changes the order, copy, or any image content, revise the table first and wait again.
 
-RedClaw exception:
+This rule is strict:
 
-- If current runtime is `redclaw` and the request is already an explicit card-set generation task, do not ask for a second confirmation.
-- In that case, finish the plan and call `image.generate` in the same turn with:
-  - `planExecutionMode: "redclaw_auto_execute"`
-  - `setType: "knowledge_card_set" | "image_card_set" | "xiaohongshu_text_cards"`
-  - `sequenceGoal`
-  - `sharedStyleGuide`
-  - `imagePlanItems`
+- The plan always comes first.
+- User approval always comes second.
+- The `image.generate` call always comes last.
+- Do not skip the approval step just because the runtime is `redclaw`.
+- Do not auto-submit a batch just because the plan looks complete.
 
 ## Tool Call Contract
 
-After the user confirms, call:
+After the user explicitly confirms, call:
 
-`app_cli(action="image.generate", payload={ ... })`
+`Redbox(resource="image", operation="generate", input={ ... })`
 
 The payload should include:
 
 - `prompt`: the overall batch brief
 - `count`: total image count
 - `planConfirmed`: `true` in normal confirmation flow
-- `planExecutionMode`: `user_confirmed` by default; `redclaw_auto_execute` for RedClaw card-set auto execution
-- `setType`: the selected image set type
+- `planExecutionMode`: use `user_confirmed`
 - `sequenceGoal`: the ordering logic for the batch
 - `sharedStyleGuide`: one concise shared subject-and-style anchor for the whole batch
 - `imagePlanItems`: one object per image, in final order
@@ -315,15 +381,22 @@ When reference images exist, still pass them through `referenceImages` or `subje
 ## Hard Rules
 
 - Do not call multi-image generation before confirmation in normal runtimes.
-- In `redclaw` runtime, only skip the extra confirmation when the request is an explicit supported card-set task and you pass `planExecutionMode=redclaw_auto_execute` with a valid `setType`.
+- Do not call multi-image generation before confirmation in `redclaw` runtime either.
+- Do not call `image.generate` until the user has explicitly approved the batch plan.
+- Do not infer approval from context, urgency, runtime mode, or previous similar tasks.
+- Do not auto-submit a multi-image batch after planning, even if the plan is strong and complete.
+- If the user has not approved the plan yet, stop after the plan and ask for confirmation.
 - Do not collapse a multi-image request into one generic prompt repeated N times.
 - Do not choose image order randomly; sequence must match the user's motive and set type.
 - Do not let one batch image drift into a different subject, color system, outfit, product shape, or rendering style.
 - Do not silently change the requested order.
 - If batch consistency is the main goal, prefer stable composition and repeatable visual language over flashy variation.
 - When there is a tradeoff, reduce style flourish before reducing subject consistency or text/layout precision.
+- Do not auto-bind generated card sets into `.redpost` or any manuscript project unless the user explicitly requests that as a separate step.
+- If the task is 电商配图 / 电商套图, you must have a concrete product source first: either user-uploaded product images or a product subject from the subject library. Without that, stop and ask for the product material instead of inventing a generic product.
 
 ## Execution Note
 
 Once the approved batch payload is submitted, the host can fan out the image requests concurrently.
 Your job is to make the approved order, per-image content, and shared style contract explicit before that call happens.
+If approval has not happened yet, your job stops at planning. Do not generate first and explain later.

@@ -5121,7 +5121,6 @@ fn interactive_execution_progress_observe_success(
 #[derive(Debug, Clone)]
 struct InteractiveAuthoringSessionTarget {
     project_path: String,
-    content_path: String,
 }
 
 fn interactive_authoring_session_target(
@@ -5155,10 +5154,7 @@ fn interactive_authoring_session_target(
         if project_path.trim().is_empty() || content_path.trim().is_empty() {
             return Ok(None);
         }
-        Ok(Some(InteractiveAuthoringSessionTarget {
-            project_path,
-            content_path,
-        }))
+        Ok(Some(InteractiveAuthoringSessionTarget { project_path }))
     })
     .ok()
     .flatten()
@@ -5191,13 +5187,8 @@ fn interactive_authoring_continuation_instruction(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.project_path.as_str());
-    let content_path = result_data
-        .get("contentPath")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(target.content_path.as_str());
     Some(format!(
-        "当前写稿工程已创建并绑定为 `{project_path}`，正文入口是 `{content_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
+        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
     ))
 }
 
@@ -5222,6 +5213,31 @@ fn interactive_authoring_error_correction_instruction(
         "你刚才发送了空的 `app_cli` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容；不要再次发送空的 app_cli，也不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
         target.project_path
     ))
+}
+
+fn auto_save_interactive_authoring_content(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    content: &str,
+    model_config: Option<&Value>,
+) -> Result<Value, String> {
+    execute_interactive_tool_call(
+        app,
+        state,
+        runtime_mode,
+        session_id,
+        None,
+        "app_cli",
+        &json!({
+            "action": "manuscripts.writeCurrent",
+            "payload": {
+                "content": content,
+            }
+        }),
+        model_config,
+    )
 }
 
 fn emit_loop_guard_checkpoint(
@@ -5381,7 +5397,7 @@ fn asset_preview_url_from_result(asset: &Value, media_kind: &str) -> Option<Stri
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if let Some(url) = preview_url.filter(|value| media_preview_matches_kind(value, media_kind)) {
-        return Some(url.to_string());
+        return Some(normalize_preview_url(url));
     }
 
     let absolute_path = asset
@@ -6988,11 +7004,13 @@ fn run_openai_interactive_chat_runtime(
             }),
         );
         let include_tools = !forcing_toolless_turn && !tool_turn_limit_reached;
+        let streaming_enabled =
+            !is_wander && !should_prefer_non_streaming_openai_turn(runtime_mode, config);
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
             "tool_choice": tool_choice.as_api_value(),
-            "stream": !is_wander
+            "stream": streaming_enabled
         });
         if include_tools {
             body["tools"] = interactive_runtime_tools_for_mode(state, runtime_mode, session_id);
@@ -7010,7 +7028,6 @@ fn run_openai_interactive_chat_runtime(
             body["temperature"] = json!(0.4);
             body["max_tokens"] = json!(900);
         }
-        let streaming_enabled = !is_wander;
         let turn_result = match run_openai_provider_turn(
             app,
             state,
@@ -7051,19 +7068,63 @@ fn run_openai_interactive_chat_runtime(
         );
 
         if tool_calls.is_empty() {
-            let final_content = append_generated_media_sections(
+            let mut final_content = append_generated_media_sections(
                 &assistant_content,
                 &generated_images,
                 &generated_videos,
             );
-            let final_content = if final_content.trim().is_empty() {
+            final_content = if final_content.trim().is_empty() {
                 interactive_tool_round_fallback_response(&latest_successful_tool_round)
                     .unwrap_or(final_content)
             } else {
                 final_content
             };
-            if let Some(correction) =
-                interactive_execution_contract_followup(&execution_contract, &execution_progress)
+            let bound_authoring_target = interactive_authoring_session_target(state, session_id);
+            let auto_save_model_config = model_config_value_from_resolved(config);
+            let mut auto_save_failed = false;
+            if execution_contract.require_save
+                && !execution_progress.save_completed
+                && bound_authoring_target.is_some()
+                && !final_content.trim().is_empty()
+            {
+                match auto_save_interactive_authoring_content(
+                    app,
+                    state,
+                    runtime_mode,
+                    session_id,
+                    &final_content,
+                    Some(&auto_save_model_config),
+                ) {
+                    Ok(_) => {
+                        execution_progress.save_completed = true;
+                    }
+                    Err(error) => {
+                        auto_save_failed = true;
+                        append_debug_log_state(
+                            state,
+                            format!(
+                                "[runtime][authoring][{}] auto-save failed: {}",
+                                session_id.unwrap_or(runtime_mode),
+                                text_snippet(&error, 240),
+                            ),
+                        );
+                        if !final_content.contains("内容已生成但尚未保存") {
+                            final_content.push_str(&format!(
+                                "\n\n内容已生成但尚未保存（自动保存失败：{}）。",
+                                text_snippet(&error, 120)
+                            ));
+                        }
+                    }
+                }
+            }
+            if let Some(correction) = (!auto_save_failed)
+                .then(|| {
+                    interactive_execution_contract_followup(
+                        &execution_contract,
+                        &execution_progress,
+                    )
+                })
+                .flatten()
             {
                 execution_contract_nudge_count += 1;
                 if execution_contract_nudge_count >= 3 {

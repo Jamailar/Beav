@@ -59,6 +59,7 @@ const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
 export interface PendingChatMessage {
   content: string;          // 实际发送给 AI 的完整内容
   displayContent?: string;  // UI 上显示的简短内容
+  sessionRouting?: 'current' | 'new';
   taskHints?: AuthoringTaskHints;
   attachment?: {
     type: 'youtube-video';

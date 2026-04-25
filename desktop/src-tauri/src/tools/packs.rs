@@ -56,8 +56,31 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     }
 }
 
+pub fn visible_tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
+    match pack {
+        ToolPack::Wander => &["Read", "List", "Search"],
+        ToolPack::Chatroom => &["Read", "List", "Search", "Write", "Redbox", "bash"],
+        ToolPack::ImageGeneration => &["Read", "List", "Search", "Redbox", "bash"],
+        ToolPack::Knowledge => &["Read", "List", "Search", "Redbox", "bash"],
+        ToolPack::Redclaw => {
+            if cfg!(target_os = "windows") {
+                &["Read", "List", "Search", "Write", "Redbox"]
+            } else {
+                &["Read", "List", "Search", "Write", "Redbox", "bash"]
+            }
+        }
+        ToolPack::BackgroundMaintenance => &["Read", "List", "Search", "Redbox", "bash"],
+        ToolPack::Editor => &["Read", "List", "Search", "Write", "Redbox", "bash"],
+        ToolPack::Diagnostics => &["Read", "List", "Search", "Write", "Redbox", "bash"],
+    }
+}
+
 pub fn tool_names_for_runtime_mode(runtime_mode: &str) -> &'static [&'static str] {
     tool_names_for_pack(pack_for_runtime_mode(runtime_mode))
+}
+
+pub fn visible_tool_names_for_runtime_mode(runtime_mode: &str) -> &'static [&'static str] {
+    visible_tool_names_for_pack(pack_for_runtime_mode(runtime_mode))
 }
 
 #[cfg(test)]
@@ -101,5 +124,16 @@ mod tests {
         } else {
             assert!(tools.contains(&"bash"));
         }
+    }
+
+    #[test]
+    fn visible_tools_use_coding_agent_style_names() {
+        let tools = visible_tool_names_for_runtime_mode("redclaw");
+        assert!(tools.contains(&"Read"));
+        assert!(tools.contains(&"List"));
+        assert!(tools.contains(&"Search"));
+        assert!(tools.contains(&"Redbox"));
+        assert!(!tools.contains(&"app_cli"));
+        assert!(!tools.contains(&"redbox_fs"));
     }
 }

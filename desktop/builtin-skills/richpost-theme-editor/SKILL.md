@@ -93,8 +93,8 @@ maxPromptChars: 3200
 
 - 不要使用 `bash` / 终端命令直接改主题文件。
 - 不要通过 `/tmp`、临时文件、`cat | sed | mv` 这类 shell 流水线改写工作区文件。
-- 读取主题文件时优先使用 `redbox_fs`；保存主题修改时优先使用 `app_cli(command="manuscripts theme ...")`。
-- 当会话已经绑定到当前 `themeRoot` 时，`redbox_fs` / `bash` 的相对路径要从该 `themeRoot` 开始写，只写 `<theme-id>.json`、`layout.tokens.json`、`masters/*.master.html`、`page-plan.json` 这类相对路径；不要再重复写 `themes/<theme-id>/...`。
+- 读取主题文件时优先使用 `Read(path="workspace://...")`；保存主题修改时优先使用当前可见的 `Write` 或 `Redbox(resource="manuscript", ...)` 产品操作。
+- 当会话已经绑定到当前 `themeRoot` 时，`Read` / `Write` / `bash` 的相对路径要从该 `themeRoot` 开始写，只写 `<theme-id>.json`、`layout.tokens.json`、`masters/*.master.html`、`page-plan.json` 这类相对路径；不要再重复写 `themes/<theme-id>/...`。
 - 不要改无关的全局主题目录或其他 theme root。当前会话只能处理当前绑定的工作区主题文件。
 - 不要改写、删减、扩写或重组 `content.md` 正文。
 - 不要手改 `content-map.json`。

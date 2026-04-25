@@ -53,6 +53,16 @@ const APP_CLI_DESCRIPTION: &str =
     "Structured business actions for the current runtime mode. Always call it with `action` and an optional `payload` object.";
 const REDBOX_EDITOR_DESCRIPTION: &str =
     "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg/remotion actions.";
+const READ_DESCRIPTION: &str =
+    "Read one local or RedBox virtual resource. Use paths like workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion.";
+const LIST_DESCRIPTION: &str =
+    "List a directory or RedBox collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, subjects:// for subjects, or media:// for media.";
+const SEARCH_DESCRIPTION: &str =
+    "Search files or RedBox collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and subjects:// for subject library lookup.";
+const WRITE_DESCRIPTION: &str =
+    "Write content to a RedBox virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
+const REDBOX_DESCRIPTION: &str =
+    "Run product-level RedBox operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "chatroom",
     "default",
@@ -810,12 +820,8 @@ fn image_generate_input_schema() -> Value {
                 "planExecutionMode",
                 json!({
                     "type": "string",
-                    "description": "How a multi-image plan is allowed to proceed. Use `user_confirmed` by default. `redclaw_auto_execute` is only valid for RedClaw card-set automation."
+                    "description": "How a multi-image plan is allowed to proceed. Use `user_confirmed` by default. `redclaw_auto_execute` is only valid inside RedClaw for coordinated multi-image batches."
                 }),
-            ),
-            (
-                "setType",
-                string_schema("Selected multi-image set type, for example `knowledge_card_set` or `xiaohongshu_text_cards`."),
             ),
             (
                 "sequenceGoal",
@@ -1165,6 +1171,50 @@ fn editor_output_schema() -> Value {
         "type": "object",
         "additionalProperties": true
     }))
+}
+
+fn virtual_path_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description,
+        "examples": [
+            "workspace://README.md",
+            "knowledge://",
+            "profiles://creator_profile",
+            "manuscripts://current",
+            "editor://current/script",
+            "editor://current/remotion"
+        ]
+    })
+}
+
+fn redbox_resource_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": [
+            "manuscript",
+            "profile",
+            "memory",
+            "subject",
+            "image",
+            "video",
+            "task",
+            "editor",
+            "skill",
+            "mcp",
+            "runtime",
+            "cli_runtime"
+        ],
+        "description": "Product resource family. Prefer Read/List/Search/Write for simple resource access; use Redbox for product operations with side effects or workflow semantics."
+    })
+}
+
+fn redbox_operation_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["list", "get", "create", "update", "delete", "run", "generate", "export", "confirm", "cancel", "resume", "install", "verify"],
+        "description": "Generic operation for the selected resource. The host maps this stable verb to the existing RedBox action contract."
+    })
 }
 
 const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
@@ -2066,6 +2116,46 @@ pub fn action_descriptor_by_name(
 
 pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
     match name {
+        "Read" => Some(ToolDescriptor {
+            name: "Read",
+            description: READ_DESCRIPTION,
+            kind: ToolKind::FileSystem,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 20_000,
+        }),
+        "List" => Some(ToolDescriptor {
+            name: "List",
+            description: LIST_DESCRIPTION,
+            kind: ToolKind::FileSystem,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 16_000,
+        }),
+        "Search" => Some(ToolDescriptor {
+            name: "Search",
+            description: SEARCH_DESCRIPTION,
+            kind: ToolKind::FileSystem,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 20_000,
+        }),
+        "Write" => Some(ToolDescriptor {
+            name: "Write",
+            description: WRITE_DESCRIPTION,
+            kind: ToolKind::Editor,
+            requires_approval: false,
+            concurrency_safe: false,
+            output_budget_chars: 16_000,
+        }),
+        "Redbox" => Some(ToolDescriptor {
+            name: "Redbox",
+            description: REDBOX_DESCRIPTION,
+            kind: ToolKind::AppCli,
+            requires_approval: false,
+            concurrency_safe: false,
+            output_budget_chars: 20_000,
+        }),
         "app_cli" => Some(ToolDescriptor {
             name: "app_cli",
             description: APP_CLI_DESCRIPTION,
@@ -2168,6 +2258,99 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
 
 pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) -> Option<Value> {
     match name {
+        "Read" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "Read",
+                "description": READ_DESCRIPTION,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": virtual_path_schema("Resource path to read. Omit a protocol to read from the current workspace."),
+                        "offset": { "type": "integer", "minimum": 0, "description": "Optional 0-based line offset for text resources." },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 400, "description": "Optional maximum lines for text resources." },
+                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 20000, "description": "Optional maximum response characters." }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "List" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "List",
+                "description": LIST_DESCRIPTION,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": virtual_path_schema("Directory or collection path to list. Omit a protocol to list from the current workspace."),
+                        "pattern": { "type": "string", "description": "Optional glob pattern within the selected path or collection." },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum entries to return." }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "Search" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "Search",
+                "description": SEARCH_DESCRIPTION,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Text or regex query to search for." },
+                        "path": virtual_path_schema("Optional path or collection to search. Omit for workspace search."),
+                        "glob": { "type": "string", "description": "Optional file glob filter for workspace or knowledge search." },
+                        "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum matches to return." },
+                        "snippetChars": { "type": "integer", "minimum": 80, "maximum": 800, "description": "Maximum snippet characters per hit." }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "Write" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "Write",
+                "description": WRITE_DESCRIPTION,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": virtual_path_schema("Target resource path. Supported write paths are manuscripts://current and editor://current/script."),
+                        "content": { "type": "string", "description": "Complete replacement content to write." },
+                        "source": { "type": "string", "enum": ["user", "ai", "system"], "description": "Optional content source for editor script writes." }
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false
+                }
+            }
+        })),
+        "Redbox" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "Redbox",
+                "description": REDBOX_DESCRIPTION,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "resource": redbox_resource_schema(),
+                        "operation": redbox_operation_schema(),
+                        "id": { "type": "string", "description": "Optional target id, such as subject id, draft id, job id, MCP server id, or runtime task id." },
+                        "input": {
+                            "type": "object",
+                            "description": "Structured operation input. Keep it small and typed; the host validates resource-specific requirements.",
+                            "additionalProperties": true
+                        }
+                    },
+                    "required": ["resource", "operation"],
+                    "additionalProperties": false
+                }
+            }
+        })),
         "app_cli" => Some(build_action_tool_schema(
             "app_cli",
             APP_CLI_DESCRIPTION,
@@ -2533,6 +2716,9 @@ mod tests {
     #[test]
     fn action_tool_schema_parameters_are_top_level_objects() {
         for (tool_name, runtime_mode) in [
+            ("Read", Some("redclaw")),
+            ("Search", Some("redclaw")),
+            ("Redbox", Some("redclaw")),
             ("app_cli", Some("redclaw")),
             ("redbox_fs", Some("wander")),
             ("redbox_editor", Some("video-editor")),
@@ -2544,6 +2730,28 @@ mod tests {
                 Some("object")
             );
         }
+    }
+
+    #[test]
+    fn universal_tool_schemas_use_familiar_function_names() {
+        let read = schema_for_tool_for_runtime_mode("Read", Some("redclaw"))
+            .expect("Read schema should exist");
+        assert_eq!(
+            read.pointer("/function/name").and_then(Value::as_str),
+            Some("Read")
+        );
+        assert!(read
+            .pointer("/function/parameters/properties/path/description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Resource path"));
+
+        let redbox = schema_for_tool_for_runtime_mode("Redbox", Some("redclaw"))
+            .expect("Redbox schema should exist");
+        assert_eq!(
+            redbox.pointer("/function/parameters/properties/resource/enum/0"),
+            Some(&json!("manuscript"))
+        );
     }
 
     #[test]

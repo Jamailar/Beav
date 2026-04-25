@@ -7,7 +7,7 @@ use crate::tools::catalog::{
     tool_action_family_summary_for_descriptors, ActionVisibility, ToolDescriptor,
 };
 use crate::tools::compat::canonical_tool_name;
-use crate::tools::packs::tool_names_for_runtime_mode;
+use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_runtime_mode};
 use crate::AppStore;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
@@ -52,8 +52,7 @@ pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<Strin
             "manuscripts.createProject" | "manuscripts.writeCurrent"
         )
     });
-    if looks_like_legacy_authoring_whitelist
-        && !actions.iter().any(|item| item == "image.generate")
+    if looks_like_legacy_authoring_whitelist && !actions.iter().any(|item| item == "image.generate")
     {
         actions.push("image.generate".to_string());
     }
@@ -139,7 +138,7 @@ pub fn tool_names_for_session(
 }
 
 pub fn descriptors_for_runtime_mode(runtime_mode: &str) -> Vec<ToolDescriptor> {
-    tool_names_for_runtime_mode(runtime_mode)
+    visible_tool_names_for_runtime_mode(runtime_mode)
         .iter()
         .filter_map(|name| descriptor_by_name(name))
         .collect()
@@ -159,6 +158,9 @@ pub fn descriptor_by_name_for_runtime_mode(
     if !tool_names_for_runtime_mode(runtime_mode)
         .iter()
         .any(|name| *name == tool_name)
+        && !visible_tool_names_for_runtime_mode(runtime_mode)
+            .iter()
+            .any(|name| *name == tool_name)
     {
         return None;
     }
@@ -174,6 +176,9 @@ pub fn descriptor_by_name_for_session(
     if !tool_names_for_session(store, runtime_mode, session_id)
         .iter()
         .any(|name| name == tool_name)
+        && !visible_tool_names_for_session(store, runtime_mode, session_id)
+            .iter()
+            .any(|name| name == tool_name)
     {
         return None;
     }
@@ -181,7 +186,7 @@ pub fn descriptor_by_name_for_session(
 }
 
 pub fn openai_schemas_for_runtime_mode(runtime_mode: &str) -> Value {
-    let schemas = tool_names_for_runtime_mode(runtime_mode)
+    let schemas = visible_tool_names_for_runtime_mode(runtime_mode)
         .iter()
         .filter_map(|name| schema_for_tool_for_runtime_mode(name, Some(runtime_mode)))
         .collect::<Vec<_>>();
@@ -200,7 +205,8 @@ pub fn openai_schemas_for_session(
             .find(|item| item.id == id)
             .and_then(|item| item.metadata.as_ref())
     });
-    let schemas = tool_names_for_session(store, runtime_mode, session_id)
+    let visible_tools = visible_tool_names_for_session(store, runtime_mode, session_id);
+    let schemas = visible_tools
         .iter()
         .filter_map(|name| {
             session_filtered_action_descriptors(name, runtime_mode, metadata)
@@ -209,6 +215,49 @@ pub fn openai_schemas_for_session(
         })
         .collect::<Vec<_>>();
     json!(schemas)
+}
+
+fn visible_tool_names_for_session(
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> Vec<String> {
+    let internal_tools = tool_names_for_session(store, runtime_mode, session_id);
+    let visible_base = visible_tool_names_for_runtime_mode(runtime_mode);
+    let mut names = Vec::new();
+    for name in visible_base {
+        let required_internal = match *name {
+            "Read" | "List" | "Search" => "redbox_fs",
+            "Write" => {
+                if internal_tools
+                    .iter()
+                    .any(|item| item == "app_cli" || item == "redbox_editor")
+                {
+                    ""
+                } else {
+                    continue;
+                }
+            }
+            "Redbox" => {
+                if internal_tools
+                    .iter()
+                    .any(|item| item == "app_cli" || item == "redbox_editor")
+                {
+                    ""
+                } else {
+                    continue;
+                }
+            }
+            other => other,
+        };
+        if required_internal.is_empty()
+            || internal_tools.iter().any(|item| item == required_internal)
+            || internal_tools.iter().any(|item| item == *name)
+        {
+            names.push((*name).to_string());
+        }
+    }
+    names
 }
 
 pub fn prompt_tool_lines_for_runtime_mode(runtime_mode: &str) -> String {
@@ -262,7 +311,6 @@ pub fn prompt_tool_lines_for_session(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> String {
-    let tool_names = tool_names_for_session(store, runtime_mode, session_id);
     let metadata = session_id.and_then(|id| {
         store
             .chat_sessions
@@ -270,7 +318,8 @@ pub fn prompt_tool_lines_for_session(
             .find(|item| item.id == id)
             .and_then(|item| item.metadata.as_ref())
     });
-    descriptors_for_tool_names(&tool_names)
+    let visible_tools = visible_tool_names_for_session(store, runtime_mode, session_id);
+    descriptors_for_tool_names(&visible_tools)
         .iter()
         .map(|item| {
             let capability_summary = session_filtered_action_descriptors(
@@ -341,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_schemas_for_session_filters_app_cli_actions() {
+    fn openai_schemas_for_session_exposes_universal_tools() {
         let mut store = crate::AppStore::default();
         store.chat_sessions.push(crate::ChatSessionRecord {
             id: "session-1".to_string(),
@@ -358,32 +407,17 @@ mod tests {
         });
 
         let schemas = openai_schemas_for_session(&store, "redclaw", Some("session-1"));
-        let app_cli = schemas
+        let names = schemas
             .as_array()
-            .and_then(|items| {
-                items
-                    .iter()
-                    .find(|item| item.pointer("/function/name") == Some(&json!("app_cli")))
-            })
-            .expect("app_cli schema");
-        let actions = app_cli["function"]["parameters"]["properties"]["action"]["enum"]
-            .as_array()
-            .expect("action enum")
+            .expect("schemas")
             .iter()
-            .filter_map(Value::as_str)
+            .filter_map(|item| item.pointer("/function/name").and_then(Value::as_str))
             .map(ToString::to_string)
             .collect::<Vec<_>>();
-        let mut actions = actions;
-        actions.sort();
-        let mut expected = vec![
-            "image.generate".to_string(),
-            "manuscripts.createProject".to_string(),
-            "manuscripts.writeCurrent".to_string(),
-        ];
-        expected.sort();
-        assert_eq!(
-            actions,
-            expected
-        );
+        assert!(names.contains(&"Read".to_string()));
+        assert!(names.contains(&"Write".to_string()));
+        assert!(names.contains(&"Redbox".to_string()));
+        assert!(!names.contains(&"app_cli".to_string()));
+        assert!(!names.contains(&"redbox_fs".to_string()));
     }
 }

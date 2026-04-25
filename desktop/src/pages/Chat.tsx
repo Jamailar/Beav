@@ -44,6 +44,12 @@ interface ChatRoom {
   createdAt: string;
 }
 
+interface ChatShortcut {
+  label: string;
+  text: string;
+  action?: 'send' | 'inject';
+}
+
 // 选中文字菜单状态
 interface SelectionMenu {
   visible: boolean;
@@ -61,8 +67,8 @@ interface ChatProps {
   fixedSessionId?: string | null;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
-  shortcuts?: Array<{ label: string; text: string }>;
-  welcomeShortcuts?: Array<{ label: string; text: string }>;
+  shortcuts?: ChatShortcut[];
+  welcomeShortcuts?: ChatShortcut[];
   showWelcomeShortcuts?: boolean;
   showComposerShortcuts?: boolean;
   fixedSessionContextIndicatorMode?: 'top' | 'corner-ring' | 'none';
@@ -2696,6 +2702,20 @@ export function Chat({
     { label: '💡 创作建议', text: '请基于当前内容提供一些创作方向的建议。' }
   ];
 
+  const applyShortcut = useCallback((shortcut: ChatShortcut) => {
+    const action = shortcut.action || 'send';
+    if (action === 'inject') {
+      setErrorNotice(null);
+      setInput(shortcut.text);
+      requestAnimationFrame(() => {
+        composerRef.current?.focus();
+        composerRef.current?.syncHeight();
+      });
+      return;
+    }
+    void sendMessage(shortcut.text);
+  }, [sendMessage]);
+
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
     if (safe >= 1000) {
@@ -2905,7 +2925,7 @@ export function Chat({
       {welcomeShortcuts.map((shortcut) => (
         <button
           key={shortcut.label}
-          onClick={() => sendMessage(shortcut.text)}
+          onClick={() => applyShortcut(shortcut)}
           className={darkEmbedded
             ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
             : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
@@ -3096,7 +3116,7 @@ export function Chat({
                   {welcomeShortcuts.map((shortcut) => (
                     <button
                       key={shortcut.label}
-                      onClick={() => sendMessage(shortcut.text)}
+                      onClick={() => applyShortcut(shortcut)}
                       className={darkEmbedded
                         ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
                         : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
@@ -3191,7 +3211,7 @@ export function Chat({
                 {showComposerShortcuts && shortcuts.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
                     {shortcuts.map((shortcut) => (
-                      <button key={shortcut.label} onClick={() => sendMessage(shortcut.text)} disabled={isProcessing} className={shortcutChipClass}>
+                      <button key={shortcut.label} onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
                         {shortcut.label}
                       </button>
                     ))}

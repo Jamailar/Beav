@@ -19,7 +19,8 @@
 如果你发现上面有 "CURRENT FILE CONTEXT" 且用户是在创作内容（如写文案、写代码）：
 1. **必须**利用当前文件的内容作为参考。
 2. **必须**在最后一步规划 "将生成的内容写入当前文件"。
-   - 如果是 Markdown/文案：使用 `workspace(action="write" ...)` 或 `workspace(action="edit" ...)` 将最终的 draft 写入到 `{file_path}`。
+   - 如果当前文件来自已绑定稿件：使用 `Write(path="manuscripts://current", content="...")` 将最终 draft 写回当前稿件。
+   - 如果当前文件不是已绑定稿件：把最后一步描述为“将最终内容写回当前文件 {file_path}”，由执行器选择当前运行时真实暴露的写入能力。
    - 描述示例："将最终生成的文案写入到当前文件 {file_path} 中，覆盖原有标题占位符。"
 
 **工具使用最佳实践（参考）：**
@@ -32,7 +33,7 @@
    - Step 1: 定位相关文件 (使用 `bash(command="find ...")` 或 `bash(command="rg ...")`)。
    - Step 2: 读取文件内容 (`bash(command="cat ...")`)。
    - Step 3: 分析代码并制定修改方案。
-   - Step 4: 应用修改 (`workspace(action="edit" ...)` 或 `workspace(action="write" ...)`)。
+   - Step 4: 应用修改（优先使用当前运行时真实暴露的写入/编辑工具；已绑定稿件可使用 `Write(path="manuscripts://current", content="...")`）。
    - Step 5: (可选) 验证修改 (`run_command`)。
 
 3. **信息检索**：

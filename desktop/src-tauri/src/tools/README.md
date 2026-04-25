@@ -5,17 +5,24 @@
 ## 职责
 
 - `catalog.rs`：工具 descriptor 与 OpenAI schema 定义（kind / approval / concurrency / budget）。
-- `compat.rs`：历史工具名兼容层，统一映射到通用 `redbox_*` 工具入口。
+- `compat.rs`：模型可见工具和历史工具名兼容层，统一映射到内部 `redbox_*` 工具入口。
   - 兼容层应优先继续收敛到 canonical tools，而不是给 legacy tool 保持完整独立语义面。
-- `packs.rs`：`runtimeMode -> tool pack` 映射，以及 pack 允许的工具集合。
-- `registry.rs`：按 mode 提供工具列表、schema 列表和提示词可读描述。
+- `packs.rs`：`runtimeMode -> tool pack` 映射，区分模型可见工具集合和内部执行工具集合。
+- `registry.rs`：按 mode 提供模型可见工具列表、schema 列表和提示词可读描述。
 - `guards.rs`：执行前工具准入校验与 `ToolResultBudget` 截断策略。
 
 ## 约束
 
 - 前端/Prompt 只消费 registry 输出，不直接拼工具清单。
 - 运行时执行工具前必须走 guard，禁止越权调用不在 pack 内的工具。
-- 通用工具收敛到：
+- 模型可见工具收敛到 Claude/Codex 风格原语：
+  - `Read`
+  - `List`
+  - `Search`
+  - `Write`
+  - `Redbox`
+  - `bash`
+- 内部执行工具继续收敛到：
   - `bash`
   - `redbox_fs`
   - `app_cli`
@@ -29,27 +36,36 @@
 
 ## 治理规则
 
-- 顶层工具优先保持在少量通用入口，不按主题、模板、稿件、profile、MCP、skill、runtime 等领域继续拆新的顶层工具。
-- 如果能力只是作用域不同、文件不同、业务子域不同，优先扩已有工具的 `action` / typed payload，而不是新增 sibling tool。
-- 文件相关能力优先收敛到 `redbox_fs`，不要继续保留或新增大量 `*_glob` / `*_grep` / `*_read` 一类领域文件工具。
-- 宿主业务能力优先收敛到 `app_cli`，不要把查询、profile、MCP、skill、runtime control 再拆成独立产品级工具面。
-- `app_cli` 内部优先用清晰 namespace 组织：例如 `advisors`、`chat sessions`、`manuscripts theme/layout`、`runtime`、`skills`、`ai`、`mcp`。可以扩子命令，但不要回退到新的顶层工具。
-- 编辑器原生协议只放在 `redbox_editor`。编辑器内部可以有动作分组，但不要把 UI 面板或模板类型直接映射成新的顶层工具。
+- 顶层模型工具优先保持为少量通用入口，不按主题、模板、稿件、profile、MCP、skill、runtime 等领域继续拆新的模型可见工具。
+- 如果能力只是作用域不同、文件不同、业务子域不同，优先用虚拟路径表达，例如 `workspace://`、`knowledge://`、`manuscripts://`、`profiles://`、`editor://current/script`。
+- 文件和知识读取优先通过 `Read` / `List` / `Search`，内部再映射到 `redbox_fs`；不要继续保留或新增大量 `*_glob` / `*_grep` / `*_read` 一类模型可见工具。
+- 宿主业务能力优先通过 `Redbox(resource, operation, input)`，内部再映射到 `app_cli`；不要把查询、profile、MCP、skill、runtime control 再拆成独立产品级工具面。
+- 编辑器原生协议优先通过 `Read` / `Write` / `Redbox(resource="editor", ...)`，内部再映射到 `redbox_editor`。编辑器内部可以有动作分组，但不要把 UI 面板或模板类型直接映射成新的模型可见工具。
 - compatibility alias 只用于迁移，不是长期治理边界。新 prompt、skill、pack、runtime metadata 一律使用 canonical tool names。
-- 任何新工具都必须先回答一个问题：`bash`、`redbox_fs`、`app_cli`、`redbox_editor` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。
+- 任何新模型可见工具都必须先回答一个问题：`Read`、`List`、`Search`、`Write`、`Redbox`、`bash` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。
 
 ## 当前 Canonical 规则
 
-- 顶层 tool 固定为：`bash`、`redbox_fs`、`app_cli`、`redbox_editor`。
-- LLM 真正选择的原子能力是 `action`，不是顶层 tool 名。
-- 新能力优先新增 canonical action，不再新增 legacy tool alias。
-- prompt / skill / runtime metadata 只允许引用 canonical tool 名和 canonical action；不要再写 `app_cli(command="...")`、`knowledge_read`、`knowledge_grep`、`redbox_runtime_control` 这类历史语法。
+- 模型可见 tool 固定为：`Read`、`List`、`Search`、`Write`、`Redbox`、`bash`。
+- 内部 canonical tool 固定为：`bash`、`redbox_fs`、`app_cli`、`redbox_editor`。
+- LLM 优先选择熟悉的通用原语；业务动作只通过 `Redbox(resource, operation, input)` 暴露。
+- 新能力优先新增内部 canonical action 或虚拟路径 resolver，不再新增 legacy tool alias。
+- prompt / skill / runtime metadata 只允许引用模型可见工具名；不要再写 `app_cli(command="...")`、`app_cli(action="...")`、`redbox_fs(action="...")`、`knowledge_read`、`knowledge_grep`、`redbox_runtime_control` 这类历史语法。
 
 ## Action Contract
 
 - 每个 action 必须单一职责，名字直接表达一个结构化能力。
 - schema-first：action 必须有明确输入 schema 和输出 schema。
-- `app_cli` / `redbox_fs` / `redbox_editor` 一律优先走 `action + payload` 协议。
+- `Read` / `List` / `Search` / `Write` 使用虚拟路径协议。
+- `Redbox` 使用 `resource + operation + id? + input?` 协议。
+- `app_cli` / `redbox_fs` / `redbox_editor` 作为内部执行层，仍一律优先走 `action + payload` 协议。
+- 虚拟路径示例：
+  - `workspace://README.md`
+  - `knowledge://api-guidelines.md`
+  - `manuscripts://current`
+  - `profiles://creator_profile`
+  - `editor://current/script`
+  - `editor://current/remotion`
 - `redbox_fs` 的 canonical action 固定为：
   - `workspace.list`
   - `workspace.read`

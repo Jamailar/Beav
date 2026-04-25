@@ -3254,11 +3254,8 @@ mod tests {
 
     #[test]
     fn image_jobs_reject_video_model_as_default_config() {
-        let error = resolve_image_provider_model(
-            Some("wan2.7-r2v-video".to_string()),
-            None,
-        )
-        .expect_err("video model should not be accepted as image default");
+        let error = resolve_image_provider_model(Some("wan2.7-r2v-video".to_string()), None)
+            .expect_err("video model should not be accepted as image default");
         assert!(error.contains("默认图片模型"));
     }
 

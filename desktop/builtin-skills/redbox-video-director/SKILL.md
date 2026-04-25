@@ -2,13 +2,13 @@
 name: redbox-video-director
 description: Use when generating short videos with RedBox official video API, including motion clips, animated cover/video requests, reference-image video, image-to-video, and first/last-frame transitions. Produces a detailed shot script first, asks the user to confirm it, then chooses between text-to-video, reference-guided, and first-last-frame modes and calls the correct wan2.7 video model with prompt discipline focused on motion, reference elements, and transitions.
 allowedRuntimeModes: [chatroom, redclaw]
-allowed-tools: app_cli
+allowed-tools: Redbox
 activationScope: turn
 ---
 
 # RedBox Video Director
 
-Use this skill before calling `app_cli(action="video.generate", payload={ ... })` for RedBox video work.
+Use this skill before calling `Redbox(resource="video", operation="generate", input={ ... })` for RedBox video work.
 
 ## Default Workflow
 
@@ -23,7 +23,7 @@ Before any video tool call, follow this order:
 7. If storyboard stills are needed, design a stable keyframe-generation plan first.
 8. Show the script to the user together with explicit video specs.
 9. Ask for confirmation or revision.
-10. Only after confirmation, call `app_cli(action="video.generate", payload={ ... })`.
+10. Only after confirmation, call `Redbox(resource="video", operation="generate", input={ ... })`.
 
 If the user has not yet confirmed the script, do not generate the video.
 
@@ -41,7 +41,7 @@ Do not create one only because the request has multiple shots, long context, con
 
 When it is explicitly needed, create it with:
 
-- `app_cli(command="video project-create --explicit-project-workflow true --title ... --duration ... --aspect-ratio ... --mode ...")`
+- `Redbox(resource="video", operation="create", input={ "explicitProjectWorkflow": true, "title": "...", "duration": "...", "aspectRatio": "...", "mode": "..." })`
 
 The project pack lives in:
 
@@ -244,7 +244,7 @@ If the script contains multiple shots, a named character, an important environme
 
 ## Tool Usage
 
-- Always use `app_cli(action="video.generate", payload={ ... })`.
+- Always use `Redbox(resource="video", operation="generate", input={ ... })`.
 - Pass no reference images for `text-to-video`.
 - Pass 1 to 5 reference images for `reference-guided`.
 - Pass exactly two reference images in `首帧,尾帧` order for `first-last-frame`.
