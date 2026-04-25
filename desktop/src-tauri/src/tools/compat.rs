@@ -646,12 +646,23 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Redbox"),
             Some("cli_runtime.run"),
         ),
-        ("cli_runtime", "verify") => app_cli_action_call(
-            "cli_runtime.verify",
-            payload,
-            Some("Redbox"),
-            Some("cli_runtime.verify"),
-        ),
+        ("cli_runtime", "verify") => {
+            if payload.get("executionId").is_some() || payload.get("execution_id").is_some() {
+                app_cli_action_call(
+                    "cli_runtime.verify",
+                    payload,
+                    Some("Redbox"),
+                    Some("cli_runtime.verify"),
+                )
+            } else {
+                app_cli_action_call(
+                    "cli_runtime.diagnose",
+                    payload,
+                    Some("Redbox"),
+                    Some("cli_runtime.verify"),
+                )
+            }
+        }
         _ => app_cli_legacy_command_call(
             "help",
             json!({ "resource": resource, "operation": operation, "input": payload }),
@@ -1584,6 +1595,54 @@ mod tests {
                 .arguments
                 .get("payload")
                 .and_then(|value| value.get("command")),
+            Some(&json!("lark-cli"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_cli_runtime_id_inspect_to_command_alias() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "cli_runtime",
+                "operation": "inspect",
+                "id": "lark-cli"
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("cli_runtime.inspect"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("id")),
+            Some(&json!("lark-cli"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_cli_runtime_verify_without_execution_to_diagnose() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "cli_runtime",
+                "operation": "verify",
+                "id": "lark-cli"
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("cli_runtime.diagnose"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("id")),
             Some(&json!("lark-cli"))
         );
     }

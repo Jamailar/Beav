@@ -806,11 +806,19 @@ fn cli_runtime_inspect_input_schema() -> Value {
         &[
             ("toolId", string_schema("CLI tool id or executable name.")),
             (
+                "id",
+                string_schema("Compatibility alias for toolId or command."),
+            ),
+            (
                 "command",
                 string_schema("Direct command/executable to inspect."),
             ),
             (
                 "executable",
+                string_schema("Compatibility alias for the command/executable to inspect."),
+            ),
+            (
+                "name",
                 string_schema("Compatibility alias for the command/executable to inspect."),
             ),
         ],
@@ -831,6 +839,18 @@ fn cli_runtime_diagnose_input_schema() -> Value {
     object_schema(
         &[
             ("command", string_schema("CLI executable name to diagnose.")),
+            (
+                "id",
+                string_schema("Compatibility alias for the command/executable to diagnose."),
+            ),
+            (
+                "name",
+                string_schema("Compatibility alias for the command/executable to diagnose."),
+            ),
+            (
+                "executable",
+                string_schema("Compatibility alias for the command/executable to diagnose."),
+            ),
             (
                 "environmentId",
                 string_schema("Optional target CLI environment id."),

@@ -410,6 +410,8 @@ fn inspect_tool_value(
     let requested = payload_string(payload, "command")
         .or_else(|| payload_string(payload, "toolId"))
         .or_else(|| payload_string(payload, "executable"))
+        .or_else(|| payload_string(payload, "name"))
+        .or_else(|| payload_string(payload, "id"))
         .unwrap_or_default();
     if requested.is_empty() {
         return Ok(None);
