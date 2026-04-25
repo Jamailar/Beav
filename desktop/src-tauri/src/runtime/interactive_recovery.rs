@@ -187,6 +187,7 @@ pub fn runtime_error_envelope_from_error(
         )
     } else if lower.contains("does not support this tool_choice")
         || lower.contains("tool_choice parameter")
+        || lower.contains("reasoning_content")
         || (lower.contains("tool_choice") && lower.contains("unsupported"))
     {
         (
@@ -309,6 +310,19 @@ mod tests {
             "AI upstream error (400): {\"error\":{\"message\":\"deepseek-reasoner does not support this tool_choice\",\"type\":\"invalid_request_error\"}}",
             Some(&openai_profile()),
             Some("deepseek-reasoner"),
+        );
+        assert_eq!(envelope.layer, RuntimeErrorLayer::Protocol);
+        assert_eq!(envelope.category, RuntimeErrorCategory::ProtocolMismatch);
+        assert_eq!(envelope.title, "模型协议不兼容");
+        assert!(!envelope.retryable);
+    }
+
+    #[test]
+    fn runtime_error_envelope_marks_reasoning_content_protocol_error_non_retryable() {
+        let envelope = runtime_error_envelope_from_error(
+            "AI upstream error (400): {\"error\":{\"message\":\"The `reasoning_content` in the thinking mode must be passed back to the API.\",\"type\":\"invalid_request_error\"}}",
+            Some(&openai_profile()),
+            Some("deepseek-chat"),
         );
         assert_eq!(envelope.layer, RuntimeErrorLayer::Protocol);
         assert_eq!(envelope.category, RuntimeErrorCategory::ProtocolMismatch);
