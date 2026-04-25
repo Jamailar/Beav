@@ -475,6 +475,7 @@ export function Settings({
   redclawOnboardingVersion?: number;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [baseSettingsLoadedRevision, setBaseSettingsLoadedRevision] = useState(0);
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
@@ -786,6 +787,7 @@ export function Settings({
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
   const aiSourceDraftDirtyRef = useRef(false);
+  const aiSourceEditGenerationRef = useRef(0);
   const redclawProfileDirtyRef = useRef(false);
   const currentSpaceIdRef = useRef(DEFAULT_SPACE_ID);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
@@ -1431,9 +1433,16 @@ export function Settings({
 
   const markAiSourceDraftDirty = useCallback(() => {
     aiSourceDraftDirtyRef.current = true;
+    aiSourceEditGenerationRef.current += 1;
   }, []);
 
-  const clearAiSourceDraftDirty = useCallback(() => {
+  const clearAiSourceDraftDirty = useCallback((expectedGeneration?: number) => {
+    if (
+      typeof expectedGeneration === 'number'
+      && aiSourceEditGenerationRef.current !== expectedGeneration
+    ) {
+      return;
+    }
     aiSourceDraftDirtyRef.current = false;
   }, []);
 
@@ -1484,6 +1493,7 @@ export function Settings({
     sources: AiSourceConfig[] = aiSources,
     resolvedDefaultSourceId: string = defaultAiSourceId,
   ) => {
+    const saveGeneration = aiSourceEditGenerationRef.current;
     const snapshot = buildAiSourcePersistenceSnapshot(sources, resolvedDefaultSourceId);
     await window.ipcRenderer.saveSettings({
       ai_sources_json: JSON.stringify(snapshot.sanitizedSources),
@@ -1492,7 +1502,7 @@ export function Settings({
       api_key: snapshot.resolvedApiKey,
       model_name: snapshot.resolvedModelName,
     });
-    clearAiSourceDraftDirty();
+    clearAiSourceDraftDirty(saveGeneration);
   }, [aiSources, buildAiSourcePersistenceSnapshot, clearAiSourceDraftDirty, defaultAiSourceId]);
 
   const updateAiSource = useCallback((sourceId: string, updater: (source: AiSourceConfig) => AiSourceConfig) => {
@@ -1522,7 +1532,7 @@ export function Settings({
         aiSourceAutosaveTimerRef.current = null;
       }
     };
-  }, [aiSources, defaultAiSourceId, persistAiSourcesSnapshot]);
+  }, [aiSources, baseSettingsLoadedRevision, defaultAiSourceId, persistAiSourcesSnapshot]);
 
   const openCreateAiSourceModal = () => {
     setCreateAiSourceDraft(createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
@@ -1675,6 +1685,7 @@ export function Settings({
     });
     setSourceModelDrafts((prev) => ({ ...prev, [sourceId]: '' }));
     setSourceModelCapabilityDrafts((prev) => ({ ...prev, [sourceId]: 'chat' }));
+    setAiSourceModelExpandState((prev) => ({ ...prev, [sourceId]: true }));
     setAddModelModalSourceId('');
   };
 
@@ -2898,7 +2909,7 @@ export function Settings({
     await window.ipcRenderer.saveSettings({
       developer_mode_enabled: enabled,
       developer_mode_unlocked_at: unlockedAt,
-    } as any);
+    });
   }, []);
 
   const expireDeveloperMode = useCallback(async () => {
@@ -2964,10 +2975,19 @@ export function Settings({
     const preserveViewState = Boolean(options?.preserveViewState);
     const preserveRemoteModels = options?.preserveRemoteModels ?? preserveViewState;
     const requestId = ++settingsLoadRequestRef.current;
+    const hadLocalAiSourceDraft = aiSourceDraftDirtyRef.current;
+    const requestAiSourceEditGeneration = aiSourceEditGenerationRef.current;
     try {
       const settings = await window.ipcRenderer.getSettings();
       if (requestId !== settingsLoadRequestRef.current) return;
-      if (preserveViewState && aiSourceDraftDirtyRef.current) {
+      if (
+        preserveViewState
+        && (
+          hadLocalAiSourceDraft
+          || aiSourceDraftDirtyRef.current
+          || requestAiSourceEditGeneration !== aiSourceEditGenerationRef.current
+        )
+      ) {
         return;
       }
       if (settings) {
@@ -3838,6 +3858,7 @@ export function Settings({
         preserveRemoteModels: true,
       });
       baseSettingsLoadedRef.current = true;
+      setBaseSettingsLoadedRevision((prev) => prev + 1);
       tabWarmRef.current.ai = true;
     } finally {
       baseSettingsInFlightRef.current = false;
@@ -4232,6 +4253,7 @@ export function Settings({
         resolvedApiKey,
         resolvedModelName,
       } = buildAiSourcePersistenceSnapshot();
+      const aiSourceSaveGeneration = aiSourceEditGenerationRef.current;
       if (defaultSource?.baseURL && (defaultSource?.apiKey || isLocalAiSource(defaultSource))) {
         const normalizedModel = (defaultSource.model || '').trim();
         if (!normalizedModel) {
@@ -4349,7 +4371,7 @@ export function Settings({
         chat_max_tokens_default: chatMaxTokensDefault,
         chat_max_tokens_deepseek: chatMaxTokensDeepseek,
       });
-      clearAiSourceDraftDirty();
+      clearAiSourceDraftDirty(aiSourceSaveGeneration);
       if (formData.debug_log_enabled) {
         await loadRecentDebugLogs();
       }

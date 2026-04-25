@@ -585,34 +585,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const persistWanderSettings = useCallback(async (patch: {
     wander_deep_think_enabled?: boolean;
   }) => {
-    const settings = await window.ipcRenderer.getSettings();
     await window.ipcRenderer.saveSettings({
-      api_endpoint: settings?.api_endpoint || '',
-      api_key: settings?.api_key || '',
-      model_name: settings?.model_name || '',
-      workspace_dir: settings?.workspace_dir,
-      active_space_id: settings?.active_space_id,
-      role_mapping: settings?.role_mapping || '{}',
-      transcription_model: settings?.transcription_model,
-      transcription_endpoint: settings?.transcription_endpoint,
-      transcription_key: settings?.transcription_key,
-      embedding_endpoint: settings?.embedding_endpoint,
-      embedding_key: settings?.embedding_key,
-      embedding_model: settings?.embedding_model,
-      ai_sources_json: settings?.ai_sources_json,
-      default_ai_source_id: settings?.default_ai_source_id,
-      image_provider: settings?.image_provider,
-      image_endpoint: settings?.image_endpoint,
-      image_api_key: settings?.image_api_key,
-      image_model: settings?.image_model,
-      image_provider_template: settings?.image_provider_template,
-      image_aspect_ratio: settings?.image_aspect_ratio,
-      image_size: settings?.image_size,
-      image_quality: settings?.image_quality,
-      mcp_servers_json: settings?.mcp_servers_json,
-      redclaw_compact_target_tokens: settings?.redclaw_compact_target_tokens,
-      wander_deep_think_enabled: patch.wander_deep_think_enabled ?? settings?.wander_deep_think_enabled,
-      wander_skill_loading_enabled: settings?.wander_skill_loading_enabled,
+      wander_deep_think_enabled: patch.wander_deep_think_enabled,
     });
   }, []);
 

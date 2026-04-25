@@ -56,22 +56,16 @@ fn normalize_default_ai_route_settings(settings: &mut Value) {
         .to_string();
 
     if let Some(object) = settings.as_object_mut() {
-        if !base_url.is_empty() {
-            object.insert("api_endpoint".to_string(), json!(base_url));
-        }
-        if !api_key.is_empty() {
-            object.insert("api_key".to_string(), json!(api_key.clone()));
-            let current_video_api_key = object
-                .get("video_api_key")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default();
-            if current_video_api_key.is_empty() {
-                object.insert("video_api_key".to_string(), json!(api_key));
-            }
-        }
-        if !model_name.is_empty() {
-            object.insert("model_name".to_string(), json!(model_name));
+        object.insert("api_endpoint".to_string(), json!(base_url));
+        object.insert("api_key".to_string(), json!(api_key.clone()));
+        object.insert("model_name".to_string(), json!(model_name));
+        let current_video_api_key = object
+            .get("video_api_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if current_video_api_key.is_empty() && !api_key.is_empty() {
+            object.insert("video_api_key".to_string(), json!(api_key));
         }
     }
 }
@@ -349,4 +343,55 @@ pub fn handle_system_channel(
     };
 
     Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_default_ai_route_settings_replaces_stale_root_fields_with_empty_values() {
+        let mut settings = json!({
+            "default_ai_source_id": "next",
+            "api_endpoint": "https://old.example/v1",
+            "api_key": "old-key",
+            "model_name": "old-model",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "next",
+                "name": "Next",
+                "baseURL": "",
+                "apiKey": "",
+                "model": ""
+            })]).unwrap()
+        });
+
+        normalize_default_ai_route_settings(&mut settings);
+
+        assert_eq!(settings["api_endpoint"], json!(""));
+        assert_eq!(settings["api_key"], json!(""));
+        assert_eq!(settings["model_name"], json!(""));
+    }
+
+    #[test]
+    fn normalize_default_ai_route_settings_syncs_selected_source_to_root_fields() {
+        let mut settings = json!({
+            "default_ai_source_id": "next",
+            "api_endpoint": "https://old.example/v1",
+            "api_key": "old-key",
+            "model_name": "old-model",
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "next",
+                "name": "Next",
+                "baseURL": "https://next.example/v1",
+                "apiKey": "next-key",
+                "model": "next-model"
+            })]).unwrap()
+        });
+
+        normalize_default_ai_route_settings(&mut settings);
+
+        assert_eq!(settings["api_endpoint"], json!("https://next.example/v1"));
+        assert_eq!(settings["api_key"], json!("next-key"));
+        assert_eq!(settings["model_name"], json!("next-model"));
+    }
 }
