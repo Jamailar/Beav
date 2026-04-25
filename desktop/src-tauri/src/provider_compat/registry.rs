@@ -16,13 +16,14 @@ fn openai_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: true,
         supports_parallel_tool_calls: true,
         supports_text_fallback: true,
-        thinking_disable_parameter: ProviderThinkingDisableParameter::EnableThinkingFalse,
+        thinking_disable_parameter: ProviderThinkingDisableParameter::None,
     }
 }
 
 fn qwen_compat_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
         requires_disable_thinking_for_forced_tool_choice: true,
+        thinking_disable_parameter: ProviderThinkingDisableParameter::EnableThinkingFalse,
         ..openai_capabilities()
     }
 }
@@ -62,7 +63,7 @@ fn anthropic_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: false,
         supports_parallel_tool_calls: true,
         supports_text_fallback: false,
-        thinking_disable_parameter: ProviderThinkingDisableParameter::EnableThinkingFalse,
+        thinking_disable_parameter: ProviderThinkingDisableParameter::None,
     }
 }
 
@@ -78,7 +79,7 @@ fn gemini_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: false,
         supports_parallel_tool_calls: true,
         supports_text_fallback: false,
-        thinking_disable_parameter: ProviderThinkingDisableParameter::EnableThinkingFalse,
+        thinking_disable_parameter: ProviderThinkingDisableParameter::None,
     }
 }
 
@@ -270,5 +271,24 @@ mod tests {
                 .turn_policy("chat", InteractiveToolChoice::Auto, false)
                 .disable_thinking
         );
+    }
+
+    #[test]
+    fn default_openai_does_not_emit_non_standard_thinking_disable_parameter() {
+        let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
+        let mut body = json!({ "model": "gpt-5" });
+        profile.apply_disable_thinking_parameter(&mut body);
+        assert_eq!(body.get("enable_thinking"), None);
+        assert_eq!(body.get("thinking"), None);
+    }
+
+    #[test]
+    fn qwen_uses_enable_thinking_disable_parameter() {
+        let profile =
+            provider_profile_from_parts("openai", "https://dashscope.aliyuncs.com/v1", "qwen-max");
+        let mut body = json!({ "model": "qwen-max" });
+        profile.apply_disable_thinking_parameter(&mut body);
+        assert_eq!(body["enable_thinking"], json!(false));
+        assert_eq!(body.get("thinking"), None);
     }
 }

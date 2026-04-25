@@ -15,6 +15,7 @@ pub(crate) enum ProviderFamily {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ProviderThinkingDisableParameter {
+    None,
     EnableThinkingFalse,
     ThinkingTypeDisabled,
 }
@@ -120,6 +121,7 @@ impl ProviderProfile {
 
     pub(crate) fn apply_disable_thinking_parameter(&self, body: &mut Value) {
         match self.capabilities.thinking_disable_parameter {
+            ProviderThinkingDisableParameter::None => {}
             ProviderThinkingDisableParameter::EnableThinkingFalse => {
                 body["enable_thinking"] = json!(false);
             }
