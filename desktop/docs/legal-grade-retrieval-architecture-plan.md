@@ -726,6 +726,14 @@ App 升级后不能假设用户会手动清空索引。检索数据库、canonic
 - 用户升级后第一次检索，如果新索引未完成，应返回旧索引结果，并在 `queryPlan` 标注 `indexStaleness`。
 - 删除文件仍必须立即传播到 canonical、block、anchor、FTS/Tantivy、audit 关联数据，不能等下一次全量重建。
 
+### 当前落地状态
+
+- 已落地版本键与 migration decision：`schema_only`、`fts_rebuild`、`block_anchor_rebuild`、`full_rebuild`。
+- 已落地后台分层 job：FTS/BM25 可从 `knowledge_document_blocks` 重建；block/anchor 可从 `knowledge_canonical_documents.canonical_json` 重建。
+- 已落地手动重建入口：`knowledge:rebuild-catalog` 支持 `mode=full | fts | canonicalBlocks` 和可选 `sourceId`。
+- canonical cache 命中必须匹配当前 parser name/version，避免 parser pipeline 升级后继续复用旧解析结果。
+- OCR 重建保持可控：`fts` 与 `canonicalBlocks` 不触发 OCR；只有 `full` 路径会按当前可插拔 OCR provider 配置解析需要 OCR 的文件。
+
 ## Security And Compliance
 
 法律行业使用场景要求默认合规。

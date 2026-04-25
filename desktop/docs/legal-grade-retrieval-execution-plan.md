@@ -1,8 +1,8 @@
 ---
 doc_type: plan
-execution_status: in_progress
+execution_status: completed
 last_updated: 2026-04-25
-execution_stage: stage8_planned
+execution_stage: stage8_completed
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -590,7 +590,11 @@ Status: Current
 - 已新增 `knowledge_index/migration.rs` 的版本键与 migration decision；启动时可自动识别 `schema_only`、`fts_rebuild`、`full_rebuild`。
 - 已接入 FTS-only 后台重建：升级到 BM25/FTS 版本后，从 `knowledge_document_blocks` 重建 FTS，不触发 OCR/parser。
 - indexed `knowledge.search` 的 `queryPlan.indexStaleness` 已标注 `current | migration_pending | rebuilding | stale_fallback | unknown`。
-- 尚未完成 canonical-to-block rebuild、source-level rebuild、迁移状态 UI 和手动“仅全文索引重建”参数。
+- 已完成 `block_anchor_rebuild` migration decision：chunk/anchor 规则变化时复用 `knowledge_canonical_documents.canonical_json` 重建 blocks、anchors、FTS/BM25，不重新 OCR 或 parser。
+- 已完成 source-level rebuild 参数：`knowledge:rebuild-catalog` 支持 `sourceId`，可按 source 触发 `fts` 或 `canonicalBlocks` 重建。
+- 已完成手动重建参数：`mode=full | fts | canonicalBlocks`；OCR 只在 `full` 且 parser 按当前 OCR provider 需要时发生，低成本重建路径不触发 OCR。
+- canonical cache 已纳入 parser name/version 校验；parser pipeline 升级后的 full rebuild 不会误用旧 canonical JSON。
+- Knowledge 页面已暴露“全量重建 / 重建引用 / 全文索引”三种入口；index status 已展示 `migrationStatus` 与 `pendingRebuildReason`。
 
 ## Phase Dependencies
 

@@ -28,6 +28,7 @@ pub(crate) enum MigrationDecision {
     Current,
     SchemaOnly,
     FtsRebuild,
+    BlockAnchorRebuild,
     FullRebuild,
 }
 
@@ -37,6 +38,7 @@ impl MigrationDecision {
             Self::Current => "current",
             Self::SchemaOnly => "schema_only",
             Self::FtsRebuild => "fts_rebuild",
+            Self::BlockAnchorRebuild => "block_anchor_rebuild",
             Self::FullRebuild => "full_rebuild",
         }
     }
@@ -63,11 +65,13 @@ pub(crate) fn plan_migration(state: &State<'_, AppState>) -> Result<MigrationDec
         || parser_pipeline_version
             .as_deref()
             .is_some_and(|value| value != CURRENT_PARSER_PIPELINE_VERSION)
-        || chunk_anchor_rule_version
-            .as_deref()
-            .is_some_and(|value| value != CURRENT_CHUNK_ANCHOR_RULE_VERSION)
     {
         MigrationDecision::FullRebuild
+    } else if chunk_anchor_rule_version
+        .as_deref()
+        .is_some_and(|value| value != CURRENT_CHUNK_ANCHOR_RULE_VERSION)
+    {
+        MigrationDecision::BlockAnchorRebuild
     } else if index_format_version.as_deref() != Some(CURRENT_INDEX_FORMAT_VERSION)
         && existing_blocks > 0
     {
@@ -202,6 +206,10 @@ mod tests {
         assert_eq!(MigrationDecision::Current.label(), "current");
         assert_eq!(MigrationDecision::SchemaOnly.label(), "schema_only");
         assert_eq!(MigrationDecision::FtsRebuild.label(), "fts_rebuild");
+        assert_eq!(
+            MigrationDecision::BlockAnchorRebuild.label(),
+            "block_anchor_rebuild"
+        );
         assert_eq!(MigrationDecision::FullRebuild.label(), "full_rebuild");
     }
 }

@@ -2,7 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 
 use crate::{
-    document_parse::CanonicalDocument,
+    document_parse::{CanonicalDocument, PARSER_NAME, PARSER_VERSION},
     knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
     AppState,
 };
@@ -49,15 +49,89 @@ pub(crate) fn load_cached_document(
             r#"
             SELECT canonical_json
             FROM knowledge_canonical_documents
-            WHERE absolute_path = ?1 AND content_hash = ?2
+            WHERE absolute_path = ?1
+              AND content_hash = ?2
+              AND parser_name = ?3
+              AND parser_version = ?4
             "#,
-            params![absolute_path, content_hash],
+            params![absolute_path, content_hash, PARSER_NAME, PARSER_VERSION],
             |row| row.get::<_, String>(0),
         )
         .optional()
         .map_err(|error| error.to_string())?;
     json.map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
         .transpose()
+}
+
+pub(crate) fn load_document_rows(
+    state: &State<'_, AppState>,
+    source_id: Option<&str>,
+) -> Result<Vec<CanonicalDocumentRow>, String> {
+    let conn = connection(state)?;
+    let sql = if source_id.is_some() {
+        r#"
+        SELECT document_id, source_id, absolute_path, relative_path, file_extension,
+               source_type, content_hash, parser_name, parser_version, language, title,
+               content_origin, ocr_average_confidence, jurisdiction, authority,
+               authority_level, effective_date, expiry_date, document_type,
+               is_superseded, canonical_json, updated_at
+        FROM knowledge_canonical_documents
+        WHERE source_id = ?1
+        ORDER BY source_id ASC, relative_path ASC
+        "#
+    } else {
+        r#"
+        SELECT document_id, source_id, absolute_path, relative_path, file_extension,
+               source_type, content_hash, parser_name, parser_version, language, title,
+               content_origin, ocr_average_confidence, jurisdiction, authority,
+               authority_level, effective_date, expiry_date, document_type,
+               is_superseded, canonical_json, updated_at
+        FROM knowledge_canonical_documents
+        ORDER BY source_id ASC, relative_path ASC
+        "#
+    };
+    let mut stmt = conn.prepare(sql).map_err(|error| error.to_string())?;
+    let rows = if let Some(source_id) = source_id {
+        stmt.query_map(params![source_id], row_to_canonical_document_row)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    } else {
+        stmt.query_map([], row_to_canonical_document_row)
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    };
+    Ok(rows)
+}
+
+fn row_to_canonical_document_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<CanonicalDocumentRow, rusqlite::Error> {
+    Ok(CanonicalDocumentRow {
+        document_id: row.get(0)?,
+        source_id: row.get(1)?,
+        absolute_path: row.get(2)?,
+        relative_path: row.get(3)?,
+        file_extension: row.get(4)?,
+        source_type: row.get(5)?,
+        content_hash: row.get(6)?,
+        parser_name: row.get(7)?,
+        parser_version: row.get(8)?,
+        language: row.get(9)?,
+        title: row.get(10)?,
+        content_origin: row.get(11)?,
+        ocr_average_confidence: row.get(12)?,
+        jurisdiction: row.get(13)?,
+        authority: row.get(14)?,
+        authority_level: row.get(15)?,
+        effective_date: row.get(16)?,
+        expiry_date: row.get(17)?,
+        document_type: row.get(18)?,
+        is_superseded: row.get(19)?,
+        canonical_json: row.get(20)?,
+        updated_at: row.get(21)?,
+    })
 }
 
 pub(crate) fn replace_documents(

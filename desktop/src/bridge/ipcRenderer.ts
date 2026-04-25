@@ -592,10 +592,14 @@ function createIpcRenderer() {
           },
         },
       ),
-      rebuildCatalog: () => invokeCommandGuarded('knowledge_rebuild_catalog', undefined, {
+      rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks'; sourceId?: string; includeOcr?: boolean }) => invokeCommandGuarded(
+        'knowledge_rebuild_catalog',
+        payload ? { payload } : undefined,
+        {
         timeoutMs: 1800,
         fallbackChannel: 'knowledge:rebuild-catalog',
-      }),
+        },
+      ),
       openIndexRoot: () => invokeCommandGuarded('knowledge_open_index_root', undefined, {
         timeoutMs: 1800,
         fallbackChannel: 'knowledge:open-index-root',

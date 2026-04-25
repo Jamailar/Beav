@@ -7,10 +7,13 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     knowledge_index::{
         advisor_source_id,
-        canonical_store::replace_documents,
+        canonical_store::{load_document_rows, replace_documents},
         catalog::{replace_catalog, KnowledgeCatalogSummary},
-        citation_anchors::{build_anchors_for_blocks, replace_anchors},
-        document_blocks::{build_blocks_for_source, replace_blocks},
+        citation_anchors::{build_anchors_for_blocks, replace_anchors, replace_anchors_for_source},
+        document_blocks::{
+            block_records_from_document, build_blocks_for_source, replace_blocks,
+            replace_blocks_for_source,
+        },
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
@@ -357,4 +360,70 @@ pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> R
     let _ = app.emit("knowledge:catalog-updated", Value::String(now_iso()));
     let _ = app.emit("knowledge:changed", serde_json::json!({ "at": now_iso() }));
     Ok(())
+}
+
+pub(crate) fn rebuild_blocks_from_canonical(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    source_id: Option<&str>,
+) -> Result<(), String> {
+    let rows = load_document_rows(state, source_id)?;
+    let mut blocks = Vec::new();
+    for row in rows {
+        let canonical: crate::document_parse::CanonicalDocument =
+            serde_json::from_str(&row.canonical_json).map_err(|error| error.to_string())?;
+        let (source_name, root_path) = source_context_for_canonical_row(state, &row)?;
+        blocks.extend(block_records_from_document(
+            &canonical,
+            &source_name,
+            &root_path,
+            &row.updated_at,
+        )?);
+    }
+    let anchors = build_anchors_for_blocks(&blocks);
+    if let Some(source_id) = source_id {
+        replace_blocks_for_source(state, source_id, &blocks)?;
+        replace_anchors_for_source(state, source_id, &anchors)?;
+    } else {
+        replace_blocks(state, &blocks)?;
+        replace_anchors(state, &anchors)?;
+    }
+    mark_indexed_now(state)?;
+    let _ = app.emit("knowledge:catalog-updated", Value::String(now_iso()));
+    let _ = app.emit("knowledge:changed", serde_json::json!({ "at": now_iso() }));
+    Ok(())
+}
+
+fn source_context_for_canonical_row(
+    state: &State<'_, AppState>,
+    row: &crate::knowledge_index::canonical_store::CanonicalDocumentRow,
+) -> Result<(String, PathBuf), String> {
+    if let Some(advisor_id) = row.source_id.strip_prefix("advisor:") {
+        let source_name = crate::with_store(state, |store| {
+            Ok(store
+                .advisors
+                .iter()
+                .find(|item| item.id == advisor_id)
+                .map(|item| item.name.clone())
+                .unwrap_or_else(|| row.source_id.clone()))
+        })?;
+        let root_path = crate::advisor_knowledge_dir(state, advisor_id)?;
+        return Ok((source_name, root_path));
+    }
+    let document_source = crate::with_store(state, |store| {
+        Ok(store
+            .document_sources
+            .iter()
+            .find(|item| item.id == row.source_id)
+            .cloned())
+    })?;
+    if let Some(source) = document_source {
+        return Ok((source.name, PathBuf::from(source.root_path)));
+    }
+    let absolute_path = PathBuf::from(&row.absolute_path);
+    let root_path = absolute_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| absolute_path.clone());
+    Ok((row.source_id.clone(), root_path))
 }
