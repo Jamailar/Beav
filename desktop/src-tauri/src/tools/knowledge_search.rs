@@ -8,6 +8,7 @@ use tauri::State;
 use crate::knowledge_index::{
     advisor_source_id, citation_anchors, document_blocks,
     hybrid::RetrievalMode,
+    index_status,
     query_profile::{self, QueryProfile},
     retrieval_audit,
 };
@@ -599,7 +600,14 @@ fn execute_source_search(
         } else {
             "indexed-blocks-lexical"
         };
-        let query_plan = build_query_plan_value(&query_profile_json, retrieval_mode, search_mode);
+        let mut query_plan =
+            build_query_plan_value(&query_profile_json, retrieval_mode, search_mode);
+        if let Some(plan) = query_plan.as_object_mut() {
+            plan.insert(
+                "indexStaleness".to_string(),
+                Value::String(index_staleness_label(state)),
+            );
+        }
         let audit_run_id = retrieval_audit::record_search_run(
             state,
             source_id,
@@ -809,6 +817,16 @@ fn build_query_plan_value(
         "documentTypeHints": query_profile_json.get("documentTypeHints").cloned().unwrap_or(Value::Null),
         "rerankers": query_profile_json.get("rerankers").cloned().unwrap_or(Value::Null),
     })
+}
+
+fn index_staleness_label(state: &State<'_, AppState>) -> String {
+    match index_status(state) {
+        Ok(status) if status.is_building => "rebuilding".to_string(),
+        Ok(status) => status
+            .migration_status
+            .unwrap_or_else(|| "current".to_string()),
+        Err(_) => "unknown".to_string(),
+    }
 }
 
 fn parse_retrieval_mode(arguments: &Value, query_profile: &QueryProfile) -> RetrievalMode {

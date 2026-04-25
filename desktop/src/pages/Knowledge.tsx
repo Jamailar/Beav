@@ -108,6 +108,8 @@ interface KnowledgeIndexStatus {
     lastIndexedAt?: string | null;
     isBuilding: boolean;
     lastError?: string | null;
+    migrationStatus?: string | null;
+    pendingRebuildReason?: string | null;
 }
 
 interface KnowledgeCardItem {
@@ -274,6 +276,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         lastIndexedAt: null,
         isBuilding: false,
         lastError: null,
+        migrationStatus: null,
+        pendingRebuildReason: null,
     });
     const wasActiveRef = useRef<boolean>(isActive);
     const embeddedViewportRef = useRef<HTMLDivElement>(null);
@@ -1843,6 +1847,12 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                 </span>
                             )}
                             {indexStatus.pendingCount > 0 && <span>待处理 {indexStatus.pendingCount}</span>}
+                            {indexStatus.migrationStatus && (
+                                <span>迁移状态 {indexStatus.migrationStatus}</span>
+                            )}
+                            {indexStatus.pendingRebuildReason && (
+                                <span>重建原因 {indexStatus.pendingRebuildReason}</span>
+                            )}
                             {indexStatus.failedCount > 0 && <span className="text-red-500">失败 {indexStatus.failedCount}</span>}
                             {indexStatus.lastIndexedAt && <span>最近更新 {new Date(indexStatus.lastIndexedAt).toLocaleString()}</span>}
                             {indexStatus.lastError && <span className="truncate text-red-500 max-w-[360px]">{indexStatus.lastError}</span>}

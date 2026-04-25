@@ -170,14 +170,16 @@ function buildFallbackResponse(channel: string, error: unknown): any {
     return [];
   }
   if (channel === 'knowledge:get-index-status') {
-    return {
-      indexedCount: 0,
-      pendingCount: 0,
-      failedCount: 0,
-      lastIndexedAt: null,
-      isBuilding: false,
-      lastError: null,
-    };
+      return {
+        indexedCount: 0,
+        pendingCount: 0,
+        failedCount: 0,
+        lastIndexedAt: null,
+        isBuilding: false,
+        lastError: null,
+        migrationStatus: null,
+        pendingRebuildReason: null,
+      };
   }
   if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
     return [];
@@ -584,6 +586,8 @@ function createIpcRenderer() {
               lastIndexedAt: typeof raw.lastIndexedAt === 'string' ? raw.lastIndexedAt : null,
               isBuilding: raw.isBuilding === true,
               lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+              migrationStatus: typeof raw.migrationStatus === 'string' ? raw.migrationStatus : null,
+              pendingRebuildReason: typeof raw.pendingRebuildReason === 'string' ? raw.pendingRebuildReason : null,
             } as T;
           },
         },

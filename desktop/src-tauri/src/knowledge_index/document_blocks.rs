@@ -210,6 +210,25 @@ pub(crate) fn count_blocks_for_source(
     .map_err(|error| error.to_string())
 }
 
+pub(crate) fn rebuild_fts_index(state: &State<'_, AppState>) -> Result<(), String> {
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM knowledge_document_blocks_fts", [])
+        .map_err(|error| error.to_string())?;
+    tx.execute(
+        r#"
+        INSERT INTO knowledge_document_blocks_fts (
+            block_id, source_id, title, text, normalized_text, relative_path
+        )
+        SELECT block_id, source_id, title, text, normalized_text, relative_path
+        FROM knowledge_document_blocks
+        "#,
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
 pub(crate) fn search_blocks(
     state: &State<'_, AppState>,
     source_id: &str,
