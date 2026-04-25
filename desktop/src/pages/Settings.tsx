@@ -149,6 +149,13 @@ type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assist
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type CliRuntimeInstallMethodOption = 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
 type CliRuntimeExecutionMode = 'managed' | 'host_compatible' | 'unrestricted';
+const normalizeCliRuntimeExecutionMode = (value: unknown): CliRuntimeExecutionMode => {
+  const normalized = String(value || '').trim();
+  if (normalized === 'managed' || normalized === 'host_compatible' || normalized === 'unrestricted') {
+    return normalized;
+  }
+  return 'host_compatible';
+};
 type CliRuntimeInstallQueueItem = {
   installId: string;
   toolName: string;
@@ -523,6 +530,7 @@ export function Settings({
     diagnostics_last_prompted_at: '',
     release_log_retention_days: '7',
     release_log_max_file_mb: '10',
+    cli_runtime_execution_mode: 'host_compatible',
     developer_mode_enabled: false,
     developer_mode_unlocked_at: '',
   });
@@ -2906,6 +2914,29 @@ export function Settings({
     }
   }, [persistDeveloperModeState]);
 
+  const handleCliRuntimeExecutionModeChange = useCallback((mode: CliRuntimeExecutionMode) => {
+    const nextMode = normalizeCliRuntimeExecutionMode(mode);
+    setCliRuntimeExecutionMode(nextMode);
+    setFormData((prev) => ({
+      ...prev,
+      cli_runtime_execution_mode: nextMode,
+    }));
+    void window.ipcRenderer.saveSettings({
+      cli_runtime_execution_mode: nextMode,
+    }).then(() => {
+      setCliRuntimeStatusMessage(
+        nextMode === 'unrestricted'
+          ? 'CLI Runtime 已切换为完全访问；仅对你明确授权的命令使用。'
+          : nextMode === 'managed'
+            ? 'CLI Runtime 已切换为安全模式。'
+            : 'CLI Runtime 已切换为兼容模式。',
+      );
+    }).catch((error) => {
+      console.error('Failed to persist CLI runtime execution mode', error);
+      setCliRuntimeStatusMessage(`保存 CLI Runtime 模式失败：${String(error)}`);
+    });
+  }, []);
+
   const handleVersionTap = useCallback(() => {
     setDeveloperVersionTapCount((prev) => {
       const next = prev + 1;
@@ -3022,6 +3053,9 @@ export function Settings({
         const developerModeEnabled = Boolean(settings.developer_mode_enabled)
           && Number.isFinite(unlockedAtMs)
           && (Date.now() - unlockedAtMs) < DEVELOPER_MODE_TTL_MS;
+        const loadedCliRuntimeExecutionMode = normalizeCliRuntimeExecutionMode(
+          settings.cli_runtime_execution_mode,
+        );
 
         setCurrentSpaceState(
           (settings as { active_space_id?: string; activeSpaceId?: string }).active_space_id
@@ -3063,6 +3097,7 @@ export function Settings({
         });
         setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
         setMcpServers(parseMcpServers(settings.mcp_servers_json));
+        setCliRuntimeExecutionMode(loadedCliRuntimeExecutionMode);
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
         setImageSourceId(resolvedImageSourceId);
@@ -3151,6 +3186,7 @@ export function Settings({
           diagnostics_last_prompted_at: String(settings.diagnostics_last_prompted_at || ''),
           release_log_retention_days: String(settings.release_log_retention_days || 7),
           release_log_max_file_mb: String(settings.release_log_max_file_mb || 10),
+          cli_runtime_execution_mode: loadedCliRuntimeExecutionMode,
           developer_mode_enabled: developerModeEnabled,
           developer_mode_unlocked_at: developerModeEnabled ? unlockedAt : '',
         });
@@ -3173,6 +3209,7 @@ export function Settings({
         setFetchingModelsBySourceId((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
+        setCliRuntimeExecutionMode('host_compatible');
         setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS);
         clearAiSourceDraftDirty();
       }
@@ -4304,6 +4341,7 @@ export function Settings({
         release_log_retention_days: releaseLogRetentionDays,
         release_log_max_file_mb: releaseLogMaxFileMb,
         notifications_json: JSON.stringify(notificationSettings),
+        cli_runtime_execution_mode: normalizeCliRuntimeExecutionMode(formData.cli_runtime_execution_mode),
         developer_mode_enabled: Boolean(formData.developer_mode_enabled),
         developer_mode_unlocked_at: formData.developer_mode_enabled
           ? (formData.developer_mode_unlocked_at || new Date().toISOString())
@@ -5358,7 +5396,7 @@ export function Settings({
                 cliRuntimeDiagnosticCommand={cliRuntimeDiagnosticCommand}
                 setCliRuntimeDiagnosticCommand={setCliRuntimeDiagnosticCommand}
                 cliRuntimeExecutionMode={cliRuntimeExecutionMode}
-                setCliRuntimeExecutionMode={setCliRuntimeExecutionMode}
+                setCliRuntimeExecutionMode={handleCliRuntimeExecutionModeChange}
                 cliRuntimeDiscoverQuery={cliRuntimeDiscoverQuery}
                 setCliRuntimeDiscoverQuery={setCliRuntimeDiscoverQuery}
                 cliRuntimeDiscoverResults={cliRuntimeDiscoverResults}

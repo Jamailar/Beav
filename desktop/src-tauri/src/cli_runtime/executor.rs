@@ -18,11 +18,11 @@ use crate::cli_runtime::{
     load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, prepare_cli_launch,
     resolve_cli_environment, run_cli_verification, sandbox_metadata, spawn_cli_terminal,
     upsert_cli_execution_record, write_execution_logs, CliEnvironmentResolveRequest,
-    CliEscalationRequestRecord, CliExecuteRequest, CliExecutionRecord, CliExecutionSnapshot,
-    CliExecutionStatus, CliVerificationStatus, CliVerifyRule,
+    CliEscalationRequestRecord, CliExecuteRequest, CliExecutionMode, CliExecutionRecord,
+    CliExecutionSnapshot, CliExecutionStatus, CliVerificationStatus, CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
-use crate::{make_id, now_i64, AppState};
+use crate::{make_id, now_i64, with_store, AppState};
 
 fn normalize_cwd(request: &CliExecuteRequest, environment_root: &str) -> String {
     request
@@ -32,6 +32,32 @@ fn normalize_cwd(request: &CliExecuteRequest, environment_root: &str) -> String 
         .filter(|value| !value.is_empty())
         .unwrap_or(environment_root)
         .to_string()
+}
+
+pub fn default_cli_execution_mode(state: &State<'_, AppState>) -> Result<CliExecutionMode, String> {
+    with_store(state, |store| {
+        let mode = store
+            .settings
+            .get("cli_runtime_execution_mode")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        Ok(match mode {
+            "managed" => CliExecutionMode::Managed,
+            "unrestricted" => CliExecutionMode::Unrestricted,
+            _ => CliExecutionMode::HostCompatible,
+        })
+    })
+}
+
+fn apply_default_execution_mode(
+    state: &State<'_, AppState>,
+    mut request: CliExecuteRequest,
+) -> Result<CliExecuteRequest, String> {
+    if request.execution_mode.is_none() {
+        request.execution_mode = Some(default_cli_execution_mode(state)?);
+    }
+    Ok(request)
 }
 
 fn split_log_chunks(content: &str, max_chars: usize) -> Vec<String> {
@@ -435,6 +461,7 @@ pub fn execute_cli_command<RT: Runtime>(
     state: &State<'_, AppState>,
     request: CliExecuteRequest,
 ) -> Result<CliExecutionRecord, String> {
+    let request = apply_default_execution_mode(state, request)?;
     if request.argv.is_empty() {
         return Err("cli execute requires at least one argv token".to_string());
     }

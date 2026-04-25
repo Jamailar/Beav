@@ -2297,7 +2297,7 @@ interface ToolsSettingsSectionProps {
     cliRuntimeDiagnosticCommand: string;
     setCliRuntimeDiagnosticCommand: Dispatch<SetStateAction<string>>;
     cliRuntimeExecutionMode: 'managed' | 'host_compatible' | 'unrestricted';
-    setCliRuntimeExecutionMode: Dispatch<SetStateAction<'managed' | 'host_compatible' | 'unrestricted'>>;
+    setCliRuntimeExecutionMode: (mode: 'managed' | 'host_compatible' | 'unrestricted') => void;
     cliRuntimeDiscoverQuery: string;
     setCliRuntimeDiscoverQuery: Dispatch<SetStateAction<string>>;
     cliRuntimeDiscovering: boolean;

@@ -8,20 +8,20 @@ use tauri::{AppHandle, State};
 use crate::cli_runtime::{
     add_installed_tool_to_environment, approve_cli_escalation, build_cli_sandbox_spec,
     build_cli_tool_manifest, cancel_cli_execution, collect_cli_requested_permissions,
-    create_task_ephemeral_environment, default_detect_commands, deny_cli_escalation, detect_tool,
-    detect_tool_with_managed_paths, discover_all_commands, emit_cli_escalation_resolved,
-    emit_cli_execution_status, emit_cli_install_finished, emit_cli_install_started,
-    emit_cli_verification_finished, ensure_app_global_environment, ensure_workspace_environment,
-    ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_environment_by_id,
-    find_cli_execution_by_id, find_cli_tool_by_command, find_cli_tool_by_id,
-    find_cli_tool_manifest_by_tool_id, list_cli_environments, list_cli_tool_records,
-    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, prepare_cli_install,
-    refresh_cli_execution, resolve_cli_environment, run_cli_verification, sandbox_metadata,
-    upsert_cli_tool_manifest, upsert_cli_tool_record, CliApproveEscalationRequest,
-    CliCreateEnvironmentRequest, CliDenyEscalationRequest, CliDiscoverRequest,
-    CliEnvironmentRecord, CliEnvironmentResolveRequest, CliEnvironmentScope, CliExecuteRequest,
-    CliExecutionMode, CliExecutionStatus, CliInstallRequest, CliInstallResult, CliToolHealth,
-    CliToolManifestRecord, CliToolRecord, CliToolSource, CliVerifyExecutionRequest,
+    create_task_ephemeral_environment, default_cli_execution_mode, default_detect_commands,
+    deny_cli_escalation, detect_tool, detect_tool_with_managed_paths, discover_all_commands,
+    emit_cli_escalation_resolved, emit_cli_execution_status, emit_cli_install_finished,
+    emit_cli_install_started, emit_cli_verification_finished, ensure_app_global_environment,
+    ensure_workspace_environment, ensure_workspace_environment_for_active_space,
+    execute_cli_command, find_cli_environment_by_id, find_cli_execution_by_id,
+    find_cli_tool_by_command, find_cli_tool_by_id, find_cli_tool_manifest_by_tool_id,
+    list_cli_environments, list_cli_tool_records, load_cli_execution_snapshot, load_host_shell_env,
+    merge_execution_env, prepare_cli_install, refresh_cli_execution, resolve_cli_environment,
+    run_cli_verification, sandbox_metadata, upsert_cli_tool_manifest, upsert_cli_tool_record,
+    CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
+    CliDiscoverRequest, CliEnvironmentRecord, CliEnvironmentResolveRequest, CliEnvironmentScope,
+    CliExecuteRequest, CliExecutionMode, CliExecutionStatus, CliInstallRequest, CliInstallResult,
+    CliToolHealth, CliToolManifestRecord, CliToolRecord, CliToolSource, CliVerifyExecutionRequest,
     CliVerifyResult,
 };
 use crate::{make_id, payload_string, AppState};
@@ -481,7 +481,12 @@ fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<V
     let execution_request = CliExecuteRequest {
         environment_id: Some(resolution.environment.id.clone()),
         tool_id: Some(command.to_string()),
-        execution_mode: request.execution_mode.clone(),
+        execution_mode: Some(
+            request
+                .execution_mode
+                .clone()
+                .unwrap_or(default_cli_execution_mode(state)?),
+        ),
         argv: vec![command.to_string(), "--version".to_string()],
         cwd: Some(cwd.clone()),
         ..Default::default()
