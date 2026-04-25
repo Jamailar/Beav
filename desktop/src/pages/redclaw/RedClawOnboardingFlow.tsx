@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ArrowLeft, ArrowRight, Loader2, Sparkles, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Slider } from '../../vendor/freecut/components/ui/slider';
@@ -312,15 +312,33 @@ export function RedClawOnboardingFlow({
   const [submissionError, setSubmissionError] = useState('');
   const [hasDefaultModelConfigured, setHasDefaultModelConfigured] = useState(true);
   const [modelConfigMessage, setModelConfigMessage] = useState('');
+  const answersRef = useRef<RedClawOnboardingAnswers>(REDCLAW_ONBOARDING_DEFAULT_ANSWERS);
+  const hasLocalInteractionRef = useRef(false);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
-    setAnswers(normalizeOnboardingAnswers(initialAnswers));
+    if (!open) {
+      wasOpenRef.current = false;
+      hasLocalInteractionRef.current = false;
+      return;
+    }
+
+    const openingNow = !wasOpenRef.current;
+    if (openingNow) {
+      wasOpenRef.current = true;
+      hasLocalInteractionRef.current = false;
+      setSubmitting(false);
+      setSubmissionStageIndex(0);
+      setSubmissionError('');
+      setModelConfigMessage('');
+    }
+
+    if (!openingNow && hasLocalInteractionRef.current) return;
+
+    const normalizedAnswers = normalizeOnboardingAnswers(initialAnswers);
+    answersRef.current = normalizedAnswers;
+    setAnswers(normalizedAnswers);
     setCurrentStepIndex(Math.max(0, Math.min(REDCLAW_ONBOARDING_MVP_QUESTIONS.length - 1, initialStepIndex)));
-    setSubmitting(false);
-    setSubmissionStageIndex(0);
-    setSubmissionError('');
-    setModelConfigMessage('');
   }, [initialAnswers, initialStepIndex, open]);
 
   useEffect(() => {
@@ -368,22 +386,29 @@ export function RedClawOnboardingFlow({
     key: keyof RedClawOnboardingAnswers,
     nextValue: number | string,
   ) => {
-    setAnswers((prev) => ({ ...prev, [key]: nextValue } as RedClawOnboardingAnswers));
+    hasLocalInteractionRef.current = true;
+    const nextAnswers = { ...answersRef.current, [key]: nextValue } as RedClawOnboardingAnswers;
+    answersRef.current = nextAnswers;
+    setAnswers(nextAnswers);
   };
 
   const currentValue = useMemo(() => {
     return answers[currentQuestion.id];
   }, [answers, currentQuestion.id]);
 
-  const commitProgress = async (nextStepIndex: number) => {
+  const commitProgress = async (
+    nextStepIndex: number,
+    nextAnswers: RedClawOnboardingAnswers = answersRef.current,
+  ) => {
     await onSaveProgress({
       stepIndex: Math.max(0, Math.min(REDCLAW_ONBOARDING_MVP_QUESTIONS.length - 1, nextStepIndex)),
-      answers,
+      answers: nextAnswers,
     });
   };
 
   const handlePrevious = async () => {
     if (submitting || currentStepIndex <= 0) return;
+    hasLocalInteractionRef.current = true;
     const nextStepIndex = currentStepIndex - 1;
     setCurrentStepIndex(nextStepIndex);
     await commitProgress(nextStepIndex);
@@ -391,12 +416,13 @@ export function RedClawOnboardingFlow({
 
   const handleNext = async () => {
     if (submitting || blockProgression) return;
+    hasLocalInteractionRef.current = true;
     if (isLastStep) {
       setSubmitting(true);
       setSubmissionStageIndex(0);
       setSubmissionError('');
       try {
-        await onComplete(answers);
+        await onComplete(answersRef.current);
       } catch (error) {
         console.error('Failed to complete RedClaw onboarding:', error);
         setSubmissionError('风格初始化失败，请重试。');

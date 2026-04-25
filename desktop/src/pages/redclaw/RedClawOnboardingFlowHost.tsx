@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { RedClawOnboardingFlow } from './RedClawOnboardingFlow';
 import { readRedClawOnboardingDraft } from './onboardingState';
@@ -83,14 +83,21 @@ export function RedClawOnboardingFlowHost({
     onCompleted();
   }, [onCompleted]);
 
-  const onboardingDraft = readRedClawOnboardingDraft(onboardingState);
+  const onboardingDraft = useMemo(
+    () => readRedClawOnboardingDraft(onboardingState),
+    [onboardingState],
+  );
+  const onboardingInitialAnswers = useMemo<Record<string, unknown>>(
+    () => ({ ...onboardingDraft.answers }),
+    [onboardingDraft],
+  );
 
   return (
     <RedClawOnboardingFlow
       open={open}
       activeSpaceName={activeSpaceName}
       initialStepIndex={onboardingDraft.stepIndex}
-      initialAnswers={{ ...onboardingDraft.answers }}
+      initialAnswers={onboardingInitialAnswers}
       onClose={onClose}
       onSaveProgress={saveOnboardingProgress}
       onComplete={completeOnboarding}
