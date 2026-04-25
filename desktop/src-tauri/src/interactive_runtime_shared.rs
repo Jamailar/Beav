@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::persistence::ensure_store_hydrated_for_subjects;
-use crate::persistence::with_store;
+use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    build_runtime_context_bundle_summary, load_session_bundle_messages,
+    append_session_checkpoint, build_runtime_context_bundle_summary, load_session_bundle_messages,
     runtime_context_messages_for_session, RuntimeContextBundle,
 };
 use crate::skills::{build_skill_prompt_bundle, normalize_skill_logical_path, resolve_skill_set};
@@ -752,9 +752,18 @@ pub(crate) fn interactive_runtime_tools_for_mode(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> Value {
-    with_store(state, |store| {
+    with_store_mut(state, |store| {
         let snapshot = tool_plan_snapshot_for_session(&store, runtime_mode, session_id);
         eprintln!("[tools][plan] {snapshot}");
+        if let Some(session_id) = session_id {
+            append_session_checkpoint(
+                store,
+                session_id,
+                "tool_plan",
+                "tool plan generated".to_string(),
+                Some(snapshot),
+            );
+        }
         Ok(openai_schemas_for_session(&store, runtime_mode, session_id))
     })
     .unwrap_or_else(|_| openai_schemas_for_runtime_mode(runtime_mode))
