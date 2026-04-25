@@ -428,6 +428,18 @@ mod tests {
     }
 
     #[test]
+    fn image_generation_runtime_exposes_image_action() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "image-generation",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("image.generate"));
+        assert!(plan.has_direct_app_cli_action("tools.search"));
+        assert!(plan.visible_tools.iter().any(|tool| tool.name == "Redbox"));
+    }
+
+    #[test]
     fn allowed_app_cli_actions_override_default_direct_set() {
         let metadata = json!({
             "allowedTools": ["redbox_fs", "app_cli"],
