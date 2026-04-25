@@ -196,6 +196,24 @@ function buildFallbackResponse(channel: string, error: unknown): any {
       updatedAt: Date.now(),
     };
   }
+  if (channel === 'collab:sessions:list' || channel === 'team-runtime:list-sessions') {
+    return [];
+  }
+  if (channel === 'collab:sessions:get' || channel === 'team-runtime:get-session') {
+    return {
+      session: null,
+      members: [],
+      tasks: [],
+      mailbox: [],
+      reports: [],
+    };
+  }
+  if (channel.startsWith('collab:')) {
+    return { success: false, error: `RedBox collaboration action failed for "${channel}": ${message}` };
+  }
+  if (channel.startsWith('team-runtime:')) {
+    return { success: false, error: `RedBox team runtime action failed for "${channel}": ${message}` };
+  }
   if (channel === 'chat:get-context-usage') {
     return {
       success: true,
@@ -716,6 +734,62 @@ function createIpcRenderer() {
       getCheckpoints: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-checkpoints', payload),
       getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
       listApprovals: () => invokeChannel('runtime:list-approvals')
+    },
+    teamRuntime: {
+      listSessions: () => invokeChannel('team-runtime:list-sessions'),
+      createSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-session', payload),
+      getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) =>
+        invokeChannel('team-runtime:get-session', payload),
+      listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
+      addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
+      listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
+      createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
+      updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
+      listMessages: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-messages', payload),
+      readMailbox: (payload: Record<string, unknown>) => invokeChannel('team-runtime:read-mailbox', payload),
+      sendMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
+      postMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
+      listReports: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-reports', payload),
+      requestReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:request-report', payload),
+      submitReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:submit-report', payload),
+      pauseSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:pause-session', payload),
+      resumeSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:resume-session', payload),
+      archiveSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:archive-session', payload),
+      tickReports: (payload: { sessionId: string }) => invokeChannel('team-runtime:tick-reports', payload),
+      listAgentBackends: () => invokeChannel('team-runtime:list-agent-backends'),
+      listTools: () => invokeChannel('team-runtime:list-tools'),
+      executeTool: (payload: { action: string; payload?: Record<string, unknown> }) =>
+        invokeChannel('team-runtime:execute-tool', payload),
+      onEvent: (listener: Listener) => on('runtime:event', listener),
+      offEvent: (listener: Listener) => off('runtime:event', listener)
+    },
+    collab: {
+      listSessions: () => invokeChannel('team-runtime:list-sessions'),
+      createSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-session', payload),
+      getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) =>
+        invokeChannel('team-runtime:get-session', payload),
+      listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
+      addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
+      listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
+      createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
+      updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
+      listMessages: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-messages', payload),
+      readMailbox: (payload: Record<string, unknown>) => invokeChannel('team-runtime:read-mailbox', payload),
+      sendMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
+      postMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
+      listReports: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-reports', payload),
+      requestReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:request-report', payload),
+      submitReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:submit-report', payload),
+      pauseSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:pause-session', payload),
+      resumeSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:resume-session', payload),
+      archiveSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:archive-session', payload),
+      tickReports: (payload: { sessionId: string }) => invokeChannel('team-runtime:tick-reports', payload),
+      listAgentBackends: () => invokeChannel('team-runtime:list-agent-backends'),
+      listTools: () => invokeChannel('team-runtime:list-tools'),
+      executeTool: (payload: { action: string; payload?: Record<string, unknown> }) =>
+        invokeChannel('team-runtime:execute-tool', payload),
+      onEvent: (listener: Listener) => on('runtime:event', listener),
+      offEvent: (listener: Listener) => off('runtime:event', listener)
     },
     cliRuntime: {
       detect: (payload?: { commands?: string[] }) => invokeChannel('cli-runtime:detect', payload || {}),

@@ -166,6 +166,11 @@ export type RuntimeUnifiedEventType =
   | 'runtime:cli-escalation-requested'
   | 'runtime:cli-escalation-resolved'
   | 'runtime:cli-verification-finished'
+  | 'runtime:collab-session-changed'
+  | 'runtime:collab-member-changed'
+  | 'runtime:collab-task-changed'
+  | 'runtime:collab-report-submitted'
+  | 'runtime:collab-message-delivered'
   | 'stream_start'
   | 'text_delta'
   | 'tool_request'
@@ -183,6 +188,114 @@ export interface RuntimeUnifiedEvent {
   parentRuntimeId?: string | null;
   payload?: unknown;
   timestamp: number;
+}
+
+export interface CollabSessionRecord {
+  id: string;
+  ownerSessionId?: string | null;
+  coordinatorMemberId?: string | null;
+  workspaceRoot?: string | null;
+  title: string;
+  objective: string;
+  status: string;
+  runtimeMode: string;
+  source: string;
+  metadata?: Record<string, unknown> | null;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number | null;
+}
+
+export interface CollabMemberRecord {
+  id: string;
+  sessionId: string;
+  displayName: string;
+  roleId: string;
+  sourceKind: string;
+  backend: string;
+  adapterKind: string;
+  status: string;
+  currentTaskId?: string | null;
+  conversationId?: string | null;
+  runtimeId?: string | null;
+  capabilities: string[];
+  allowedTools: string[];
+  progressIntervalMs: number;
+  reportIntervalSeconds: number;
+  lastSeenAt?: number | null;
+  lastReportAt?: number | null;
+  lastActivityAt?: number | null;
+  lastError?: string | null;
+}
+
+export interface CollabTaskRecord {
+  id: string;
+  sessionId: string;
+  parentTaskId?: string | null;
+  memberId?: string | null;
+  reviewerMemberId?: string | null;
+  title: string;
+  objective: string;
+  description: string;
+  status: string;
+  priority: number;
+  taskType: string;
+  dependsOnTaskIds: string[];
+  blockedByTaskIds: string[];
+  blocksTaskIds: string[];
+  runtimeTaskId?: string | null;
+  externalTaskRef?: string | null;
+  resultSummary?: string | null;
+  progressPercent?: number | null;
+  artifacts: unknown[];
+  artifactIds: string[];
+  dueAt?: number | null;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number | null;
+  completedAt?: number | null;
+}
+
+export interface CollabMailboxMessageRecord {
+  id: string;
+  sessionId: string;
+  fromMemberId?: string | null;
+  toMemberId?: string | null;
+  fromKind: string;
+  taskId?: string | null;
+  kind: string;
+  messageType: string;
+  status: string;
+  subject?: string | null;
+  body: string;
+  attachmentRefs: string[];
+  createdAt: number;
+  readAt?: number | null;
+}
+
+export interface CollabProgressReportRecord {
+  id: string;
+  sessionId: string;
+  memberId: string;
+  taskId?: string | null;
+  reportType: string;
+  status: string;
+  summary: string;
+  nextAction?: string | null;
+  nextSteps: string[];
+  progressPercent?: number | null;
+  blockers: string[];
+  artifacts: unknown[];
+  artifactIds: string[];
+  createdAt: number;
+}
+
+export interface CollabSessionSnapshot {
+  session: CollabSessionRecord;
+  members: CollabMemberRecord[];
+  tasks: CollabTaskRecord[];
+  mailbox: CollabMailboxMessageRecord[];
+  reports: CollabProgressReportRecord[];
 }
 
 export type CliRuntimeToolSource =
@@ -745,6 +858,30 @@ declare global {
         getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
         getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
       };
+      teamRuntime: {
+        listSessions: () => Promise<CollabSessionRecord[]>;
+        createSession: (payload: Record<string, unknown>) => Promise<CollabSessionRecord>;
+        getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) => Promise<CollabSessionSnapshot>;
+        listMembers: (payload: { sessionId: string }) => Promise<CollabMemberRecord[]>;
+        addMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
+        listTasks: (payload: { sessionId: string }) => Promise<CollabTaskRecord[]>;
+        createTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        updateTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        listMessages: (payload: { sessionId: string; memberId?: string; taskId?: string; unreadOnly?: boolean; limit?: number }) => Promise<CollabMailboxMessageRecord[]>;
+        readMailbox: (payload: { sessionId: string; memberId?: string; taskId?: string; unreadOnly?: boolean; markRead?: boolean; limit?: number }) => Promise<CollabMailboxMessageRecord[]>;
+        sendMessage: (payload: Record<string, unknown>) => Promise<CollabMailboxMessageRecord>;
+        listReports: (payload: { sessionId: string; memberId?: string; taskId?: string; limit?: number }) => Promise<CollabProgressReportRecord[]>;
+        requestReport: (payload: Record<string, unknown>) => Promise<CollabMailboxMessageRecord>;
+        submitReport: (payload: Record<string, unknown>) => Promise<CollabProgressReportRecord>;
+        pauseSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
+        resumeSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
+        archiveSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
+        tickReports: (payload: { sessionId: string }) => Promise<Record<string, unknown>>;
+        listAgentBackends: () => Promise<Array<Record<string, unknown>>>;
+        listTools: () => Promise<Array<Record<string, unknown>>>;
+        executeTool: (payload: { action: string; payload?: Record<string, unknown> }) => Promise<unknown>;
+      };
+      collab: Window['ipcRenderer']['teamRuntime'];
       toolHooks: {
         list: () => Promise<unknown[]>;
         register: (hook: unknown) => Promise<{ success: boolean; hookId: string }>;

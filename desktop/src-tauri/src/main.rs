@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent;
+mod agent_hub;
 mod app_shared;
 mod assistant_core;
 mod auth;
@@ -63,12 +64,13 @@ use runtime::{
     append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
     resolve_runtime_mode_from_context_type, role_sequence_for_route, runtime_error_payload,
     runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
-    ApprovalRuntimeState, InteractiveLoopGuard, InteractiveToolCall, InteractiveToolOutcomeDigest,
-    McpServerRecord, RedclawJobDefinitionRecord, RedclawJobExecutionRecord,
-    RedclawLongCycleTaskRecord, RedclawRuntime, RedclawScheduledTaskRecord, RedclawStateRecord,
-    ResolvedChatConfig, RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
-    RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord, SkillRecord,
+    ApprovalRuntimeState, CollabMailboxMessageRecord, CollabMemberRecord,
+    CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, InteractiveLoopGuard,
+    InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord, RedclawJobDefinitionRecord,
+    RedclawJobExecutionRecord, RedclawLongCycleTaskRecord, RedclawRuntime,
+    RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, RuntimeHookRecord,
+    RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState,
+    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SkillRecord,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
@@ -352,6 +354,11 @@ struct AppStore {
     session_tool_results: Vec<SessionToolResultRecord>,
     runtime_tasks: Vec<RuntimeTaskRecord>,
     runtime_task_traces: Vec<RuntimeTaskTraceRecord>,
+    collab_sessions: Vec<CollabSessionRecord>,
+    collab_members: Vec<CollabMemberRecord>,
+    collab_tasks: Vec<CollabTaskRecord>,
+    collab_mailbox_messages: Vec<CollabMailboxMessageRecord>,
+    collab_progress_reports: Vec<CollabProgressReportRecord>,
     cli_tools: Vec<cli_runtime::CliToolRecord>,
     cli_environments: Vec<cli_runtime::CliEnvironmentRecord>,
     cli_manifests: Vec<cli_runtime::CliToolManifestRecord>,

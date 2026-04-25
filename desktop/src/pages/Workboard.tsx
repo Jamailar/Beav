@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Clock3, ListTodo, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { AlertCircle, Clock3, ListTodo, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { CollaborationBoard } from './workboard/CollaborationBoard';
 
 type TaskListResponse = Awaited<ReturnType<typeof window.ipcRenderer.redclawRunner.taskList>>;
 type TaskListItem = NonNullable<TaskListResponse['items']>[number];
@@ -489,6 +490,7 @@ function TaskEditorPanel({
 }
 
 export function Workboard({ isActive = true }: { isActive?: boolean }) {
+    const [mode, setMode] = useState<'redclaw' | 'collaboration'>('redclaw');
     const [items, setItems] = useState<TaskListItem[]>([]);
     const [stats, setStats] = useState<TaskStatsResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -670,6 +672,10 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
         });
     }, [executeAction]);
 
+    if (mode === 'collaboration') {
+        return <CollaborationBoard isActive={isActive} onSwitchRedclaw={() => setMode('redclaw')} />;
+    }
+
     return (
         <div className="h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
             <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
@@ -684,6 +690,13 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                         <div className="rounded-full border border-[#ece5da] bg-white px-2.5 py-1 text-[11px] text-[#7d766a]">
                             更新于 {formatDateTime(lastUpdatedAt)}
                         </div>
+                        <button
+                            onClick={() => setMode('collaboration')}
+                            className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#d8e6d8] bg-white px-3 text-[11px] text-[#607166] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f1f7f0]"
+                        >
+                            <Users className="h-3 w-3" />
+                            团队看板
+                        </button>
                         <button
                             onClick={openCreateEditor}
                             className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#d2b690] bg-[#efe1ca] px-3 text-[11px] text-[#5e4730] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#e7d5b9]"
