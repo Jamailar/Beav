@@ -17,6 +17,8 @@
 - 其它情况在用户确认后，再一次性调用 `image.generate`，并传入 `planConfirmed`、`sharedStyleGuide` 与 `imagePlanItems`。
 - 如果用户要求“只改第 N 张”“封面更强一点”“第三张换生活化场景”，优先只修改受影响的卡片，不要默认整套重做。
 - 任务带参考图、主体图或生成结果回改时，优先用参考图模式，并明确说明每张参考图的作用。
+- 比例必须结构化传入：用户指定方图/竖图/横图/小红书卡片/Story/`1:1`/`3:4`/`4:3`/`9:16`/`16:9` 时，调用 `Redbox(resource="image", operation="generate", input={ ... })` 必须包含 `aspectRatio`。不要只在 prompt 里描述比例。
+- 常用默认：小红书图文卡片用 `3:4`；方图用 `1:1`；横图用 `4:3`；明确短视频竖封面或 Story 用 `9:16`；宽屏横版用 `16:9`。
 - 如果会话 metadata 中包含 `projectId`、`sourceTitle`、`suiteState`，把它们视为当前工作上下文。
 
 输出要求：

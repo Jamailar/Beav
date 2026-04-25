@@ -3842,6 +3842,13 @@ fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
             merged.insert("aspectRatio".to_string(), json!(ratio));
         }
     }
+    if let Some(normalized_ratio) = merged
+        .get("aspectRatio")
+        .and_then(Value::as_str)
+        .and_then(normalize_image_aspect_ratio_alias)
+    {
+        merged.insert("aspectRatio".to_string(), json!(normalized_ratio));
+    }
     if !merged.contains_key("durationSeconds") {
         let duration_seconds = payload_field(payload, "duration")
             .and_then(|value| match value {
@@ -3870,6 +3877,44 @@ fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+fn normalize_image_aspect_ratio_alias(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = trimmed
+        .replace('：', ":")
+        .replace('×', "x")
+        .replace('*', "x")
+        .to_ascii_lowercase();
+    let compact = normalized
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    match compact.as_str() {
+        "1:1" | "square" => return Some("1:1".to_string()),
+        "3:4" | "portrait" | "verticalcard" => return Some("3:4".to_string()),
+        "4:3" | "landscape" => return Some("4:3".to_string()),
+        "9:16" | "story" | "reels" | "shorts" => return Some("9:16".to_string()),
+        "16:9" | "wide" | "widescreen" => return Some("16:9".to_string()),
+        _ => {}
+    }
+    if compact.contains("正方") || compact.contains("方图") {
+        return Some("1:1".to_string());
+    }
+    if compact.contains("小红书")
+        || compact.contains("竖图")
+        || compact.contains("竖版")
+        || compact.contains("肖像")
+    {
+        return Some("3:4".to_string());
+    }
+    if compact.contains("横图") || compact.contains("横版") || compact.contains("风景") {
+        return Some("4:3".to_string());
+    }
+    None
 }
 
 fn comma_list_value(value: Option<Value>) -> Option<Value> {
@@ -5062,6 +5107,22 @@ mod tests {
         assert_eq!(
             payload_string(&merged, "aspectRatio"),
             Some("9:16".to_string())
+        );
+    }
+
+    #[test]
+    fn build_generation_payload_normalizes_image_ratio_aliases() {
+        let merged = build_generation_payload(
+            &CliArgs::default(),
+            &json!({
+                "prompt": "生成小红书竖图封面",
+                "aspectRatio": "小红书竖图"
+            }),
+        );
+
+        assert_eq!(
+            payload_string(&merged, "aspectRatio"),
+            Some("3:4".to_string())
         );
     }
 
