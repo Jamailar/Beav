@@ -148,6 +148,7 @@ function normalizeNotificationPermissionState(
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
 type CliRuntimeInstallMethodOption = 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+type CliRuntimeExecutionMode = 'managed' | 'host_compatible' | 'unrestricted';
 type CliRuntimeInstallQueueItem = {
   installId: string;
   toolName: string;
@@ -1062,6 +1063,7 @@ export function Settings({
   const [isCliRuntimeRefreshing, setIsCliRuntimeRefreshing] = useState(false);
   const [cliRuntimeInspectingToolId, setCliRuntimeInspectingToolId] = useState('');
   const [cliRuntimeDiagnosticCommand, setCliRuntimeDiagnosticCommand] = useState('');
+  const [cliRuntimeExecutionMode, setCliRuntimeExecutionMode] = useState<CliRuntimeExecutionMode>('host_compatible');
   const [cliRuntimeDiscoverQuery, setCliRuntimeDiscoverQuery] = useState('');
   const [cliRuntimeDiscoverResults, setCliRuntimeDiscoverResults] = useState<CliRuntimeToolRecord[]>([]);
   const [cliRuntimeDiscovering, setCliRuntimeDiscovering] = useState(false);
@@ -3299,18 +3301,23 @@ export function Settings({
     }
     setCliRuntimeInspectingToolId(command);
     try {
-      const result = await window.ipcRenderer.cliRuntime.inspect({ command, executable: command });
-      const normalized = normalizeCliRuntimeToolRecord(result);
+      const result = await window.ipcRenderer.cliRuntime.diagnose({
+        command,
+        executionMode: cliRuntimeExecutionMode,
+      });
+      const normalized = normalizeCliRuntimeToolRecord((result as { tool?: unknown } | null)?.tool);
       if (normalized) {
         setCliRuntimeTools((prev) => {
           const next = prev.filter((item) => item.id !== normalized.id);
           next.unshift(normalized);
           return next.sort((left, right) => left.name.localeCompare(right.name));
         });
+        const sandbox = (result as { sandbox?: { mode?: string; backend?: string; allowNetwork?: boolean } } | null)?.sandbox;
+        const summary = String((result as { summary?: string } | null)?.summary || '').trim();
         setCliRuntimeStatusMessage(
           normalized.resolvedPath
-            ? `已解析 ${command}：${normalized.resolvedPath}`
-            : `未在当前 PATH 中解析到 ${command}`,
+            ? `${summary || `已解析 ${command}`} · ${sandbox?.backend || 'runtime'} · ${normalized.resolvedPath}`
+            : summary || `未在当前 PATH 中解析到 ${command}`,
         );
       } else {
         setCliRuntimeStatusMessage(`未返回 ${command} 的诊断数据`);
@@ -3321,7 +3328,7 @@ export function Settings({
     } finally {
       setCliRuntimeInspectingToolId('');
     }
-  }, [cliRuntimeDiagnosticCommand]);
+  }, [cliRuntimeDiagnosticCommand, cliRuntimeExecutionMode]);
 
   const handleDiscoverCliRuntimeTools = useCallback(async () => {
     setCliRuntimeDiscovering(true);
@@ -3403,6 +3410,7 @@ export function Settings({
         installMethod: cliRuntimeInstallDraft.installMethod,
         spec,
         toolName: toolName || undefined,
+        executionMode: cliRuntimeExecutionMode,
       });
       const installId = String((result as { installId?: string } | null)?.installId || '').trim();
       if (installId) {
@@ -5285,6 +5293,8 @@ export function Settings({
                 cliRuntimeInspectingToolId={cliRuntimeInspectingToolId}
                 cliRuntimeDiagnosticCommand={cliRuntimeDiagnosticCommand}
                 setCliRuntimeDiagnosticCommand={setCliRuntimeDiagnosticCommand}
+                cliRuntimeExecutionMode={cliRuntimeExecutionMode}
+                setCliRuntimeExecutionMode={setCliRuntimeExecutionMode}
                 cliRuntimeDiscoverQuery={cliRuntimeDiscoverQuery}
                 setCliRuntimeDiscoverQuery={setCliRuntimeDiscoverQuery}
                 cliRuntimeDiscoverResults={cliRuntimeDiscoverResults}
