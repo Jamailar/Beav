@@ -988,7 +988,7 @@ mod tests {
             &app_handle,
             &state,
             CliExecuteRequest {
-                argv: vec!["rustc".to_string(), "--version".to_string()],
+                argv: vec!["echo".to_string(), "cli-runtime-ok".to_string()],
                 cwd: Some(cwd.to_string_lossy().to_string()),
                 ..CliExecuteRequest::default()
             },
@@ -997,6 +997,6 @@ mod tests {
         .expect("managed command should succeed");
 
         assert_eq!(snapshot.execution.status, CliExecutionStatus::Completed);
-        assert!(snapshot.stdout_tail.contains("rustc"));
+        assert!(snapshot.stdout_tail.contains("cli-runtime-ok"));
     }
 }
