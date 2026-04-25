@@ -29,6 +29,7 @@ pub(crate) enum MigrationDecision {
     SchemaOnly,
     FtsRebuild,
     BlockAnchorRebuild,
+    CanonicalReparse,
     FullRebuild,
 }
 
@@ -39,6 +40,7 @@ impl MigrationDecision {
             Self::SchemaOnly => "schema_only",
             Self::FtsRebuild => "fts_rebuild",
             Self::BlockAnchorRebuild => "block_anchor_rebuild",
+            Self::CanonicalReparse => "canonical_reparse",
             Self::FullRebuild => "full_rebuild",
         }
     }
@@ -66,7 +68,7 @@ pub(crate) fn plan_migration(state: &State<'_, AppState>) -> Result<MigrationDec
             .as_deref()
             .is_some_and(|value| value != CURRENT_PARSER_PIPELINE_VERSION)
     {
-        MigrationDecision::FullRebuild
+        MigrationDecision::CanonicalReparse
     } else if chunk_anchor_rule_version
         .as_deref()
         .is_some_and(|value| value != CURRENT_CHUNK_ANCHOR_RULE_VERSION)
@@ -104,13 +106,14 @@ pub(crate) fn mark_schema_current(state: &State<'_, AppState>) -> Result<(), Str
 
 pub(crate) fn mark_rebuild_success(
     state: &State<'_, AppState>,
-    _decision: MigrationDecision,
+    decision: MigrationDecision,
 ) -> Result<(), String> {
     let conn = connection(state)?;
     write_current_versions(&conn, true)?;
     clear_pending_migration(&conn)?;
     set_meta_value(&conn, META_LAST_SUCCESSFUL_REBUILD_AT, &now_iso())?;
     delete_meta_value(&conn, META_LAST_MIGRATION_ERROR)?;
+    clear_index_error(&conn, decision.label())?;
     Ok(())
 }
 
@@ -122,7 +125,16 @@ pub(crate) fn mark_rebuild_error(
     let conn = connection(state)?;
     set_meta_value(&conn, META_PENDING_MIGRATION, decision.label())?;
     set_meta_value(&conn, META_LAST_MIGRATION_ERROR, error)?;
+    record_index_error(&conn, decision.label(), error)?;
     Ok(())
+}
+
+pub(crate) fn canonical_cache_is_current(state: &State<'_, AppState>) -> Result<bool, String> {
+    let conn = connection(state)?;
+    Ok(meta_value(&conn, META_CANONICAL_SCHEMA_VERSION)?.as_deref()
+        == Some(CURRENT_CANONICAL_SCHEMA_VERSION)
+        && meta_value(&conn, META_PARSER_PIPELINE_VERSION)?.as_deref()
+            == Some(CURRENT_PARSER_PIPELINE_VERSION))
 }
 
 fn write_current_versions(conn: &Connection, include_index_format: bool) -> Result<(), String> {
@@ -197,6 +209,30 @@ fn clear_pending_migration(conn: &Connection) -> Result<(), String> {
     delete_meta_value(conn, META_PENDING_MIGRATION)
 }
 
+fn record_index_error(conn: &Connection, path: &str, message: &str) -> Result<(), String> {
+    conn.execute(
+        r#"
+        INSERT INTO knowledge_index_errors (path, message, updated_at)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(path) DO UPDATE SET
+            message = excluded.message,
+            updated_at = excluded.updated_at
+        "#,
+        params![path, message, now_iso()],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+fn clear_index_error(conn: &Connection, path: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM knowledge_index_errors WHERE path = ?1",
+        params![path],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,6 +245,10 @@ mod tests {
         assert_eq!(
             MigrationDecision::BlockAnchorRebuild.label(),
             "block_anchor_rebuild"
+        );
+        assert_eq!(
+            MigrationDecision::CanonicalReparse.label(),
+            "canonical_reparse"
         );
         assert_eq!(MigrationDecision::FullRebuild.label(), "full_rebuild");
     }

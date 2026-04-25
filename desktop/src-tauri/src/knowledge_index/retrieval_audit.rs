@@ -16,6 +16,30 @@ fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
     Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())
 }
 
+pub(crate) fn delete_runs_for_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<(), String> {
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute(
+        r#"
+        DELETE FROM knowledge_retrieval_hits
+        WHERE run_id IN (
+            SELECT run_id FROM knowledge_retrieval_runs WHERE source_id = ?1
+        )
+        "#,
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute(
+        "DELETE FROM knowledge_retrieval_runs WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
 pub(crate) fn record_search_run(
     state: &State<'_, AppState>,
     source_id: &str,

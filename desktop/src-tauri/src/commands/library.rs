@@ -820,6 +820,16 @@ fn knowledge_rebuild_catalog_value(
                 "ocrIncluded": false
             }))
         }
+        "canonicalreparse" | "canonical_reparse" => {
+            knowledge_index::jobs::schedule_canonical_reparse(app);
+            Ok(json!({
+                "success": true,
+                "mode": "canonicalReparse",
+                "sourceId": Value::Null,
+                "ocrIncluded": request.include_ocr.unwrap_or(false),
+                "ocrPolicy": "uses configured OCR provider only when parser needs OCR"
+            }))
+        }
         "full" | "catalog" | "full_rebuild" => {
             knowledge_index::jobs::schedule_rebuild(app, "manual-rebuild");
             Ok(json!({

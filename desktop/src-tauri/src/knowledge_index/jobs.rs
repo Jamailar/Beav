@@ -16,6 +16,7 @@ enum RebuildJobKind {
     FullCatalog,
     FtsOnly { source_id: Option<String> },
     BlockAnchor { source_id: Option<String> },
+    CanonicalReparse,
 }
 
 impl RebuildJobKind {
@@ -24,6 +25,7 @@ impl RebuildJobKind {
             Self::FullCatalog => "full_rebuild",
             Self::FtsOnly { .. } => "fts_rebuild",
             Self::BlockAnchor { .. } => "block_anchor_rebuild",
+            Self::CanonicalReparse => "canonical_reparse",
         }
     }
 
@@ -32,6 +34,7 @@ impl RebuildJobKind {
             Self::FullCatalog => MigrationDecision::FullRebuild,
             Self::FtsOnly { .. } => MigrationDecision::FtsRebuild,
             Self::BlockAnchor { .. } => MigrationDecision::BlockAnchorRebuild,
+            Self::CanonicalReparse => MigrationDecision::CanonicalReparse,
         }
     }
 }
@@ -46,11 +49,13 @@ fn mark_pending(state: &State<'_, AppState>, reason: &str) -> Result<bool, Strin
         runtime.pending_count = 1;
         runtime.pending_rebuild_reason = Some(reason.to_string());
         runtime.migration_status = Some("rebuilding".to_string());
+        runtime.rebuild_progress = Some(0.0);
         return Ok(false);
     }
     runtime.pending_count = 1;
     runtime.pending_rebuild_reason = Some(reason.to_string());
     runtime.migration_status = Some("migration_pending".to_string());
+    runtime.rebuild_progress = Some(0.0);
     Ok(true)
 }
 
@@ -70,6 +75,7 @@ fn begin_build(state: &State<'_, AppState>, reason: &str) -> Result<bool, String
     runtime.last_error = None;
     runtime.migration_status = Some("rebuilding".to_string());
     runtime.pending_rebuild_reason = Some(reason.to_string());
+    runtime.rebuild_progress = Some(0.05);
     Ok(true)
 }
 
@@ -87,11 +93,13 @@ fn finish_build(state: &State<'_, AppState>, result: Result<(), String>) -> Resu
             runtime.last_error = None;
             runtime.migration_status = None;
             runtime.pending_rebuild_reason = None;
+            runtime.rebuild_progress = Some(1.0);
         }
         Err(error) => {
             runtime.failed_count += 1;
             runtime.last_error = Some(error);
             runtime.migration_status = Some("stale_fallback".to_string());
+            runtime.rebuild_progress = Some(1.0);
         }
     }
     Ok(rerun)
@@ -116,6 +124,7 @@ fn spawn_rebuild(app: AppHandle, kind: RebuildJobKind) {
             RebuildJobKind::BlockAnchor { source_id } => {
                 rebuild_blocks_from_canonical(&app, &state, source_id.as_deref())
             }
+            RebuildJobKind::CanonicalReparse => rebuild_catalog(&app, &state),
         };
         match &result {
             Ok(_) => {
@@ -172,6 +181,17 @@ pub(crate) fn schedule_block_anchor_rebuild(app: &AppHandle, source_id: Option<S
     }
 }
 
+pub(crate) fn schedule_canonical_reparse(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    match mark_pending(&state, "canonical_reparse") {
+        Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::CanonicalReparse),
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("[RedBox knowledge index] mark canonical reparse pending failed: {error}")
+        }
+    }
+}
+
 pub(crate) fn ensure_catalog_ready_async(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -188,6 +208,9 @@ pub(crate) fn ensure_catalog_ready_async(
         }
         MigrationDecision::BlockAnchorRebuild => {
             schedule_block_anchor_rebuild(app, None);
+        }
+        MigrationDecision::CanonicalReparse => {
+            schedule_canonical_reparse(app);
         }
         MigrationDecision::FullRebuild => {
             schedule_rebuild(app, "migration-full-rebuild");

@@ -733,6 +733,7 @@ App 升级后不能假设用户会手动清空索引。检索数据库、canonic
 - 已落地手动重建入口：`knowledge:rebuild-catalog` 支持 `mode=full | fts | canonicalBlocks` 和可选 `sourceId`。
 - canonical cache 命中必须匹配当前 parser name/version，避免 parser pipeline 升级后继续复用旧解析结果。
 - OCR 重建保持可控：`fts` 与 `canonicalBlocks` 不触发 OCR；只有 `full` 路径会按当前可插拔 OCR provider 配置解析需要 OCR 的文件。
+- 已落地 `canonical_reparse`、`rebuildProgress` 与 `knowledge_index_errors`；删除 document source 会同步删除 canonical、block、anchor、FTS/BM25、retrieval audit 关联数据。
 
 ## Security And Compliance
 

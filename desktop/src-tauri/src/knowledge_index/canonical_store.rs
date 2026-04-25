@@ -3,7 +3,7 @@ use tauri::State;
 
 use crate::{
     document_parse::{CanonicalDocument, PARSER_NAME, PARSER_VERSION},
-    knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
+    knowledge_index::{catalog_db_path, migration, schema::ensure_catalog_ready},
     AppState,
 };
 
@@ -43,6 +43,9 @@ pub(crate) fn load_cached_document(
     absolute_path: &str,
     content_hash: &str,
 ) -> Result<Option<CanonicalDocument>, String> {
+    if !migration::canonical_cache_is_current(state)? {
+        return Ok(None);
+    }
     let conn = connection(state)?;
     let json = conn
         .query_row(
@@ -61,6 +64,19 @@ pub(crate) fn load_cached_document(
         .map_err(|error| error.to_string())?;
     json.map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
         .transpose()
+}
+
+pub(crate) fn delete_documents_for_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<(), String> {
+    let conn = connection(state)?;
+    conn.execute(
+        "DELETE FROM knowledge_canonical_documents WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 pub(crate) fn load_document_rows(

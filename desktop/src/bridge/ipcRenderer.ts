@@ -174,6 +174,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
         indexedCount: 0,
         pendingCount: 0,
         failedCount: 0,
+        rebuildProgress: null,
         lastIndexedAt: null,
         isBuilding: false,
         lastError: null,
@@ -583,6 +584,7 @@ function createIpcRenderer() {
               indexedCount: typeof raw.indexedCount === 'number' ? raw.indexedCount : 0,
               pendingCount: typeof raw.pendingCount === 'number' ? raw.pendingCount : 0,
               failedCount: typeof raw.failedCount === 'number' ? raw.failedCount : 0,
+              rebuildProgress: typeof raw.rebuildProgress === 'number' ? raw.rebuildProgress : null,
               lastIndexedAt: typeof raw.lastIndexedAt === 'string' ? raw.lastIndexedAt : null,
               isBuilding: raw.isBuilding === true,
               lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
@@ -592,7 +594,7 @@ function createIpcRenderer() {
           },
         },
       ),
-      rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks'; sourceId?: string; includeOcr?: boolean }) => invokeCommandGuarded(
+      rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeOcr?: boolean }) => invokeCommandGuarded(
         'knowledge_rebuild_catalog',
         payload ? { payload } : undefined,
         {

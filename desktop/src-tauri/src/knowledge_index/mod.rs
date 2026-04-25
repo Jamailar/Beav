@@ -27,6 +27,7 @@ pub(crate) struct KnowledgeIndexRuntimeState {
     pub pending_rebuild: bool,
     pub pending_count: usize,
     pub failed_count: usize,
+    pub rebuild_progress: Option<f64>,
     pub last_indexed_at: Option<String>,
     pub last_error: Option<String>,
     pub migration_status: Option<String>,
@@ -40,6 +41,7 @@ pub(crate) struct KnowledgeCatalogStatus {
     pub indexed_count: i64,
     pub pending_count: usize,
     pub failed_count: usize,
+    pub rebuild_progress: Option<f64>,
     pub last_indexed_at: Option<String>,
     pub is_building: bool,
     pub last_error: Option<String>,
@@ -77,12 +79,24 @@ pub(crate) fn index_status(state: &State<'_, AppState>) -> Result<KnowledgeCatal
         indexed_count,
         pending_count: runtime.pending_count,
         failed_count: runtime.failed_count,
+        rebuild_progress: runtime.rebuild_progress,
         last_indexed_at: runtime.last_indexed_at,
         is_building: runtime.is_building,
         last_error: runtime.last_error,
         migration_status: runtime.migration_status,
         pending_rebuild_reason: runtime.pending_rebuild_reason,
     })
+}
+
+pub(crate) fn delete_source_artifacts(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<(), String> {
+    canonical_store::delete_documents_for_source(state, source_id)?;
+    citation_anchors::delete_anchors_for_source(state, source_id)?;
+    document_blocks::delete_blocks_for_source(state, source_id)?;
+    retrieval_audit::delete_runs_for_source(state, source_id)?;
+    Ok(())
 }
 
 pub(crate) fn mark_indexed_now(state: &State<'_, AppState>) -> Result<(), String> {

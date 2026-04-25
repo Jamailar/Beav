@@ -595,6 +595,9 @@ Status: Current
 - 已完成手动重建参数：`mode=full | fts | canonicalBlocks`；OCR 只在 `full` 且 parser 按当前 OCR provider 需要时发生，低成本重建路径不触发 OCR。
 - canonical cache 已纳入 parser name/version 校验；parser pipeline 升级后的 full rebuild 不会误用旧 canonical JSON。
 - Knowledge 页面已暴露“全量重建 / 重建引用 / 全文索引”三种入口；index status 已展示 `migrationStatus` 与 `pendingRebuildReason`。
+- 已补 `canonical_reparse` migration decision；canonical schema 或 parser pipeline 版本变化时进入独立状态，并禁用旧 canonical cache。
+- index status 已补 `rebuildProgress`；迁移失败会写入 `knowledge_index_errors` 与 `last_migration_error`。
+- 删除 document source 会立即清理 canonical、blocks、anchors、FTS/BM25 与 retrieval audit 关联数据。
 
 ## Phase Dependencies
 
