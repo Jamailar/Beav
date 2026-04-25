@@ -70,6 +70,9 @@ pub fn handle_runtime_session_channel(
         "team-runtime:list-agent-backends" => runtime_collab::list_agent_backends_value(state),
         "team-runtime:list-tools" => Ok(runtime_collab::tool_descriptors_value()),
         "team-runtime:execute-tool" => runtime_collab::execute_tool_value(state, payload),
+        "team-runtime:mcp-contract" => Ok(runtime_collab::mcp_contract_value()),
+        "team-runtime:mcp-bridge-config" => Ok(runtime_collab::mcp_bridge_config_value(payload)),
+        "team-runtime:execute-mcp-tool" => runtime_collab::execute_mcp_tool_value(state, payload),
         _ => return None,
     })
 }

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
+use crate::cli_runtime::{detect_tool_with_managed_paths, CliToolHealth};
 use crate::AppStore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,7 +18,7 @@ pub struct AgentBackendDescriptor {
 }
 
 pub fn list_agent_backends(_store: &AppStore) -> Vec<AgentBackendDescriptor> {
-    vec![
+    let mut backends = vec![
         AgentBackendDescriptor {
             id: "internal-runtime".to_string(),
             label: "RedBox Internal Runtime".to_string(),
@@ -35,8 +37,8 @@ pub fn list_agent_backends(_store: &AppStore) -> Vec<AgentBackendDescriptor> {
             }),
         },
         AgentBackendDescriptor {
-            id: "external-acp".to_string(),
-            label: "External ACP Adapter".to_string(),
+            id: "external-acp-contract".to_string(),
+            label: "External ACP Adapter Contract".to_string(),
             source_kind: "external_acp".to_string(),
             backend: "acp".to_string(),
             status: "adapter_contract_ready".to_string(),
@@ -52,5 +54,53 @@ pub fn list_agent_backends(_store: &AppStore) -> Vec<AgentBackendDescriptor> {
                 "idleExitStatus": "suspended"
             }),
         },
+    ];
+    backends.extend(detected_acp_cli_backends());
+    backends
+}
+
+fn detected_acp_cli_backends() -> Vec<AgentBackendDescriptor> {
+    let env = std::env::vars().collect::<BTreeMap<_, _>>();
+    [
+        ("aionrs", "AionRS ACP CLI", "aionrs"),
+        ("codex", "Codex CLI", "codex"),
+        ("gemini", "Gemini CLI", "gemini"),
+        ("claude", "Claude CLI", "claude"),
     ]
+    .into_iter()
+    .map(|(command, label, backend)| {
+        let detected = detect_tool_with_managed_paths(command, &env, None, false);
+        let is_ready = detected.health == CliToolHealth::Ready;
+        AgentBackendDescriptor {
+            id: format!("external-acp-{backend}"),
+            label: label.to_string(),
+            source_kind: "external_acp".to_string(),
+            backend: backend.to_string(),
+            status: if is_ready {
+                "available".to_string()
+            } else {
+                "missing".to_string()
+            },
+            capabilities: vec![
+                "acp_process".to_string(),
+                "team_mcp_contract".to_string(),
+                "desired_current_config".to_string(),
+                "idle_suspended".to_string(),
+            ],
+            desired_current_config: json!({
+                "desired": {
+                    "command": command,
+                    "teamMcpServer": "redbox-team",
+                },
+                "current": {
+                    "resolvedPath": detected.resolved_path,
+                    "version": detected.version,
+                    "health": detected.health,
+                },
+                "reassertOnReconnect": true,
+                "idleExitStatus": "suspended"
+            }),
+        }
+    })
+    .collect()
 }

@@ -263,6 +263,30 @@ pub fn execute_tool_value(state: &State<'_, AppState>, payload: &Value) -> Resul
     })
 }
 
+pub fn mcp_contract_value() -> Value {
+    json!({
+        "serverName": "redbox-team",
+        "tools": crate::mcp::team_mcp_tool_contracts(),
+        "toolsListResponse": crate::mcp::team_mcp_tools_list_response()
+    })
+}
+
+pub fn mcp_bridge_config_value(payload: &Value) -> Value {
+    json!(crate::mcp::build_team_mcp_bridge_config(payload))
+}
+
+pub fn execute_mcp_tool_value(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let tool_name =
+        payload_string(payload, "toolName").ok_or_else(|| "缺少 toolName".to_string())?;
+    let arguments = payload.get("arguments").unwrap_or(payload);
+    with_store_mut(state, |store| {
+        crate::mcp::execute_team_mcp_tool(store, &tool_name, arguments)
+    })
+}
+
 pub fn list_agent_backends_value(state: &State<'_, AppState>) -> Result<Value, String> {
     with_store(state, |store| {
         Ok(json!(crate::agent_hub::list_agent_backends(&store)))
