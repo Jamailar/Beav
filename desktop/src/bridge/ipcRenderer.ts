@@ -890,7 +890,7 @@ function createIpcRenderer() {
       taskCreate: (payload: Record<string, unknown>) => invokeChannel('redclaw:task-create', payload),
       taskConfirm: (payload: { draftId: string; confirm: boolean }) => invokeChannel('redclaw:task-confirm', payload),
       taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => invokeChannel('redclaw:task-update', payload),
-      taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => invokeChannel('redclaw:task-cancel', payload),
+      taskCancel: (payload: { jobDefinitionId: string; reason?: string; deleteSource?: boolean }) => invokeChannel('redclaw:task-cancel', payload),
       taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => invokeChannel('redclaw:task-list', payload || {}),
       taskStats: () => invokeChannel('redclaw:task-stats'),
     },

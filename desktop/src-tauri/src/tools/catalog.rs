@@ -433,6 +433,10 @@ fn redclaw_task_cancel_input_schema() -> Value {
                 string_schema("Target job definition id."),
             ),
             ("reason", string_schema("Optional cancellation reason.")),
+            (
+                "deleteSource",
+                bool_schema("Set true to remove the underlying scheduled or long-cycle task instead of only disabling it."),
+            ),
         ],
         &["jobDefinitionId"],
         None,
@@ -1467,7 +1471,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.cancel",
         namespace: "redclaw.task",
-        description: "Disable or discard a RedClaw task definition.",
+        description: "Disable, discard, or delete a RedClaw task definition. Set deleteSource=true when the user explicitly asks to delete the task.",
         input_schema: redclaw_task_cancel_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,

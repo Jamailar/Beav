@@ -314,6 +314,9 @@ pub fn handle_task_cancel(
         .ok_or_else(|| "jobDefinitionId is required".to_string())?;
     let reason = payload_string(payload, "reason")
         .unwrap_or_else(|| "Cancelled by task control".to_string());
+    let delete_source = payload_field(payload, "deleteSource")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let result = with_store_mut(state, |store| {
         let definition = store
@@ -330,6 +333,42 @@ pub fn handle_task_cancel(
                 "cancelled": true,
                 "jobDefinitionId": job_definition_id,
                 "draft": true,
+            }));
+        }
+
+        if delete_source {
+            match definition.source_kind.as_deref() {
+                Some("scheduled") => {
+                    if let Some(source_task_id) = definition.source_task_id.as_deref() {
+                        store
+                            .redclaw_state
+                            .scheduled_tasks
+                            .retain(|item| item.id != source_task_id);
+                    }
+                }
+                Some("long_cycle") => {
+                    if let Some(source_task_id) = definition.source_task_id.as_deref() {
+                        store
+                            .redclaw_state
+                            .long_cycle_tasks
+                            .retain(|item| item.id != source_task_id);
+                    }
+                }
+                _ => {
+                    store
+                        .redclaw_job_definitions
+                        .retain(|item| item.id != job_definition_id);
+                }
+            }
+            if let Some(source_task_id) = definition.source_task_id.clone() {
+                let _ = cancel_job_execution(store, &source_task_id, &reason);
+            }
+            sync_redclaw_job_definitions(store);
+            return Ok(json!({
+                "cancelled": true,
+                "deleted": true,
+                "jobDefinitionId": job_definition_id,
+                "reason": reason,
             }));
         }
 
@@ -1063,6 +1102,10 @@ fn task_list_item(store: &crate::AppStore, definition: &RedclawJobDefinitionReco
         "prompt": definition.payload.get("prompt"),
         "objective": definition.payload.get("objective"),
         "stepPrompt": definition.payload.get("stepPrompt"),
+        "intervalMinutes": definition.payload.get("intervalMinutes"),
+        "time": definition.payload.get("time"),
+        "weekdays": definition.payload.get("weekdays"),
+        "runAt": definition.payload.get("runAt"),
         "riskRationale": definition.payload.get("riskRationale"),
         "totalRounds": definition.payload.get("totalRounds"),
         "completedRounds": definition.payload.get("completedRounds"),
