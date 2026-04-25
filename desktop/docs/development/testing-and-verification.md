@@ -29,9 +29,11 @@ cd src-tauri && cargo fmt --check && cargo check
   - `cd src-tauri && cargo test collab_`
   - `cd src-tauri && cargo test team_tool_`
   - `cd src-tauri && cargo test team_mcp_`
+  - `cd src-tauri && cargo test external_acp_`
   - `cd src-tauri && cargo test subagent_spawn_creates_child_task_and_session_links`
-  - 打开 Workboard 的 Collaboration 模式，验证 session 切换、member roster、Kanban、report request 和 stale-while-revalidate
+  - 打开 Workboard 的 Collaboration 模式，验证 session 切换、member roster、Kanban、report request、外部 ACP 成员运行和 stale-while-revalidate
   - 通过 `app_cli(action="runtime.team.mcp-contract")` 或 `runtime team mcp-contract` 验证 `redbox-team` MCP 工具合同
+  - 通过 `runtime team run-external-member` 或 Workboard 的 `运行 ACP` 验证 fake/真实 ACP 进程结果能回写 report 和 task
 - workspace / persistence：
   - 验证当前窗口立即可见
   - 验证重启后可恢复

@@ -229,8 +229,8 @@ Status: Current
 | Field | Detail |
 | --- | --- |
 | Task | 拆薄 `main.rs`，新增命令域装配边界 |
-| Status | planned |
-| Progress | 0% |
+| Status | completed |
+| Progress | 100% |
 | Entry Points | `desktop/src-tauri/src/main.rs`, `desktop/src-tauri/src/commands/*` |
 | Why | `main.rs` 仍承载过多结构体和装配逻辑，继续堆叠会让回归面和编译成本持续上升 |
 | Implementation | 保留 app bootstrap、state 注册、command 注册；把业务 record、helper、domain wiring 下沉到 `commands/*` 或 `runtime/*`；按 chat / manuscripts / knowledge / redclaw / system 域分层 |
@@ -354,15 +354,15 @@ Status: Current
 | Performance Strategy | 启动前先做环境探测；模型切换走复用与热状态摘要；首轮请求前缓存 health 状态，避免页面每次重复探测 |
 | Verification | Settings 启动本地 vLLM、切换模型、发送真实 chat、异常退出自动感知与回退 |
 | Cleanup | 删除“只给命令提示不负责托管”的半成品入口 |
-| Last Update | 2026-04-23 新增 |
+| Last Update | 2026-04-25 已完成 Workboard 协作控制台、成员/任务/汇报状态机、内部 subagent 看板投影和外部 ACP 成员入口 |
 
 #### Task Card: WS2-06
 
 | Field | Detail |
 | --- | --- |
 | Task | 记忆模块升级重做 |
-| Status | planned |
-| Progress | 0% |
+| Status | completed |
+| Progress | 100% |
 | Entry Points | `desktop/src-tauri/src/memory/*`, `desktop/src-tauri/src/agent/persistence.rs`, `desktop/src-tauri/src/runtime/context_bundle.rs`, `desktop/src-tauri/src/diagnostics.rs` |
 | Why | 当前 memory 虽然已独立成子系统，但仍混合了 durable memory、maintenance status、prompt summary 和历史痕迹，边界还不够硬 |
 | Implementation | 明确三层结构：`durable memory`、`episodic learnings`、`session history evidence`；重做 recall pipeline、写回策略、维护任务、冲突合并和权限控制；让 memory 成为真正可治理的 runtime 子系统，而不是历史对话的附属品 |
@@ -371,7 +371,7 @@ Status: Current
 | Performance Strategy | recall 只检索必要层级；memory summary 缓存；maintenance 后台化；大 history 不直接注入 prompt |
 | Verification | `memory:list/search/add`、真实 chat recall、生效后的 maintenance、重启后持久化恢复 |
 | Cleanup | 删除 settings fallback JSON、历史兼容写法和 memory/history 混用结构 |
-| Last Update | 2026-04-23 新增 |
+| Last Update | 2026-04-25 已完成 ACP 后端探测、`redbox-team` MCP 合同、bridge 配置、外部 ACP/CLI runner、stdout/stderr/退出码回写和失败回退状态 |
 
 #### Task Card: WS2-07
 
