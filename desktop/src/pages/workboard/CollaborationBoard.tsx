@@ -88,6 +88,17 @@ function memberMetadata(member?: CollabMemberRecord | null): Record<string, unkn
   return metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata as Record<string, unknown> : {};
 }
 
+function fallbackObjective(): string {
+  return `新协作项目 ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
+}
+
+function requireCreatedSession(value: unknown): CollabSessionRecord {
+  const record = value && typeof value === 'object' ? value as Partial<CollabSessionRecord> & { error?: unknown } : null;
+  if (record?.id) return record as CollabSessionRecord;
+  const message = typeof record?.error === 'string' ? record.error : '协作项目创建失败：宿主没有返回有效 session';
+  throw new Error(message);
+}
+
 export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: CollaborationBoardProps) {
   const [sessions, setSessions] = useState<CollabSessionRecord[]>([]);
   const [snapshot, setSnapshot] = useState<CollabSessionSnapshot | null>(null);
@@ -219,16 +230,15 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   }, [selectedTaskId, tasks]);
 
   const createSession = useCallback(async () => {
-    const objective = draftObjective.trim();
-    if (!objective) return;
+    const objective = draftObjective.trim() || fallbackObjective();
     setBusy('create-session');
     try {
-      const created = await window.ipcRenderer.teamRuntime.createSession({
+      const created = requireCreatedSession(await window.ipcRenderer.teamRuntime.createSession({
         title: objective.slice(0, 48),
         objective,
         runtimeMode: 'default',
         source: 'workboard',
-      });
+      }));
       setDraftObjective('');
       setSelectedSessionId(created.id);
       await loadSessions(created.id);
@@ -493,10 +503,20 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                 <input
                   value={draftObjective}
                   onChange={(event) => setDraftObjective(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void createSession();
+                  }}
                   placeholder="新建项目目标"
                   className="min-w-0 flex-1 rounded-full border border-[#dde7da] px-3 py-1.5 text-[12px] outline-none"
                 />
-                <button onClick={() => void createSession()} disabled={busy === 'create-session'} className="rounded-full bg-[#24412c] px-2.5 text-white">
+                <button
+                  type="button"
+                  aria-label="创建协作项目"
+                  title={draftObjective.trim() ? '创建协作项目' : '创建默认协作项目'}
+                  onClick={() => void createSession()}
+                  disabled={busy === 'create-session'}
+                  className="rounded-full bg-[#24412c] px-2.5 text-white disabled:cursor-wait disabled:opacity-60"
+                >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
               </div>
