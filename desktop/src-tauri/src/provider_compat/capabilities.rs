@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use super::{InteractiveToolChoice, ProviderTurnPolicy};
 
@@ -9,6 +10,13 @@ pub(crate) enum ProviderFamily {
     MiniMax,
     Anthropic,
     Gemini,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ProviderThinkingDisableParameter {
+    EnableThinkingFalse,
+    ThinkingTypeDisabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +32,7 @@ pub(crate) struct ProviderCapabilities {
     pub supports_usage_trailer: bool,
     pub supports_parallel_tool_calls: bool,
     pub supports_text_fallback: bool,
+    pub thinking_disable_parameter: ProviderThinkingDisableParameter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +69,12 @@ impl ProviderProfile {
         runtime_mode: &str,
         forcing_required_tool_choice: bool,
     ) -> bool {
+        if matches!(
+            runtime_mode,
+            "chatroom" | "image-generation" | "redclaw" | "wander"
+        ) {
+            return true;
+        }
         if !self.capabilities.supports_thinking {
             return true;
         }
@@ -101,5 +116,16 @@ impl ProviderProfile {
             InteractiveToolChoice::None => self.capabilities.supports_tool_choice_none,
         };
         supported.then_some(tool_choice.as_api_value())
+    }
+
+    pub(crate) fn apply_disable_thinking_parameter(&self, body: &mut Value) {
+        match self.capabilities.thinking_disable_parameter {
+            ProviderThinkingDisableParameter::EnableThinkingFalse => {
+                body["enable_thinking"] = json!(false);
+            }
+            ProviderThinkingDisableParameter::ThinkingTypeDisabled => {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
+        }
     }
 }

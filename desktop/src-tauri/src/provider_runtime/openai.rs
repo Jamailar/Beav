@@ -199,7 +199,8 @@ pub(crate) fn run_openai_provider_turn(
                 false,
             );
             if turn_policy.disable_thinking {
-                fallback_body["enable_thinking"] = json!(false);
+                provider_profile_from_config(config)
+                    .apply_disable_thinking_parameter(&mut fallback_body);
             }
             let response = run_openai_json_chat_completion_transport(
                 state,
