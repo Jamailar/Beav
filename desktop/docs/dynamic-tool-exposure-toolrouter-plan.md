@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: not_started
+execution_status: in_progress
 last_updated: 2026-04-25
 owner: codex
 scope:
@@ -49,6 +49,24 @@ success_metrics:
 - 工具结果如何进入 transcript、checkpoint、trace 和下一轮上下文。
 
 本轮明确不做 UI 改造。只落底层 runtime、工具 registry、schema 注入、执行路由和日志可观测性。UI 后续只消费这些底层数据。
+
+## 1.1 Implementation Progress
+
+2026-04-25 已完成第一轮底层落地：
+
+- 新增 `desktop/src-tauri/src/tools/plan.rs`，建立 session-scoped `ToolRegistryPlan`，集中计算 internal tools、visible tools、direct `app_cli` actions、deferred action index 和 fingerprint。
+- `registry.rs` 的 session schema / prompt tool lines 已切到 `ToolRegistryPlan`，`Redbox` 的 `resource` / `operation` enum 会按本轮 direct actions 收敛。
+- 新增 `tools.search` app_cli action，并通过 `Redbox { resource: "tools", operation: "search" }` 暴露 deferred action discovery。
+- `app_cli` 执行层会拒绝本轮 deferred action，返回结构化 `ACTION_DEFERRED`，并给出 `tools.search` 查询建议。
+- `image-generation` runtime 已补齐 `image.generate` / `video.generate` action 覆盖。
+- 每次生成 provider tools 时会在 app 日志输出 `[tools][plan]` 快照，包含 fingerprint、visible tools、direct actions、deferred namespace 和 deferred count。
+
+尚未完成：
+
+- `catalog.rs` 按 family 文件拆分。
+- 独立 `tools/router.rs` 类型化封装。
+- `runtime/turn_context.rs` typed turn context。
+- UI 消费 ToolRegistryPlan 快照。
 
 ## 2. Current Problem
 
