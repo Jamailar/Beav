@@ -1226,12 +1226,22 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
             }
             Some("memory.search")
         }
+        ["memory", "recall", ..] => {
+            if let Some(query) = extract_flag_value(&tokens, &["--query", "-q"]) {
+                translated_payload.insert("query".to_string(), json!(query));
+            }
+            Some("memory.recall")
+        }
         ["memory", "add", rest @ ..] => {
             if !translated_payload.contains_key("content") && !rest.is_empty() {
                 translated_payload.insert("content".to_string(), json!(rest.join(" ")));
             }
             Some("memory.add")
         }
+        ["memory", "update", ..] => Some("memory.update"),
+        ["memory", "archive", ..] => Some("memory.archive"),
+        ["memory", "rebuild-index", ..] => Some("memory.rebuildIndex"),
+        ["memory", "diagnostics", ..] => Some("memory.diagnostics"),
         ["redclaw", "profile-bundle", ..] => Some("redclaw.profile.bundle"),
         ["redclaw", "profile-read", ..] => {
             if let Some(doc_type) = extract_flag_value(&tokens, &["--doc-type"]) {

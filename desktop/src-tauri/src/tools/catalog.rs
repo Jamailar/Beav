@@ -213,10 +213,31 @@ fn memory_list_input_schema() -> Value {
 
 fn memory_search_input_schema() -> Value {
     object_schema(
-        &[(
-            "query",
-            string_schema("Free-text search query for durable memory."),
-        )],
+        &[
+            (
+                "query",
+                string_schema("Free-text search query for durable memory."),
+            ),
+            (
+                "limit",
+                integer_schema("Maximum results to return.", 1, 200),
+            ),
+            ("scope", string_schema("Optional memory scope filter.")),
+            (
+                "scopes",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "memoryTypes",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            ("projectId", string_schema("Optional project id filter.")),
+            ("sessionId", string_schema("Optional session id filter.")),
+            (
+                "includeArchived",
+                bool_schema("Whether archived memories should be included."),
+            ),
+        ],
         &["query"],
         None,
     )
@@ -226,11 +247,101 @@ fn memory_add_input_schema() -> Value {
     object_schema(
         &[
             ("content", string_schema("Memory text to persist.")),
-            ("category", string_schema("Optional memory category.")),
+            (
+                "type",
+                string_schema(
+                    "Memory type, such as fact, preference, constraint, goal, or project.",
+                ),
+            ),
+            (
+                "scope",
+                string_schema(
+                    "Memory scope, such as user, workspace, project, redclaw, advisor, or session.",
+                ),
+            ),
+            (
+                "category",
+                string_schema("Backward-compatible alias for scope."),
+            ),
+            (
+                "tags",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "entities",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "confidence",
+                json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 }),
+            ),
+            ("spaceId", string_schema("Optional space id.")),
+            ("projectId", string_schema("Optional project id.")),
+            ("sessionId", string_schema("Optional session id.")),
+            (
+                "source",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
         ],
         &["content"],
         None,
     )
+}
+
+fn memory_update_input_schema() -> Value {
+    object_schema(
+        &[
+            ("id", string_schema("Memory id to update.")),
+            ("content", string_schema("Updated memory text.")),
+            ("type", string_schema("Updated memory type.")),
+            ("scope", string_schema("Updated memory scope.")),
+            (
+                "tags",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "entities",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "confidence",
+                json!({ "type": "number", "minimum": 0.0, "maximum": 1.0 }),
+            ),
+            ("spaceId", string_schema("Optional space id.")),
+            ("projectId", string_schema("Optional project id.")),
+            ("sessionId", string_schema("Optional session id.")),
+            (
+                "source",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+            ("reason", string_schema("Optional update reason.")),
+        ],
+        &["id"],
+        None,
+    )
+}
+
+fn memory_archive_input_schema() -> Value {
+    object_schema(
+        &[
+            ("id", string_schema("Memory id to archive.")),
+            ("reason", string_schema("Archive reason.")),
+        ],
+        &["id"],
+        None,
+    )
+}
+
+fn memory_recall_input_schema() -> Value {
+    memory_search_input_schema()
+}
+
+fn memory_rebuild_index_input_schema() -> Value {
+    no_payload_schema()
+}
+
+fn memory_diagnostics_input_schema() -> Value {
+    no_payload_schema()
 }
 
 fn memory_output_schema() -> Value {
@@ -1609,6 +1720,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "memory.recall",
+        namespace: "memory",
+        description: "Recall compact durable memory entries for runtime context with ranking metadata.",
+        input_schema: memory_recall_input_schema,
+        output_schema: memory_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "memory.add",
         namespace: "memory",
         description: "Persist a durable memory entry.",
@@ -1616,6 +1738,50 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: memory_output_schema,
         mutating: true,
         concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "memory.update",
+        namespace: "memory",
+        description: "Update a durable memory entry while preserving history.",
+        input_schema: memory_update_input_schema,
+        output_schema: memory_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "memory.archive",
+        namespace: "memory",
+        description: "Archive a durable memory entry while preserving history.",
+        input_schema: memory_archive_input_schema,
+        output_schema: memory_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "memory.rebuildIndex",
+        namespace: "memory",
+        description: "Rebuild the local durable memory BM25 index from the memory catalog.",
+        input_schema: memory_rebuild_index_input_schema,
+        output_schema: memory_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "memory.diagnostics",
+        namespace: "memory",
+        description: "Inspect durable memory index status and retrieval engine diagnostics.",
+        input_schema: memory_diagnostics_input_schema,
+        output_schema: memory_output_schema,
+        mutating: false,
+        concurrency_safe: true,
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },

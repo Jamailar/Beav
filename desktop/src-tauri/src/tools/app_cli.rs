@@ -536,8 +536,28 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["search".to_string()];
                 self.handle_memory(&tokens, payload)
             }
+            "memoryrecall" => {
+                let tokens = vec!["recall".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
             "memoryadd" => {
                 let tokens = vec!["add".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "memoryupdate" => {
+                let tokens = vec!["update".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "memoryarchive" => {
+                let tokens = vec!["archive".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "memoryrebuildindex" => {
+                let tokens = vec!["rebuild-index".to_string()];
+                self.handle_memory(&tokens, payload)
+            }
+            "memorydiagnostics" => {
+                let tokens = vec!["diagnostics".to_string()];
                 self.handle_memory(&tokens, payload)
             }
             "redclawprofilebundle" => {
@@ -3906,23 +3926,11 @@ fn memory_action_request(
 ) -> Result<(&'static str, Value), String> {
     match action {
         "list" => Ok(("memory:list", json!({}))),
-        "search" => Ok((
-            "memory:search",
-            json!({
-                "query": args
-                    .string(&["query", "q"])
-                    .or_else(|| payload_string(payload, "query"))
-                    .or_else(|| {
-                        if args.positionals.is_empty() {
-                            None
-                        } else {
-                            Some(args.positionals.join(" "))
-                        }
-                    })
-                    .unwrap_or_default()
-            }),
-        )),
+        "search" => Ok(("memory:search", memory_query_payload(args, payload))),
+        "recall" => Ok(("memory:recall", memory_query_payload(args, payload))),
         "add" => Ok(("memory:add", merge_payload(&args.options, payload))),
+        "update" => Ok(("memory:update", merge_payload(&args.options, payload))),
+        "archive" => Ok(("memory:archive", merge_payload(&args.options, payload))),
         "delete" => Ok((
             "memory:delete",
             json!(args
@@ -3930,8 +3938,33 @@ fn memory_action_request(
                 .or_else(|| args.positionals.first().cloned())
                 .ok_or_else(|| "memory delete requires --id".to_string())?),
         )),
+        "rebuild-index" | "rebuildIndex" => Ok(("memory:rebuild-index", json!({}))),
+        "diagnostics" => Ok(("memory:diagnostics", json!({}))),
         _ => Err(format!("unsupported memory action: {action}")),
     }
+}
+
+fn memory_query_payload(args: &CliArgs, payload: &Value) -> Value {
+    let mut merged = payload
+        .as_object()
+        .cloned()
+        .unwrap_or_else(Map::<String, Value>::new);
+    let query = args
+        .string(&["query", "q"])
+        .or_else(|| payload_string(payload, "query"))
+        .or_else(|| {
+            if args.positionals.is_empty() {
+                None
+            } else {
+                Some(args.positionals.join(" "))
+            }
+        })
+        .unwrap_or_default();
+    merged.insert("query".to_string(), json!(query));
+    for (key, value) in &args.options {
+        merged.insert(key.clone(), value.clone());
+    }
+    Value::Object(merged)
 }
 
 fn build_generation_payload(args: &CliArgs, payload: &Value) -> Value {
@@ -4883,7 +4916,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "video generate|project-create|project-list|project-get|project-brief|project-script|project-asset-add",
             "knowledge list|search",
             "work list|ready|get|update",
-            "memory list|search|add|delete",
+            "memory list|search|recall|add|update|archive|delete|rebuild-index|diagnostics",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
             "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
@@ -5691,5 +5724,47 @@ mod tests {
         let err = memory_action_request("delete", &CliArgs::default(), &json!({}))
             .expect_err("delete without id should fail");
         assert!(err.contains("memory delete requires --id"));
+    }
+
+    #[test]
+    fn memory_action_request_routes_extended_actions() {
+        let args = parse_cli_args(&[
+            "--query".to_string(),
+            "verification".to_string(),
+            "--scope".to_string(),
+            "project".to_string(),
+        ])
+        .expect("cli args should parse");
+        let (recall_channel, recall_payload) =
+            memory_action_request("recall", &args, &json!({})).expect("recall request");
+        assert_eq!(recall_channel, "memory:recall");
+        assert_eq!(recall_payload.get("query"), Some(&json!("verification")));
+        assert_eq!(recall_payload.get("scope"), Some(&json!("project")));
+
+        let (update_channel, update_payload) = memory_action_request(
+            "update",
+            &CliArgs::default(),
+            &json!({ "id": "memory-1", "content": "Updated" }),
+        )
+        .expect("update request");
+        assert_eq!(update_channel, "memory:update");
+        assert_eq!(update_payload.get("id"), Some(&json!("memory-1")));
+
+        let (archive_channel, _) =
+            memory_action_request("archive", &CliArgs::default(), &json!({ "id": "memory-1" }))
+                .expect("archive request");
+        assert_eq!(archive_channel, "memory:archive");
+
+        let (rebuild_channel, rebuild_payload) =
+            memory_action_request("rebuild-index", &CliArgs::default(), &json!({}))
+                .expect("rebuild request");
+        assert_eq!(rebuild_channel, "memory:rebuild-index");
+        assert_eq!(rebuild_payload, json!({}));
+
+        let (diagnostics_channel, diagnostics_payload) =
+            memory_action_request("diagnostics", &CliArgs::default(), &json!({}))
+                .expect("diagnostics request");
+        assert_eq!(diagnostics_channel, "memory:diagnostics");
+        assert_eq!(diagnostics_payload, json!({}));
     }
 }
