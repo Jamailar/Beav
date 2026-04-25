@@ -610,6 +610,30 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Redbox"),
             Some("cli_runtime.list"),
         ),
+        ("cli_runtime", "detect") => app_cli_action_call(
+            "cli_runtime.detect",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.detect"),
+        ),
+        ("cli_runtime", "discover" | "search") => app_cli_action_call(
+            "cli_runtime.discover",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.discover"),
+        ),
+        ("cli_runtime", "inspect" | "get") => app_cli_action_call(
+            "cli_runtime.inspect",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.inspect"),
+        ),
+        ("cli_runtime", "diagnose") => app_cli_action_call(
+            "cli_runtime.diagnose",
+            payload,
+            Some("Redbox"),
+            Some("cli_runtime.diagnose"),
+        ),
         ("cli_runtime", "install") => app_cli_action_call(
             "cli_runtime.install",
             payload,
@@ -1537,6 +1561,30 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("explicitProjectWorkflow")),
             Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_cli_runtime_inspect_to_structured_action() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "cli_runtime",
+                "operation": "inspect",
+                "input": { "command": "lark-cli" }
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("cli_runtime.inspect"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("command")),
+            Some(&json!("lark-cli"))
         );
     }
 }
