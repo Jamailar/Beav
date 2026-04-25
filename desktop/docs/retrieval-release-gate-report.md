@@ -56,9 +56,10 @@ cargo test grounding_audit_detects_unsupported_claims -- --nocapture
 - Grounding audit gate passes.
 - OCR confidence penalty regression still passes.
 - Anchor stability regression still passes.
-- Execution plan remains at `stage7_completed`.
+- Execution plan remains at `stage8_completed`.
 
 ## Notes
 
 - This gate is deterministic and fixture-based by design, so it can run on every version change.
 - The current gate is a repository-local acceptance baseline, not yet a large external legal benchmark corpus.
+- Stage 8 migration coverage now includes explicit decisions for `schema_only`, `fts_rebuild`, `block_anchor_rebuild`, `canonical_reparse`, and `full_rebuild`; manual full reparse paths require explicit OCR confirmation.

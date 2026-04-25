@@ -1,9 +1,8 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     compatible_workspace_base_dir, configured_workspace_dir, copy_dir_recursive, file_url_for_path,
@@ -12,8 +11,6 @@ use crate::{
     SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SpaceRecord,
     UserMemoryRecord, WanderHistoryRecord,
 };
-
-static LEGACY_IMPORT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn legacy_db_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
@@ -55,244 +52,110 @@ pub(crate) fn run_sqlite_json_lines(db_path: &Path, sql: &str) -> Result<Vec<Val
     Ok(rows)
 }
 
-struct PreparedLegacyImportDb {
-    path: PathBuf,
+fn quote_sql_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-impl PreparedLegacyImportDb {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for PreparedLegacyImportDb {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-#[cfg(test)]
 fn quote_sql_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-fn prepare_legacy_import_db(source: &Path) -> Result<PreparedLegacyImportDb, String> {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    let sequence = LEGACY_IMPORT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "redbox-legacy-import-{}-{unique}-{sequence}.db",
-        std::process::id()
-    ));
-    fs::copy(source, &path).map_err(|error| error.to_string())?;
-
-    let conn = Connection::open(&path).map_err(|error| error.to_string())?;
-    conn.execute_batch(
-        "
-        create table if not exists settings (id integer primary key check (id = 1));
-        create table if not exists spaces (id text primary key);
-        create table if not exists chat_sessions (id text primary key);
-        create table if not exists chat_messages (id text primary key);
-        create table if not exists session_transcript_records (id text primary key);
-        create table if not exists session_checkpoints (id text primary key);
-        create table if not exists session_tool_results (id text primary key);
-        create table if not exists wander_history (id text primary key);
-        create table if not exists user_memories (id text primary key);
-        create table if not exists archive_profiles (id text primary key);
-        create table if not exists archive_samples (id text primary key);
-        ",
-    )
-    .map_err(|error| error.to_string())?;
-
-    for (table, columns) in [
-        (
-            "settings",
-            &[
-                ("api_endpoint", "text"),
-                ("api_key", "text"),
-                ("model_name", "text"),
-                ("role_mapping", "text"),
-                ("workspace_dir", "text"),
-                ("transcription_model", "text"),
-                ("transcription_endpoint", "text"),
-                ("transcription_key", "text"),
-                ("embedding_endpoint", "text"),
-                ("embedding_key", "text"),
-                ("embedding_model", "text"),
-                ("active_space_id", "text"),
-                ("image_provider", "text"),
-                ("image_endpoint", "text"),
-                ("image_api_key", "text"),
-                ("image_model", "text"),
-                ("image_size", "text"),
-                ("image_quality", "text"),
-                ("ai_sources_json", "text"),
-                ("default_ai_source_id", "text"),
-                ("mcp_servers_json", "text"),
-                ("redclaw_compact_target_tokens", "integer"),
-                ("image_provider_template", "text"),
-                ("image_aspect_ratio", "text"),
-                ("wander_deep_think_enabled", "integer"),
-                ("chat_max_tokens_default", "integer"),
-                ("chat_max_tokens_deepseek", "integer"),
-                ("model_name_wander", "text"),
-                ("model_name_chatroom", "text"),
-                ("model_name_knowledge", "text"),
-                ("model_name_redclaw", "text"),
-                ("debug_log_enabled", "integer"),
-                ("developer_mode_enabled", "integer"),
-                ("developer_mode_unlocked_at", "text"),
-                ("search_provider", "text"),
-                ("search_endpoint", "text"),
-                ("search_api_key", "text"),
-                ("video_endpoint", "text"),
-                ("video_api_key", "text"),
-                ("video_model", "text"),
-                ("proxy_enabled", "integer"),
-                ("proxy_url", "text"),
-                ("proxy_bypass", "text"),
-            ][..],
-        ),
-        (
-            "spaces",
-            &[
-                ("name", "text"),
-                ("created_at", "integer"),
-                ("updated_at", "integer"),
-            ][..],
-        ),
-        (
-            "chat_sessions",
-            &[
-                ("title", "text"),
-                ("created_at", "integer"),
-                ("updated_at", "integer"),
-                ("metadata", "text"),
-            ][..],
-        ),
-        (
-            "chat_messages",
-            &[
-                ("session_id", "text"),
-                ("role", "text"),
-                ("content", "text"),
-                ("timestamp", "integer"),
-            ][..],
-        ),
-        (
-            "session_transcript_records",
-            &[
-                ("session_id", "text"),
-                ("record_type", "text"),
-                ("role", "text"),
-                ("content", "text"),
-                ("payload_json", "text"),
-                ("created_at", "integer"),
-            ][..],
-        ),
-        (
-            "session_checkpoints",
-            &[
-                ("session_id", "text"),
-                ("checkpoint_type", "text"),
-                ("summary", "text"),
-                ("payload_json", "text"),
-                ("created_at", "integer"),
-            ][..],
-        ),
-        (
-            "session_tool_results",
-            &[
-                ("session_id", "text"),
-                ("call_id", "text"),
-                ("tool_name", "text"),
-                ("command", "text"),
-                ("success", "integer"),
-                ("result_text", "text"),
-                ("summary_text", "text"),
-                ("prompt_text", "text"),
-                ("original_chars", "integer"),
-                ("prompt_chars", "integer"),
-                ("truncated", "integer"),
-                ("payload_json", "text"),
-                ("created_at", "integer"),
-                ("updated_at", "integer"),
-            ][..],
-        ),
-        (
-            "wander_history",
-            &[
-                ("items", "text"),
-                ("result", "text"),
-                ("created_at", "integer"),
-            ][..],
-        ),
-        (
-            "user_memories",
-            &[
-                ("content", "text"),
-                ("type", "text"),
-                ("tags", "text"),
-                ("created_at", "integer"),
-                ("updated_at", "integer"),
-                ("last_accessed", "integer"),
-            ][..],
-        ),
-        (
-            "archive_profiles",
-            &[
-                ("name", "text"),
-                ("platform", "text"),
-                ("goal", "text"),
-                ("domain", "text"),
-                ("audience", "text"),
-                ("tone_tags", "text"),
-                ("created_at", "integer"),
-                ("updated_at", "integer"),
-            ][..],
-        ),
-        (
-            "archive_samples",
-            &[
-                ("profile_id", "text"),
-                ("title", "text"),
-                ("content", "text"),
-                ("excerpt", "text"),
-                ("tags", "text"),
-                ("images", "text"),
-                ("platform", "text"),
-                ("source_url", "text"),
-                ("sample_date", "text"),
-                ("is_featured", "integer"),
-                ("created_at", "integer"),
-            ][..],
-        ),
-    ] {
-        for (column, definition) in columns {
-            let _ = conn.execute(
-                &format!("alter table {table} add column {column} {definition}"),
-                [],
-            );
-        }
+fn sqlite_table_columns(db_path: &Path, table: &str) -> Result<HashSet<String>, String> {
+    let connection = Connection::open(db_path).map_err(|error| error.to_string())?;
+    let sql = format!("pragma table_info({})", quote_sql_identifier(table));
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| error.to_string())?;
+    let rows_iter = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?;
+    let mut columns = HashSet::new();
+    for row in rows_iter {
+        columns.insert(row.map_err(|error| error.to_string())?);
     }
+    Ok(columns)
+}
 
-    conn.execute_batch(
-        "
-        update chat_sessions set metadata = null where metadata is not null and not json_valid(metadata);
-        update session_transcript_records set payload_json = null where payload_json is not null and not json_valid(payload_json);
-        update session_checkpoints set payload_json = null where payload_json is not null and not json_valid(payload_json);
-        update session_tool_results set payload_json = null where payload_json is not null and not json_valid(payload_json);
-        ",
-    )
-    .map_err(|error| error.to_string())?;
+#[derive(Clone, Copy)]
+enum LegacyColumnExpr {
+    Column,
+    CastText,
+    Coalesce(&'static str),
+}
 
-    Ok(PreparedLegacyImportDb { path })
+#[derive(Clone, Copy)]
+struct LegacyColumnSpec {
+    key: &'static str,
+    column: &'static str,
+    if_present: LegacyColumnExpr,
+    if_missing: &'static str,
+}
+
+fn legacy_json_rows(
+    db_path: &Path,
+    table: &str,
+    specs: &[LegacyColumnSpec],
+    order: Option<(&str, &str)>,
+) -> Result<Vec<Value>, String> {
+    let columns = sqlite_table_columns(db_path, table)?;
+    if columns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pairs = specs
+        .iter()
+        .map(|spec| {
+            let expr = if columns.contains(spec.column) {
+                let column = quote_sql_identifier(spec.column);
+                match spec.if_present {
+                    LegacyColumnExpr::Column => column,
+                    LegacyColumnExpr::CastText => format!("cast({column} as text)"),
+                    LegacyColumnExpr::Coalesce(fallback) => {
+                        format!("coalesce({column}, {fallback})")
+                    }
+                }
+            } else {
+                spec.if_missing.to_string()
+            };
+            format!("{}, {}", quote_sql_string(spec.key), expr)
+        })
+        .collect::<Vec<_>>();
+    let order_clause = order
+        .filter(|(column, _)| columns.contains(*column))
+        .map(|(column, direction)| {
+            format!(" order by {} {}", quote_sql_identifier(column), direction)
+        })
+        .unwrap_or_default();
+    let sql = format!(
+        "select json_object({}) from {}{};",
+        pairs.join(", "),
+        quote_sql_identifier(table),
+        order_clause
+    );
+    run_sqlite_json_lines(db_path, &sql)
+}
+
+fn optional_json_text_field(value: &Value, key: &str) -> Option<Value> {
+    let raw = value.get(key)?;
+    if raw.is_null() {
+        return None;
+    }
+    if let Some(text) = raw.as_str() {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return serde_json::from_str::<Value>(trimmed)
+            .ok()
+            .or_else(|| Some(Value::String(text.to_string())));
+    }
+    Some(raw.clone())
 }
 
 pub(crate) fn sqlite_count(db_path: &Path, table: &str) -> i64 {
-    let sql = format!("select json_object('count', count(*)) from {table};");
+    let sql = format!(
+        "select json_object('count', count(*)) from {};",
+        quote_sql_identifier(table)
+    );
     run_sqlite_json_lines(db_path, &sql)
         .ok()
         .and_then(|rows| rows.into_iter().next())
@@ -322,17 +185,163 @@ pub(crate) fn detect_best_legacy_db() -> Option<PathBuf> {
     best.map(|(path, _)| path)
 }
 
+const LEGACY_SETTINGS_COLUMNS: &[&str] = &[
+    "api_endpoint",
+    "api_key",
+    "model_name",
+    "role_mapping",
+    "workspace_dir",
+    "transcription_model",
+    "transcription_endpoint",
+    "transcription_key",
+    "embedding_endpoint",
+    "embedding_key",
+    "embedding_model",
+    "active_space_id",
+    "image_provider",
+    "image_endpoint",
+    "image_api_key",
+    "image_model",
+    "image_size",
+    "image_quality",
+    "ai_sources_json",
+    "default_ai_source_id",
+    "mcp_servers_json",
+    "redclaw_compact_target_tokens",
+    "image_provider_template",
+    "image_aspect_ratio",
+    "wander_deep_think_enabled",
+    "chat_max_tokens_default",
+    "chat_max_tokens_deepseek",
+    "model_name_wander",
+    "model_name_chatroom",
+    "model_name_knowledge",
+    "model_name_redclaw",
+    "debug_log_enabled",
+    "developer_mode_enabled",
+    "developer_mode_unlocked_at",
+    "search_provider",
+    "search_endpoint",
+    "search_api_key",
+    "video_endpoint",
+    "video_api_key",
+    "video_model",
+    "proxy_enabled",
+    "proxy_url",
+    "proxy_bypass",
+];
+
+fn legacy_settings_rows(db_path: &Path) -> Result<Vec<Value>, String> {
+    let columns = sqlite_table_columns(db_path, "settings")?;
+    let mut pairs = Vec::new();
+    for column in LEGACY_SETTINGS_COLUMNS {
+        if columns.contains(*column) {
+            pairs.push(format!(
+                "{}, {}",
+                quote_sql_string(column),
+                quote_sql_identifier(column)
+            ));
+        }
+    }
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "select json_object({}) from settings limit 1;",
+        pairs.join(", ")
+    );
+    run_sqlite_json_lines(db_path, &sql)
+}
+
+fn legacy_archive_samples_rows(db_path: &Path) -> Result<Vec<Value>, String> {
+    legacy_json_rows(
+        db_path,
+        "archive_samples",
+        &[
+            LegacyColumnSpec {
+                key: "id",
+                column: "id",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "''",
+            },
+            LegacyColumnSpec {
+                key: "profile_id",
+                column: "profile_id",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "''",
+            },
+            LegacyColumnSpec {
+                key: "title",
+                column: "title",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "null",
+            },
+            LegacyColumnSpec {
+                key: "content",
+                column: "content",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "null",
+            },
+            LegacyColumnSpec {
+                key: "excerpt",
+                column: "excerpt",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "null",
+            },
+            LegacyColumnSpec {
+                key: "tags",
+                column: "tags",
+                if_present: LegacyColumnExpr::Coalesce("'[]'"),
+                if_missing: "'[]'",
+            },
+            LegacyColumnSpec {
+                key: "images",
+                column: "images",
+                if_present: LegacyColumnExpr::Coalesce("'[]'"),
+                if_missing: "'[]'",
+            },
+            LegacyColumnSpec {
+                key: "platform",
+                column: "platform",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "null",
+            },
+            LegacyColumnSpec {
+                key: "source_url",
+                column: "source_url",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "null",
+            },
+            LegacyColumnSpec {
+                key: "sample_date",
+                column: "sample_date",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "null",
+            },
+            LegacyColumnSpec {
+                key: "is_featured",
+                column: "is_featured",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "0",
+            },
+            LegacyColumnSpec {
+                key: "created_at",
+                column: "created_at",
+                if_present: LegacyColumnExpr::Column,
+                if_missing: "0",
+            },
+        ],
+        Some(("created_at", "desc")),
+    )
+}
+
 #[allow(dead_code)]
 pub(crate) fn legacy_workspace_dir_from_store(store: &AppStore, db_path: &Path) -> Option<PathBuf> {
     let direct = configured_workspace_dir(&store.settings);
     if direct.as_ref().is_some_and(|path| path.exists()) {
         return direct;
     }
-    let rows = run_sqlite_json_lines(
-        db_path,
-        "select json_object('workspace_dir', workspace_dir) from settings limit 1;",
-    )
-    .ok()?;
+    let rows = legacy_settings_rows(db_path).ok()?;
     rows.into_iter()
         .next()
         .and_then(|value| configured_workspace_dir(&value))
@@ -514,19 +523,20 @@ pub(crate) fn maybe_import_legacy_store(
     store: &mut AppStore,
     store_path: &Path,
 ) -> Result<(), String> {
-    let source_db_path =
-        detect_best_legacy_db().ok_or_else(|| "legacy database not found".to_string())?;
-    let prepared_db = prepare_legacy_import_db(&source_db_path)?;
-    let db_path = prepared_db.path();
+    let db_path = detect_best_legacy_db().ok_or_else(|| "legacy database not found".to_string())?;
+    import_legacy_store_from_db(store, store_path, &db_path)
+}
 
+fn import_legacy_store_from_db(
+    store: &mut AppStore,
+    store_path: &Path,
+    db_path: &Path,
+) -> Result<(), String> {
     if !store.settings.is_object() {
         store.settings = json!({});
     }
 
-    let settings_rows = run_sqlite_json_lines(
-        db_path,
-        "select json_object('api_endpoint', api_endpoint, 'api_key', api_key, 'model_name', model_name, 'role_mapping', role_mapping, 'workspace_dir', workspace_dir, 'transcription_model', transcription_model, 'transcription_endpoint', transcription_endpoint, 'transcription_key', transcription_key, 'embedding_endpoint', embedding_endpoint, 'embedding_key', embedding_key, 'embedding_model', embedding_model, 'active_space_id', active_space_id, 'image_provider', image_provider, 'image_endpoint', image_endpoint, 'image_api_key', image_api_key, 'image_model', image_model, 'image_size', image_size, 'image_quality', image_quality, 'ai_sources_json', ai_sources_json, 'default_ai_source_id', default_ai_source_id, 'mcp_servers_json', mcp_servers_json, 'redclaw_compact_target_tokens', redclaw_compact_target_tokens, 'image_provider_template', image_provider_template, 'image_aspect_ratio', image_aspect_ratio, 'wander_deep_think_enabled', wander_deep_think_enabled, 'chat_max_tokens_default', chat_max_tokens_default, 'chat_max_tokens_deepseek', chat_max_tokens_deepseek, 'model_name_wander', model_name_wander, 'model_name_chatroom', model_name_chatroom, 'model_name_knowledge', model_name_knowledge, 'model_name_redclaw', model_name_redclaw, 'debug_log_enabled', debug_log_enabled, 'developer_mode_enabled', developer_mode_enabled, 'developer_mode_unlocked_at', developer_mode_unlocked_at, 'search_provider', search_provider, 'search_endpoint', search_endpoint, 'search_api_key', search_api_key, 'video_endpoint', video_endpoint, 'video_api_key', video_api_key, 'video_model', video_model, 'proxy_enabled', proxy_enabled, 'proxy_url', proxy_url, 'proxy_bypass', proxy_bypass) from settings limit 1;",
-    )?;
+    let settings_rows = legacy_settings_rows(db_path)?;
     if let Some(first) = settings_rows.into_iter().next() {
         if let (Some(current), Some(next)) = (store.settings.as_object_mut(), first.as_object()) {
             for (key, value) in next {
@@ -547,9 +557,36 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.spaces.len() <= 1 {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'name', name, 'created_at', cast(created_at as text), 'updated_at', cast(updated_at as text)) from spaces order by updated_at desc;",
+            "spaces",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "name",
+                    column: "name",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "'未命名空间'",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::CastText,
+                    if_missing: "'0'",
+                },
+                LegacyColumnSpec {
+                    key: "updated_at",
+                    column: "updated_at",
+                    if_present: LegacyColumnExpr::CastText,
+                    if_missing: "'0'",
+                },
+            ],
+            Some(("updated_at", "desc")),
         )?;
         let mut imported_spaces = Vec::new();
         for value in rows {
@@ -587,12 +624,45 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.chat_sessions.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'title', coalesce(title, 'New Chat'), 'created_at', cast(created_at as text), 'updated_at', cast(updated_at as text), 'metadata', json(metadata)) from chat_sessions order by updated_at desc;",
+            "chat_sessions",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "title",
+                    column: "title",
+                    if_present: LegacyColumnExpr::Coalesce("'New Chat'"),
+                    if_missing: "'New Chat'",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::CastText,
+                    if_missing: "'0'",
+                },
+                LegacyColumnSpec {
+                    key: "updated_at",
+                    column: "updated_at",
+                    if_present: LegacyColumnExpr::CastText,
+                    if_missing: "'0'",
+                },
+                LegacyColumnSpec {
+                    key: "metadata",
+                    column: "metadata",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+            ],
+            Some(("updated_at", "desc")),
         )?;
         for value in rows {
-            let metadata = value.get("metadata").cloned().filter(|v| !v.is_null());
+            let metadata = optional_json_text_field(&value, "metadata");
             store.chat_sessions.push(ChatSessionRecord {
                 id: value
                     .get("id")
@@ -620,9 +690,42 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.chat_messages.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'session_id', session_id, 'role', role, 'content', content, 'timestamp', timestamp) from chat_messages order by timestamp asc;",
+            "chat_messages",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "session_id",
+                    column: "session_id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "role",
+                    column: "role",
+                    if_present: LegacyColumnExpr::Coalesce("'assistant'"),
+                    if_missing: "'assistant'",
+                },
+                LegacyColumnSpec {
+                    key: "content",
+                    column: "content",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "timestamp",
+                    column: "timestamp",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+            ],
+            Some(("timestamp", "asc")),
         )?;
         for value in rows {
             let session_id = value
@@ -658,9 +761,54 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.session_transcript_records.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'session_id', session_id, 'record_type', record_type, 'role', role, 'content', content, 'payload', json(payload_json), 'created_at', created_at) from session_transcript_records order by created_at asc;",
+            "session_transcript_records",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "session_id",
+                    column: "session_id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "record_type",
+                    column: "record_type",
+                    if_present: LegacyColumnExpr::Coalesce("'message'"),
+                    if_missing: "'message'",
+                },
+                LegacyColumnSpec {
+                    key: "role",
+                    column: "role",
+                    if_present: LegacyColumnExpr::Coalesce("'assistant'"),
+                    if_missing: "'assistant'",
+                },
+                LegacyColumnSpec {
+                    key: "content",
+                    column: "content",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "payload",
+                    column: "payload_json",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+            ],
+            Some(("created_at", "asc")),
         )?;
         for value in rows {
             store
@@ -691,7 +839,7 @@ pub(crate) fn maybe_import_legacy_store(
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    payload: value.get("payload").cloned().filter(|v| !v.is_null()),
+                    payload: optional_json_text_field(&value, "payload"),
                     created_at: value
                         .get("created_at")
                         .and_then(|v| v.as_i64())
@@ -701,9 +849,48 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.session_checkpoints.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'session_id', session_id, 'checkpoint_type', checkpoint_type, 'summary', summary, 'payload', json(payload_json), 'created_at', created_at) from session_checkpoints order by created_at asc;",
+            "session_checkpoints",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "session_id",
+                    column: "session_id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "checkpoint_type",
+                    column: "checkpoint_type",
+                    if_present: LegacyColumnExpr::Coalesce("'checkpoint'"),
+                    if_missing: "'checkpoint'",
+                },
+                LegacyColumnSpec {
+                    key: "summary",
+                    column: "summary",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "payload",
+                    column: "payload_json",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+            ],
+            Some(("created_at", "asc")),
         )?;
         for value in rows {
             store.session_checkpoints.push(SessionCheckpointRecord {
@@ -730,7 +917,7 @@ pub(crate) fn maybe_import_legacy_store(
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                payload: value.get("payload").cloned().filter(|v| !v.is_null()),
+                payload: optional_json_text_field(&value, "payload"),
                 created_at: value
                     .get("created_at")
                     .and_then(|v| v.as_i64())
@@ -740,9 +927,102 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.session_tool_results.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'session_id', session_id, 'call_id', call_id, 'tool_name', tool_name, 'command', command, 'success', success, 'result_text', result_text, 'summary_text', summary_text, 'prompt_text', prompt_text, 'original_chars', original_chars, 'prompt_chars', prompt_chars, 'truncated', truncated, 'payload', json(payload_json), 'created_at', created_at, 'updated_at', updated_at) from session_tool_results order by created_at asc;",
+            "session_tool_results",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "session_id",
+                    column: "session_id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "call_id",
+                    column: "call_id",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "tool_name",
+                    column: "tool_name",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "command",
+                    column: "command",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "success",
+                    column: "success",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+                LegacyColumnSpec {
+                    key: "result_text",
+                    column: "result_text",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "summary_text",
+                    column: "summary_text",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "prompt_text",
+                    column: "prompt_text",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "original_chars",
+                    column: "original_chars",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "prompt_chars",
+                    column: "prompt_chars",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "truncated",
+                    column: "truncated",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+                LegacyColumnSpec {
+                    key: "payload",
+                    column: "payload_json",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+                LegacyColumnSpec {
+                    key: "updated_at",
+                    column: "updated_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+            ],
+            Some(("created_at", "asc")),
         )?;
         for value in rows {
             store.session_tool_results.push(SessionToolResultRecord {
@@ -789,7 +1069,7 @@ pub(crate) fn maybe_import_legacy_store(
                 original_chars: value.get("original_chars").and_then(|v| v.as_i64()),
                 prompt_chars: value.get("prompt_chars").and_then(|v| v.as_i64()),
                 truncated: value.get("truncated").and_then(|v| v.as_i64()).unwrap_or(0) != 0,
-                payload: value.get("payload").cloned().filter(|v| !v.is_null()),
+                payload: optional_json_text_field(&value, "payload"),
                 created_at: value
                     .get("created_at")
                     .and_then(|v| v.as_i64())
@@ -803,9 +1083,36 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.wander_history.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'items', items, 'result', result, 'created_at', created_at) from wander_history order by created_at desc;",
+            "wander_history",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "items",
+                    column: "items",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "result",
+                    column: "result",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+            ],
+            Some(("created_at", "desc")),
         )?;
         for value in rows {
             store.wander_history.push(WanderHistoryRecord {
@@ -833,9 +1140,54 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.memories.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'content', content, 'type', type, 'tags', coalesce(tags, '[]'), 'created_at', created_at, 'updated_at', updated_at, 'last_accessed', last_accessed) from user_memories order by updated_at desc;",
+            "user_memories",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "content",
+                    column: "content",
+                    if_present: LegacyColumnExpr::Coalesce("''"),
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "type",
+                    column: "type",
+                    if_present: LegacyColumnExpr::Coalesce("'general'"),
+                    if_missing: "'general'",
+                },
+                LegacyColumnSpec {
+                    key: "tags",
+                    column: "tags",
+                    if_present: LegacyColumnExpr::Coalesce("'[]'"),
+                    if_missing: "'[]'",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+                LegacyColumnSpec {
+                    key: "updated_at",
+                    column: "updated_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "last_accessed",
+                    column: "last_accessed",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+            ],
+            Some(("updated_at", "desc")),
         )?;
         for value in rows {
             let tags = value
@@ -860,6 +1212,13 @@ pub(crate) fn maybe_import_legacy_store(
                     .unwrap_or("general")
                     .to_string(),
                 tags,
+                entities: Vec::new(),
+                scope: Some("user".to_string()),
+                space_id: None,
+                project_id: None,
+                session_id: None,
+                source: Some(json!({ "kind": "legacy_import" })),
+                confidence: Some(0.75),
                 created_at: value
                     .get("created_at")
                     .and_then(|v| v.as_i64())
@@ -878,9 +1237,66 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.archive_profiles.is_empty() {
-        let rows = run_sqlite_json_lines(
+        let rows = legacy_json_rows(
             db_path,
-            "select json_object('id', id, 'name', name, 'platform', platform, 'goal', goal, 'domain', domain, 'audience', audience, 'tone_tags', coalesce(tone_tags, '[]'), 'created_at', created_at, 'updated_at', updated_at) from archive_profiles order by updated_at desc;",
+            "archive_profiles",
+            &[
+                LegacyColumnSpec {
+                    key: "id",
+                    column: "id",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "''",
+                },
+                LegacyColumnSpec {
+                    key: "name",
+                    column: "name",
+                    if_present: LegacyColumnExpr::Coalesce("'未命名档案'"),
+                    if_missing: "'未命名档案'",
+                },
+                LegacyColumnSpec {
+                    key: "platform",
+                    column: "platform",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "goal",
+                    column: "goal",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "domain",
+                    column: "domain",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "audience",
+                    column: "audience",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "null",
+                },
+                LegacyColumnSpec {
+                    key: "tone_tags",
+                    column: "tone_tags",
+                    if_present: LegacyColumnExpr::Coalesce("'[]'"),
+                    if_missing: "'[]'",
+                },
+                LegacyColumnSpec {
+                    key: "created_at",
+                    column: "created_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+                LegacyColumnSpec {
+                    key: "updated_at",
+                    column: "updated_at",
+                    if_present: LegacyColumnExpr::Column,
+                    if_missing: "0",
+                },
+            ],
+            Some(("updated_at", "desc")),
         )?;
         for value in rows {
             let tags = value
@@ -929,10 +1345,7 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     if store.archive_samples.is_empty() {
-        let rows = run_sqlite_json_lines(
-            db_path,
-            "select json_object('id', id, 'profile_id', profile_id, 'title', title, 'content', content, 'excerpt', excerpt, 'tags', coalesce(tags, '[]'), 'images', coalesce(images, '[]'), 'platform', platform, 'source_url', source_url, 'sample_date', sample_date, 'is_featured', is_featured, 'created_at', created_at) from archive_samples order by created_at desc;",
-        )?;
+        let rows = legacy_archive_samples_rows(db_path)?;
         for value in rows {
             let tags = value
                 .get("tags")
@@ -1005,7 +1418,7 @@ pub(crate) fn maybe_import_legacy_store(
     }
 
     store.legacy_imported_at = Some(now_iso());
-    store.legacy_import_source = Some(source_db_path.display().to_string());
+    store.legacy_import_source = Some(db_path.display().to_string());
     let imported_memories = store.memories.clone();
     let _ = hydrate_store_from_workspace_files(store, store_path);
     if store.memories.is_empty() && !imported_memories.is_empty() {
@@ -1017,6 +1430,8 @@ pub(crate) fn maybe_import_legacy_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::default_store;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_db_path(label: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -1026,8 +1441,16 @@ mod tests {
         std::env::temp_dir().join(format!("redbox-legacy-import-{label}-{unique}.db"))
     }
 
+    fn temp_dir_path(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("redbox-legacy-import-{label}-{unique}"))
+    }
+
     #[test]
-    fn prepared_legacy_import_db_adds_missing_new_settings_columns() {
+    fn legacy_settings_rows_skip_missing_new_columns() {
         let db_path = temp_db_path("settings");
         {
             let connection = Connection::open(&db_path).expect("test db should open");
@@ -1048,13 +1471,7 @@ mod tests {
                 .expect("legacy settings fixture should be created");
         }
 
-        let prepared =
-            prepare_legacy_import_db(&db_path).expect("legacy db should be prepared for import");
-        let rows = run_sqlite_json_lines(
-            prepared.path(),
-            "select json_object('api_endpoint', api_endpoint, 'model_name', model_name, 'model_name_wander', model_name_wander) from settings limit 1;",
-        )
-        .expect("prepared settings should be queryable");
+        let rows = legacy_settings_rows(&db_path).expect("legacy settings should import");
         let _ = fs::remove_file(&db_path);
 
         let first = rows.first().expect("settings row should be returned");
@@ -1066,12 +1483,12 @@ mod tests {
             first.get("model_name").and_then(|value| value.as_str()),
             Some("legacy-model")
         );
-        assert!(first.get("model_name_wander").is_some_and(Value::is_null));
+        assert!(first.get("model_name_wander").is_none());
     }
 
     #[test]
-    fn prepared_legacy_import_db_adds_missing_optional_tables_and_columns() {
-        let db_path = temp_db_path("partial-schema");
+    fn legacy_archive_samples_rows_default_missing_images_column() {
+        let db_path = temp_db_path("archive-samples");
         {
             let connection = Connection::open(&db_path).expect("test db should open");
             connection
@@ -1081,27 +1498,25 @@ mod tests {
                         id text primary key,
                         profile_id text not null,
                         title text,
+                        content text,
+                        excerpt text,
+                        tags text,
+                        platform text,
+                        source_url text,
+                        sample_date text,
+                        is_featured integer default 0,
                         created_at integer not null
                     );
-                    insert into archive_samples (id, profile_id, title, created_at)
-                    values ('sample-1', 'profile-1', 'Title', 123);
+                    insert into archive_samples
+                        (id, profile_id, title, content, tags, is_featured, created_at)
+                    values
+                        ('sample-1', 'profile-1', 'Title', 'Content', '[\"tag\"]', 1, 123);
                     ",
                 )
-                .expect("partial archive sample fixture should be created");
+                .expect("legacy archive sample fixture should be created");
         }
 
-        let prepared =
-            prepare_legacy_import_db(&db_path).expect("legacy db should be prepared for import");
-        let rows = run_sqlite_json_lines(
-            prepared.path(),
-            "select json_object('id', id, 'images', coalesce(images, '[]'), 'created_at', created_at) from archive_samples order by created_at desc;",
-        )
-        .expect("prepared archive samples should be queryable");
-        let missing_table_rows = run_sqlite_json_lines(
-            prepared.path(),
-            "select json_object('count', count(*)) from session_tool_results;",
-        )
-        .expect("missing optional tables should be created");
+        let rows = legacy_archive_samples_rows(&db_path).expect("archive samples should import");
         let _ = fs::remove_file(&db_path);
 
         let first = rows.first().expect("archive sample row should be returned");
@@ -1110,58 +1525,154 @@ mod tests {
             Some("[]")
         );
         assert_eq!(
-            missing_table_rows
-                .first()
-                .and_then(|value| value.get("count"))
-                .and_then(Value::as_i64),
-            Some(0)
+            first.get("title").and_then(|value| value.as_str()),
+            Some("Title")
         );
     }
 
     #[test]
-    fn prepared_legacy_import_db_clears_invalid_json_fields_in_copy_only() {
-        let db_path = temp_db_path("invalid-json");
+    fn import_legacy_store_skips_missing_optional_tables() {
+        let db_path = temp_db_path("partial-import");
+        let workspace_dir = temp_dir_path("workspace");
+        fs::create_dir_all(&workspace_dir).expect("workspace fixture should be created");
         {
             let connection = Connection::open(&db_path).expect("test db should open");
             connection
-                .execute_batch(
+                .execute_batch(&format!(
                     "
-                    create table chat_sessions (id text primary key, metadata text);
-                    insert into chat_sessions (id, metadata) values ('session-1', 'not-json');
-                    create table session_tool_results (id text primary key, payload_json text);
-                    insert into session_tool_results (id, payload_json) values ('tool-1', 'not-json');
+                    create table settings (
+                        id integer primary key,
+                        api_endpoint text,
+                        api_key text,
+                        model_name text,
+                        workspace_dir text
+                    );
+                    insert into settings (id, api_endpoint, api_key, model_name, workspace_dir)
+                    values (1, 'https://api.example.test', 'secret', 'legacy-model', {});
+
+                    create table archive_samples (
+                        id text primary key,
+                        profile_id text not null,
+                        title text,
+                        content text,
+                        tags text,
+                        created_at integer not null
+                    );
+                    insert into archive_samples
+                        (id, profile_id, title, content, tags, created_at)
+                    values
+                        ('sample-1', 'profile-1', 'Title', 'Content', '[]', 123);
                     ",
-                )
-                .expect("invalid json fixture should be created");
+                    quote_sql_string(&workspace_dir.display().to_string())
+                ))
+                .expect("partial legacy fixture should be created");
         }
 
-        let prepared =
-            prepare_legacy_import_db(&db_path).expect("legacy db should be prepared for import");
-        let prepared_rows = run_sqlite_json_lines(
-            prepared.path(),
-            "select json_object('metadata', json(metadata)) from chat_sessions;",
-        )
-        .expect("prepared invalid metadata should be nullable and queryable");
-        let original_rows = run_sqlite_json_lines(
-            &db_path,
-            &format!(
-                "select json_object('metadata', {}) from chat_sessions;",
-                quote_sql_string("not-json")
-            ),
-        )
-        .expect("source db should remain readable");
+        let store_path = temp_dir_path("store").join("store.json");
+        let mut store = default_store();
+        import_legacy_store_from_db(&mut store, &store_path, &db_path)
+            .expect("partial legacy db should import");
         let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&workspace_dir);
+        if let Some(parent) = store_path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
 
-        assert!(prepared_rows
-            .first()
-            .and_then(|value| value.get("metadata"))
-            .is_some_and(Value::is_null));
         assert_eq!(
-            original_rows
-                .first()
-                .and_then(|value| value.get("metadata"))
-                .and_then(Value::as_str),
-            Some("not-json")
+            store
+                .settings
+                .get("model_name")
+                .and_then(|value| value.as_str()),
+            Some("legacy-model")
         );
+        assert_eq!(store.archive_samples.len(), 1);
+        assert_eq!(store.archive_samples[0].images, Vec::<String>::new());
+        assert!(store.legacy_imported_at.is_some());
+    }
+
+    #[test]
+    fn import_legacy_store_tolerates_partial_table_schemas_and_invalid_json_text() {
+        let db_path = temp_db_path("partial-schemas");
+        let workspace_dir = temp_dir_path("workspace");
+        fs::create_dir_all(&workspace_dir).expect("workspace fixture should be created");
+        {
+            let connection = Connection::open(&db_path).expect("test db should open");
+            connection
+                .execute_batch(&format!(
+                    "
+                    create table settings (
+                        id integer primary key,
+                        model_name text,
+                        workspace_dir text
+                    );
+                    insert into settings (id, model_name, workspace_dir)
+                    values (1, 'legacy-model', {});
+
+                    create table spaces (id text primary key);
+                    insert into spaces (id) values ('default');
+
+                    create table chat_sessions (id text primary key, metadata text);
+                    insert into chat_sessions (id, metadata) values ('session-1', 'not-json');
+
+                    create table chat_messages (id text primary key);
+                    insert into chat_messages (id) values ('message-1');
+
+                    create table session_transcript_records (id text primary key, payload_json text);
+                    insert into session_transcript_records (id, payload_json) values ('transcript-1', 'not-json');
+
+                    create table session_checkpoints (id text primary key, payload_json text);
+                    insert into session_checkpoints (id, payload_json) values ('checkpoint-1', '{{\"ok\":true}}');
+
+                    create table session_tool_results (id text primary key, payload_json text);
+                    insert into session_tool_results (id, payload_json) values ('tool-1', 'not-json');
+
+                    create table wander_history (id text primary key);
+                    insert into wander_history (id) values ('wander-1');
+
+                    create table user_memories (id text primary key);
+                    insert into user_memories (id) values ('memory-1');
+
+                    create table archive_profiles (id text primary key);
+                    insert into archive_profiles (id) values ('profile-1');
+
+                    create table archive_samples (id text primary key);
+                    insert into archive_samples (id) values ('sample-1');
+                    ",
+                    quote_sql_string(&workspace_dir.display().to_string())
+                ))
+                .expect("partial schema fixture should be created");
+        }
+
+        let store_path = temp_dir_path("store").join("store.json");
+        let mut store = default_store();
+        import_legacy_store_from_db(&mut store, &store_path, &db_path)
+            .expect("partial schemas should not abort legacy import");
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&workspace_dir);
+        if let Some(parent) = store_path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+
+        assert_eq!(store.spaces.len(), 1);
+        assert_eq!(store.spaces[0].name, "未命名空间");
+        assert_eq!(
+            store.chat_sessions[0].metadata,
+            Some(Value::String("not-json".to_string()))
+        );
+        assert_eq!(
+            store.session_transcript_records[0].payload,
+            Some(Value::String("not-json".to_string()))
+        );
+        assert_eq!(
+            store.session_checkpoints[0].payload,
+            Some(json!({ "ok": true }))
+        );
+        assert_eq!(
+            store.session_tool_results[0].payload,
+            Some(Value::String("not-json".to_string()))
+        );
+        assert_eq!(store.memories[0].r#type, "general");
+        assert_eq!(store.archive_profiles[0].name, "未命名档案");
+        assert_eq!(store.archive_samples[0].images, Vec::<String>::new());
     }
 }

@@ -821,6 +821,12 @@ fn knowledge_rebuild_catalog_value(
             }))
         }
         "canonicalreparse" | "canonical_reparse" => {
+            if request.include_ocr != Some(true) {
+                return Err(
+                    "canonical reparse may trigger OCR; pass includeOcr=true after user confirmation"
+                        .to_string(),
+                );
+            }
             knowledge_index::jobs::schedule_canonical_reparse(app);
             Ok(json!({
                 "success": true,
@@ -831,6 +837,12 @@ fn knowledge_rebuild_catalog_value(
             }))
         }
         "full" | "catalog" | "full_rebuild" => {
+            if request.include_ocr != Some(true) {
+                return Err(
+                    "full rebuild may trigger OCR; pass includeOcr=true after user confirmation"
+                        .to_string(),
+                );
+            }
             knowledge_index::jobs::schedule_rebuild(app, "manual-rebuild");
             Ok(json!({
                 "success": true,

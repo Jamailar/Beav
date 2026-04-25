@@ -177,14 +177,14 @@ Status: Current
 建议用现成库 / SDK：
 
 - 远程 OCR：供应商 API / 自建 OCR 服务作为默认推荐通道，降低弱性能客户端负载
-- 本地 OCR：`PaddleOCR`、`Tesseract` 或平台原生 Vision 作为离线兜底
+- 本地 OCR：仅允许平台原生 Apple Vision 作为 macOS 离线兜底；不引入 `PaddleOCR` / `Tesseract` 这类额外本地 OCR 引擎
 - 版面分析：优先利用 `Docling` 能力，必要时补 `layoutparser` 类方案
 
 推荐：
 
 - OCR provider 必须可插拔，支持 `auto | api | local | disabled`
-- 默认 `auto`：配置远程 endpoint 时优先网络 OCR；未配置或远程失败且允许 fallback 时使用本地 OCR
-- `PaddleOCR` / `Tesseract` / 系统 Vision 保留为离线 fallback，不应成为无法替换的硬依赖
+- 默认 `auto`：配置远程 endpoint 时优先网络 OCR；未配置或远程失败且允许 fallback 时仅使用 macOS Apple Vision
+- `PaddleOCR` / `Tesseract` 不进入桌面端 OCR 执行链路；需要此类能力时通过远程 OCR API / sidecar 暴露
 
 必须自研：
 
@@ -728,7 +728,7 @@ App 升级后不能假设用户会手动清空索引。检索数据库、canonic
 
 ### 当前落地状态
 
-- 已落地版本键与 migration decision：`schema_only`、`fts_rebuild`、`block_anchor_rebuild`、`full_rebuild`。
+- 已落地版本键与 migration decision：`schema_only`、`fts_rebuild`、`block_anchor_rebuild`、`canonical_reparse`、`full_rebuild`。
 - 已落地 `Tantivy + SQLite FTS5 BM25` 双倒排底座；后台分层 job 会同步重建 FTS/BM25 与 Tantivy block index。
 - 已落地 Docling / Tika / Unstructured 可插拔解析入口：外部 sidecar / API 可配置，不配置时保留内置 parser，失败时按顺序 fallback。
 - 已落地可插拔 cross-encoder rerank 入口：配置 `rerank_endpoint` 后参与排序，不配置时使用本地 legal/citation/confidence rerank。
@@ -736,7 +736,7 @@ App 升级后不能假设用户会手动清空索引。检索数据库、canonic
 - 已落地手动重建入口：`knowledge:rebuild-catalog` 支持 `mode=full | fts | canonicalBlocks` 和可选 `sourceId`。
 - canonical cache 命中必须匹配当前 parser name/version，避免 parser pipeline 升级后继续复用旧解析结果。
 - OCR 重建保持可控：`fts` 与 `canonicalBlocks` 不触发 OCR；只有 `full` 路径会按当前可插拔 OCR provider 配置解析需要 OCR 的文件。
-- 已落地 `canonical_reparse`、`rebuildProgress` 与 `knowledge_index_errors`；删除 document source 会同步删除 canonical、block、anchor、FTS/BM25、retrieval audit 关联数据。
+- 已落地 `canonical_reparse`、`rebuildProgress` 与 `knowledge_index_errors`；`canonical_reparse` 会按 fingerprint 复用未变更 canonical，手动 full / canonical reparse 必须确认 `includeOcr=true`；删除 document source 会同步删除 canonical、block、anchor、FTS/BM25、retrieval audit 关联数据。
 
 ## Security And Compliance
 

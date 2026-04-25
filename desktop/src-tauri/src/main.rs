@@ -497,6 +497,20 @@ struct UserMemoryRecord {
     content: String,
     r#type: String,
     tags: Vec<String>,
+    #[serde(default)]
+    entities: Vec<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    space_id: Option<String>,
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    source: Option<Value>,
+    #[serde(default)]
+    confidence: Option<f64>,
     created_at: i64,
     updated_at: Option<i64>,
     last_accessed: Option<i64>,
@@ -6222,7 +6236,10 @@ fn run_anthropic_interactive_chat_runtime(
             .arg("-N")
             .arg("-X")
             .arg("POST")
-            .arg(format!("{}/messages", normalize_base_url(&config.base_url)))
+            .arg(format!(
+                "{}/messages",
+                normalize_anthropic_base_url(&config.base_url)
+            ))
             .arg("-H")
             .arg("Content-Type: application/json")
             .arg("-H")
@@ -6452,7 +6469,10 @@ fn run_anthropic_interactive_chat_runtime(
                     http_error_debug_line(
                         "ai-http",
                         "POST",
-                        &format!("{}/messages", normalize_base_url(&config.base_url)),
+                        &format!(
+                            "{}/messages",
+                            normalize_anthropic_base_url(&config.base_url)
+                        ),
                         &details
                     ),
                     runtime_mode,

@@ -1,5 +1,6 @@
 use tauri::State;
 
+use super::index::{recall_memory_matches_indexed, MemorySearchOptions};
 use super::types::{MemoryRecallItem, MemoryRecallSummary};
 use crate::memory::store::list_active_memories;
 use crate::persistence::with_store;
@@ -10,6 +11,18 @@ pub(crate) fn recall_memory_matches(
     query: &str,
     limit: usize,
 ) -> Result<Vec<MemoryRecallItem>, String> {
+    if !query.trim().is_empty() {
+        let options = MemorySearchOptions {
+            query: query.to_string(),
+            limit,
+            ..MemorySearchOptions::default()
+        };
+        if let Ok(items) = recall_memory_matches_indexed(state, &options) {
+            if !items.is_empty() {
+                return Ok(items);
+            }
+        }
+    }
     with_store(state, |store| {
         let lowered_query = query.trim().to_lowercase();
         let mut items = list_active_memories(&store)
@@ -132,6 +145,13 @@ mod tests {
                     content: "用户长期偏好讲实操和复盘".to_string(),
                     r#type: "creator-profile".to_string(),
                     tags: vec!["复盘".to_string()],
+                    entities: Vec::new(),
+                    scope: Some("user".to_string()),
+                    space_id: None,
+                    project_id: None,
+                    session_id: None,
+                    source: None,
+                    confidence: Some(0.75),
                     created_at: now,
                     updated_at: Some(now),
                     last_accessed: None,
@@ -148,6 +168,13 @@ mod tests {
                     content: "普通背景信息".to_string(),
                     r#type: "general".to_string(),
                     tags: vec!["其他".to_string()],
+                    entities: Vec::new(),
+                    scope: Some("user".to_string()),
+                    space_id: None,
+                    project_id: None,
+                    session_id: None,
+                    source: None,
+                    confidence: Some(0.75),
                     created_at: now - 1,
                     updated_at: Some(now - 1),
                     last_accessed: None,

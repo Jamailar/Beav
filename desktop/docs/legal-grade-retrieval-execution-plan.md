@@ -350,7 +350,7 @@ Status: Current
 
 - 支持 `auto | api | local | disabled`
 - `auto` 在配置远程 endpoint 时优先网络 OCR，避免弱性能客户端承担识别压力
-- 本地 OCR 作为离线 fallback，不允许把单一 OCR 引擎硬编码成唯一通道
+- 本地 OCR 仅允许 macOS Apple Vision 作为离线 fallback；`PaddleOCR` / `Tesseract` 等本地引擎必须通过远程 OCR API / sidecar 接入
 
 2. OCR 置信度链路
 
@@ -597,11 +597,14 @@ Status: Current
 - 已完成手动重建参数：`mode=full | fts | canonicalBlocks`；OCR 只在 `full` 且 parser 按当前 OCR provider 需要时发生，低成本重建路径不触发 OCR。
 - Settings 已暴露 Docling / Tika / Unstructured parser endpoint、parser API key、cross-encoder rerank endpoint/model/key，便于弱性能客户端使用网络 sidecar。
 - canonical cache 已纳入 parser name/version 校验；parser pipeline 升级后的 full rebuild 不会误用旧 canonical JSON。
+- `canonical_reparse` 现在按文件 fingerprint 复用未变更 canonical，并把 parser info 归一到当前版本；只有缺失、变更或旧 canonical 无法反序列化的文件会重新解析。
 - Knowledge 页面已暴露“全量重建 / 重建引用 / 全文索引”三种入口；index status 已展示 `migrationStatus` 与 `pendingRebuildReason`。
 - 已补 `canonical_reparse` migration decision；canonical schema 或 parser pipeline 版本变化时进入独立状态，并禁用旧 canonical cache。
+- `full_rebuild` 已进入 migration decision：已有 catalog 但缺少 block/index 结构时会投递完整重建，避免停留在 schema-only。
 - index status 已补 `rebuildProgress`；迁移失败会写入 `knowledge_index_errors` 与 `last_migration_error`。
 - 删除 document source 会立即清理 canonical、blocks、anchors、FTS/BM25 与 retrieval audit 关联数据。
 - FTS-only 与 block/anchor rebuild 已同步重建 Tantivy block index，避免双索引不一致。
+- 手动 full / canonical reparse 重建必须显式传入 `includeOcr=true`；OCR 路径只允许远程 API 与 macOS Apple Vision fallback，不引入其他本地 OCR 引擎。
 
 ## Phase Dependencies
 

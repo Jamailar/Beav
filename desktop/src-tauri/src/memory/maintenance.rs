@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::State;
 
+use super::index::rebuild_memory_index_from_store;
 use super::store::{memory_root, persist_memory_workspace_state};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
@@ -210,11 +211,38 @@ pub(crate) fn run_memory_maintenance_with_reason(
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
+                    let entities = action
+                        .get("entities")
+                        .and_then(|value| value.as_array())
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(ToString::to_string))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
                     let record = UserMemoryRecord {
                         id: make_id("memory"),
                         content,
                         r#type: memory_type,
                         tags,
+                        entities,
+                        scope: payload_string(&action, "scope")
+                            .or_else(|| Some("user".to_string())),
+                        space_id: payload_string(&action, "spaceId"),
+                        project_id: payload_string(&action, "projectId"),
+                        session_id: payload_string(&action, "sessionId"),
+                        source: action.get("source").cloned().or_else(|| {
+                            Some(json!({ "kind": "memory_maintenance", "reason": reason }))
+                        }),
+                        confidence: action
+                            .get("confidence")
+                            .and_then(|value| {
+                                value
+                                    .as_f64()
+                                    .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                            })
+                            .or(Some(0.75)),
                         created_at: now_i64(),
                         updated_at: Some(now_i64()),
                         last_accessed: None,
@@ -260,6 +288,36 @@ pub(crate) fn run_memory_maintenance_with_reason(
                                 .iter()
                                 .filter_map(|entry| entry.as_str().map(ToString::to_string))
                                 .collect();
+                        }
+                        if let Some(entities) =
+                            action.get("entities").and_then(|value| value.as_array())
+                        {
+                            item.entities = entities
+                                .iter()
+                                .filter_map(|entry| entry.as_str().map(ToString::to_string))
+                                .collect();
+                        }
+                        if let Some(scope) = payload_string(&action, "scope") {
+                            item.scope = Some(scope);
+                        }
+                        if let Some(space_id) = payload_string(&action, "spaceId") {
+                            item.space_id = Some(space_id);
+                        }
+                        if let Some(project_id) = payload_string(&action, "projectId") {
+                            item.project_id = Some(project_id);
+                        }
+                        if let Some(session_id) = payload_string(&action, "sessionId") {
+                            item.session_id = Some(session_id);
+                        }
+                        if let Some(source) = action.get("source").cloned() {
+                            item.source = Some(source);
+                        }
+                        if let Some(confidence) = action.get("confidence").and_then(|value| {
+                            value
+                                .as_f64()
+                                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                        }) {
+                            item.confidence = Some(confidence.clamp(0.0, 1.0));
                         }
                         item.updated_at = Some(now_i64());
                         let after = json!(item.clone());
@@ -366,6 +424,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
         persist_memory_workspace_state(state, store)?;
         Ok(())
     });
+    let _ = rebuild_memory_index_from_store(state);
     Ok(status)
 }
 

@@ -52,8 +52,13 @@ export const AUTHORING_ALLOWED_TOOLS = ['redbox_fs', 'app_cli'];
 export const AUTHORING_ALLOWED_APP_CLI_ACTIONS = [
     'image.generate',
     'memory.add',
+    'memory.archive',
+    'memory.diagnostics',
     'memory.list',
+    'memory.rebuildIndex',
+    'memory.recall',
     'memory.search',
+    'memory.update',
     'manuscripts.createProject',
     'manuscripts.list',
     'manuscripts.writeCurrent',
