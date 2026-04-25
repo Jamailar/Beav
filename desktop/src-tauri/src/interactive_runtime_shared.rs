@@ -309,6 +309,8 @@ pub(crate) fn interactive_runtime_context_bundle(
         rendered.push_str(
             "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- `app_cli` now uses structured `action` + optional `payload`; do not invent legacy command strings in normal runtime turns.\n- The available_tools section already lists the action families exposed for this runtime; prefer those families directly instead of exploratory help calls.\n- When diagnosing local CLI availability, prefer `app_cli(action=\"cli_runtime.inspect\")` for a known command and `app_cli(action=\"cli_runtime.discover\")` for PATH search. Do not infer “not installed” only because `cli_runtime.detect` did not list a command.\n- Do not use `bash` for PATH diagnosis such as `which`, `command -v`, or `echo $PATH`; `bash` is read-only inspection only and its allowlist does not model host CLI availability.\n- When `redbox_fs` is available, use it as the default structured file tool. For advisor/member knowledge, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` instead of broad `bash` scanning.\n- For workspace file discovery, prefer `redbox_fs(scope=\"workspace\", action=\"search\")` or exact relative paths instead of `bash find` when the path is known or can be narrowed.\n- When `bash` is available, use it only for read-only inspection inside currentSpaceRoot.\n- `redbox_editor` is the editor-only tool for bound video/audio manuscript packages and exposes only the script-first editing actions in normal runtime turns.\n",
         );
+        rendered.push_str("\n");
+        rendered.push_str(team_coordinator_prompt());
         if !prompt_suffix.trim().is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(prompt_suffix.trim());
@@ -336,9 +338,10 @@ Use tools when the user asks about app state, knowledge, advisors, work items, m
 Do not invent workspace/app facts that you can fetch with tools. \
 If no tool is needed, answer directly and concisely. \
 When using tools, synthesize the final answer in Chinese unless the user clearly asks otherwise. \
-Host runtime context: {}",
+Host runtime context: {}\n{}",
         runtime_mode,
-        render_host_runtime_context_section(&current_host_runtime_context())
+        render_host_runtime_context_section(&current_host_runtime_context()),
+        team_coordinator_prompt()
     );
     RuntimeContextBundle::new(
         fallback.clone(),
@@ -514,6 +517,10 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
         }
         _ => String::new(),
     }
+}
+
+fn team_coordinator_prompt() -> &'static str {
+    "\nTeam coordinator rules:\n- When the user asks for team collaboration, multiple roles, project tracking, a Kanban board, or regular progress reports, use `app_cli` team actions instead of only describing a plan.\n- Create the collaboration project with `team.session.create`, then create internal members with `team.member.spawn`, then create assignable tasks with `team.task.create`.\n- Team members are internal runtime members only. Do not create external ACP/CLI members and do not ask the user to install an external agent for team collaboration.\n- Use `team.message.send` for member-to-member/coordinator communication and `team.report.request` / `team.report.submit` for progress reporting.\n- After mutating team state, summarize the created session id, member names, task titles, and what the user can see on the Workboard."
 }
 
 pub(crate) fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {
