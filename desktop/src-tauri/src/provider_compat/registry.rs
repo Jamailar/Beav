@@ -34,6 +34,8 @@ fn model_capability_overrides(
             supports_tool_choice_auto: false,
             supports_tool_choice_required: false,
             supports_tool_choice_none: false,
+            supports_thinking: false,
+            supports_reasoning_effort: false,
             ..capabilities
         };
     }
@@ -170,6 +172,9 @@ mod tests {
         assert!(!profile.capabilities.supports_tool_choice_auto);
         assert!(!profile.capabilities.supports_tool_choice_required);
         assert!(!profile.capabilities.supports_tool_choice_none);
+        assert!(!profile.capabilities.supports_thinking);
+        assert!(!profile.capabilities.supports_reasoning_effort);
+        assert!(profile.should_disable_thinking("chat", false));
         assert_eq!(
             profile.api_tool_choice_value(InteractiveToolChoice::Auto),
             None
