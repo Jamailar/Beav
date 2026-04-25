@@ -9,6 +9,7 @@ use crate::knowledge_index::{
     advisor_source_id, citation_anchors, document_blocks,
     hybrid::RetrievalMode,
     query_profile::{self, QueryProfile},
+    retrieval_audit,
 };
 use crate::persistence::with_store;
 use crate::{payload_field, payload_string, AppState};
@@ -593,6 +594,23 @@ fn execute_source_search(
             retrieval_mode,
             &query_profile,
         )?;
+        let search_mode = if retrieval_mode == RetrievalMode::Hybrid {
+            "indexed-blocks-hybrid"
+        } else {
+            "indexed-blocks-lexical"
+        };
+        let query_plan = build_query_plan_value(&query_profile_json, retrieval_mode, search_mode);
+        let audit_run_id = retrieval_audit::record_search_run(
+            state,
+            source_id,
+            scope.source_name.as_deref(),
+            query,
+            search_mode,
+            &query_profile_json,
+            &query_plan,
+            &hit_payloads,
+            &evidence_pack,
+        )?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
             "sourceId": scope.source_id,
@@ -600,13 +618,10 @@ fn execute_source_search(
             "rootPath": scoped_root_path(scope),
             "pattern": pattern_text,
             "query": query,
+            "auditRunId": audit_run_id,
             "queryProfile": query_profile_json.clone(),
-            "queryPlan": build_query_plan_value(
-                &query_profile_json,
-                retrieval_mode,
-                if retrieval_mode == RetrievalMode::Hybrid { "indexed-blocks-hybrid" } else { "indexed-blocks-lexical" }
-            ),
-            "searchMode": if retrieval_mode == RetrievalMode::Hybrid { "indexed-blocks-hybrid" } else { "indexed-blocks-lexical" },
+            "queryPlan": query_plan,
+            "searchMode": search_mode,
             "totalMatches": hits.len(),
             "hits": hit_payloads,
             "evidencePack": evidence_pack

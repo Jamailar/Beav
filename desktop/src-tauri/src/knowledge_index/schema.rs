@@ -185,6 +185,35 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS knowledge_retrieval_runs (
+            run_id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            source_name TEXT,
+            query TEXT NOT NULL,
+            search_mode TEXT NOT NULL,
+            query_profile_json TEXT NOT NULL,
+            query_plan_json TEXT NOT NULL,
+            evidence_pack_json TEXT NOT NULL,
+            total_hits INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_retrieval_runs_source_created
+            ON knowledge_retrieval_runs(source_id, created_at DESC);
+        CREATE TABLE IF NOT EXISTS knowledge_retrieval_hits (
+            run_id TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            block_id TEXT,
+            document_id TEXT,
+            anchor_ids_json TEXT NOT NULL DEFAULT '[]',
+            source_path TEXT,
+            page INTEGER,
+            snippet TEXT NOT NULL DEFAULT '',
+            ranking_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, rank)
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_retrieval_hits_block
+            ON knowledge_retrieval_hits(block_id);
         CREATE TABLE IF NOT EXISTS knowledge_index_errors (
             path TEXT PRIMARY KEY,
             message TEXT NOT NULL,
