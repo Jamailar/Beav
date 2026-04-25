@@ -20,6 +20,7 @@ pub struct ToolRegistryPlanParams<'a> {
     pub session_id: Option<&'a str>,
     pub session_metadata: Option<&'a Value>,
     pub active_skills: &'a [String],
+    pub allowed_tool_names: Option<&'a [String]>,
     pub task_intent: Option<&'a str>,
     pub max_direct_app_cli_actions: Option<usize>,
 }
@@ -78,6 +79,7 @@ pub fn build_tool_registry_plan_for_session(
         session_id,
         session_metadata: metadata,
         active_skills: &active_skills,
+        allowed_tool_names: Some(&skill_state.allowed_tools),
         task_intent: metadata
             .and_then(|item| item.get("taskIntent"))
             .and_then(Value::as_str),
@@ -87,7 +89,10 @@ pub fn build_tool_registry_plan_for_session(
 
 pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegistryPlan {
     let runtime_mode = normalize_runtime_mode(params.runtime_mode).to_string();
-    let internal_tool_names = base_tool_names_for_metadata(&runtime_mode, params.session_metadata);
+    let internal_tool_names = params
+        .allowed_tool_names
+        .map(|items| items.to_vec())
+        .unwrap_or_else(|| base_tool_names_for_metadata(&runtime_mode, params.session_metadata));
     let visible_tool_names =
         visible_tool_names_for_internal_tools(&runtime_mode, &internal_tool_names);
     let visible_tools = visible_tool_names
