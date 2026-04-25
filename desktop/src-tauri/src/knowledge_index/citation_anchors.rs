@@ -181,6 +181,19 @@ pub(crate) fn replace_anchors_for_source(
     tx.commit().map_err(|error| error.to_string())
 }
 
+pub(crate) fn delete_anchors_for_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<(), String> {
+    let conn = connection(state)?;
+    conn.execute(
+        "DELETE FROM knowledge_citation_anchors WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 pub(crate) fn build_anchors_for_blocks(
     blocks: &[DocumentBlockRecord],
 ) -> Vec<CitationAnchorRecord> {

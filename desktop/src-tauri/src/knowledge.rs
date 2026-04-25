@@ -2170,6 +2170,7 @@ pub(crate) fn delete_document_source(
             remove_dir_if_exists(root)?;
         }
     }
+    crate::knowledge_index::delete_source_artifacts(state, source_id)?;
     refresh_knowledge_projection_and_emit(
         Some(app),
         state,

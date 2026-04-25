@@ -1286,7 +1286,7 @@ declare global {
         listPage: <T = Record<string, unknown>>(payload?: Record<string, unknown>) => Promise<T>;
         getItemDetail: <T = Record<string, unknown>>(payload: Record<string, unknown>) => Promise<T | null>;
         getIndexStatus: <T = Record<string, unknown>>() => Promise<T>;
-        rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks'; sourceId?: string; includeOcr?: boolean }) => Promise<unknown>;
+        rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeOcr?: boolean }) => Promise<unknown>;
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;

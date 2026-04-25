@@ -105,6 +105,7 @@ interface KnowledgeIndexStatus {
     indexedCount: number;
     pendingCount: number;
     failedCount: number;
+    rebuildProgress?: number | null;
     lastIndexedAt?: string | null;
     isBuilding: boolean;
     lastError?: string | null;
@@ -273,6 +274,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         indexedCount: 0,
         pendingCount: 0,
         failedCount: 0,
+        rebuildProgress: null,
         lastIndexedAt: null,
         isBuilding: false,
         lastError: null,
@@ -1863,6 +1865,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                 </span>
                             )}
                             {indexStatus.pendingCount > 0 && <span>待处理 {indexStatus.pendingCount}</span>}
+                            {typeof indexStatus.rebuildProgress === 'number' && indexStatus.rebuildProgress < 1 && (
+                                <span>重建进度 {Math.round(indexStatus.rebuildProgress * 100)}%</span>
+                            )}
                             {indexStatus.migrationStatus && (
                                 <span>迁移状态 {indexStatus.migrationStatus}</span>
                             )}

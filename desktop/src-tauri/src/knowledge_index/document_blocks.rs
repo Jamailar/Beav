@@ -269,6 +269,25 @@ pub(crate) fn replace_blocks_for_source(
     rebuild_fts_index(state)
 }
 
+pub(crate) fn delete_blocks_for_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<(), String> {
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute(
+        "DELETE FROM knowledge_document_blocks WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute(
+        "DELETE FROM knowledge_document_blocks_fts WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
 pub(crate) fn count_blocks_for_source(
     state: &State<'_, AppState>,
     source_id: &str,
