@@ -12,8 +12,10 @@ use crate::events::{
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_runtime_task_trace_scoped, append_session_checkpoint_scoped, create_runtime_task,
-    record_runtime_node, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
+    add_collab_member, append_runtime_task_trace_scoped, append_session_checkpoint_scoped,
+    create_collab_session, create_collab_task, create_runtime_task, record_runtime_node,
+    submit_collab_report, update_collab_task, RuntimeArtifact, RuntimeCheckpointRecord,
+    RuntimeRouteRecord,
 };
 use crate::subagents::{
     build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
@@ -215,6 +217,129 @@ fn ensure_parent_runtime_id(
     })
 }
 
+fn metadata_with_collab_session_id(
+    metadata: Option<&Value>,
+    collab_session_id: &str,
+) -> Option<Value> {
+    let mut object = metadata
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    object.insert(
+        "collabSessionId".to_string(),
+        json!(collab_session_id.to_string()),
+    );
+    Some(Value::Object(object))
+}
+
+fn ensure_collab_session_for_parent_task(
+    store: &mut AppStore,
+    parent_task_id: &str,
+    parent_session_id: Option<&str>,
+    runtime_mode: &str,
+    route: &RuntimeRouteRecord,
+) -> Result<String, String> {
+    if let Some(existing) = store
+        .collab_sessions
+        .iter()
+        .find(|session| {
+            session
+                .metadata
+                .as_ref()
+                .and_then(|metadata| payload_string(metadata, "sourceTaskId"))
+                .as_deref()
+                == Some(parent_task_id)
+        })
+        .map(|session| session.id.clone())
+    {
+        return Ok(existing);
+    }
+    let session = create_collab_session(
+        store,
+        &json!({
+            "ownerSessionId": parent_session_id,
+            "title": route.goal.chars().take(48).collect::<String>(),
+            "objective": route.goal,
+            "runtimeMode": runtime_mode,
+            "source": "real-subagent-orchestration",
+            "metadata": {
+                "sourceTaskId": parent_task_id,
+                "intent": route.intent,
+                "recommendedRole": route.recommended_role
+            }
+        }),
+    )?;
+    Ok(session.id)
+}
+
+fn ensure_collab_records_for_child_runtime(
+    store: &mut AppStore,
+    config: &SubAgentConfig,
+    spawn: &mut SubAgentSpawnResult,
+    route: &RuntimeRouteRecord,
+) -> Result<(), String> {
+    let Some(collab_session_id) = config.collab_session_id.as_deref() else {
+        return Ok(());
+    };
+    let member = add_collab_member(
+        store,
+        &json!({
+            "sessionId": collab_session_id,
+            "displayName": config.role_id,
+            "roleId": config.role_id,
+            "sourceKind": "internal_runtime",
+            "adapterKind": "internal",
+            "backend": "redbox-real-subagent",
+            "status": "working",
+            "conversationId": spawn.child_session_id,
+            "runtimeId": spawn.child_runtime_id,
+            "capabilities": config.fork_overrides.allowed_tools,
+            "allowedTools": config.fork_overrides.allowed_tools,
+            "desiredModelConfig": config.model_config,
+            "currentModelConfig": config.model_config,
+            "metadata": {
+                "parentTaskId": config.parent_task_id,
+                "childTaskId": spawn.child_task_id,
+                "childSessionId": spawn.child_session_id,
+                "childRuntimeId": spawn.child_runtime_id
+            }
+        }),
+    )?;
+    let task = create_collab_task(
+        store,
+        &json!({
+            "sessionId": collab_session_id,
+            "memberId": member.id,
+            "title": format!("{}: {}", config.role_id, route.goal),
+            "objective": route.goal,
+            "description": route.reasoning,
+            "status": "running",
+            "taskType": "subagent",
+            "runtimeTaskId": spawn.child_task_id,
+            "priority": if config.role_id == "reviewer" { 1 } else { 0 },
+            "metadata": {
+                "roleId": config.role_id,
+                "parentTaskId": config.parent_task_id,
+                "childTaskId": spawn.child_task_id,
+                "childSessionId": spawn.child_session_id,
+                "childRuntimeId": spawn.child_runtime_id
+            }
+        }),
+    )?;
+    if let Some(member_record) = store
+        .collab_members
+        .iter_mut()
+        .find(|item| item.id == member.id)
+    {
+        member_record.current_task_id = Some(task.id.clone());
+        member_record.last_seen_at = Some(now_i64());
+        member_record.last_activity_at = Some(now_i64());
+    }
+    spawn.collab_member_id = Some(member.id);
+    spawn.collab_task_id = Some(task.id);
+    Ok(())
+}
+
 fn create_child_runtime_records_in_store(
     store: &mut AppStore,
     parent_task_id: &str,
@@ -319,12 +444,16 @@ fn create_child_runtime_records_in_store(
         parent.child_task_ids.push(child_task_id.clone());
         parent.aggregation_status = Some("running".to_string());
     }
-    SubAgentSpawnResult {
+    let mut spawn = SubAgentSpawnResult {
         child_task_id,
         child_session_id,
         child_runtime_id,
         role_id: config.role_id.clone(),
-    }
+        collab_member_id: None,
+        collab_task_id: None,
+    };
+    let _ = ensure_collab_records_for_child_runtime(store, config, &mut spawn, route);
+    spawn
 }
 
 fn create_child_runtime_records(
@@ -427,6 +556,46 @@ fn persist_child_execution(
                 "childSessionId": spawn.child_session_id,
             })),
         );
+        if let (Some(member_id), Some(collab_task_id), Some(collab_session_id)) = (
+            spawn.collab_member_id.as_deref(),
+            spawn.collab_task_id.as_deref(),
+            config.collab_session_id.as_deref(),
+        ) {
+            let _ = submit_collab_report(
+                store,
+                &json!({
+                    "sessionId": collab_session_id,
+                    "memberId": member_id,
+                    "taskId": collab_task_id,
+                    "status": "completed",
+                    "reportType": "completion",
+                    "summary": output.summary,
+                    "nextAction": output.handoff,
+                    "artifacts": output.artifact.as_ref().map(|value| vec![json!({
+                        "type": "text",
+                        "label": format!("{} output", config.role_id),
+                        "content": value
+                    })]).unwrap_or_default(),
+                    "payload": {
+                        "roleId": config.role_id,
+                        "childTaskId": spawn.child_task_id,
+                        "childSessionId": spawn.child_session_id,
+                        "approved": output.approved,
+                        "risks": output.risks,
+                        "issues": output.issues
+                    }
+                }),
+            );
+            let _ = update_collab_task(
+                store,
+                &json!({
+                    "taskId": collab_task_id,
+                    "status": "completed",
+                    "resultSummary": output.summary,
+                    "progressPercent": 100
+                }),
+            );
+        }
         Ok(())
     })
 }
@@ -462,6 +631,37 @@ fn mark_child_failure(
                 "error": error,
             })),
         );
+        if let (Some(member_id), Some(collab_task_id), Some(collab_session_id)) = (
+            spawn.collab_member_id.as_deref(),
+            spawn.collab_task_id.as_deref(),
+            config.collab_session_id.as_deref(),
+        ) {
+            let _ = submit_collab_report(
+                store,
+                &json!({
+                    "sessionId": collab_session_id,
+                    "memberId": member_id,
+                    "taskId": collab_task_id,
+                    "status": "failed",
+                    "reportType": "failure",
+                    "summary": error,
+                    "blockers": ["subagent_execution_failed"],
+                    "payload": {
+                        "roleId": config.role_id,
+                        "childTaskId": spawn.child_task_id,
+                        "childSessionId": spawn.child_session_id
+                    }
+                }),
+            );
+            let _ = update_collab_task(
+                store,
+                &json!({
+                    "taskId": collab_task_id,
+                    "status": "failed",
+                    "resultSummary": error
+                }),
+            );
+        }
         Ok(())
     })
 }
@@ -599,14 +799,21 @@ pub fn run_real_subagent_orchestration_for_task(
 ) -> Result<Value, String> {
     let _ = settings;
     let parent_runtime_id = ensure_parent_runtime_id(state, task_id, session_id)?;
-    let configs = build_subagent_configs(
+    let collab_session_id = with_store_mut(state, |store| {
+        ensure_collab_session_for_parent_task(store, task_id, session_id, runtime_mode, route)
+    })?;
+    let metadata_with_collab = metadata_with_collab_session_id(metadata, &collab_session_id);
+    let mut configs = build_subagent_configs(
         route,
         runtime_mode,
         task_id,
         session_id,
-        metadata,
+        metadata_with_collab.as_ref(),
         model_config,
     );
+    for config in configs.iter_mut() {
+        config.collab_session_id = Some(collab_session_id.clone());
+    }
     let mut grouped = BTreeMap::<usize, Vec<SubAgentConfig>>::new();
     for config in configs {
         grouped
@@ -753,7 +960,7 @@ pub fn run_real_subagent_orchestration_for_task(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{create_runtime_task, runtime_direct_route_record};
+    use crate::runtime::{create_collab_session, create_runtime_task, runtime_direct_route_record};
 
     #[test]
     fn subagent_spawn_creates_child_task_and_session_links() {
@@ -780,11 +987,22 @@ mod tests {
             .first()
             .map(|item| item.id.clone())
             .unwrap_or_default();
+        let collab_session_id = create_collab_session(
+            &mut store,
+            &json!({
+                "ownerSessionId": "session-parent",
+                "title": "Parent collaboration",
+                "objective": "draft"
+            }),
+        )
+        .expect("collab session")
+        .id;
         let config = SubAgentConfig {
             role_id: "planner".to_string(),
             runtime_mode: "chatroom".to_string(),
             parent_task_id: parent_task_id.clone(),
             parent_session_id: Some("session-parent".to_string()),
+            collab_session_id: Some(collab_session_id.clone()),
             parallel_group: 0,
             model_config: Some(json!({"modelName": "gpt"})),
             ..SubAgentConfig::default()
@@ -802,6 +1020,16 @@ mod tests {
         assert!(store.runtime_tasks.iter().any(|item| {
             item.parent_task_id.as_deref() == Some(parent_task_id.as_str())
                 && item.runtime_id.is_some()
+        }));
+        assert!(spawn.collab_member_id.is_some());
+        assert!(spawn.collab_task_id.is_some());
+        assert!(store.collab_members.iter().any(|item| {
+            item.session_id == collab_session_id && item.current_task_id == spawn.collab_task_id
+        }));
+        assert!(store.collab_tasks.iter().any(|item| {
+            item.session_id == collab_session_id
+                && item.member_id == spawn.collab_member_id
+                && item.runtime_task_id.as_deref() == Some(spawn.child_task_id.as_str())
         }));
     }
 }
