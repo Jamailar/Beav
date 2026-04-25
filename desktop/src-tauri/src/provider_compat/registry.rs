@@ -29,7 +29,7 @@ fn model_capability_overrides(
     capabilities: ProviderCapabilities,
 ) -> ProviderCapabilities {
     let model_key = model_name.trim().to_ascii_lowercase();
-    if model_key.contains("deepseek-reasoner") {
+    if model_key.contains("deepseek") {
         return ProviderCapabilities {
             supports_tool_choice_auto: false,
             supports_tool_choice_required: false,
@@ -160,11 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn deepseek_reasoner_disables_tool_choice_by_model_name() {
+    fn deepseek_models_disable_tool_choice_by_model_name() {
         let profile = provider_profile_from_parts(
             "openai",
             "https://gateway.example.com/v1",
-            "deepseek-reasoner",
+            "provider-prefix/deepseek-chat",
         );
         assert_eq!(profile.provider_family, ProviderFamily::OpenAiCompat);
         assert!(!profile.capabilities.supports_tool_choice_auto);
