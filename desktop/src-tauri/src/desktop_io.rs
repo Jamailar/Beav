@@ -1008,7 +1008,7 @@ pub(crate) fn download_ytdlp_subtitle(
                         "字幕下载被 YouTube 限流（HTTP 429 / Too Many Requests）: {}",
                         combine_output(&capture)
                     ));
-                    break;
+                    continue;
                 }
                 if output_mentions_auth_challenge(&capture) {
                     last_error = Some(format!(
