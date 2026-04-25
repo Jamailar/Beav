@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: not_started
+execution_status: in_progress
 last_updated: 2026-04-25
 owner: desktop-runtime
 scope: desktop
@@ -28,6 +28,38 @@ success_metrics:
 ---
 
 # RedConvert 线程管理升级计划 v2
+
+## 0. 执行记录
+
+### 2026-04-25
+
+已开始执行线程优化计划，当前完成范围：
+
+1. 新增 Phase 0 后台 worker 观测基线。
+   - `debug:get-runtime-summary` 的 `phase0.backgroundWorkers` 现在包含 Media Runtime、RedClaw、Knowledge、CLI、Assistant、Persistence 的只读快照。
+   - `background-workers:get-pool-state` 不再返回空数组，改为返回同一份后台 worker 汇总。
+   - Media Runtime 暴露 job status、due poll、leased job 和 stage limit 快照。
+
+2. 将低风险短任务从裸 `thread::spawn` 迁移到 Tauri blocking pool。
+   - chat title
+   - RedClaw chat postprocess
+   - post-exchange maintenance
+   - startup migration
+   - note transcription
+   - YouTube subtitle/audio fallback
+
+3. 将 RedClaw execution heartbeat 从 OS thread 迁移到 async runtime task。
+   - 保留 `start_execution_heartbeat` / `ExecutionHeartbeat::stop` API。
+   - 不改变 execution lease、heartbeat 字段、runner 状态机。
+
+暂缓范围：
+
+1. RedClaw scheduler / runner 两个长期 loop 暂不直接迁移。
+   - runner 会执行长任务，不能简单搬到 async loop。
+   - 后续需要按本计划的 `RedClawCoordinator + budgeted dispatch` 方案处理。
+
+2. CLI stdout/stderr reader、assistant listener、knowledge watcher、audio capture、log sink 保留专属线程。
+   - 这些属于有明确生命周期的 reader/listener/device/sink worker。
 
 ## 1. 背景
 
