@@ -2096,6 +2096,8 @@ interface ToolsSettingsSectionProps {
     cliRuntimeInspectingToolId: string;
     cliRuntimeDiagnosticCommand: string;
     setCliRuntimeDiagnosticCommand: Dispatch<SetStateAction<string>>;
+    cliRuntimeExecutionMode: 'managed' | 'host_compatible' | 'unrestricted';
+    setCliRuntimeExecutionMode: Dispatch<SetStateAction<'managed' | 'host_compatible' | 'unrestricted'>>;
     cliRuntimeDiscoverQuery: string;
     setCliRuntimeDiscoverQuery: Dispatch<SetStateAction<string>>;
     cliRuntimeDiscovering: boolean;
@@ -2241,6 +2243,8 @@ export function ToolsSettingsSection({
     cliRuntimeInspectingToolId,
     cliRuntimeDiagnosticCommand,
     setCliRuntimeDiagnosticCommand,
+    cliRuntimeExecutionMode,
+    setCliRuntimeExecutionMode,
     cliRuntimeDiscoverQuery,
     setCliRuntimeDiscoverQuery,
     cliRuntimeDiscovering,
@@ -2681,7 +2685,7 @@ export function ToolsSettingsSection({
                     <div>
                         <h3 className="text-sm font-medium text-text-primary">本机 CLI</h3>
                         <div className="mt-1 text-xs text-text-tertiary">
-                            {cliRuntimeTools.length} 个工具 · {cliRuntimeEnvironments.length} 个环境
+                            {cliRuntimeTools.length} 个工具 · {cliRuntimeEnvironments.length} 个环境 · {cliRuntimeExecutionMode === 'unrestricted' ? '完全访问' : cliRuntimeExecutionMode === 'managed' ? '安全模式' : '兼容模式'}
                         </div>
                     </div>
                     <button
@@ -2692,6 +2696,29 @@ export function ToolsSettingsSection({
                     >
                         {isCliRuntimeRefreshing ? '刷新中...' : '刷新'}
                     </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    {[
+                        ['managed', '安全模式', '最小文件权限，无网络除非命令申请。'],
+                        ['host_compatible', '兼容模式', '默认推荐；允许读取本机 CLI 及其依赖。'],
+                        ['unrestricted', '完全访问', '不进入 sandbox，仅用于用户明确授权的命令。'],
+                    ].map(([mode, title, description]) => (
+                        <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setCliRuntimeExecutionMode(mode as 'managed' | 'host_compatible' | 'unrestricted')}
+                            className={clsx(
+                                'rounded border px-3 py-2 text-left transition-colors',
+                                cliRuntimeExecutionMode === mode
+                                    ? 'border-accent-primary bg-accent-primary/10'
+                                    : 'border-border bg-surface-primary/50 hover:bg-surface-secondary',
+                            )}
+                        >
+                            <div className="text-xs font-medium text-text-primary">{title}</div>
+                            <div className="mt-1 text-[11px] text-text-tertiary">{description}</div>
+                        </button>
+                    ))}
                 </div>
 
                 <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
