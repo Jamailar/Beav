@@ -1,8 +1,8 @@
 ---
 doc_type: plan
-execution_status: completed
+execution_status: in_progress
 last_updated: 2026-04-25
-execution_stage: stage7_completed
+execution_stage: stage8_planned
 owner: ai-agent
 target_files:
   - desktop/src-tauri/src/knowledge_index/*
@@ -497,6 +497,97 @@ Status: Current
 - Stage 7 现在通过失败测试直接阻塞 release gate，而不是依赖人工检查
 - 已补 release gate 报告与检查清单：[retrieval-release-gate-report.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/retrieval-release-gate-report.md)
 
+## Stage 8: 升级迁移与索引重建
+
+### Goal
+
+解决用户升级 App 后的数据库迁移、索引格式升级和后台重建问题，保证旧索引可用、新索引可恢复、失败可回滚。
+
+### Implementation
+
+必须实现：
+
+1. 检索版本常量
+
+- 在 `knowledge_index/schema.rs` 或独立 `migration.rs` 中定义：
+  - `CURRENT_SCHEMA_VERSION`
+  - `CURRENT_INDEX_FORMAT_VERSION`
+  - `CURRENT_CANONICAL_SCHEMA_VERSION`
+  - `CURRENT_PARSER_PIPELINE_VERSION`
+  - `CURRENT_CHUNK_ANCHOR_RULE_VERSION`
+  - `CURRENT_RERANK_POLICY_VERSION`
+
+2. `knowledge_meta` 版本记录
+
+- 存储当前已完成版本。
+- 存储 `pending_migration`。
+- 存储 `last_successful_rebuild_at`。
+- 存储 `last_migration_error`。
+
+3. migration decision builder
+
+- 启动时对比旧版本和当前版本。
+- 输出 `schema_only | fts_rebuild | block_anchor_rebuild | canonical_reparse | full_rebuild`。
+- decision 必须可序列化到 index status，UI 能展示。
+
+4. 幂等 schema migration
+
+- 只在启动路径做轻量 DDL。
+- 禁止在 UI 线程做 OCR、parser、全库扫描。
+- FTS5/Tantivy/vector index 的重建只投递后台 job。
+
+5. 分层重建 job
+
+- `schema_only`：补表/列后直接标记完成。
+- `fts_rebuild`：从 `knowledge_document_blocks` 重建 FTS/Tantivy，不重新解析文件。
+- `block_anchor_rebuild`：从 `knowledge_canonical_documents.canonical_json` 重建 blocks、anchors、FTS/Tantivy。
+- `canonical_reparse`：按 fingerprint 重新解析受影响文件，重建 downstream。
+- `full_rebuild`：完整执行当前 catalog rebuild。
+
+6. 旧索引兼容
+
+- 新索引未完成前继续允许 `knowledge.search` 使用旧索引。
+- 响应 `queryPlan.indexStaleness` 标明 `current | migration_pending | rebuilding | stale_fallback`。
+- 失败时保留旧索引，写 `knowledge_index_errors` 与 `last_migration_error`。
+
+7. 手动重建入口
+
+- 保留 `knowledge:rebuild-catalog`。
+- 增加“强制重建当前 source / 全库 / 仅全文索引”的参数设计。
+- OCR 重建必须单独确认，避免升级后默认消耗大量本地性能或远程 API 额度。
+
+### Deliverables
+
+- `knowledge_index/migration.rs`
+- `knowledge_meta` 版本键读写工具
+- index status migration 字段
+- 分层 rebuild job
+- FTS/Tantivy-only rebuild
+- canonical-to-block rebuild
+- migration regression tests
+
+### Acceptance
+
+1. 老版本没有 FTS 表的数据库升级后，会自动补 schema 并后台重建 FTS，原检索在重建前仍可用。
+2. 只改 rerank policy version 时，不触发 OCR/parser/FTS 重建。
+3. 只改 chunk/anchor 规则时，从 canonical 重建 blocks/anchors，不重新 OCR。
+4. 改 canonical schema 或 parser pipeline 时，只重新解析 fingerprint 受影响的文件。
+5. 迁移中杀进程，重启后能继续或重新安全执行，不破坏旧索引。
+6. 迁移失败时，`knowledge.search` 仍能使用旧索引，并在 query plan 标注 stale fallback。
+7. 用户可手动触发全库重建或仅全文索引重建。
+
+### Exit Criteria
+
+- 用户升级 App 不需要手动删库。
+- 所有检索结构变化都有明确 migration decision。
+- 大型库升级不会阻塞 UI。
+- 失败可观测、可重试、可保留旧索引。
+
+### Progress Notes
+
+- 当前 `schema.rs` 已有幂等建表/补列基础，但还缺显式版本键、migration decision、分层重建和 index staleness 标注。
+- 当前 rebuild 是全量 `rebuild_catalog`，需要拆出 FTS-only、canonical-to-block、source-level rebuild。
+
 ## Phase Dependencies
 
 - Stage 2 依赖 Stage 1 的 canonical/index 主链路
@@ -505,6 +596,7 @@ Status: Current
 - Stage 5 依赖 Stage 2 的 parser 编排与 Stage 3 的 anchor 结构
 - Stage 6 依赖 Stage 4 / Stage 5 的稳定评测数据
 - Stage 7 贯穿全程，但必须在 Stage 6 后完成最终闸门
+- Stage 8 依赖 Stage 2 的 schema/catalog 和 Stage 6/7 的 query plan/audit 字段；所有后续检索结构变更都必须先更新 Stage 8 的版本键与迁移规则
 
 ## Recommended Delivery Slices
 
@@ -523,6 +615,10 @@ Status: Current
 11. hybrid planner
 12. rerank pipeline
 13. benchmark 与 release gate
+14. retrieval schema version 与 migration decision
+15. FTS/Tantivy-only rebuild
+16. canonical-to-block rebuild
+17. migration status UI 与 stale index query plan
 
 ## First Milestone Definition
 

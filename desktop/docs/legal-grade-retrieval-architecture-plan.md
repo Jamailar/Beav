@@ -666,6 +666,66 @@ final_score =
 - rerank feature cache
 - parser artifact cache
 
+## Upgrade, Migration, And Rebuild Strategy
+
+App 升级后不能假设用户会手动清空索引。检索数据库、canonical schema、parser 版本、chunk/anchor 规则、FTS/Tantivy 索引格式都必须有版本化迁移和安全重建流程。
+
+### 版本记录
+
+`knowledge_meta` 必须记录以下版本键：
+
+- `schema_version`：SQLite 表结构版本。
+- `index_format_version`：FTS/Tantivy/vector 索引格式版本。
+- `canonical_schema_version`：`CanonicalDocument` JSON 契约版本。
+- `parser_pipeline_version`：parser/OCR/layout 编排版本。
+- `chunk_anchor_rule_version`：block 切分与 citation anchor 规则版本。
+- `rerank_policy_version`：rerank 权重和规则版本。
+- `last_successful_rebuild_at`：最近一次完整成功重建时间。
+
+### 启动迁移流程
+
+启动时必须按固定顺序执行：
+
+1. 打开 `.redbox/index/knowledge_catalog.sqlite`。
+2. 设置 WAL 与基础 PRAGMA。
+3. 执行幂等 schema migration：只做 `CREATE TABLE IF NOT EXISTS`、`CREATE INDEX IF NOT EXISTS`、`ALTER TABLE ADD COLUMN`、可重建虚拟表创建，不在 UI 线程做重型重建。
+4. 读取 `knowledge_meta` 中的版本键。
+5. 对比当前 app 内置的检索版本常量。
+6. 生成 migration decision：
+   - `schema_only`：只需要表结构补齐，不需要重建。
+   - `fts_rebuild`：FTS/Tantivy 索引结构变化，只重建全文索引。
+   - `block_anchor_rebuild`：chunk/anchor 规则变化，复用 canonical，重建 blocks、anchors、lexical/vector index。
+   - `canonical_reparse`：parser/OCR/canonical schema 变化，重新解析文件并重建下游层。
+   - `full_rebuild`：无法安全增量迁移或旧版本缺少关键元数据，完整重建。
+7. 将 decision 写入 `knowledge_meta.pending_migration`，并通过 index status 暴露给 UI。
+8. 后台 job 执行迁移/重建，旧索引在新索引完成前继续提供检索。
+9. 重建成功后原子更新版本键和 `last_successful_rebuild_at`；失败时保留旧索引并记录 `knowledge_index_errors`。
+
+### 重建粒度
+
+不同升级类型必须触发不同层级，避免每次升级都重新 OCR 大文件：
+
+| 变化类型 | 触发动作 | 是否重新 OCR / parser |
+| --- | --- | --- |
+| 新增 SQLite 表/列 | schema migration | 否 |
+| FTS5 表新增或格式变化 | 重建 FTS rows | 否 |
+| Tantivy schema 变化 | 重建 Tantivy index | 否 |
+| rerank 权重变化 | 更新策略版本 | 否 |
+| citation anchor 切分规则变化 | 重建 anchors，并按需重建 evidence cache | 否 |
+| block chunk 规则变化 | 从 canonical 重建 blocks、anchors、索引 | 否 |
+| canonical schema 变化 | 重新解析文件，重建 downstream | 是 |
+| OCR provider 配置变化 | 只影响新解析；若用户选择“重新 OCR”，才重建 OCR 文档 | 可选 |
+| parser engine/version 变化 | 对受影响文件重新解析 | 是 |
+
+### 安全要求
+
+- 迁移必须幂等，同一版本可重复执行。
+- 迁移失败不得删除旧可用索引。
+- 大型重建必须后台执行，不阻塞页面进入。
+- UI 必须展示 `migrationStatus`、`pendingRebuildReason`、`rebuildProgress`、`lastError`。
+- 用户升级后第一次检索，如果新索引未完成，应返回旧索引结果，并在 `queryPlan` 标注 `indexStaleness`。
+- 删除文件仍必须立即传播到 canonical、block、anchor、FTS/Tantivy、audit 关联数据，不能等下一次全量重建。
+
 ## Security And Compliance
 
 法律行业使用场景要求默认合规。
