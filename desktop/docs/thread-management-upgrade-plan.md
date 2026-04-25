@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: in_progress
+execution_status: completed
 last_updated: 2026-04-25
 owner: desktop-runtime
 scope: desktop
@@ -33,7 +33,7 @@ success_metrics:
 
 ### 2026-04-25
 
-已开始执行线程优化计划，当前完成范围：
+线程优化计划已按兼容优先策略完成，当前完成范围：
 
 1. 新增 Phase 0 后台 worker 观测基线。
    - `debug:get-runtime-summary` 的 `phase0.backgroundWorkers` 现在包含 Media Runtime、RedClaw、Knowledge、CLI、Assistant、Persistence 的只读快照。
@@ -52,14 +52,28 @@ success_metrics:
    - 保留 `start_execution_heartbeat` / `ExecutionHeartbeat::stop` API。
    - 不改变 execution lease、heartbeat 字段、runner 状态机。
 
-暂缓范围：
+4. 将 RedClaw scheduler / runner 两个长期 sleep-loop 迁移到 async runtime。
+   - 外层 tick 使用 `tokio::time::interval`。
+   - 实际 store I/O、due scan、maintenance、job execution dispatch 仍通过 `spawn_blocking` 进入 blocking pool。
+   - `redclaw:stop` 改为 abort async task，避免 UI 因等待长期 loop join 被阻塞。
 
-1. RedClaw scheduler / runner 两个长期 loop 暂不直接迁移。
-   - runner 会执行长任务，不能简单搬到 async loop。
-   - 后续需要按本计划的 `RedClawCoordinator + budgeted dispatch` 方案处理。
+5. 将 CLI background reaper 从每个后台进程一个 OS thread 迁移到 async runtime task。
+   - 保留 stdout/stderr reader 线程，避免破坏当前管道读取和日志实时输出兼容性。
+   - reaper 仍按 100ms 刷新进程状态，但不再占用独立常驻 OS thread。
 
-2. CLI stdout/stderr reader、assistant listener、knowledge watcher、audio capture、log sink 保留专属线程。
+6. 将旧版 `runtimeBypass` 图片批量生成和 subagent fanout 从裸 `thread::spawn` 迁移到 Tauri blocking pool。
+   - 保留原并发上限、同步返回、结果排序和错误传播语义。
+   - 避免兼容路径绕过统一 runtime pool。
+
+保留范围：
+
+1. CLI stdout/stderr reader、assistant listener、knowledge watcher、audio capture、log sink 保留专属线程。
    - 这些属于有明确生命周期的 reader/listener/device/sink worker。
+   - 它们不是“小任务线程”，不参与合并，后续只纳入 diagnostics / telemetry。
+
+2. `main.rs` 中外部命令 stderr reader 保留专用 reader 线程。
+   - 当前逻辑依赖阻塞式 stderr pipe drain，贸然改成 async process 会影响流式下载和错误收集。
+   - 若后续要继续压缩 reader 线程，应单独做 `tokio::process` 迁移，不能混入本轮线程管理合并。
 
 ## 1. 背景
 
@@ -85,17 +99,17 @@ App 功能已经发生变化：图片/视频生成不再只是 `image-gen:genera
 2. RedClaw Runtime
    - 位置：`desktop/src-tauri/src/scheduler/*`、`commands/redclaw*.rs`
    - 任务：定时任务、长期任务、自动化执行、heartbeat、retry、maintenance
-   - 当前问题：scheduler/runner 是两个 sleep-loop 线程，heartbeat 仍是每 execution 一个线程
+   - 当前状态：scheduler/runner 已迁入 async runtime，heartbeat 已迁入 async runtime task
 
 3. Knowledge Runtime
    - 位置：`knowledge_index/*`、`knowledge.rs`
    - 任务：文件 watcher、catalog rebuild、转写、YouTube 字幕/音频 fallback
-   - 当前问题：watcher 合理保留，但转写/字幕等一次性任务仍有裸线程
+   - 当前状态：watcher 合理保留，转写/字幕等一次性任务已迁入 Tauri blocking pool
 
 4. CLI Runtime
    - 位置：`cli_runtime/*`
    - 任务：后台命令、stdout/stderr reader、reaper、verification
-   - 当前问题：reader/reaper 会随后台进程增长
+   - 当前状态：reader 作为管道生命周期线程保留，reaper 已迁入 async runtime
 
 5. Assistant Runtime
    - 位置：`assistant_core.rs`
