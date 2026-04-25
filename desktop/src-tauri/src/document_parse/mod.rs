@@ -10,8 +10,8 @@ use std::path::Path;
 pub(crate) use legal_metadata::LegalMetadata;
 pub(crate) use ocr::{OcrProvider, OcrProviderConfig};
 
-const PARSER_NAME: &str = "redbox-canonical";
-const PARSER_VERSION: &str = "stage5-v1";
+pub(crate) const PARSER_NAME: &str = "redbox-canonical";
+pub(crate) const PARSER_VERSION: &str = "stage5-v1";
 const MAX_CANONICAL_BLOCK_CHARS: usize = 1600;
 const MAX_CANONICAL_BLOCK_LINES: usize = 24;
 const MAX_ZIP_ENTRY_BYTES: u64 = 4 * 1024 * 1024;

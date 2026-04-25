@@ -30,6 +30,14 @@ pub struct KnowledgeItemDetailRequest {
     pub kind: String,
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeRebuildCatalogRequest {
+    pub mode: Option<String>,
+    pub source_id: Option<String>,
+    pub include_ocr: Option<bool>,
+}
+
 fn builtin_animation_elements() -> Vec<Value> {
     vec![json!({
         "id": "builtin:apple-drop",
@@ -775,10 +783,57 @@ pub async fn knowledge_get_index_status(state: State<'_, AppState>) -> Result<Va
 pub async fn knowledge_rebuild_catalog(
     app: AppHandle,
     state: State<'_, AppState>,
+    payload: Option<KnowledgeRebuildCatalogRequest>,
 ) -> Result<Value, String> {
-    let _ = knowledge_index::jobs::ensure_catalog_ready_async(&app, &state, "manual-rebuild");
-    knowledge_index::jobs::schedule_rebuild(&app, "manual-rebuild");
-    Ok(json!({ "success": true }))
+    knowledge_rebuild_catalog_value(&app, &state, payload.unwrap_or_default())
+}
+
+fn knowledge_rebuild_catalog_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    request: KnowledgeRebuildCatalogRequest,
+) -> Result<Value, String> {
+    let _ = knowledge_index::jobs::ensure_catalog_ready_async(app, state, "manual-rebuild");
+    let mode = request
+        .mode
+        .as_deref()
+        .unwrap_or("full")
+        .trim()
+        .to_ascii_lowercase();
+    let source_id = request.source_id.filter(|value| !value.trim().is_empty());
+    match mode.as_str() {
+        "fts" | "fulltext" | "full_text" => {
+            knowledge_index::jobs::schedule_fts_rebuild(app, source_id.clone());
+            Ok(json!({
+                "success": true,
+                "mode": "fts",
+                "sourceId": source_id,
+                "ocrIncluded": false
+            }))
+        }
+        "canonicalblocks" | "canonical_blocks" | "blocks" | "block_anchor_rebuild" => {
+            knowledge_index::jobs::schedule_block_anchor_rebuild(app, source_id.clone());
+            Ok(json!({
+                "success": true,
+                "mode": "canonicalBlocks",
+                "sourceId": source_id,
+                "ocrIncluded": false
+            }))
+        }
+        "full" | "catalog" | "full_rebuild" => {
+            knowledge_index::jobs::schedule_rebuild(app, "manual-rebuild");
+            Ok(json!({
+                "success": true,
+                "mode": "full",
+                "sourceId": Value::Null,
+                "ocrIncluded": request.include_ocr.unwrap_or(false),
+                "ocrPolicy": "uses configured OCR provider only when parser needs OCR"
+            }))
+        }
+        _ => Err(format!(
+            "不支持的重建模式: {mode}，可用值: full / fts / canonicalBlocks"
+        )),
+    }
 }
 
 #[tauri::command]
@@ -867,10 +922,13 @@ pub fn handle_library_channel(
             }
             "knowledge:get-index-status" => knowledge_get_index_status_value(state),
             "knowledge:rebuild-catalog" => {
-                let _ =
-                    knowledge_index::jobs::ensure_catalog_ready_async(app, state, "manual-rebuild");
-                knowledge_index::jobs::schedule_rebuild(app, "manual-rebuild");
-                Ok(json!({ "success": true }))
+                let request = if payload.is_null() {
+                    KnowledgeRebuildCatalogRequest::default()
+                } else {
+                    serde_json::from_value(payload.clone())
+                        .map_err(|error| format!("knowledge rebuild payload 无效: {error}"))?
+                };
+                knowledge_rebuild_catalog_value(app, state, request)
             }
             "knowledge:open-index-root" => {
                 let root = knowledge_index::catalog_root(state)?;

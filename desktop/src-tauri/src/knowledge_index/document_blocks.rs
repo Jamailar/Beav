@@ -197,6 +197,78 @@ pub(crate) fn replace_blocks(
     tx.commit().map_err(|error| error.to_string())
 }
 
+pub(crate) fn replace_blocks_for_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+    blocks: &[DocumentBlockRecord],
+) -> Result<(), String> {
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute(
+        "DELETE FROM knowledge_document_blocks WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    {
+        let mut stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO knowledge_document_blocks (
+                    block_id, document_id, source_id, source_name, root_path, absolute_path,
+                    relative_path, file_extension, title, language, content_origin,
+                    ocr_confidence, jurisdiction, authority, authority_level, effective_date,
+                    expiry_date, document_type, is_superseded, page, block_type,
+                    section_path_json, block_index, line_start, line_end, text,
+                    normalized_text, semantic_vector_json, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6,
+                    ?7, ?8, ?9, ?10, ?11, ?12,
+                    ?13, ?14, ?15, ?16, ?17, ?18,
+                    ?19, ?20, ?21, ?22, ?23, ?24,
+                    ?25, ?26, ?27, ?28, ?29
+                )
+                "#,
+            )
+            .map_err(|error| error.to_string())?;
+        for block in blocks {
+            stmt.execute(params![
+                block.block_id,
+                block.document_id,
+                block.source_id,
+                block.source_name,
+                block.root_path,
+                block.absolute_path,
+                block.relative_path,
+                block.file_extension,
+                block.title,
+                block.language,
+                block.content_origin,
+                block.ocr_confidence,
+                block.jurisdiction,
+                block.authority,
+                block.authority_level,
+                block.effective_date,
+                block.expiry_date,
+                block.document_type,
+                block.is_superseded,
+                block.page,
+                block.block_type,
+                block.section_path_json,
+                block.block_index,
+                block.line_start,
+                block.line_end,
+                block.text,
+                block.normalized_text,
+                block.semantic_vector_json,
+                block.updated_at
+            ])
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    tx.commit().map_err(|error| error.to_string())?;
+    rebuild_fts_index(state)
+}
+
 pub(crate) fn count_blocks_for_source(
     state: &State<'_, AppState>,
     source_id: &str,
@@ -224,6 +296,35 @@ pub(crate) fn rebuild_fts_index(state: &State<'_, AppState>) -> Result<(), Strin
         FROM knowledge_document_blocks
         "#,
         [],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
+pub(crate) fn rebuild_fts_index_for_source(
+    state: &State<'_, AppState>,
+    source_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(source_id) = source_id else {
+        return rebuild_fts_index(state);
+    };
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute(
+        "DELETE FROM knowledge_document_blocks_fts WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute(
+        r#"
+        INSERT INTO knowledge_document_blocks_fts (
+            block_id, source_id, title, text, normalized_text, relative_path
+        )
+        SELECT block_id, source_id, title, text, normalized_text, relative_path
+        FROM knowledge_document_blocks
+        WHERE source_id = ?1
+        "#,
+        params![source_id],
     )
     .map_err(|error| error.to_string())?;
     tx.commit().map_err(|error| error.to_string())
@@ -707,7 +808,7 @@ fn resolve_ocr_provider_config(state: &State<'_, AppState>) -> Result<OcrProvide
     })
 }
 
-fn block_records_from_document(
+pub(crate) fn block_records_from_document(
     document: &CanonicalDocument,
     source_name: &str,
     root_path: &Path,

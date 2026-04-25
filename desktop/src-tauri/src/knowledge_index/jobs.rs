@@ -2,33 +2,36 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::{
     knowledge_index::{
-        document_blocks::rebuild_fts_index,
+        document_blocks::rebuild_fts_index_for_source,
         index_status,
-        indexer::rebuild_catalog,
+        indexer::{rebuild_blocks_from_canonical, rebuild_catalog},
         migration::{self, MigrationDecision},
         schema::ensure_catalog_ready,
     },
     AppState,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum RebuildJobKind {
     FullCatalog,
-    FtsOnly,
+    FtsOnly { source_id: Option<String> },
+    BlockAnchor { source_id: Option<String> },
 }
 
 impl RebuildJobKind {
-    fn reason(self) -> &'static str {
+    fn reason(&self) -> &'static str {
         match self {
             Self::FullCatalog => "full_rebuild",
-            Self::FtsOnly => "fts_rebuild",
+            Self::FtsOnly { .. } => "fts_rebuild",
+            Self::BlockAnchor { .. } => "block_anchor_rebuild",
         }
     }
 
-    fn migration_decision(self) -> MigrationDecision {
+    fn migration_decision(&self) -> MigrationDecision {
         match self {
             Self::FullCatalog => MigrationDecision::FullRebuild,
-            Self::FtsOnly => MigrationDecision::FtsRebuild,
+            Self::FtsOnly { .. } => MigrationDecision::FtsRebuild,
+            Self::BlockAnchor { .. } => MigrationDecision::BlockAnchorRebuild,
         }
     }
 }
@@ -105,9 +108,14 @@ fn spawn_rebuild(app: AppHandle, kind: RebuildJobKind) {
                 return;
             }
         }
-        let result = match kind {
+        let result = match &kind {
             RebuildJobKind::FullCatalog => rebuild_catalog(&app, &state),
-            RebuildJobKind::FtsOnly => rebuild_fts_index(&state),
+            RebuildJobKind::FtsOnly { source_id } => {
+                rebuild_fts_index_for_source(&state, source_id.as_deref())
+            }
+            RebuildJobKind::BlockAnchor { source_id } => {
+                rebuild_blocks_from_canonical(&app, &state, source_id.as_deref())
+            }
         };
         match &result {
             Ok(_) => {
@@ -144,12 +152,23 @@ pub(crate) fn schedule_rebuild(app: &AppHandle, _reason: &str) {
     }
 }
 
-fn schedule_fts_rebuild(app: &AppHandle) {
+pub(crate) fn schedule_fts_rebuild(app: &AppHandle, source_id: Option<String>) {
     let state = app.state::<AppState>();
     match mark_pending(&state, "fts_rebuild") {
-        Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::FtsOnly),
+        Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::FtsOnly { source_id }),
         Ok(false) => {}
         Err(error) => eprintln!("[RedBox knowledge index] mark fts pending failed: {error}"),
+    }
+}
+
+pub(crate) fn schedule_block_anchor_rebuild(app: &AppHandle, source_id: Option<String>) {
+    let state = app.state::<AppState>();
+    match mark_pending(&state, "block_anchor_rebuild") {
+        Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::BlockAnchor { source_id }),
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("[RedBox knowledge index] mark block-anchor pending failed: {error}")
+        }
     }
 }
 
@@ -165,7 +184,10 @@ pub(crate) fn ensure_catalog_ready_async(
             migration::mark_schema_current(state)?;
         }
         MigrationDecision::FtsRebuild => {
-            schedule_fts_rebuild(app);
+            schedule_fts_rebuild(app, None);
+        }
+        MigrationDecision::BlockAnchorRebuild => {
+            schedule_block_anchor_rebuild(app, None);
         }
         MigrationDecision::FullRebuild => {
             schedule_rebuild(app, "migration-full-rebuild");
