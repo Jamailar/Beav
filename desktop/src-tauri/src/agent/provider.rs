@@ -67,6 +67,54 @@ pub fn resolve_chat_exchange_response_stage(
             emitted_live_events: emits_live_events_for_runtime_mode(&context.runtime_mode),
         }),
         Err(error) => {
+            if should_retry_as_text_after_multimodal_error(&error, attachment) {
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[runtime][{}][{}] multimodal-direct-input-fallback | model={} | {}",
+                        context.runtime_mode, context.working_session_id, config.model_name, error
+                    ),
+                );
+                let downgraded_attachment = attachment.map(multimodal_text_fallback_attachment);
+                let fallback_result = match config.protocol.as_str() {
+                    "openai" => run_openai_interactive_chat_runtime(
+                        app,
+                        state,
+                        Some(context.working_session_id.as_str()),
+                        &config,
+                        message,
+                        downgraded_attachment.as_ref(),
+                        &context.runtime_mode,
+                    ),
+                    "anthropic" => run_anthropic_interactive_chat_runtime(
+                        app,
+                        state,
+                        Some(context.working_session_id.as_str()),
+                        &config,
+                        message,
+                        downgraded_attachment.as_ref(),
+                        &context.runtime_mode,
+                    ),
+                    "gemini" => run_gemini_interactive_chat_runtime(
+                        app,
+                        state,
+                        Some(context.working_session_id.as_str()),
+                        &config,
+                        message,
+                        downgraded_attachment.as_ref(),
+                        &context.runtime_mode,
+                    ),
+                    _ => unreachable!(),
+                };
+                if let Ok(response) = fallback_result {
+                    return Ok(ChatExchangeResponseStage {
+                        response,
+                        emitted_live_events: emits_live_events_for_runtime_mode(
+                            &context.runtime_mode,
+                        ),
+                    });
+                }
+            }
             let provider_profile = provider_profile_from_config(&config);
             let envelope = runtime_error_envelope_from_error(
                 &error,
@@ -88,6 +136,70 @@ pub fn resolve_chat_exchange_response_stage(
             Err(error)
         }
     }
+}
+
+fn attachment_requested_direct_multimodal(attachment: Option<&Value>) -> bool {
+    let Some(attachment) = attachment else {
+        return false;
+    };
+    let mode = attachment
+        .get("deliveryMode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if mode != "direct-input" {
+        return false;
+    }
+    let kind = attachment
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    matches!(kind, "image" | "audio" | "video")
+        || attachment
+            .get("requiresMultimodal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn should_retry_as_text_after_multimodal_error(error: &str, attachment: Option<&Value>) -> bool {
+    if !attachment_requested_direct_multimodal(attachment) {
+        return false;
+    }
+    let lower = error.to_ascii_lowercase();
+    [
+        "multimodal",
+        "multi-modal",
+        "vision",
+        "image input",
+        "input_image",
+        "image_url",
+        "video input",
+        "audio input",
+        "media type",
+        "unsupported content",
+        "does not support image",
+        "does not support video",
+        "does not support audio",
+        "only supports text",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn multimodal_text_fallback_attachment(attachment: &Value) -> Value {
+    let mut downgraded = attachment.clone();
+    if let Some(object) = downgraded.as_object_mut() {
+        object.insert(
+            "deliveryMode".to_string(),
+            Value::String("tool-read".to_string()),
+        );
+        object.insert(
+            "multimodalFallbackReason".to_string(),
+            Value::String("provider-rejected-direct-media-input".to_string()),
+        );
+    }
+    downgraded
 }
 
 fn emits_live_events_for_runtime_mode(runtime_mode: &str) -> bool {

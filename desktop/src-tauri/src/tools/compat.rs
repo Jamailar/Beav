@@ -864,12 +864,12 @@ fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
             format!("{scope_prefix}.{normalized_action}")
         }
         "workspace.list" | "workspace.read" | "workspace.search" | "knowledge.list"
-        | "knowledge.read" | "knowledge.search" => normalized_action,
+        | "knowledge.read" | "knowledge.attach" | "knowledge.search" => normalized_action,
         other => other.to_string(),
     };
     match combined.as_str() {
         "workspace.list" | "workspace.read" | "workspace.search" | "knowledge.list"
-        | "knowledge.read" | "knowledge.search" => combined,
+        | "knowledge.read" | "knowledge.attach" | "knowledge.search" => combined,
         _ => combined,
     }
 }
