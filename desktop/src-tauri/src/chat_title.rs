@@ -19,7 +19,7 @@ pub fn spawn_chat_session_auto_title(
     attachment: Option<Value>,
     model_config: Option<Value>,
 ) {
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = run_chat_session_auto_title(
             &app,
             &session_id,

@@ -91,7 +91,7 @@ pub fn execute_session_agent_turn(
     );
     if let Some(app_handle) = app.cloned() {
         let response_for_maintenance = response.clone();
-        std::thread::spawn(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
             let _ = update_post_exchange_maintenance(&state, &response_for_maintenance);
         });

@@ -70,7 +70,7 @@ fn spawn_redclaw_chat_postprocess(
     response: String,
     message: String,
 ) {
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let artifact_kind = detect_redclaw_artifact_kind(&message, "chat-session");
         let artifacts = save_redclaw_outputs(

@@ -11,7 +11,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::thread;
 use tauri::{AppHandle, Emitter, State};
 use url::Url;
 
@@ -894,7 +893,7 @@ fn spawn_note_transcription_processing(
     entry_dir: PathBuf,
 ) {
     let app_handle = app.clone();
-    thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         append_debug_log_state(
             &state,
@@ -985,7 +984,7 @@ fn spawn_youtube_subtitle_processing(
     entry_dir: PathBuf,
 ) {
     let app_handle = app.clone();
-    thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         append_debug_log_state(
             &state,
