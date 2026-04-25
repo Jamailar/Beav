@@ -5,7 +5,6 @@ use crate::*;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::thread;
 use tauri::{AppHandle, State};
 
 const REDBOX_OFFICIAL_VIDEO_ENDPOINT: &str = "https://api.ziz.hk/redbox/v1";
@@ -277,7 +276,7 @@ fn generate_planned_image_batch(
                     let mime_type = mime_type.clone();
                     let item = item.clone();
                     let index = *index;
-                    thread::spawn(move || {
+                    tauri::async_runtime::spawn_blocking(move || {
                         execute_planned_image_generation_item(
                             request_payload,
                             media_root_path,
@@ -303,9 +302,8 @@ fn generate_planned_image_batch(
                 .collect::<Vec<_>>();
             let mut chunk_results = Vec::with_capacity(handles.len());
             for handle in handles {
-                let result = handle
-                    .join()
-                    .map_err(|_| "planned image batch worker panicked".to_string())??;
+                let result = tauri::async_runtime::block_on(handle)
+                    .map_err(|error| format!("planned image batch worker failed: {error}"))??;
                 chunk_results.push(result);
             }
             chunk_results.sort_by_key(|(index, _)| *index);
