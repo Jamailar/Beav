@@ -1,12 +1,44 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Clock3, ListTodo, Loader2, Play, RefreshCw } from 'lucide-react';
-import { appAlert } from '../utils/appDialogs';
+import { AlertCircle, Clock3, ListTodo, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 
 type TaskListResponse = Awaited<ReturnType<typeof window.ipcRenderer.redclawRunner.taskList>>;
 type TaskListItem = NonNullable<TaskListResponse['items']>[number];
 type TaskStatsResponse = Awaited<ReturnType<typeof window.ipcRenderer.redclawRunner.taskStats>>;
 
 type TaskFilterKey = 'all' | 'scheduled' | 'long_cycle' | 'draft' | 'active' | 'cooldown';
+type TaskEditorMode = 'create' | 'edit';
+type TaskEditorKind = 'scheduled' | 'long_cycle';
+
+interface TaskEditorState {
+    kind: TaskEditorKind;
+    name: string;
+    cron: string;
+    prompt: string;
+    objective: string;
+    stepPrompt: string;
+    actionType: string;
+    ownerScope: string;
+    timezone: string;
+    missedRunPolicy: string;
+    totalRounds: string;
+    reason: string;
+}
+
+const defaultTaskEditorState: TaskEditorState = {
+    kind: 'scheduled',
+    name: '',
+    cron: '0 9 * * *',
+    prompt: '',
+    objective: '',
+    stepPrompt: '',
+    actionType: 'redclaw_prompt',
+    ownerScope: 'manual:redclaw',
+    timezone: 'local',
+    missedRunPolicy: 'single',
+    totalRounds: '12',
+    reason: '',
+};
 
 function formatDateTime(value?: string | null): string {
     if (!value) return '-';
@@ -124,6 +156,97 @@ function scheduleSummary(item: TaskListItem): string {
     }
 }
 
+function cronFromItem(item: TaskListItem): string {
+    if (item.triggerKind === 'interval') {
+        return `@every ${Number(item.intervalMinutes || (item.kind === 'long_cycle' ? 720 : 60))} minutes`;
+    }
+    if (item.triggerKind === 'daily' && item.time) {
+        const [hour = '9', minute = '0'] = item.time.split(':');
+        return `${Number(minute)} ${Number(hour)} * * *`;
+    }
+    if (item.triggerKind === 'weekly' && item.time) {
+        const [hour = '9', minute = '0'] = item.time.split(':');
+        const weekdays = Array.isArray(item.weekdays) && item.weekdays.length > 0 ? item.weekdays.join(',') : '1';
+        return `${Number(minute)} ${Number(hour)} * * ${weekdays}`;
+    }
+    if (item.triggerKind === 'once' && item.runAt) {
+        return `@once ${item.runAt}`;
+    }
+    return item.kind === 'long_cycle' ? '@every 12 hours' : '0 9 * * *';
+}
+
+function editorStateFromItem(item: TaskListItem): TaskEditorState {
+    return {
+        kind: item.kind === 'long_cycle' ? 'long_cycle' : 'scheduled',
+        name: item.title || '',
+        cron: cronFromItem(item),
+        prompt: item.prompt || item.goal || '',
+        objective: item.objective || '',
+        stepPrompt: item.stepPrompt || '',
+        actionType: item.actionType || (item.kind === 'long_cycle' ? 'long_cycle' : 'redclaw_prompt'),
+        ownerScope: item.ownerScope || 'manual:redclaw',
+        timezone: item.timezone || 'local',
+        missedRunPolicy: item.missedRunPolicy || 'single',
+        totalRounds: String(item.totalRounds || 12),
+        reason: '用户从任务中心更新任务',
+    };
+}
+
+function taskIntentFromEditor(editor: TaskEditorState): Record<string, unknown> {
+    const name = editor.name.trim();
+    const cron = editor.cron.trim();
+    const actionType = editor.actionType.trim() || (editor.kind === 'long_cycle' ? 'long_cycle' : 'redclaw_prompt');
+    const ownerScope = editor.ownerScope.trim() || 'manual:redclaw';
+    const timezone = editor.timezone.trim() || 'local';
+    const missedRunPolicy = editor.missedRunPolicy.trim() || 'single';
+
+    if (!name) throw new Error('请填写任务名称。');
+    if (!cron) throw new Error('请填写调度表达式。');
+
+    const intent: Record<string, unknown> = {
+        kind: editor.kind,
+        name,
+        cron,
+        actionType,
+        ownerScope,
+        timezone,
+        missedRunPolicy,
+        creatorMode: 'ui-manual',
+        createdBy: 'redclaw-task-center',
+    };
+
+    if (editor.kind === 'long_cycle') {
+        const objective = editor.objective.trim();
+        const stepPrompt = editor.stepPrompt.trim();
+        const totalRounds = Number(editor.totalRounds || 12);
+        if (!objective) throw new Error('长周期任务需要填写目标。');
+        if (!stepPrompt) throw new Error('长周期任务需要填写每轮提示词。');
+        intent.objective = objective;
+        intent.stepPrompt = stepPrompt;
+        intent.totalRounds = Number.isFinite(totalRounds) && totalRounds > 0 ? Math.floor(totalRounds) : 12;
+    } else {
+        const prompt = editor.prompt.trim();
+        if (!prompt) throw new Error('定时任务需要填写执行提示词。');
+        intent.prompt = prompt;
+        intent.goal = prompt;
+    }
+
+    return intent;
+}
+
+function previewTokenFromResult(result: unknown): string {
+    const token = (result as { previewToken?: unknown })?.previewToken;
+    return typeof token === 'string' ? token : '';
+}
+
+function draftIdFromResult(result: unknown): string {
+    const value = result as { draftId?: unknown; definition?: { draftId?: unknown; id?: unknown } };
+    if (typeof value?.draftId === 'string') return value.draftId;
+    if (typeof value?.definition?.draftId === 'string') return value.definition.draftId;
+    if (typeof value?.definition?.id === 'string') return value.definition.id;
+    return '';
+}
+
 function shortFingerprint(value?: string | null): string {
     const raw = String(value || '').trim();
     if (!raw) return '-';
@@ -215,6 +338,156 @@ function DetailRow({
     );
 }
 
+function TaskEditorPanel({
+    mode,
+    value,
+    busy,
+    error,
+    onChange,
+    onSubmit,
+    onCancel,
+}: {
+    mode: TaskEditorMode;
+    value: TaskEditorState;
+    busy: boolean;
+    error: string;
+    onChange: (value: TaskEditorState) => void;
+    onSubmit: () => void;
+    onCancel: () => void;
+}) {
+    const update = (patch: Partial<TaskEditorState>) => onChange({ ...value, ...patch });
+    const inputClass = 'mt-1.5 w-full rounded-[14px] border border-[#e7ded1] bg-white px-3 py-2 text-[13px] text-[#201d1a] outline-none transition focus:border-[#c8a66f] focus:ring-2 focus:ring-[#ead8b8]';
+    const labelClass = 'text-[10px] uppercase tracking-[0.16em] text-[#9c9284]';
+
+    return (
+        <section className="rounded-[22px] border border-[#e8dccb] bg-[#fffaf2] px-4 py-4 shadow-[0_16px_40px_rgba(107,78,38,0.06)]">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <div className="text-[13px] font-semibold text-[#1d1b18]">
+                        {mode === 'create' ? '创建任务' : '编辑任务'}
+                    </div>
+                    <div className="mt-1 text-[11px] leading-5 text-[#7e7568]">
+                        通过统一任务协议写入 RedClaw 调度任务，保存前会先执行策略预览。
+                    </div>
+                </div>
+                <button
+                    onClick={onCancel}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[#e5dacb] bg-white text-[#766d61] hover:bg-[#f7f1e8]"
+                    aria-label="关闭任务编辑器"
+                >
+                    <X className="h-3.5 w-3.5" />
+                </button>
+            </div>
+
+            {error && (
+                <div className="mt-3 rounded-[14px] border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-700">
+                    {error}
+                </div>
+            )}
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label>
+                    <div className={labelClass}>任务类型</div>
+                    <select
+                        value={value.kind}
+                        disabled={mode === 'edit'}
+                        onChange={(event) => update({
+                            kind: event.target.value === 'long_cycle' ? 'long_cycle' : 'scheduled',
+                            actionType: event.target.value === 'long_cycle' ? 'long_cycle' : 'redclaw_prompt',
+                            cron: event.target.value === 'long_cycle' ? '@every 12 hours' : '0 9 * * *',
+                        })}
+                        className={inputClass}
+                    >
+                        <option value="scheduled">定时任务</option>
+                        <option value="long_cycle">长周期任务</option>
+                    </select>
+                </label>
+                <label>
+                    <div className={labelClass}>任务名称</div>
+                    <input value={value.name} onChange={(event) => update({ name: event.target.value })} className={inputClass} />
+                </label>
+                <label>
+                    <div className={labelClass}>调度表达式</div>
+                    <input
+                        value={value.cron}
+                        onChange={(event) => update({ cron: event.target.value })}
+                        placeholder="例如 45 21 * * * 或 @every 12 hours"
+                        className={inputClass}
+                    />
+                </label>
+                <label>
+                    <div className={labelClass}>动作分类</div>
+                    <input value={value.actionType} onChange={(event) => update({ actionType: event.target.value })} className={inputClass} />
+                </label>
+                <label>
+                    <div className={labelClass}>Owner Scope</div>
+                    <input value={value.ownerScope} onChange={(event) => update({ ownerScope: event.target.value })} className={inputClass} />
+                </label>
+                <label>
+                    <div className={labelClass}>时区</div>
+                    <input value={value.timezone} onChange={(event) => update({ timezone: event.target.value })} className={inputClass} />
+                </label>
+                <label>
+                    <div className={labelClass}>错过策略</div>
+                    <select value={value.missedRunPolicy} onChange={(event) => update({ missedRunPolicy: event.target.value })} className={inputClass}>
+                        <option value="single">single</option>
+                        <option value="drop">drop</option>
+                        <option value="catchup">catchup</option>
+                    </select>
+                </label>
+                {value.kind === 'long_cycle' && (
+                    <label>
+                        <div className={labelClass}>总轮次</div>
+                        <input value={value.totalRounds} onChange={(event) => update({ totalRounds: event.target.value })} className={inputClass} />
+                    </label>
+                )}
+            </div>
+
+            {value.kind === 'long_cycle' ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <label>
+                        <div className={labelClass}>目标</div>
+                        <textarea value={value.objective} onChange={(event) => update({ objective: event.target.value })} className={`${inputClass} min-h-[98px] resize-y`} />
+                    </label>
+                    <label>
+                        <div className={labelClass}>每轮提示词</div>
+                        <textarea value={value.stepPrompt} onChange={(event) => update({ stepPrompt: event.target.value })} className={`${inputClass} min-h-[98px] resize-y`} />
+                    </label>
+                </div>
+            ) : (
+                <label className="mt-3 block">
+                    <div className={labelClass}>执行提示词</div>
+                    <textarea value={value.prompt} onChange={(event) => update({ prompt: event.target.value })} className={`${inputClass} min-h-[112px] resize-y`} />
+                </label>
+            )}
+
+            {mode === 'edit' && (
+                <label className="mt-3 block">
+                    <div className={labelClass}>更新原因</div>
+                    <input value={value.reason} onChange={(event) => update({ reason: event.target.value })} className={inputClass} />
+                </label>
+            )}
+
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+                <button
+                    onClick={onCancel}
+                    className="rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
+                >
+                    取消
+                </button>
+                <button
+                    onClick={onSubmit}
+                    disabled={busy}
+                    className="inline-flex items-center rounded-full border border-[#d2b690] bg-[#efe1ca] px-3.5 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    {busy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                    {busy ? '保存中...' : mode === 'create' ? '创建并启用' : '保存修改'}
+                </button>
+            </div>
+        </section>
+    );
+}
+
 export function Workboard({ isActive = true }: { isActive?: boolean }) {
     const [items, setItems] = useState<TaskListItem[]>([]);
     const [stats, setStats] = useState<TaskStatsResponse | null>(null);
@@ -224,6 +497,10 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
     const [selectedId, setSelectedId] = useState('');
     const [filter, setFilter] = useState<TaskFilterKey>('all');
     const [actionState, setActionState] = useState<{ id: string; action: string } | null>(null);
+    const [editorMode, setEditorMode] = useState<TaskEditorMode | null>(null);
+    const [editorDraft, setEditorDraft] = useState<TaskEditorState>(defaultTaskEditorState);
+    const [editorBusy, setEditorBusy] = useState(false);
+    const [editorError, setEditorError] = useState('');
     const itemsRef = useRef<TaskListItem[]>([]);
     const loadRequestRef = useRef(0);
 
@@ -329,6 +606,70 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
         }
     }, [load]);
 
+    const openCreateEditor = useCallback(() => {
+        setEditorMode('create');
+        setEditorDraft(defaultTaskEditorState);
+        setEditorError('');
+    }, []);
+
+    const openEditEditor = useCallback((item: TaskListItem) => {
+        setEditorMode('edit');
+        setEditorDraft(editorStateFromItem(item));
+        setEditorError('');
+    }, []);
+
+    const closeEditor = useCallback(() => {
+        if (editorBusy) return;
+        setEditorMode(null);
+        setEditorError('');
+    }, [editorBusy]);
+
+    const submitEditor = useCallback(async () => {
+        try {
+            setEditorBusy(true);
+            setEditorError('');
+            const intent = taskIntentFromEditor(editorDraft);
+            if (editorMode === 'create') {
+                const preview = await window.ipcRenderer.redclawRunner.taskPreview({ intent });
+                const previewToken = previewTokenFromResult(preview);
+                if (!previewToken) throw new Error('任务预览未返回 previewToken。');
+                const created = await window.ipcRenderer.redclawRunner.taskCreate({ intent, previewToken });
+                const draftId = draftIdFromResult(created);
+                if (!draftId) throw new Error('任务创建未返回 draftId。');
+                await window.ipcRenderer.redclawRunner.taskConfirm({ draftId, confirm: true });
+            } else if (editorMode === 'edit') {
+                if (!selectedItem) throw new Error('请选择要编辑的任务。');
+                await window.ipcRenderer.redclawRunner.taskUpdate({
+                    jobDefinitionId: selectedItem.definitionId,
+                    patch: intent,
+                    reason: editorDraft.reason.trim() || '用户从任务中心更新任务',
+                });
+            }
+            setEditorMode(null);
+            await load();
+        } catch (submitError) {
+            setEditorError(submitError instanceof Error ? submitError.message : String(submitError));
+        } finally {
+            setEditorBusy(false);
+        }
+    }, [editorDraft, editorMode, load, selectedItem]);
+
+    const deleteTask = useCallback(async (item: TaskListItem) => {
+        const confirmed = await appConfirm(`确认删除任务“${item.title}”？删除后会移除源任务并取消关联执行。`, {
+            title: '删除任务',
+            confirmLabel: '删除',
+            tone: 'danger',
+        });
+        if (!confirmed) return;
+        await executeAction(item, 'delete', async () => {
+            await window.ipcRenderer.redclawRunner.taskCancel({
+                jobDefinitionId: item.definitionId,
+                reason: '用户从任务中心删除任务',
+                deleteSource: true,
+            });
+        });
+    }, [executeAction]);
+
     return (
         <div className="h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
             <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
@@ -343,6 +684,13 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                         <div className="rounded-full border border-[#ece5da] bg-white px-2.5 py-1 text-[11px] text-[#7d766a]">
                             更新于 {formatDateTime(lastUpdatedAt)}
                         </div>
+                        <button
+                            onClick={openCreateEditor}
+                            className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#d2b690] bg-[#efe1ca] px-3 text-[11px] text-[#5e4730] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#e7d5b9]"
+                        >
+                            <Plus className="h-3 w-3" />
+                            新建任务
+                        </button>
                         <button
                             onClick={() => void load()}
                             className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#e7e0d4] bg-white px-3 text-[11px] text-[#7d766a] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f5f1e9]"
@@ -468,12 +816,33 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                         </div>
 
                         <div className="min-h-0 overflow-y-auto rounded-[24px] border border-[#ece4d8] bg-white px-5 py-5">
-                            {!selectedItem ? (
+                            {editorMode === 'create' ? (
+                                <TaskEditorPanel
+                                    mode="create"
+                                    value={editorDraft}
+                                    busy={editorBusy}
+                                    error={editorError}
+                                    onChange={setEditorDraft}
+                                    onSubmit={() => void submitEditor()}
+                                    onCancel={closeEditor}
+                                />
+                            ) : !selectedItem ? (
                                 <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-[13px] leading-6 text-[#7b7469]">
-                                    选择左侧任务后，这里会显示调度规则、策略信息和最近执行状态。
+                                    选择左侧任务后，这里会显示调度规则、策略信息和最近执行状态。也可以直接新建任务。
                                 </div>
                             ) : (
                                 <div className="space-y-5">
+                                    {editorMode === 'edit' && (
+                                        <TaskEditorPanel
+                                            mode="edit"
+                                            value={editorDraft}
+                                            busy={editorBusy}
+                                            error={editorError}
+                                            onChange={setEditorDraft}
+                                            onSubmit={() => void submitEditor()}
+                                            onCancel={closeEditor}
+                                        />
+                                    )}
                                     <div className="flex flex-wrap items-start justify-between gap-3">
                                         <div>
                                             <div className="flex flex-wrap items-center gap-1.5">
@@ -530,15 +899,24 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                             )}
 
                                             {!selectedItem.requiresConfirmation && (
-                                                <button
-                                                    onClick={() => void executeAction(selectedItem, 'run-now', () => runTaskNow(selectedItem))}
-                                                    className="inline-flex items-center rounded-full border border-[#d2b690] bg-[#efe1ca] px-3.5 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
-                                                >
-                                                    <Play className="mr-1.5 h-3.5 w-3.5" />
-                                                    {actionState?.id === selectedItem.definitionId && actionState.action === 'run-now'
-                                                        ? '执行中...'
-                                                        : '立即执行'}
-                                                </button>
+                                                <>
+                                                    <button
+                                                        onClick={() => openEditEditor(selectedItem)}
+                                                        className="inline-flex items-center rounded-full border border-[#eadfce] bg-white px-3.5 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
+                                                    >
+                                                        <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                                                        编辑任务
+                                                    </button>
+                                                    <button
+                                                        onClick={() => void executeAction(selectedItem, 'run-now', () => runTaskNow(selectedItem))}
+                                                        className="inline-flex items-center rounded-full border border-[#d2b690] bg-[#efe1ca] px-3.5 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
+                                                    >
+                                                        <Play className="mr-1.5 h-3.5 w-3.5" />
+                                                        {actionState?.id === selectedItem.definitionId && actionState.action === 'run-now'
+                                                            ? '执行中...'
+                                                            : '立即执行'}
+                                                    </button>
+                                                </>
                                             )}
 
                                             {!selectedItem.requiresConfirmation && selectedItem.enabled && (
@@ -560,6 +938,18 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
                                                     {actionState?.id === selectedItem.definitionId && actionState.action === 'resume'
                                                         ? '处理中...'
                                                         : '恢复任务'}
+                                                </button>
+                                            )}
+
+                                            {!selectedItem.requiresConfirmation && (
+                                                <button
+                                                    onClick={() => void deleteTask(selectedItem)}
+                                                    className="inline-flex items-center rounded-full border border-[#efcdcd] bg-[#fff7f7] px-3.5 py-1.5 text-[12px] text-[#9a4f54] hover:bg-[#ffecec]"
+                                                >
+                                                    <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                                                    {actionState?.id === selectedItem.definitionId && actionState.action === 'delete'
+                                                        ? '删除中...'
+                                                        : '删除任务'}
                                                 </button>
                                             )}
                                         </div>

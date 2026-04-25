@@ -1446,7 +1446,7 @@ declare global {
         taskCreate: (payload: Record<string, unknown>) => Promise<unknown>;
         taskConfirm: (payload: { draftId: string; confirm: boolean }) => Promise<unknown>;
         taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => Promise<unknown>;
-        taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => Promise<unknown>;
+        taskCancel: (payload: { jobDefinitionId: string; reason?: string; deleteSource?: boolean }) => Promise<unknown>;
         taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => Promise<{
           success?: boolean;
           items?: Array<{
@@ -1481,6 +1481,10 @@ declare global {
             prompt?: string | null;
             objective?: string | null;
             stepPrompt?: string | null;
+            intervalMinutes?: number | null;
+            time?: string | null;
+            weekdays?: number[] | null;
+            runAt?: string | null;
             riskRationale?: string | null;
             totalRounds?: number | null;
             completedRounds?: number | null;
