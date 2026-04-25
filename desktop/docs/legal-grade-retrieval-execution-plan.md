@@ -587,9 +587,9 @@ Status: Current
 
 ### Progress Notes
 
-- 当前 `schema.rs` 已有幂等建表/补列基础，但还缺显式版本键、migration decision、分层重建和 index staleness 标注。
-- 当前 rebuild 是全量 `rebuild_catalog`，需要拆出 FTS-only、canonical-to-block、source-level rebuild。
-- 已新增 `knowledge_index/migration.rs` 的版本键与 migration decision；启动时可自动识别 `schema_only`、`fts_rebuild`、`full_rebuild`。
+- `schema.rs` 已具备幂等建表/补列基础，并已补显式版本键、migration decision、分层重建和 index staleness 标注。
+- rebuild 已从单一全量 `rebuild_catalog` 拆出 FTS-only、canonical-to-block、source-level rebuild。
+- 已新增 `knowledge_index/migration.rs` 的版本键与 migration decision；启动时可自动识别 `schema_only`、`fts_rebuild`、`block_anchor_rebuild`、`canonical_reparse`、`full_rebuild`。
 - 已接入 FTS-only 后台重建：升级到 BM25/FTS 版本后，从 `knowledge_document_blocks` 重建 FTS，不触发 OCR/parser。
 - indexed `knowledge.search` 的 `queryPlan.indexStaleness` 已标注 `current | migration_pending | rebuilding | stale_fallback | unknown`。
 - 已完成 `block_anchor_rebuild` migration decision：chunk/anchor 规则变化时复用 `knowledge_canonical_documents.canonical_json` 重建 blocks、anchors、FTS/BM25，不重新 OCR 或 parser。
