@@ -443,6 +443,33 @@ impl<'a> AppCliExecutor<'a> {
 
     fn ensure_action_allowed(&self, action: &str) -> Result<(), String> {
         let Some(allowed_actions) = self.session_allowed_structured_actions() else {
+            let plan = with_store(self.state, |store| {
+                Ok(build_tool_registry_plan_for_session(
+                    &store,
+                    self.runtime_mode,
+                    self.session_id,
+                ))
+            })?;
+            if plan.has_direct_app_cli_action(action) {
+                return Ok(());
+            }
+            if let Some(deferred) = plan
+                .deferred_app_cli_actions
+                .iter()
+                .find(|entry| entry.action == action)
+            {
+                return Err(app_cli_error_json(
+                    Some(action),
+                    "ACTION_DEFERRED",
+                    "app_cli action is available but not directly exposed in this turn; search actions first.",
+                    true,
+                    Some(json!({
+                        "suggestedAction": "tools.search",
+                        "queryHint": format!("{} {}", deferred.namespace, deferred.description),
+                        "deferredNamespaces": plan.deferred_action_namespaces,
+                    })),
+                ));
+            }
             return Ok(());
         };
         if allowed_actions.iter().any(|item| item == action) {
