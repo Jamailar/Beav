@@ -22,6 +22,8 @@ mod orchestration_runtime;
 mod session_runtime;
 #[path = "runtime/task_runtime.rs"]
 mod task_runtime;
+#[path = "runtime/turn_context.rs"]
+mod turn_context;
 #[path = "runtime/types.rs"]
 mod types;
 
@@ -37,6 +39,7 @@ pub use interactive_recovery::*;
 pub use orchestration_runtime::*;
 pub use session_runtime::*;
 pub use task_runtime::*;
+pub use turn_context::*;
 pub use types::*;
 
 #[cfg(test)]
