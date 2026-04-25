@@ -17,16 +17,19 @@ import {
     Plus,
     RotateCcw,
     Sparkles,
+    Trash2,
     X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
+import { findAiPresetById, inferPresetIdByEndpoint, type AiSourceConfig } from '../config/aiSources';
 import type { GenerationIntent, PendingChatMessage } from '../App';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobSuccessful, isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
 import { Chat } from './Chat';
+import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources } from './settings/shared';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert } from '../utils/appDialogs';
 
@@ -38,6 +41,7 @@ type ImageCreationSurface = 'manual' | 'agent';
 type SettingsShape = {
     api_endpoint?: string;
     api_key?: string;
+    ai_sources_json?: string;
     image_provider?: string;
     image_endpoint?: string;
     image_api_key?: string;
@@ -893,7 +897,57 @@ function feedMediaHeightClass(request: GenerationRequest): string {
 type PickerOption = {
     value: string;
     label: string;
+    description?: string;
 };
+
+function getAiSourceTypeLabel(source: AiSourceConfig): string {
+    const presetId = String(source.presetId || inferPresetIdByEndpoint(source.baseURL || '') || '').trim();
+    const preset = findAiPresetById(presetId);
+    if (preset?.label) return preset.label;
+    if (presetId) return presetId;
+    return source.protocol ? source.protocol.toUpperCase() : 'Custom';
+}
+
+function getAiSourceModelDescriptors(source: AiSourceConfig) {
+    return normalizeAiModelDescriptors([
+        ...(source.modelsMeta || []),
+        ...(source.models || []).map((id) => ({ id })),
+        source.model ? { id: source.model } : null,
+    ]);
+}
+
+function buildImageModelOptions(settings: SettingsShape): PickerOption[] {
+    const sources = parseAiSources(settings.ai_sources_json);
+    const optionsByModel = new Map<string, { label: string; sourceLabels: string[] }>();
+
+    for (const source of sources) {
+        const imageModels = filterAiModelsByCapability(getAiSourceModelDescriptors(source), 'image');
+        if (imageModels.length === 0) continue;
+
+        const sourceType = getAiSourceTypeLabel(source);
+        const sourceName = String(source.name || '').trim();
+        const sourceLabel = sourceName && sourceName !== sourceType
+            ? `${sourceType} · ${sourceName}`
+            : sourceType;
+
+        for (const model of imageModels) {
+            const existing = optionsByModel.get(model.id);
+            if (!existing) {
+                optionsByModel.set(model.id, { label: model.id, sourceLabels: [sourceLabel] });
+                continue;
+            }
+            if (!existing.sourceLabels.includes(sourceLabel)) {
+                existing.sourceLabels.push(sourceLabel);
+            }
+        }
+    }
+
+    return Array.from(optionsByModel.entries()).map(([value, option]) => ({
+        value,
+        label: option.label,
+        description: option.sourceLabels.join(' / '),
+    }));
+}
 
 function useDismissiblePopover(open: boolean, onClose: () => void) {
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -930,6 +984,8 @@ function PopoverSelect({
     title,
     panelClassName,
     layout = 'wrap',
+    disabled = false,
+    emptyText = '未选择',
 }: {
     value: string;
     onChange: (value: string) => void;
@@ -938,6 +994,8 @@ function PopoverSelect({
     title?: string;
     panelClassName?: string;
     layout?: 'wrap' | 'column';
+    disabled?: boolean;
+    emptyText?: string;
 }) {
     const [open, setOpen] = useState(false);
     const rootRef = useDismissiblePopover(open, () => setOpen(false));
@@ -947,14 +1005,19 @@ function PopoverSelect({
         <div ref={rootRef} className="relative">
             <button
                 type="button"
-                onClick={() => setOpen((prev) => !prev)}
+                onClick={() => {
+                    if (disabled || options.length === 0) return;
+                    setOpen((prev) => !prev);
+                }}
+                disabled={disabled || options.length === 0}
                 className={clsx(
                     'inline-flex h-9 min-w-[104px] items-center gap-2 rounded-full border border-border bg-surface-primary px-3 shadow-[var(--ui-shadow-1)] transition-colors hover:border-border/70',
                     open && 'border-brand-red/50 ring-1 ring-brand-red/20',
+                    (disabled || options.length === 0) && 'cursor-not-allowed opacity-55 hover:border-border',
                     className,
                 )}
             >
-                <span className="truncate text-[12px] font-medium text-text-primary">{active?.label || value}</span>
+                <span className="truncate text-[12px] font-medium text-text-primary">{active?.label || value || emptyText}</span>
                 <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-accent-muted text-text-tertiary">
                     <ChevronDown className="h-3 w-3" />
                 </span>
@@ -989,7 +1052,15 @@ function PopoverSelect({
                                             : 'border-transparent bg-surface-tertiary text-text-secondary hover:bg-accent-muted',
                                     )}
                                 >
-                                    {option.label}
+                                    <div className="truncate">{option.label}</div>
+                                    {option.description && (
+                                        <div className={clsx(
+                                            'mt-1 truncate text-[11px] font-normal',
+                                            selected ? 'text-white/75' : 'text-text-tertiary',
+                                        )}>
+                                            {option.description}
+                                        </div>
+                                    )}
                                 </button>
                             );
                         })}
@@ -1308,12 +1379,14 @@ function FeedEntryMessage({
     entry,
     onRegenerate,
     onEdit,
+    onDelete,
     onPreviewAsset,
     onOpenAssetMenu,
 }: {
     entry: GenerationFeedEntry;
     onRegenerate: (entry: GenerationFeedEntry) => void;
     onEdit: (entry: GenerationFeedEntry) => void;
+    onDelete: (entryId: string) => void;
     onPreviewAsset: (asset: GeneratedAsset) => void;
     onOpenAssetMenu: (event: React.MouseEvent<HTMLElement>, asset: GeneratedAsset, entryId?: string) => void;
 }) {
@@ -1353,8 +1426,19 @@ function FeedEntryMessage({
                 </div>
             </div>
 
-            <div className="max-w-[680px] text-[13px] leading-6 text-text-primary">
-                {entry.request.prompt}
+            <div className="flex max-w-[680px] items-start gap-2">
+                <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-6 text-text-primary">
+                    {entry.request.prompt}
+                </div>
+                <button
+                    type="button"
+                    onClick={() => onDelete(entry.id)}
+                    className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
+                    aria-label="删除创作记录"
+                    title="删除创作记录"
+                >
+                    <Trash2 className="h-3.5 w-3.5" />
+                </button>
             </div>
 
             {isRunning && (
@@ -1662,7 +1746,7 @@ export function GenerationStudio({
             const normalizedSettings = (nextSettings || {}) as SettingsShape;
             setSettings(normalizedSettings);
 
-            setImageModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || 'gpt-image-1') : prev));
+            setImageModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || '') : prev));
             setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
             setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality || 'auto') : prev));
@@ -1827,22 +1911,27 @@ export function GenerationStudio({
         ? getRedBoxOfficialVideoModel(videoMode)
         : (settings.video_model || getRedBoxOfficialVideoModel(videoMode)).trim();
 
-    const imageModelLabel = imageModel.trim() || settings.image_model || 'GPT Image';
+    const imageModelOptions = useMemo<PickerOption[]>(() => buildImageModelOptions(settings), [settings]);
+    const activeImageModelOption = useMemo(
+        () => imageModelOptions.find((option) => option.value === imageModel.trim()) || null,
+        [imageModel, imageModelOptions],
+    );
+    const imageModelLabel = activeImageModelOption?.label || imageModel.trim() || '未选择模型';
     const videoModelLabel = effectiveVideoModel;
     const currentConfigHint = studioMode === 'image'
         ? `${imageModelLabel} · ${imageAspectRatio || 'Auto'} · ${imageSize || '自动'}`
         : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
     const activeError = studioMode === 'image' ? imageError : videoError;
-    const imageModelOptions = useMemo<PickerOption[]>(() => {
-        const baseOptions: PickerOption[] = [
-            { value: 'gpt-image-1', label: 'gpt-image-1' },
-            { value: 'gpt-image-2', label: 'gpt-image-2' },
-        ];
 
-        if (!imageModel.trim()) return baseOptions;
-        if (baseOptions.some((option) => option.value === imageModel)) return baseOptions;
-        return [{ value: imageModel, label: imageModelLabel }, ...baseOptions];
-    }, [imageModel, imageModelLabel]);
+    useEffect(() => {
+        setImageModel((prev) => {
+            const current = prev.trim();
+            if (current && imageModelOptions.some((option) => option.value === current)) {
+                return prev;
+            }
+            return imageModelOptions[0]?.value || '';
+        });
+    }, [imageModelOptions]);
 
     const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => ({
         kind: 'generation',
@@ -1863,6 +1952,10 @@ export function GenerationStudio({
         }
         if (!hasImageConfig) {
             setImageError('未检测到生图配置，请先在设置中补齐');
+            return false;
+        }
+        if (!request.model.trim()) {
+            setImageError('未检测到已添加的生图模型，请先在设置中添加生图模型');
             return false;
         }
         if (request.generationMode === 'image-to-image' && request.referenceItems.length === 0) {
@@ -2116,7 +2209,7 @@ export function GenerationStudio({
     const handleDeleteEntry = useCallback((entryId: string) => {
         updateFeedEntries((prev) => prev.filter((entry) => entry.id !== entryId));
         setAssetContextMenu((current) => (current?.entryId === entryId ? null : current));
-    }, []);
+    }, [updateFeedEntries]);
 
     const resolveAssetSource = useCallback((asset: GeneratedAsset) => (
         asset.previewUrl || asset.relativePath || ''
@@ -2482,39 +2575,55 @@ export function GenerationStudio({
                                         entry={entry}
                                         onRegenerate={handleRegenerate}
                                         onEdit={handleEditEntry}
+                                        onDelete={handleDeleteEntry}
                                         onPreviewAsset={setPreviewAsset}
                                         onOpenAssetMenu={handleOpenAssetMenu}
                                     />
                                 ) : (
-                                    <Chat
-                                        key={entry.id}
-                                        isActive={isActive}
-                                        fixedSessionId={entry.sessionId}
-                                        pendingMessage={entry.sessionId === agentSessionId ? agentPendingMessage : null}
-                                        onMessageConsumed={() => {
-                                            if (entry.sessionId === agentSessionId) {
-                                                setAgentPendingMessage(null);
-                                            }
-                                        }}
-                                        defaultCollapsed={true}
-                                        showClearButton={false}
-                                        showWelcomeShortcuts={false}
-                                        showComposerShortcuts={false}
-                                        showComposer={false}
-                                        showMessageAttachments={true}
-                                        showWelcomeHeader={false}
-                                        collapseEmptyFixedSession={true}
-                                        fixedSessionContextIndicatorMode="none"
-                                        welcomeTitle=""
-                                        welcomeSubtitle=""
-                                        contentLayout="wide"
-                                        allowFileUpload={false}
-                                        messageWorkflowPlacement="top"
-                                        messageWorkflowVariant="compact"
-                                        messageWorkflowEmphasis="thoughts-first"
-                                        messageWorkflowDisplayMode="all"
-                                        onExecutionStateChange={entry.sessionId === agentSessionId ? setAgentExecutionActive : undefined}
-                                    />
+                                    <article key={entry.id} className="space-y-3">
+                                        <div className="flex max-w-[680px] items-start gap-2">
+                                            <div className="min-w-0 flex-1 text-[13px] font-medium leading-6 text-text-primary">
+                                                {entry.title}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleDeleteEntry(entry.id)}
+                                                className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-brand-red/10 hover:text-brand-red"
+                                                aria-label="删除创作记录"
+                                                title="删除创作记录"
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                            </button>
+                                        </div>
+                                        <Chat
+                                            isActive={isActive}
+                                            fixedSessionId={entry.sessionId}
+                                            pendingMessage={entry.sessionId === agentSessionId ? agentPendingMessage : null}
+                                            onMessageConsumed={() => {
+                                                if (entry.sessionId === agentSessionId) {
+                                                    setAgentPendingMessage(null);
+                                                }
+                                            }}
+                                            defaultCollapsed={true}
+                                            showClearButton={false}
+                                            showWelcomeShortcuts={false}
+                                            showComposerShortcuts={false}
+                                            showComposer={false}
+                                            showMessageAttachments={true}
+                                            showWelcomeHeader={false}
+                                            collapseEmptyFixedSession={true}
+                                            fixedSessionContextIndicatorMode="none"
+                                            welcomeTitle=""
+                                            welcomeSubtitle=""
+                                            contentLayout="wide"
+                                            allowFileUpload={false}
+                                            messageWorkflowPlacement="top"
+                                            messageWorkflowVariant="compact"
+                                            messageWorkflowEmphasis="thoughts-first"
+                                            messageWorkflowDisplayMode="all"
+                                            onExecutionStateChange={entry.sessionId === agentSessionId ? setAgentExecutionActive : undefined}
+                                        />
+                                    </article>
                                 )
                             ))}
                             <div ref={feedBottomRef} />
@@ -2618,6 +2727,8 @@ export function GenerationStudio({
                                                         title="图片模型"
                                                         panelClassName="w-[240px]"
                                                         layout="column"
+                                                        disabled={imageModelOptions.length === 0}
+                                                        emptyText="未添加生图模型"
                                                     />
                                                     <ImageAspectRatioPicker
                                                         value={imageAspectRatio}
@@ -2642,7 +2753,7 @@ export function GenerationStudio({
                                                     <button
                                                         type="button"
                                                         onClick={isAgentMode ? handleSendAgentMessage : handleGenerateImage}
-                                                        disabled={isAgentMode ? !canSendAgentMessage : !hasImageConfig}
+                                                        disabled={isAgentMode ? !canSendAgentMessage : (!hasImageConfig || !imageModel.trim())}
                                                         className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
                                                     >
                                                         {isAgentMode ? (
