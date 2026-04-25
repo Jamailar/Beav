@@ -124,6 +124,7 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         params.task_intent,
         params
             .max_direct_app_cli_actions
+            .or_else(|| max_direct_actions_from_metadata(params.session_metadata))
             .unwrap_or(DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS),
         &app_cli_descriptors,
     );
@@ -242,6 +243,9 @@ fn select_direct_app_cli_actions(
             .collect();
     }
     let preferred_namespaces = preferred_app_cli_namespaces(runtime_mode, task_intent);
+    let preferred_namespaces = direct_namespaces_from_metadata(metadata)
+        .filter(|items| !items.is_empty())
+        .unwrap_or(preferred_namespaces);
     let mut selected = Vec::<ActionDescriptor>::new();
     for namespace in preferred_namespaces {
         for descriptor in descriptors
@@ -258,11 +262,31 @@ fn select_direct_app_cli_actions(
     selected
 }
 
-fn preferred_app_cli_namespaces(
-    runtime_mode: &str,
-    task_intent: Option<&str>,
-) -> Vec<&'static str> {
+fn preferred_app_cli_namespaces(runtime_mode: &str, task_intent: Option<&str>) -> Vec<String> {
     families::default_direct_namespaces(runtime_mode, task_intent)
+        .into_iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn direct_namespaces_from_metadata(metadata: Option<&Value>) -> Option<Vec<String>> {
+    let families = metadata_string_list(metadata, "directActionFamilies");
+    let families = if families.is_empty() {
+        metadata_string_list(metadata, "allowedActionFamilies")
+    } else {
+        families
+    };
+    if families.is_empty() {
+        return None;
+    }
+    Some(families)
+}
+
+fn max_direct_actions_from_metadata(metadata: Option<&Value>) -> Option<usize> {
+    metadata
+        .and_then(|item| item.get("maxDirectActions"))
+        .and_then(Value::as_u64)
+        .map(|value| value.clamp(1, 64) as usize)
 }
 
 fn deferred_action_entry(descriptor: &ActionDescriptor) -> DeferredActionEntry {
@@ -445,6 +469,26 @@ mod tests {
 
         assert_eq!(names, vec!["Read", "List", "Search"]);
         assert!(plan.direct_app_cli_actions.is_empty());
+    }
+
+    #[test]
+    fn metadata_can_select_direct_action_families() {
+        let metadata = json!({
+            "directActionFamilies": ["mcp"],
+            "maxDirectActions": 3
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "diagnostics",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(!plan.direct_app_cli_actions.is_empty());
+        assert!(plan.direct_app_cli_actions.len() <= 3);
+        assert!(plan
+            .direct_app_cli_actions
+            .iter()
+            .all(|descriptor| descriptor.namespace == "mcp"));
     }
 
     #[test]
