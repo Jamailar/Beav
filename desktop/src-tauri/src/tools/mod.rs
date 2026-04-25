@@ -4,6 +4,7 @@ pub mod bash;
 pub mod catalog;
 pub mod compat;
 pub mod executor;
+pub mod families;
 pub mod guards;
 pub mod knowledge_search;
 pub mod packs;

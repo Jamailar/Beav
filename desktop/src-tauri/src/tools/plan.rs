@@ -9,6 +9,7 @@ use crate::tools::catalog::{
     ToolDescriptor,
 };
 use crate::tools::compat::canonical_tool_name;
+use crate::tools::families;
 use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_runtime_mode};
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{AppStore, ChatSessionRecord};
@@ -261,66 +262,7 @@ fn preferred_app_cli_namespaces(
     runtime_mode: &str,
     task_intent: Option<&str>,
 ) -> Vec<&'static str> {
-    let mut namespaces = match normalize_runtime_mode(runtime_mode) {
-        "image-generation" => vec!["tools", "image", "subjects", "skills", "media"],
-        "knowledge" => vec!["tools", "subjects", "memory", "skills"],
-        "redclaw" => vec![
-            "tools",
-            "redclaw.task",
-            "image",
-            "video",
-            "manuscripts",
-            "subjects",
-            "memory",
-            "skills",
-        ],
-        "background-maintenance" | "diagnostics" => vec![
-            "tools",
-            "runtime",
-            "runtime.tasks",
-            "redclaw.task",
-            "cli_runtime",
-            "cli_runtime.execution",
-            "settings",
-        ],
-        "video-editor" | "audio-editor" => vec![
-            "tools",
-            "image",
-            "video",
-            "subjects",
-            "cli_runtime",
-            "cli_runtime.execution",
-            "skills",
-        ],
-        _ => vec![
-            "tools",
-            "subjects",
-            "memory",
-            "skills",
-            "image",
-            "manuscripts",
-        ],
-    };
-    match task_intent
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "image" | "image-generation" | "cover" => prepend_namespace(&mut namespaces, "image"),
-        "video" | "video-generation" => prepend_namespace(&mut namespaces, "video"),
-        "redclaw-task" | "scheduled-task" => prepend_namespace(&mut namespaces, "redclaw.task"),
-        "knowledge" | "search" => prepend_namespace(&mut namespaces, "subjects"),
-        _ => {}
-    }
-    namespaces
-}
-
-fn prepend_namespace(namespaces: &mut Vec<&'static str>, namespace: &'static str) {
-    if let Some(index) = namespaces.iter().position(|item| *item == namespace) {
-        namespaces.remove(index);
-    }
-    namespaces.insert(0, namespace);
+    families::default_direct_namespaces(runtime_mode, task_intent)
 }
 
 fn deferred_action_entry(descriptor: &ActionDescriptor) -> DeferredActionEntry {
