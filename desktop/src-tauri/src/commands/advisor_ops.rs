@@ -232,6 +232,30 @@ pub async fn advisors_list_templates() -> Result<Value, String> {
     advisors_list_templates_value()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advisors_list_templates_loads_bundled_member_templates() {
+        let templates = advisors_list_templates_value()
+            .expect("advisor templates should load")
+            .as_array()
+            .cloned()
+            .expect("advisor templates should be an array");
+        let template_ids = templates
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(templates.len(), 14);
+        assert!(template_ids.contains("agency-xiaohongshu-specialist"));
+        assert!(template_ids.contains("agency-product-manager"));
+        assert!(template_ids.contains("content-strategist"));
+        assert!(template_ids.contains("growth-analyst"));
+    }
+}
+
 pub fn handle_advisor_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
