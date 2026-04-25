@@ -3,7 +3,6 @@ use image::ImageReader;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -175,6 +174,12 @@ struct YtdlpSubtitleLanguageProbe {
     automatic: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct YtdlpSubtitleLanguageCandidate {
+    lang: String,
+    automatic: bool,
+}
+
 fn log_ytdlp(message: impl AsRef<str>) {
     eprintln!("{YTDLP_LOG_PREFIX} {}", message.as_ref());
 }
@@ -235,6 +240,51 @@ fn ytdlp_release_asset_name() -> &'static str {
             _ => "yt-dlp_linux",
         }
     }
+}
+
+fn normalize_ytdlp_channel_url(channel_url: &str) -> String {
+    let trimmed = channel_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    let split_index = trimmed
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '?' | '#').then_some(index));
+    let (base, suffix) = split_index
+        .map(|index| (&trimmed[..index], &trimmed[index..]))
+        .unwrap_or((trimmed, ""));
+    let base = base.trim_end_matches('/');
+    let lower_base = base.to_ascii_lowercase();
+    let is_youtube_channel = lower_base.contains("youtube.com/@")
+        || lower_base.contains("youtube.com/channel/")
+        || lower_base.contains("youtube.com/c/")
+        || lower_base.contains("youtube.com/user/");
+    let already_points_to_collection = [
+        "/videos",
+        "/shorts",
+        "/streams",
+        "/featured",
+        "/playlists",
+        "/community",
+    ]
+    .iter()
+    .any(|suffix| lower_base.ends_with(suffix));
+    if is_youtube_channel
+        && !already_points_to_collection
+        && !lower_base.contains("/watch")
+        && !lower_base.contains("/playlist")
+    {
+        format!("{base}/videos{suffix}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn is_probable_youtube_video_id(value: &str) -> bool {
+    value.len() == 11
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 fn command_output_string(binary: &str, args: &[&str]) -> Option<String> {
@@ -541,12 +591,13 @@ pub(crate) fn run_ytdlp_json(args: &[&str]) -> Result<Value, String> {
 }
 
 pub(crate) fn fetch_ytdlp_channel_info(channel_url: &str, limit: i64) -> Result<Value, String> {
+    let normalized_url = normalize_ytdlp_channel_url(channel_url);
     run_ytdlp_json(&[
         "-J",
         "--flat-playlist",
         "--playlist-end",
         &limit.max(1).to_string(),
-        channel_url,
+        &normalized_url,
     ])
 }
 
@@ -567,6 +618,9 @@ pub(crate) fn parse_ytdlp_videos(
                 .and_then(|item| item.as_str())
                 .map(|item| item.trim().to_string())
                 .filter(|item| !item.is_empty())?;
+            if !is_probable_youtube_video_id(&id) {
+                return None;
+            }
             let title = entry
                 .get("title")
                 .and_then(|item| item.as_str())
@@ -586,6 +640,7 @@ pub(crate) fn parse_ytdlp_videos(
                 .unwrap_or_else(now_iso);
             let video_url = entry
                 .get("url")
+                .or_else(|| entry.get("webpage_url"))
                 .and_then(|item| item.as_str())
                 .map(|item| item.to_string())
                 .filter(|item| item.starts_with("http"))
@@ -650,6 +705,14 @@ pub(crate) fn download_ytdlp_subtitle(
             || haystack.contains("no subtitles")
     }
 
+    fn output_mentions_auth_challenge(capture: &YtdlpCommandCapture) -> bool {
+        let haystack = format!("{}\n{}", capture.stdout, capture.stderr).to_lowercase();
+        haystack.contains("sign in to confirm")
+            || haystack.contains("not a bot")
+            || haystack.contains("login details are needed")
+            || haystack.contains("cookies")
+    }
+
     fn subtitle_browser_candidates() -> Vec<&'static str> {
         #[cfg(target_os = "macos")]
         {
@@ -690,14 +753,19 @@ pub(crate) fn download_ytdlp_subtitle(
         collect_paths_with_prefix(target_dir, file_prefix)
             .into_iter()
             .find(|path| {
-                path.extension()
+                let has_expected_extension = path
+                    .extension()
                     .and_then(|value| value.to_str())
                     .map(|ext| {
                         extensions
                             .iter()
                             .any(|expected| ext.eq_ignore_ascii_case(expected))
                     })
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                has_expected_extension
+                    && fs::metadata(path)
+                        .map(|metadata| metadata.len() > 0)
+                        .unwrap_or(false)
             })
     }
 
@@ -765,6 +833,14 @@ pub(crate) fn download_ytdlp_subtitle(
             "--no-playlist".to_string(),
             "--no-warnings".to_string(),
             "--no-progress".to_string(),
+            "--socket-timeout".to_string(),
+            "30".to_string(),
+            "--retries".to_string(),
+            "3".to_string(),
+            "--fragment-retries".to_string(),
+            "3".to_string(),
+            "--extractor-retries".to_string(),
+            "3".to_string(),
             "--write-auto-sub".to_string(),
             "--write-sub".to_string(),
         ];
@@ -794,6 +870,10 @@ pub(crate) fn download_ytdlp_subtitle(
             "--skip-download".to_string(),
             "--no-playlist".to_string(),
             "--no-warnings".to_string(),
+            "--socket-timeout".to_string(),
+            "30".to_string(),
+            "--extractor-retries".to_string(),
+            "3".to_string(),
         ];
         if let Some(browser) = cookie_browser {
             args.push("--cookies-from-browser".to_string());
@@ -823,12 +903,51 @@ pub(crate) fn download_ytdlp_subtitle(
         })
     }
 
-    fn available_probe_languages(probe: &YtdlpSubtitleLanguageProbe) -> Vec<String> {
-        let mut values = BTreeSet::new();
-        for language in probe.manual.iter().chain(probe.automatic.iter()) {
-            values.insert(language.clone());
+    fn subtitle_language_score(language: &str) -> u8 {
+        let normalized = language.to_ascii_lowercase();
+        if normalized == "zh-hans" || normalized == "zh-cn" {
+            0
+        } else if normalized == "zh-hant" || normalized == "zh-tw" || normalized == "zh-hk" {
+            1
+        } else if normalized == "zh" || normalized.starts_with("zh-") {
+            2
+        } else if normalized == "en" {
+            3
+        } else if normalized.starts_with("en-") {
+            4
+        } else {
+            9
         }
-        values.into_iter().collect()
+    }
+
+    fn ranked_subtitle_language_candidates(
+        probe: &YtdlpSubtitleLanguageProbe,
+    ) -> Vec<YtdlpSubtitleLanguageCandidate> {
+        let mut candidates = Vec::new();
+        for language in &probe.manual {
+            candidates.push(YtdlpSubtitleLanguageCandidate {
+                lang: language.clone(),
+                automatic: false,
+            });
+        }
+        for language in &probe.automatic {
+            if !candidates
+                .iter()
+                .any(|candidate| candidate.lang == *language)
+            {
+                candidates.push(YtdlpSubtitleLanguageCandidate {
+                    lang: language.clone(),
+                    automatic: true,
+                });
+            }
+        }
+        candidates.sort_by(|left, right| {
+            subtitle_language_score(&left.lang)
+                .cmp(&subtitle_language_score(&right.lang))
+                .then_with(|| left.automatic.cmp(&right.automatic))
+                .then_with(|| left.lang.cmp(&right.lang))
+        });
+        candidates
     }
 
     fs::create_dir_all(target_dir).map_err(|error| error.to_string())?;
@@ -848,6 +967,66 @@ pub(crate) fn download_ytdlp_subtitle(
     for cookie_browser in browser_attempts {
         let browser_label = cookie_browser.unwrap_or("none");
         cleanup_downloaded_files(target_dir, file_prefix);
+        let probe = match probe_subtitle_languages(&binary, video_url, cookie_browser) {
+            Ok(probe) => {
+                log_ytdlp(format!(
+                    "subtitle language probe: manual={:?} automatic={:?}",
+                    probe.manual, probe.automatic
+                ));
+                Some(probe)
+            }
+            Err(error) => {
+                last_error = Some(error);
+                None
+            }
+        };
+
+        if let Some(probe) = probe {
+            let candidates = ranked_subtitle_language_candidates(&probe);
+            if candidates.is_empty() {
+                return Err("该视频没有可用字幕（YouTube 未提供手动或自动字幕）".to_string());
+            }
+            for candidate in candidates {
+                cleanup_downloaded_files(target_dir, file_prefix);
+                let args =
+                    build_subtitle_args(&template, video_url, &candidate.lang, cookie_browser);
+                let capture = run_ytdlp_with_retry(
+                    &binary,
+                    &args,
+                    &format!(
+                        "subtitle attempt ({browser_label}, lang={}, automatic={})",
+                        candidate.lang, candidate.automatic
+                    ),
+                )?;
+                if let Some(path) =
+                    find_downloaded_file(target_dir, file_prefix, &["srt", "vtt", "txt"])
+                {
+                    return Ok(path);
+                }
+                if output_is_rate_limited(&capture) {
+                    last_error = Some(format!(
+                        "字幕下载被 YouTube 限流（HTTP 429 / Too Many Requests）: {}",
+                        combine_output(&capture)
+                    ));
+                    break;
+                }
+                if output_mentions_auth_challenge(&capture) {
+                    last_error = Some(format!(
+                        "YouTube 要求登录或浏览器 Cookie 验证：{}",
+                        combine_output(&capture)
+                    ));
+                    break;
+                }
+                if output_mentions_missing_subtitles(&capture) {
+                    last_error = Some(format!("字幕轨不可用：{}", combine_output(&capture)));
+                    continue;
+                }
+                last_error = Some(combine_output(&capture));
+            }
+            continue;
+        }
+
+        cleanup_downloaded_files(target_dir, file_prefix);
         let preferred_args = build_subtitle_args(
             &template,
             video_url,
@@ -859,65 +1038,17 @@ pub(crate) fn download_ytdlp_subtitle(
             &preferred_args,
             &format!("preferred subtitle attempt ({browser_label})"),
         )?;
-        if preferred_capture.success {
-            if let Some(path) =
-                find_downloaded_file(target_dir, file_prefix, &["srt", "vtt", "txt"])
-            {
-                return Ok(path);
-            }
+        if let Some(path) = find_downloaded_file(target_dir, file_prefix, &["srt", "vtt", "txt"]) {
+            return Ok(path);
         }
-
-        let should_probe = preferred_capture.success
-            || output_mentions_missing_subtitles(&preferred_capture)
-            || output_is_rate_limited(&preferred_capture);
-        if should_probe {
-            match probe_subtitle_languages(&binary, video_url, cookie_browser) {
-                Ok(probe) => {
-                    log_ytdlp(format!(
-                        "subtitle language probe: manual={:?} automatic={:?}",
-                        probe.manual, probe.automatic
-                    ));
-                    let fallback_languages = available_probe_languages(&probe);
-                    if fallback_languages.is_empty() {
-                        return Err(
-                            "该视频没有可用字幕（YouTube 未提供手动或自动字幕）".to_string()
-                        );
-                    }
-                    let fallback_csv = fallback_languages.join(",");
-                    cleanup_downloaded_files(target_dir, file_prefix);
-                    let fallback_args =
-                        build_subtitle_args(&template, video_url, &fallback_csv, cookie_browser);
-                    let fallback_capture = run_ytdlp_with_retry(
-                        &binary,
-                        &fallback_args,
-                        &format!("fallback subtitle attempt ({browser_label})"),
-                    )?;
-                    if fallback_capture.success {
-                        if let Some(path) =
-                            find_downloaded_file(target_dir, file_prefix, &["srt", "vtt", "txt"])
-                        {
-                            return Ok(path);
-                        }
-                        last_error = Some(format!(
-                            "yt-dlp completed but no subtitle file was produced; available subtitles: manual={:?}, automatic={:?}",
-                            probe.manual, probe.automatic
-                        ));
-                    } else if output_is_rate_limited(&fallback_capture) {
-                        last_error = Some(format!(
-                            "字幕下载被 YouTube 限流（HTTP 429 / Too Many Requests）: {}",
-                            combine_output(&fallback_capture)
-                        ));
-                    } else {
-                        last_error = Some(combine_output(&fallback_capture));
-                    }
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                }
-            }
-        } else if output_is_rate_limited(&preferred_capture) {
+        if output_is_rate_limited(&preferred_capture) {
             last_error = Some(format!(
                 "字幕下载被 YouTube 限流（HTTP 429 / Too Many Requests）: {}",
+                combine_output(&preferred_capture)
+            ));
+        } else if output_mentions_auth_challenge(&preferred_capture) {
+            last_error = Some(format!(
+                "YouTube 要求登录或浏览器 Cookie 验证：{}",
                 combine_output(&preferred_capture)
             ));
         } else {
