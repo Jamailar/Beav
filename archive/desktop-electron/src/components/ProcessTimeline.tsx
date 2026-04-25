@@ -2,7 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
 
-export type ProcessItemType = 'phase' | 'thought' | 'tool-call' | 'skill';
+export type ProcessItemType =
+  | 'phase'
+  | 'thought'
+  | 'tool-call'
+  | 'skill'
+  | 'cli-install'
+  | 'cli-exec'
+  | 'cli-escalation'
+  | 'cli-verify';
 
 export interface ProcessItem {
   id: string;
@@ -19,6 +27,22 @@ export interface ProcessItem {
   skillData?: {
     name: string;
     description: string;
+  };
+  cliData?: {
+    executionId?: string;
+    installId?: string;
+    escalationId?: string;
+    toolName?: string;
+    environmentId?: string;
+    argv?: string[];
+    cwd?: string;
+    installMethod?: string;
+    spec?: string;
+    commandPreview?: string;
+    logPreview?: string;
+    verificationSummary?: string;
+    permissions?: string[];
+    resolutionScope?: string;
   };
   duration?: number;
   timestamp: number;
@@ -101,7 +125,14 @@ const getToolSummary = (toolName: string, input: unknown): string => {
     return '';
   };
 
-  if (toolName === 'app_cli') return pickText('command');
+  if (toolName === 'app_cli') return pickText('action', 'command');
+  if (toolName === 'redbox_fs') {
+    const action = pickText('action');
+    const target = pickText('path', 'pattern', 'query');
+    if (action && target) return `${action} · ${target}`;
+    return action || target;
+  }
+  if (toolName === 'redbox_editor') return pickText('action', 'filePath');
   if (toolName === 'bash' || toolName === 'run_command') return pickText('cmd', 'command');
   if (toolName === 'workspace') return pickText('action', 'path', 'query');
   if (toolName === 'read_file') return pickText('filePath', 'path');
@@ -115,6 +146,13 @@ const getToolSummary = (toolName: string, input: unknown): string => {
 const truncateText = (text: string, maxLength = 800): string => {
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength)}\n...`;
+};
+
+const stringifyCliCommand = (argv?: string[], fallback?: string): string => {
+  if (Array.isArray(argv) && argv.length > 0) {
+    return argv.join(' ');
+  }
+  return String(fallback || '').trim();
 };
 
 const getStatusTone = (status: SummaryItem['status']) => {
@@ -162,6 +200,80 @@ const buildSummaryItem = (item: ProcessItem): SummaryItem | null => {
     };
   }
 
+  if (item.type === 'cli-install') {
+    const toolName = item.cliData?.toolName || item.title || 'CLI 安装';
+    const parts = [
+      item.cliData?.installMethod,
+      item.cliData?.spec,
+      item.cliData?.environmentId ? `env ${item.cliData.environmentId}` : '',
+    ].filter(Boolean);
+    return {
+      id: item.id,
+      status: item.status,
+      label: `安装 ${toolName}`,
+      desc: parts.join(' · ') || item.content || toolName,
+      input: stringifyValue({
+        installId: item.cliData?.installId,
+        environmentId: item.cliData?.environmentId,
+        installMethod: item.cliData?.installMethod,
+        spec: item.cliData?.spec,
+      }),
+      output: item.cliData?.logPreview ? truncateText(item.cliData.logPreview, 1200) : '',
+    };
+  }
+
+  if (item.type === 'cli-exec') {
+    const toolName = item.cliData?.toolName || item.title || 'CLI 执行';
+    const commandPreview = stringifyCliCommand(item.cliData?.argv, item.cliData?.commandPreview);
+    return {
+      id: item.id,
+      status: item.status,
+      label: toolName,
+      desc: commandPreview || item.content || '执行外部命令',
+      input: stringifyValue({
+        executionId: item.cliData?.executionId,
+        command: commandPreview,
+        cwd: item.cliData?.cwd,
+        environmentId: item.cliData?.environmentId,
+      }),
+      output: item.cliData?.logPreview ? truncateText(item.cliData.logPreview, 1200) : '',
+    };
+  }
+
+  if (item.type === 'cli-escalation') {
+    return {
+      id: item.id,
+      status: item.status,
+      label: item.title || '权限确认',
+      desc: item.content || 'CLI 请求额外权限',
+      input: stringifyValue({
+        escalationId: item.cliData?.escalationId,
+        commandPreview: item.cliData?.commandPreview,
+        permissions: item.cliData?.permissions,
+      }),
+      output: truncateText(
+        [
+          item.cliData?.resolutionScope ? `scope: ${item.cliData.resolutionScope}` : '',
+          item.content,
+        ].filter(Boolean).join('\n'),
+        1200,
+      ),
+    };
+  }
+
+  if (item.type === 'cli-verify') {
+    return {
+      id: item.id,
+      status: item.status,
+      label: item.title || '结果校验',
+      desc: item.cliData?.verificationSummary || item.content || '执行后校验',
+      input: stringifyValue({
+        executionId: item.cliData?.executionId,
+      }),
+      output: item.cliData?.verificationSummary ? truncateText(item.cliData.verificationSummary, 1200) : '',
+    };
+  }
+
   return null;
 };
 
@@ -205,7 +317,7 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default' }: Pro
             )}
           />
           <span className="truncate">
-            查看工具调用
+            查看执行过程
             <span className="ml-1 text-text-tertiary/80">({summaryItems.length})</span>
           </span>
           {runningCount > 0 && <span className="text-blue-500">{runningCount} 运行中</span>}

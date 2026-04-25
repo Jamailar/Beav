@@ -1,4 +1,5 @@
 import { toPng } from 'html-to-image';
+import { resolveAssetUrl } from '../../utils/pathManager';
 
 const RICHPOST_FONT_SCALE_MIN = 0.8;
 const RICHPOST_FONT_SCALE_MAX = 1.6;
@@ -41,14 +42,68 @@ function extractUrlValue(raw: string): string | null {
   return source;
 }
 
+function normalizeSvgDataUrlMime(source: string): string {
+  const raw = String(source || '').trim();
+  if (!/^data:image\/svg(?=;|,)/i.test(raw)) {
+    return raw;
+  }
+  return raw.replace(/^data:image\/svg(?=;|,)/i, 'data:image/svg+xml');
+}
+
 function serializeRichpostHtml(doc: Document): string {
   return `<!doctype html>\n${doc.documentElement.outerHTML}`;
+}
+
+function normalizeRichpostAssetUrl(source: string): string {
+  const raw = normalizeSvgDataUrlMime(source);
+  if (!raw || raw === 'none') return '';
+  return resolveAssetUrl(raw) || raw;
+}
+
+function rewriteCssUrlReferences(raw: string): string {
+  if (!raw || !/url\(/i.test(raw)) return raw;
+  return raw.replace(/url\((['"]?)(.*?)\1\)/gi, (match, quote, source) => {
+    const normalized = normalizeRichpostAssetUrl(source);
+    if (!normalized || normalized === String(source || '').trim()) {
+      return match;
+    }
+    const wrappedQuote = quote || '"';
+    return `url(${wrappedQuote}${normalized}${wrappedQuote})`;
+  });
+}
+
+function normalizeRichpostDocumentAssetUrls(doc: Document): void {
+  Array.from(doc.querySelectorAll<HTMLElement>('[style]')).forEach((node) => {
+    const styleAttr = node.getAttribute('style') || '';
+    const rewritten = rewriteCssUrlReferences(styleAttr);
+    if (rewritten !== styleAttr) {
+      node.setAttribute('style', rewritten);
+    }
+  });
+  Array.from(doc.querySelectorAll<HTMLStyleElement>('style')).forEach((node) => {
+    const cssText = node.textContent || '';
+    const rewritten = rewriteCssUrlReferences(cssText);
+    if (rewritten !== cssText) {
+      node.textContent = rewritten;
+    }
+  });
+  Array.from(doc.querySelectorAll<HTMLElement>('img[src], source[src], video[src], video[poster]')).forEach((node) => {
+    ['src', 'poster'].forEach((attribute) => {
+      const current = node.getAttribute(attribute);
+      if (!current) return;
+      const normalized = normalizeRichpostAssetUrl(current);
+      if (normalized && normalized !== current) {
+        node.setAttribute(attribute, normalized);
+      }
+    });
+  });
 }
 
 function materializeRichpostBackgroundInHtml(html: string): string {
   if (!html.trim()) return html;
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
+  normalizeRichpostDocumentAssetUrls(doc);
   const host = doc.querySelector('.rb-page-host') as HTMLElement | null;
   const backgroundZone = doc.querySelector('.rb-zone-background') as HTMLElement | null;
   if (!host || !backgroundZone) return html;
@@ -64,7 +119,7 @@ function materializeRichpostBackgroundInHtml(html: string): string {
   const img = doc.createElement('img');
   img.setAttribute('data-richpost-export-bg', 'true');
   img.alt = '';
-  img.src = source;
+  img.src = normalizeRichpostAssetUrl(source) || source;
   backgroundZone.setAttribute('style', 'background-image:none;');
   backgroundZone.replaceChildren(img);
   return serializeRichpostHtml(doc);
@@ -199,20 +254,13 @@ async function waitForIframeContentReady(frame: HTMLIFrameElement): Promise<Docu
     frame.addEventListener('error', handleError, { once: true });
   });
 
+  normalizeRichpostDocumentAssetUrls(doc);
   const fonts = (doc as Document & { fonts?: { ready?: Promise<unknown> } }).fonts;
   if (fonts?.ready) {
     await fonts.ready.catch(() => undefined);
   }
   await Promise.all(
-    Array.from(doc.images).map((image) => (
-      image.complete
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            const done = () => resolve();
-            image.addEventListener('load', done, { once: true });
-            image.addEventListener('error', done, { once: true });
-          })
-    ))
+    Array.from(doc.images).map((image) => waitForImageReady(image, '图文页面图片'))
   );
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -223,40 +271,71 @@ async function waitForIframeContentReady(frame: HTMLIFrameElement): Promise<Docu
 function extractRichpostBackgroundSource(doc: Document): string | null {
   const backgroundZone = doc.querySelector('.rb-zone-background') as HTMLElement | null;
   const existingImage = backgroundZone?.querySelector('img') as HTMLImageElement | null;
-  if (existingImage?.src) {
-    return existingImage.src;
+  if (existingImage?.currentSrc || existingImage?.src) {
+    return normalizeRichpostAssetUrl(existingImage.currentSrc || existingImage.src) || existingImage.currentSrc || existingImage.src;
   }
   const computed = backgroundZone ? doc.defaultView?.getComputedStyle(backgroundZone) : null;
   const computedSource = extractUrlValue(computed?.backgroundImage || '');
   if (computedSource) {
-    return computedSource;
+    return normalizeRichpostAssetUrl(computedSource) || computedSource;
   }
   const host = doc.querySelector('.rb-page-host') as HTMLElement | null;
   const styleAttr = host?.getAttribute('style') || '';
   const styleMatch = styleAttr.match(/--rb-background-image\s*:\s*url\((['"]?)(.+?)\1\)\s*;/i);
-  return styleMatch?.[2]?.trim() || null;
+  const source = styleMatch?.[2]?.trim() || '';
+  return normalizeRichpostAssetUrl(source) || source || null;
+}
+
+function hasUsableImageData(image: HTMLImageElement): boolean {
+  return Boolean(image.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
+}
+
+async function waitForImageReady(image: HTMLImageElement, label: string): Promise<void> {
+  if (hasUsableImageData(image)) return;
+  const source = image.currentSrc || image.src || 'unknown';
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      image.removeEventListener('load', handleLoad);
+      image.removeEventListener('error', handleError);
+    };
+    const fail = () => {
+      cleanup();
+      reject(new Error(`${label}加载失败：${source}`));
+    };
+    const handleLoad = () => {
+      if (hasUsableImageData(image)) {
+        cleanup();
+        resolve();
+        return;
+      }
+      fail();
+    };
+    const handleError = () => fail();
+    if (image.complete) {
+      fail();
+      return;
+    }
+    image.addEventListener('load', handleLoad, { once: true });
+    image.addEventListener('error', handleError, { once: true });
+  });
 }
 
 async function loadImage(source: string): Promise<HTMLImageElement> {
+  const resolvedSource = normalizeRichpostAssetUrl(source) || source;
   const image = new Image();
   image.decoding = 'async';
-  image.src = source;
+  image.src = resolvedSource;
   if ('decode' in image) {
     try {
       await image.decode();
-      return image;
+      if (hasUsableImageData(image)) {
+        return image;
+      }
     } catch {
       // fall through to standard load listeners
     }
   }
-  await new Promise<void>((resolve, reject) => {
-    if (image.complete) {
-      resolve();
-      return;
-    }
-    image.addEventListener('load', () => resolve(), { once: true });
-    image.addEventListener('error', () => reject(new Error('图片资源加载失败')), { once: true });
-  });
+  await waitForImageReady(image, '导出图片资源');
   return image;
 }
 
@@ -310,7 +389,7 @@ async function materializeRichpostBackgroundImage(doc: Document): Promise<void> 
   img.setAttribute('data-richpost-export-bg', 'true');
   img.alt = '';
   img.decoding = 'async';
-  img.src = source;
+  img.src = normalizeRichpostAssetUrl(source) || source;
   Object.assign(img.style, {
     position: 'absolute',
     inset: '0',
@@ -326,20 +405,14 @@ async function materializeRichpostBackgroundImage(doc: Document): Promise<void> 
   if ('decode' in img) {
     try {
       await img.decode();
-      return;
+      if (hasUsableImageData(img)) {
+        return;
+      }
     } catch {
       // fall through to load/error listeners
     }
   }
-  await new Promise<void>((resolve) => {
-    if (img.complete) {
-      resolve();
-      return;
-    }
-    const done = () => resolve();
-    img.addEventListener('load', done, { once: true });
-    img.addEventListener('error', done, { once: true });
-  });
+  await waitForImageReady(img, '图文背景图');
 }
 
 async function renderRichpostFrameToPng(

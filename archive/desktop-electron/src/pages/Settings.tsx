@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -23,6 +23,10 @@ import {
   type McpServerRuntimeItem,
   type McpServerConfig,
   type McpSessionState,
+  type RuntimePerfBenchmarkMode,
+  type RuntimePerfPreset,
+  type RuntimePerfRunResult,
+  type RuntimePerfTimelineItem,
   type ToolDiagnosticDescriptor,
   type ToolDiagnosticRunResult,
   AiPresetLogo,
@@ -57,17 +61,34 @@ import {
   toAiModelDescriptor,
 } from './settings/shared';
 import { type ModelCapability } from '../../shared/modelCapabilities';
+import type {
+  CliRuntimeEnvironmentRecord,
+  CliRuntimeEnvironmentScope,
+  CliRuntimeToolRecord,
+  DiagnosticsLogStatus,
+  DiagnosticsPendingReport,
+  NotificationPermissionState,
+  NotificationSettingsPayload,
+} from '../types';
 import {
   REDBOX_OFFICIAL_VIDEO_BASE_URL,
   REDBOX_OFFICIAL_VIDEO_MODEL_LIST,
   REDBOX_OFFICIAL_VIDEO_MODELS,
 } from '../../shared/redboxVideo';
+import {
+  isRedClawOnboardingCompleted,
+  type RedclawOnboardingState,
+} from './redclaw/onboardingState';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
+import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
   GeneralSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
 } from './settings/SettingsSections';
+import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { playTestNotificationSound } from '../notifications/audio';
+import { DEFAULT_NOTIFICATION_SETTINGS, parseNotificationSettings } from '../notifications/types';
 
 const MIN_CHAT_MAX_TOKENS = 1024;
 const DEFAULT_CHAT_MAX_TOKENS = 262144;
@@ -76,13 +97,67 @@ const DEVELOPER_MODE_UNLOCK_TAP_COUNT = 7;
 const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
+const RUNTIME_PERF_HISTORY_LIMIT = 12;
+const RUNTIME_PERF_TIMELINE_LIMIT = 40;
+const RUNTIME_PERF_CHECKPOINT_WINDOW_MS = 1500;
+const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
+  {
+    id: 'latency-smoke',
+    label: '延迟冒烟',
+    description: '验证纯文本响应路径，观察 thinking 到首个 response 的延迟。',
+    message: '请直接回答：用三句话说明当前 runtime mode 的职责、主要风险和最先检查的观测点。不要调用工具。',
+  },
+  {
+    id: 'tooling-probe',
+    label: '工具探测',
+    description: '尽量触发一次真实工具调用，检查 tool-start/tool-end 延迟和成功率。',
+    message: '先调用一个最适合当前运行时的诊断类工具读取状态，再用两条结论总结发现。若当前上下文没有合适工具，再明确说明原因。',
+  },
+  {
+    id: 'long-response',
+    label: '长响应',
+    description: '拉长输出链路，观察持续流式输出和总耗时。',
+    message: '围绕当前 runtime mode 输出一个结构化调试清单，至少包含：入口、关键事件、常见瓶颈、建议日志位、回归检查项，每项 2 到 3 句。',
+  },
+];
 
-type SettingsTab = 'general' | 'ai' | 'tools' | 'remote';
+type SettingsTab = 'general' | 'ai' | 'tools' | 'profile' | 'remote';
+
+type RedclawProfileDraft = {
+  user: string;
+  creatorProfile: string;
+};
+
+const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
+  user: '',
+  creatorProfile: '',
+};
+
+const DEFAULT_SPACE_ID = 'default';
+
+function normalizeNotificationPermissionState(
+  value: unknown,
+): NotificationPermissionState['state'] {
+  const state = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (state === 'granted' || state === 'denied' || state === 'prompt') {
+    return state;
+  }
+  return 'unknown';
+}
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
-type OfficialAuthStateSnapshot = Awaited<ReturnType<typeof window.ipcRenderer.auth.getState>>;
-
+type CliRuntimeInstallMethodOption = 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+type CliRuntimeInstallQueueItem = {
+  installId: string;
+  toolName: string;
+  environmentId?: string;
+  installMethod?: string;
+  spec?: string;
+  status: string;
+  summary?: string;
+  updatedAt: number;
+};
 type AssistantDaemonDraft = {
   enabled: boolean;
   autoStart: boolean;
@@ -264,6 +339,116 @@ type RuntimeHookDefinition = {
   enabled?: boolean;
 };
 
+type RuntimePerfCollector = {
+  runId: string;
+  sessionId: string;
+  startedAt: number;
+  thinkingStartedMs?: number;
+  thoughtFirstTokenMs?: number;
+  firstResponseMs?: number;
+  firstToolStartMs?: number;
+  firstCheckpointMs?: number;
+  toolCalls: number;
+  toolSuccessCount: number;
+  toolFailureCount: number;
+  checkpointCount: number;
+  checkpointTypes: string[];
+  responseChars?: number;
+  timeline: RuntimePerfTimelineItem[];
+};
+
+function toRuntimePerfRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {};
+  return value as Record<string, unknown>;
+}
+
+function toRuntimePerfText(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function toRuntimePerfNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function normalizeCliRuntimeToolRecord(value: unknown): CliRuntimeToolRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = String(record.id || record.toolId || '').trim();
+  const executable = String(record.executable || record.command || '').trim();
+  const name = String(record.name || executable || id).trim();
+  if (!id && !name && !executable) return null;
+  return {
+    id: id || name || executable,
+    name: name || executable || id,
+    executable: executable || name || id,
+    resolvedPath: String(record.resolvedPath || record.resolved_path || '').trim() || null,
+    resolvedFrom: String(record.resolvedFrom || record.resolved_from || '').trim().toLowerCase() as CliRuntimeToolRecord['resolvedFrom'],
+    source: String(record.source || 'unknown').trim().toLowerCase() as CliRuntimeToolRecord['source'],
+    installMethod: String(record.installMethod || record.install_method || '').trim() || null,
+    installSpec: String(record.installSpec || record.install_spec || '').trim() || null,
+    version: String(record.version || '').trim() || null,
+    health: String(record.health || 'unknown').trim().toLowerCase() as CliRuntimeToolRecord['health'],
+    manifestId: String(record.manifestId || record.manifest_id || '').trim() || null,
+    environmentId: String(record.environmentId || record.environment_id || '').trim() || null,
+    lastCheckedAt: toRuntimePerfNumber(record.lastCheckedAt) ?? null,
+    effectivePathPreview: Array.isArray(record.effectivePathPreview)
+      ? record.effectivePathPreview.map((item) => String(item || '').trim()).filter(Boolean)
+      : Array.isArray(record.effective_path_preview)
+        ? (record.effective_path_preview as unknown[]).map((item) => String(item || '').trim()).filter(Boolean)
+        : [],
+    searchedPathEntriesCount:
+      toRuntimePerfNumber(record.searchedPathEntriesCount)
+      ?? toRuntimePerfNumber(record.searched_path_entries_count)
+      ?? null,
+    isInDefaultDetectCatalog:
+      record.isInDefaultDetectCatalog === true || record.is_in_default_detect_catalog === true,
+    metadata: record.metadata && typeof record.metadata === 'object' ? record.metadata as Record<string, unknown> : null,
+  };
+}
+
+function normalizeCliRuntimeEnvironmentRecord(value: unknown): CliRuntimeEnvironmentRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = String(record.id || '').trim();
+  const rootPath = String(record.rootPath || record.root_path || '').trim();
+  if (!id && !rootPath) return null;
+  return {
+    id: id || rootPath,
+    scope: String(record.scope || 'workspace-local').trim().toLowerCase() as CliRuntimeEnvironmentRecord['scope'],
+    rootPath,
+    workspaceRoot: String(record.workspaceRoot || record.workspace_root || '').trim() || null,
+    pathEntries: Array.isArray(record.pathEntries)
+      ? record.pathEntries.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    installedToolIds: Array.isArray(record.installedToolIds)
+      ? record.installedToolIds.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+    runtimes: record.runtimes && typeof record.runtimes === 'object' ? record.runtimes as Record<string, unknown> : null,
+    createdAt: toRuntimePerfNumber(record.createdAt) ?? null,
+    updatedAt: toRuntimePerfNumber(record.updatedAt) ?? null,
+    metadata: record.metadata && typeof record.metadata === 'object' ? record.metadata as Record<string, unknown> : null,
+  };
+}
+
+function runtimePerfContextTypeForMode(mode: RuntimePerfBenchmarkMode): string {
+  if (mode === 'chatroom') return 'chatroom';
+  if (mode === 'diagnostics') return 'diagnostics';
+  return mode;
+}
+
+function formatRuntimePerfRunIndex(index: number): string {
+  return `Run ${String(index).padStart(2, '0')}`;
+}
+
 const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < MIN_CHAT_MAX_TOKENS) {
@@ -272,9 +457,17 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
   return String(Math.floor(parsed));
 };
 
-export function Settings({ isActive = true }: { isActive?: boolean }) {
+export function Settings({
+  isActive = true,
+  onOpenRedClawOnboarding,
+  redclawOnboardingVersion = 0,
+}: {
+  isActive?: boolean;
+  onOpenRedClawOnboarding?: () => void;
+  redclawOnboardingVersion?: number;
+}) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<any>({
     api_endpoint: '',
     api_key: '',
     model_name: '',
@@ -295,7 +488,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     image_provider_template: 'openai-images',
     image_aspect_ratio: '3:4',
     image_size: '',
-    image_quality: 'standard',
+    image_quality: 'auto',
     model_name_wander: '',
     model_name_chatroom: '',
     model_name_knowledge: '',
@@ -308,6 +501,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     chat_max_tokens_deepseek: String(DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
     wander_deep_think_enabled: false,
     debug_log_enabled: false,
+    diagnostics_upload_consent: 'prompt',
+    diagnostics_include_advanced_context: false,
+    diagnostics_auto_send_same_crash: false,
+    diagnostics_last_prompted_at: '',
+    release_log_retention_days: '7',
+    release_log_max_file_mb: '10',
     developer_mode_enabled: false,
     developer_mode_unlocked_at: '',
   });
@@ -326,7 +525,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [embeddingSourceId, setEmbeddingSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
   const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
-  const [isTesting, setIsTesting] = useState(false);
+  const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [testMsg, setTestMsg] = useState('');
   const [imageAvailableModels, setImageAvailableModels] = useState<Array<{ id: string; source: 'remote' | 'suggested' }>>([]);
@@ -334,6 +533,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [imageModelStatus, setImageModelStatus] = useState('');
   const [recentDebugLogs, setRecentDebugLogs] = useState<string[]>([]);
   const [isDebugLogsLoading, setIsDebugLogsLoading] = useState(false);
+  const [logStatus, setLogStatus] = useState<DiagnosticsLogStatus | null>(null);
+  const [pendingDiagnosticReports, setPendingDiagnosticReports] = useState<DiagnosticsPendingReport[]>([]);
+  const [diagnosticsActionBusy, setDiagnosticsActionBusy] = useState<string | null>(null);
   const [toolDiagnostics, setToolDiagnostics] = useState<ToolDiagnosticDescriptor[]>([]);
   const [toolDiagnosticResults, setToolDiagnosticResults] = useState<Record<string, ToolDiagnosticRunResult | undefined>>({});
   const [toolDiagnosticRunning, setToolDiagnosticRunning] = useState<Record<string, 'direct' | 'ai' | undefined>>({});
@@ -351,6 +553,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskItem[]>([]);
   const [backgroundWorkerPool, setBackgroundWorkerPool] = useState<BackgroundWorkerPoolState>({ json: [], runtime: [] });
   const [selectedBackgroundTaskId, setSelectedBackgroundTaskId] = useState('');
+  const [selectedBackgroundTaskDetail, setSelectedBackgroundTaskDetail] = useState<BackgroundTaskItem | null>(null);
   const [runtimeDraftInput, setRuntimeDraftInput] = useState('');
   const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
   const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
@@ -360,7 +563,23 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [isRuntimeCreating, setIsRuntimeCreating] = useState(false);
   const [runtimeTaskActionRunning, setRuntimeTaskActionRunning] = useState<Record<string, 'resume' | 'cancel' | undefined>>({});
   const [backgroundTaskActionRunning, setBackgroundTaskActionRunning] = useState<Record<string, 'cancel' | undefined>>({});
+  const [runtimePerfMode, setRuntimePerfMode] = useState<RuntimePerfBenchmarkMode>('diagnostics');
+  const [runtimePerfPresetId, setRuntimePerfPresetId] = useState<string>(RUNTIME_PERF_PRESETS[0].id);
+  const [runtimePerfMessage, setRuntimePerfMessage] = useState<string>(RUNTIME_PERF_PRESETS[0].message);
+  const [runtimePerfIterations, setRuntimePerfIterations] = useState(1);
+  const [isRuntimePerfRunning, setIsRuntimePerfRunning] = useState(false);
+  const [runtimePerfStatusMessage, setRuntimePerfStatusMessage] = useState('');
+  const [runtimePerfResults, setRuntimePerfResults] = useState<RuntimePerfRunResult[]>([]);
+  const [activeRuntimePerfRunId, setActiveRuntimePerfRunId] = useState('');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [redclawProfileDraft, setRedclawProfileDraft] = useState<RedclawProfileDraft>(EMPTY_REDCLAW_PROFILE_DRAFT);
+  const [savedRedclawProfileDraft, setSavedRedclawProfileDraft] = useState<RedclawProfileDraft>(EMPTY_REDCLAW_PROFILE_DRAFT);
+  const [redclawProfileRoot, setRedclawProfileRoot] = useState('');
+  const [isRedclawProfileLoading, setIsRedclawProfileLoading] = useState(false);
+  const [redclawProfileDirty, setRedclawProfileDirty] = useState(false);
+  const [redclawProfileMessage, setRedclawProfileMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
+  const [redclawOnboardingState, setRedclawOnboardingState] = useState<RedclawOnboardingState>(null);
+  const [currentSpaceId, setCurrentSpaceId] = useState(DEFAULT_SPACE_ID);
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
   const [assistantDaemonLogs, setAssistantDaemonLogs] = useState<string[]>([]);
@@ -370,10 +589,57 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [assistantDaemonWeixinLogin, setAssistantDaemonWeixinLogin] = useState<AssistantDaemonWeixinLoginState | null>(null);
   const [showScopedModelOverrides, setShowScopedModelOverrides] = useState(false);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsPayload>(DEFAULT_NOTIFICATION_SETTINGS);
+  const [notificationPermissionState, setNotificationPermissionState] = useState<NotificationPermissionState['state']>('unknown');
+  const [notificationStatusMessage, setNotificationStatusMessage] = useState('');
   const hasSelectedRuntimeSession = useMemo(
     () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
     [runtimeSessions, selectedRuntimeSessionId],
   );
+  const redclawOnboardingCompleted = useMemo(
+    () => isRedClawOnboardingCompleted(redclawOnboardingState),
+    [redclawOnboardingState],
+  );
+
+  const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
+    setRuntimePerfResults((prev) =>
+      prev.map((run) => (run.id === runId ? updater(run) : run))
+    );
+  }, []);
+
+  const snapshotRuntimePerfCollector = useCallback((collector: RuntimePerfCollector) => ({
+    thinkingStartedMs: collector.thinkingStartedMs,
+    thoughtFirstTokenMs: collector.thoughtFirstTokenMs,
+    firstResponseMs: collector.firstResponseMs,
+    firstToolStartMs: collector.firstToolStartMs,
+    firstCheckpointMs: collector.firstCheckpointMs,
+    responseChars: collector.responseChars,
+    toolCalls: collector.toolCalls,
+    toolSuccessCount: collector.toolSuccessCount,
+    toolFailureCount: collector.toolFailureCount,
+    checkpointCount: collector.checkpointCount,
+    checkpointTypes: [...collector.checkpointTypes],
+    timeline: [...collector.timeline],
+  }), []);
+
+  const appendRuntimePerfTimeline = useCallback((
+    collector: RuntimePerfCollector,
+    event: Omit<RuntimePerfTimelineItem, 'id' | 'offsetMs'> & { offsetMs?: number },
+  ) => {
+    const offsetMs = typeof event.offsetMs === 'number'
+      ? event.offsetMs
+      : Math.max(0, event.at - collector.startedAt);
+    const item: RuntimePerfTimelineItem = {
+      id: `${collector.runId}:${collector.timeline.length}:${event.eventType}:${event.at}`,
+      at: event.at,
+      offsetMs,
+      eventType: event.eventType,
+      label: event.label,
+      detail: event.detail,
+      tone: event.tone,
+    };
+    collector.timeline = [...collector.timeline, item].slice(-RUNTIME_PERF_TIMELINE_LIMIT);
+  }, []);
 
   const buildWeixinQrImageUrl = useCallback(async (rawUrl?: string): Promise<string | undefined> => {
     const text = String(rawUrl || '').trim();
@@ -390,7 +656,90 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       return undefined;
     }
   }, []);
-  const fetchModelsRequestRef = useRef(0);
+
+  const setRedclawProfileDirtyState = useCallback((next: boolean) => {
+    redclawProfileDirtyRef.current = next;
+    setRedclawProfileDirty(next);
+  }, []);
+
+  const setCurrentSpaceState = useCallback((spaceId?: string | null) => {
+    const normalized = String(spaceId || '').trim() || DEFAULT_SPACE_ID;
+    currentSpaceIdRef.current = normalized;
+    setCurrentSpaceId(normalized);
+    return normalized;
+  }, []);
+
+  const resetRedclawProfileState = useCallback(() => {
+    redclawProfileLoadRequestRef.current += 1;
+    setRedclawProfileRoot('');
+    setSavedRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
+    setRedclawProfileDraft(EMPTY_REDCLAW_PROFILE_DRAFT);
+    setRedclawOnboardingState(null);
+    setRedclawProfileDirtyState(false);
+    setRedclawProfileMessage(null);
+    setIsRedclawProfileLoading(false);
+  }, [setRedclawProfileDirtyState]);
+
+  const loadRedclawProfileBundle = useCallback(async (options?: { preserveDraft?: boolean; expectedSpaceId?: string }) => {
+    const expectedSpaceId = String(options?.expectedSpaceId || currentSpaceIdRef.current || DEFAULT_SPACE_ID).trim() || DEFAULT_SPACE_ID;
+    const requestId = ++redclawProfileLoadRequestRef.current;
+    setIsRedclawProfileLoading(true);
+    try {
+      const bundle = await window.ipcRenderer.redclawProfile.getBundle();
+      if (requestId !== redclawProfileLoadRequestRef.current) return;
+      const responseSpaceId = String(bundle.activeSpaceId || expectedSpaceId).trim() || DEFAULT_SPACE_ID;
+      if (responseSpaceId !== currentSpaceIdRef.current) {
+        setCurrentSpaceState(responseSpaceId);
+      }
+      setRedclawOnboardingState(
+        bundle.onboardingState && typeof bundle.onboardingState === 'object'
+          ? bundle.onboardingState as Record<string, unknown>
+          : null
+      );
+      if (options?.preserveDraft && redclawProfileDirtyRef.current) {
+        setRedclawProfileRoot(String(bundle.profileRoot || '').trim());
+        return;
+      }
+      const files = bundle.files || {};
+      const nextDraft: RedclawProfileDraft = {
+        user: String(bundle.user || files.user || ''),
+        creatorProfile: String(bundle.creatorProfile || files.creatorProfile || ''),
+      };
+      setRedclawProfileRoot(String(bundle.profileRoot || '').trim());
+      setSavedRedclawProfileDraft(nextDraft);
+      setRedclawProfileDraft(nextDraft);
+      setRedclawProfileDirtyState(false);
+      setRedclawProfileMessage(null);
+    } catch (error) {
+      if (requestId !== redclawProfileLoadRequestRef.current) return;
+      console.error('Failed to load RedClaw profile bundle', error);
+      setRedclawProfileMessage({
+        tone: 'error',
+        text: `加载用户档案失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+    } finally {
+      if (requestId === redclawProfileLoadRequestRef.current) {
+        setIsRedclawProfileLoading(false);
+      }
+    }
+  }, [setRedclawProfileDirtyState]);
+
+  const handleRedclawProfileDraftChange = useCallback((field: keyof RedclawProfileDraft, value: string) => {
+    setRedclawProfileDraft((prev) => {
+      const next = {
+        ...prev,
+        [field]: value,
+      };
+      const dirty = next.user !== savedRedclawProfileDraft.user
+        || next.creatorProfile !== savedRedclawProfileDraft.creatorProfile;
+      setRedclawProfileDirtyState(dirty);
+      return next;
+    });
+    setRedclawProfileMessage(null);
+    setStatus('idle');
+  }, [savedRedclawProfileDraft.creatorProfile, savedRedclawProfileDraft.user, setRedclawProfileDirtyState]);
+
+  const fetchModelsRequestRef = useRef<Record<string, number>>({});
   const fetchImageModelsRequestRef = useRef(0);
   const settingsLoadRequestRef = useRef(0);
   const debugLogsLoadRequestRef = useRef(0);
@@ -400,24 +749,33 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const runtimeTaskTracesLoadRequestRef = useRef(0);
   const runtimeSessionDetailsLoadRequestRef = useRef(0);
   const runtimeObservabilityRefreshTimerRef = useRef<number | null>(null);
+  const runtimePerfCollectorRef = useRef<RuntimePerfCollector | null>(null);
+  const runtimePerfRunCounterRef = useRef(0);
   const backgroundTasksLoadRequestRef = useRef(0);
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
+  const aiSourceAutosaveTimerRef = useRef<number | null>(null);
   const remoteTabWarmTimerRef = useRef<number | null>(null);
   const settingsActivationTimerRef = useRef<number | null>(null);
+  const redclawProfileLoadRequestRef = useRef(0);
   const baseSettingsLoadedRef = useRef(false);
   const baseSettingsInFlightRef = useRef(false);
+  const aiSourceDraftDirtyRef = useRef(false);
+  const redclawProfileDirtyRef = useRef(false);
+  const currentSpaceIdRef = useRef(DEFAULT_SPACE_ID);
   const tabWarmRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
     tools: false,
+    profile: false,
     remote: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
     ai: false,
     tools: false,
+    profile: false,
     remote: false,
   });
 
@@ -685,6 +1043,29 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     error?: string;
   } | null>(null);
   const [isPreparingBrowserPlugin, setIsPreparingBrowserPlugin] = useState(false);
+  const [cliRuntimeTools, setCliRuntimeTools] = useState<CliRuntimeToolRecord[]>([]);
+  const [cliRuntimeEnvironments, setCliRuntimeEnvironments] = useState<CliRuntimeEnvironmentRecord[]>([]);
+  const [cliRuntimeInstallDraft, setCliRuntimeInstallDraft] = useState<{
+    environmentId: string;
+    installMethod: CliRuntimeInstallMethodOption;
+    spec: string;
+    toolName: string;
+  }>({
+    environmentId: '',
+    installMethod: 'pnpm',
+    spec: '',
+    toolName: '',
+  });
+  const [cliRuntimeInstallQueue, setCliRuntimeInstallQueue] = useState<CliRuntimeInstallQueueItem[]>([]);
+  const [cliRuntimeInstalling, setCliRuntimeInstalling] = useState(false);
+  const [cliRuntimeStatusMessage, setCliRuntimeStatusMessage] = useState('');
+  const [isCliRuntimeRefreshing, setIsCliRuntimeRefreshing] = useState(false);
+  const [cliRuntimeInspectingToolId, setCliRuntimeInspectingToolId] = useState('');
+  const [cliRuntimeDiagnosticCommand, setCliRuntimeDiagnosticCommand] = useState('');
+  const [cliRuntimeDiscoverQuery, setCliRuntimeDiscoverQuery] = useState('');
+  const [cliRuntimeDiscoverResults, setCliRuntimeDiscoverResults] = useState<CliRuntimeToolRecord[]>([]);
+  const [cliRuntimeDiscovering, setCliRuntimeDiscovering] = useState(false);
+  const [cliRuntimeCreatingEnvironment, setCliRuntimeCreatingEnvironment] = useState<CliRuntimeEnvironmentScope | ''>('');
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [mcpStatusMessage, setMcpStatusMessage] = useState('');
   const [isSyncingMcp, setIsSyncingMcp] = useState(false);
@@ -695,12 +1076,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const [mcpInspectingId, setMcpInspectingId] = useState('');
 
   // Update State
-  const [appVersion, setAppVersion] = useState('');
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   const [aiModelSubTab, setAiModelSubTab] = useState<'custom' | 'login'>('custom');
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
-  const [officialAuthState, setOfficialAuthState] = useState<OfficialAuthStateSnapshot | null>(null);
+  const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
 
   const isDeprecatedEmptyOpenAiSource = useCallback((source?: AiSourceConfig | null): boolean => {
     if (!source) return false;
@@ -746,42 +1127,6 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       canceled = true;
     };
   }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, officialAiPanelEnabled]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const applyOfficialAuthState = (snapshot: OfficialAuthStateSnapshot | null | undefined) => {
-      if (!mounted) return;
-      setOfficialAuthState(snapshot || null);
-    };
-
-    const handleOfficialAuthStateChanged = (
-      event:
-        | { payload?: OfficialAuthStateSnapshot | null }
-        | OfficialAuthStateSnapshot
-        | null
-        | undefined,
-    ) => {
-      const payload = (event && typeof event === 'object' && 'payload' in event)
-        ? (event as { payload?: OfficialAuthStateSnapshot | null }).payload
-        : (event as OfficialAuthStateSnapshot | null | undefined);
-      applyOfficialAuthState(payload);
-    };
-
-    void window.ipcRenderer.auth.getState()
-      .then((snapshot) => {
-        applyOfficialAuthState(snapshot);
-      })
-      .catch(() => {
-        applyOfficialAuthState(null);
-      });
-
-    window.ipcRenderer.auth.onStateChanged(handleOfficialAuthStateChanged);
-    return () => {
-      mounted = false;
-      window.ipcRenderer.auth.offStateChanged(handleOfficialAuthStateChanged);
-    };
-  }, []);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -841,14 +1186,14 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, [aiSources, hasOfficialManagedSource, officialAiPanelEnabled]);
 
   const officialAuthStatus = String((officialAuthState as { status?: string } | null)?.status || '').trim();
-  const officialAuthKnown = officialAuthState !== null;
-  const officialAuthPending = !officialAuthKnown
+  const officialAuthKnown = officialAuthBootstrapped;
+  const officialAuthPending = !officialAuthBootstrapped
     || officialAuthStatus === 'restoring'
     || officialAuthStatus === 'refreshing';
   const officialAuthLoggedIn = officialAuthKnown
-    && !officialAuthPending
     && officialAuthStatus !== 'anonymous'
     && officialAuthStatus !== 'reauthRequired'
+    && officialAuthStatus !== 'restoring'
     && Boolean((officialAuthState as { loggedIn?: boolean } | null)?.loggedIn);
   const officialAuthNeedsLogin = officialAuthKnown && !officialAuthPending && !officialAuthLoggedIn;
 
@@ -976,6 +1321,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return next.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 200);
       });
       setSelectedBackgroundTaskId((prev) => prev || task.id);
+      setSelectedBackgroundTaskDetail((prev) => (prev?.id === task.id ? { ...prev, ...task } : prev));
     };
     window.ipcRenderer.on('background:task-updated', onBackgroundTaskUpdated);
     return () => {
@@ -996,6 +1342,23 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, [activeTab, formData.developer_mode_enabled, hasSelectedRuntimeSession, selectedRuntimeSessionId]);
 
   useEffect(() => {
+    if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+    if (!selectedBackgroundTaskId) {
+      setSelectedBackgroundTaskDetail(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const detail = await window.ipcRenderer.backgroundTasks.get(selectedBackgroundTaskId);
+      if (cancelled) return;
+      setSelectedBackgroundTaskDetail(detail && typeof detail === 'object' ? detail as BackgroundTaskItem : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, formData.developer_mode_enabled, selectedBackgroundTaskId]);
+
+  useEffect(() => {
     setTestStatus('idle');
     setTestMsg('');
     setDetectedAiProtocol((activeAiSource?.protocol || 'openai') as AiProtocol);
@@ -1006,6 +1369,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     const timer = window.setTimeout(() => setMcpStatusMessage(''), 2800);
     return () => window.clearTimeout(timer);
   }, [mcpStatusMessage]);
+
+  useEffect(() => {
+    if (!cliRuntimeStatusMessage) return;
+    const timer = window.setTimeout(() => setCliRuntimeStatusMessage(''), 3200);
+    return () => window.clearTimeout(timer);
+  }, [cliRuntimeStatusMessage]);
 
   useEffect(() => {
     if (activeTab !== 'tools') return;
@@ -1035,9 +1404,100 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     return undefined;
   }, []);
 
-  const updateAiSource = useCallback((sourceId: string, updater: (source: AiSourceConfig) => AiSourceConfig) => {
-    setAiSources((prev) => prev.map((source) => (source.id === sourceId ? updater(source) : source)));
+  const markAiSourceDraftDirty = useCallback(() => {
+    aiSourceDraftDirtyRef.current = true;
   }, []);
+
+  const clearAiSourceDraftDirty = useCallback(() => {
+    aiSourceDraftDirtyRef.current = false;
+  }, []);
+
+  const buildAiSourcePersistenceSnapshot = useCallback((
+    sources: AiSourceConfig[] = aiSources,
+    resolvedDefaultSourceId: string = defaultAiSourceId,
+  ) => {
+    const sanitizedSources: AiSourceConfig[] = sources
+      .map((source) => ({
+        ...source,
+        name: source.name.trim(),
+        presetId: source.presetId.trim() || 'custom',
+        baseURL: source.baseURL.trim(),
+        apiKey: source.apiKey.trim(),
+        models: normalizeSourceModels([...(source.models || []), source.model]),
+        modelsMeta: normalizeAiModelDescriptors([
+          ...(source.modelsMeta || []),
+          ...(source.models || []).map((id) => ({ id })),
+          source.model ? { id: source.model } : null,
+        ]),
+        model: String(source.model || '').trim(),
+        protocol: source.protocol || findAiPresetById(source.presetId)?.protocol || 'openai',
+      }))
+      .map((source) => ({
+        ...source,
+        model: source.model || source.models?.[0] || '',
+        models: normalizeSourceModels([...(source.models || []), source.model]),
+        modelsMeta: normalizeAiModelDescriptors([
+          ...(source.modelsMeta || []),
+          ...(source.models || []).map((id) => ({ id })),
+          source.model ? { id: source.model } : null,
+        ]),
+      }))
+      .filter((source) => !isDeprecatedEmptyOpenAiSource(source));
+
+    const defaultSource = sanitizedSources.find((source) => source.id === resolvedDefaultSourceId) || sanitizedSources[0];
+    return {
+      sanitizedSources,
+      resolvedDefaultSourceId,
+      defaultSource,
+      resolvedApiEndpoint: String(defaultSource?.baseURL || '').trim(),
+      resolvedApiKey: String(defaultSource?.apiKey || '').trim(),
+      resolvedModelName: String(defaultSource?.model || '').trim(),
+    };
+  }, [aiSources, defaultAiSourceId, isDeprecatedEmptyOpenAiSource]);
+
+  const persistAiSourcesSnapshot = useCallback(async (
+    sources: AiSourceConfig[] = aiSources,
+    resolvedDefaultSourceId: string = defaultAiSourceId,
+  ) => {
+    const snapshot = buildAiSourcePersistenceSnapshot(sources, resolvedDefaultSourceId);
+    await window.ipcRenderer.saveSettings({
+      ai_sources_json: JSON.stringify(snapshot.sanitizedSources),
+      default_ai_source_id: snapshot.resolvedDefaultSourceId || snapshot.defaultSource?.id || '',
+      api_endpoint: snapshot.resolvedApiEndpoint,
+      api_key: snapshot.resolvedApiKey,
+      model_name: snapshot.resolvedModelName,
+    });
+    clearAiSourceDraftDirty();
+  }, [aiSources, buildAiSourcePersistenceSnapshot, clearAiSourceDraftDirty, defaultAiSourceId]);
+
+  const updateAiSource = useCallback((sourceId: string, updater: (source: AiSourceConfig) => AiSourceConfig) => {
+    markAiSourceDraftDirty();
+    setAiSources((prev) => prev.map((source) => (source.id === sourceId ? updater(source) : source)));
+  }, [markAiSourceDraftDirty]);
+
+  useEffect(() => {
+    if (!baseSettingsLoadedRef.current) return;
+    if (!aiSourceDraftDirtyRef.current) return;
+    if (aiSourceAutosaveTimerRef.current != null) {
+      window.clearTimeout(aiSourceAutosaveTimerRef.current);
+    }
+    aiSourceAutosaveTimerRef.current = window.setTimeout(() => {
+      aiSourceAutosaveTimerRef.current = null;
+      void persistAiSourcesSnapshot().catch((error) => {
+        console.error('Failed to persist AI source snapshot:', error);
+        setStatus('error');
+        setTestStatus('error');
+        setTestMsg(error instanceof Error ? error.message : 'AI 源配置自动保存失败');
+      });
+    }, 350);
+
+    return () => {
+      if (aiSourceAutosaveTimerRef.current != null) {
+        window.clearTimeout(aiSourceAutosaveTimerRef.current);
+        aiSourceAutosaveTimerRef.current = null;
+      }
+    };
+  }, [aiSources, defaultAiSourceId, persistAiSourcesSnapshot]);
 
   const openCreateAiSourceModal = () => {
     setCreateAiSourceDraft(createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
@@ -1062,6 +1522,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       protocol: createAiSourceDraft.protocol || preset?.protocol || 'openai',
     };
 
+    markAiSourceDraftDirty();
     setAiSources((prev) => [...prev, nextSource]);
     setActiveAiSourceId(nextSource.id);
     setAiSourceExpandState((prev) => ({ ...prev, [nextSource.id]: true }));
@@ -1073,6 +1534,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   };
 
   const handleDeleteAiSource = (sourceId: string) => {
+    markAiSourceDraftDirty();
     setAiSources((prev) => {
       const next = prev.filter((source) => source.id !== sourceId);
       if (!next.length) {
@@ -1095,6 +1557,15 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       delete next[sourceId];
       return next;
     });
+    setFetchingModelsBySourceId((prev) => {
+      if (!prev[sourceId]) return prev;
+      const next = { ...prev };
+      delete next[sourceId];
+      return next;
+    });
+    fetchModelsRequestRef.current = Object.fromEntries(
+      Object.entries(fetchModelsRequestRef.current).filter(([id]) => id !== sourceId),
+    );
     setSourceModelDrafts((prev) => {
       const next = { ...prev };
       delete next[sourceId];
@@ -1199,11 +1670,18 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     source: AiSourceConfig,
     options?: { manual?: boolean }
   ) => {
+    const sourceId = String(source.id || '').trim();
     const baseURL = source.baseURL.trim();
     const apiKey = source.apiKey.trim();
     const allowEmptyKey = isLocalAiSource(source);
     if (!baseURL || (!apiKey && !allowEmptyKey)) {
       setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
+      setFetchingModelsBySourceId((prev) => {
+        if (!prev[source.id]) return prev;
+        const next = { ...prev };
+        delete next[source.id];
+        return next;
+      });
       if (options?.manual) {
         setTestStatus('error');
         setTestMsg(allowEmptyKey ? '请先填写 Endpoint' : '请先填写 Endpoint 与 API Key');
@@ -1214,8 +1692,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       return;
     }
 
-    const requestId = ++fetchModelsRequestRef.current;
-    setIsTesting(true);
+    const requestId = (fetchModelsRequestRef.current[sourceId] || 0) + 1;
+    fetchModelsRequestRef.current = {
+      ...fetchModelsRequestRef.current,
+      [sourceId]: requestId,
+    };
+    setFetchingModelsBySourceId((prev) => ({ ...prev, [source.id]: true }));
     if (options?.manual) {
       setTestStatus('idle');
       setTestMsg('');
@@ -1229,7 +1711,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
 
       const protocol = detectResult?.protocol || source.protocol || 'openai';
-      if (requestId !== fetchModelsRequestRef.current) return;
+      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
 
       if (source.protocol !== protocol) {
         updateAiSource(source.id, (prev) => ({ ...prev, protocol }));
@@ -1244,7 +1726,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         presetId: source.presetId,
         protocol,
       });
-      if (requestId !== fetchModelsRequestRef.current) return;
+      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
 
       const deduped = Array.from(new Map(
         ((models || []) as unknown[])
@@ -1290,14 +1772,19 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           : `候选模型已更新（${deduped.length} 个），请在“添加模型”中手动加入需要的模型`
       );
     } catch (e: unknown) {
-      if (requestId !== fetchModelsRequestRef.current) return;
+      if (requestId !== (fetchModelsRequestRef.current[sourceId] || 0)) return;
       setModelsBySource((prev) => ({ ...prev, [source.id]: [] }));
       setTestStatus('error');
       const message = e instanceof Error ? e.message : '拉取模型列表失败';
       setTestMsg(message);
     } finally {
-      if (requestId === fetchModelsRequestRef.current) {
-        setIsTesting(false);
+      if (requestId === (fetchModelsRequestRef.current[sourceId] || 0)) {
+        setFetchingModelsBySourceId((prev) => {
+          if (!prev[source.id]) return prev;
+          const next = { ...prev };
+          delete next[source.id];
+          return next;
+        });
       }
     }
   }, [activeAiSourceId, isLocalAiSource, isOfficialManagedSource, updateAiSource]);
@@ -1569,9 +2056,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   const loadAppVersion = useCallback(async () => {
     try {
       const version = await window.ipcRenderer.getAppVersion();
-      setAppVersion(version || '');
+      const normalizedVersion = typeof version === 'string'
+        ? version.trim()
+        : String(version || '').trim();
+      setAppVersion(normalizedVersion || '未读取到版本号');
     } catch (e) {
       console.error('Failed to load app version:', e);
+      setAppVersion('读取失败');
     }
   }, []);
 
@@ -1579,7 +2070,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     const requestId = ++debugLogsLoadRequestRef.current;
     setIsDebugLogsLoading(true);
     try {
-      const result = await window.ipcRenderer.debug.getRecent(120);
+      const result = await window.ipcRenderer.logs.getRecent(120);
       if (requestId !== debugLogsLoadRequestRef.current) return;
       setRecentDebugLogs(Array.isArray(result?.lines) ? result.lines : []);
     } catch (e) {
@@ -1591,12 +2082,79 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   }, []);
 
+  const loadLoggingStatus = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.logs.getStatus();
+      setLogStatus(result || null);
+    } catch (error) {
+      console.error('Failed to load logging status', error);
+    }
+  }, []);
+
+  const loadPendingDiagnosticReports = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.logs.listPendingReports();
+      setPendingDiagnosticReports(Array.isArray(result) ? result : []);
+    } catch (error) {
+      console.error('Failed to load pending diagnostic reports', error);
+    }
+  }, []);
+
   const openDebugLogDirectory = async () => {
-    const result = await window.ipcRenderer.debug.openLogDir();
+    const result = await window.ipcRenderer.logs.openDir();
     if (!result?.success && result?.error) {
       void appAlert(`打开日志目录失败：${result.error}`);
     }
   };
+
+  const handleExportDiagnosticBundle = useCallback(async (reportId?: string) => {
+    setDiagnosticsActionBusy(reportId || 'manual-export');
+    try {
+      const result = await window.ipcRenderer.logs.exportBundle(reportId, {
+        includeAdvancedContext: Boolean(formData.debug_log_enabled || formData.diagnostics_include_advanced_context),
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || '导出诊断包失败');
+      }
+      await appAlert(`诊断包已导出到：\n${result.path}`);
+      await Promise.all([loadLoggingStatus(), loadPendingDiagnosticReports()]);
+    } catch (error) {
+      void appAlert(`导出诊断包失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDiagnosticsActionBusy(null);
+    }
+  }, [formData.debug_log_enabled, formData.diagnostics_include_advanced_context, loadLoggingStatus, loadPendingDiagnosticReports]);
+
+  const handleUploadPendingReport = useCallback(async (reportId: string) => {
+    setDiagnosticsActionBusy(reportId);
+    try {
+      const result = await window.ipcRenderer.logs.uploadReport(reportId);
+      if (!result?.success) {
+        throw new Error(result?.error || '上传诊断报告失败');
+      }
+      await appAlert('诊断报告已上传。');
+      await Promise.all([loadLoggingStatus(), loadPendingDiagnosticReports()]);
+    } catch (error) {
+      void appAlert(`上传诊断报告失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDiagnosticsActionBusy(null);
+    }
+  }, [loadLoggingStatus, loadPendingDiagnosticReports]);
+
+  const handleDismissPendingReport = useCallback(async (reportId: string) => {
+    setDiagnosticsActionBusy(reportId);
+    try {
+      const result = await window.ipcRenderer.logs.dismissReport(reportId);
+      if (!result?.success) {
+        throw new Error(result?.error || '删除待发送报告失败');
+      }
+      await Promise.all([loadLoggingStatus(), loadPendingDiagnosticReports()]);
+    } catch (error) {
+      void appAlert(`删除待发送报告失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDiagnosticsActionBusy(null);
+    }
+  }, [loadLoggingStatus, loadPendingDiagnosticReports]);
 
   const loadToolDiagnostics = useCallback(async () => {
     try {
@@ -1755,6 +2313,151 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     };
   }, [activeTab, formData.developer_mode_enabled, isActive, loadRuntimeSessionDetails, loadRuntimeSessions, selectedRuntimeSessionId]);
 
+  useEffect(() => {
+    if (!isActive) return;
+    if (activeTab !== 'tools' || !formData.developer_mode_enabled) return;
+
+    const onRuntimePerfEvent = (_event: unknown, envelope?: unknown) => {
+      const collector = runtimePerfCollectorRef.current;
+      if (!collector) return;
+
+      const record = toRuntimePerfRecord(envelope);
+      const eventType = toRuntimePerfText(record.eventType);
+      const sessionId = toRuntimePerfText(record.sessionId);
+      const timestamp = toRuntimePerfNumber(record.timestamp) || Date.now();
+      if (!eventType || sessionId !== collector.sessionId) return;
+
+      const payload = toRuntimePerfRecord(record.payload);
+      let changed = false;
+
+      if (eventType === 'runtime:stream-start') {
+        const phase = toRuntimePerfText(payload.phase) || 'unknown';
+        if (phase === 'thinking' && collector.thinkingStartedMs == null) {
+          collector.thinkingStartedMs = Math.max(0, timestamp - collector.startedAt);
+          changed = true;
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `phase · ${phase}`,
+          detail: toRuntimePerfText(payload.runtimeMode) || undefined,
+          tone: 'neutral',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:text-delta') {
+        const stream = toRuntimePerfText(payload.stream);
+        const content = toRuntimePerfText(payload.content);
+        if (stream === 'thought' && collector.thoughtFirstTokenMs == null) {
+          collector.thoughtFirstTokenMs = Math.max(0, timestamp - collector.startedAt);
+          appendRuntimePerfTimeline(collector, {
+            at: timestamp,
+            eventType,
+            label: 'thought first token',
+            detail: `${content.length} chars`,
+            tone: 'neutral',
+          });
+          changed = true;
+        }
+        if (stream === 'response') {
+          if (collector.firstResponseMs == null) {
+            collector.firstResponseMs = Math.max(0, timestamp - collector.startedAt);
+            appendRuntimePerfTimeline(collector, {
+              at: timestamp,
+              eventType,
+              label: 'response first token',
+              detail: `${content.length} chars`,
+              tone: 'success',
+            });
+            changed = true;
+          }
+          const nextChars = (collector.responseChars || 0) + content.length;
+          if (nextChars !== collector.responseChars) {
+            collector.responseChars = nextChars;
+            changed = true;
+          }
+        }
+      } else if (eventType === 'runtime:tool-start') {
+        collector.toolCalls += 1;
+        if (collector.firstToolStartMs == null) {
+          collector.firstToolStartMs = Math.max(0, timestamp - collector.startedAt);
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `tool start · ${toRuntimePerfText(payload.name) || 'tool'}`,
+          detail: toRuntimePerfText(payload.description) || undefined,
+          tone: 'warning',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:tool-end') {
+        const output = toRuntimePerfRecord(payload.output);
+        const success = output.success !== false;
+        if (success) {
+          collector.toolSuccessCount += 1;
+        } else {
+          collector.toolFailureCount += 1;
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `tool ${success ? 'done' : 'failed'} · ${toRuntimePerfText(payload.name) || 'tool'}`,
+          detail: toRuntimePerfText(output.content) || undefined,
+          tone: success ? 'success' : 'error',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:checkpoint') {
+        const checkpointType = toRuntimePerfText(payload.checkpointType) || 'checkpoint';
+        collector.checkpointCount += 1;
+        if (collector.firstCheckpointMs == null) {
+          collector.firstCheckpointMs = Math.max(0, timestamp - collector.startedAt);
+        }
+        if (checkpointType && !collector.checkpointTypes.includes(checkpointType)) {
+          collector.checkpointTypes = [...collector.checkpointTypes, checkpointType];
+        }
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `checkpoint · ${checkpointType}`,
+          detail: toRuntimePerfText(payload.summary) || undefined,
+          tone: checkpointType === 'chat.error' ? 'error' : 'neutral',
+        });
+        changed = true;
+      } else if (eventType === 'runtime:done') {
+        appendRuntimePerfTimeline(collector, {
+          at: timestamp,
+          eventType,
+          label: `done · ${toRuntimePerfText(payload.status) || 'completed'}`,
+          detail: toRuntimePerfText(payload.reason) || undefined,
+          tone: toRuntimePerfText(payload.status) === 'error' ? 'error' : 'success',
+        });
+        const content = toRuntimePerfText(payload.content);
+        if (content) {
+          collector.responseChars = Math.max(collector.responseChars || 0, content.length);
+        }
+        changed = true;
+      }
+
+      if (!changed) return;
+
+      updateRuntimePerfRun(collector.runId, (run) => ({
+        ...run,
+        ...snapshotRuntimePerfCollector(collector),
+      }));
+    };
+
+    window.ipcRenderer.on('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('runtime:event', onRuntimePerfEvent as (...args: unknown[]) => void);
+    };
+  }, [
+    activeTab,
+    appendRuntimePerfTimeline,
+    formData.developer_mode_enabled,
+    isActive,
+    snapshotRuntimePerfCollector,
+    updateRuntimePerfRun,
+  ]);
+
   const loadRuntimeHooks = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.toolHooks.list();
@@ -1778,6 +2481,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         }
         return taskList[0]?.id || '';
       });
+      setSelectedBackgroundTaskDetail((prev) => (
+        prev && taskList.some((task) => task.id === prev.id) ? prev : null
+      ));
     } catch (e) {
       console.error('Failed to load background tasks', e);
       if (!preserveSelection) {
@@ -1828,6 +2534,242 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     loadRuntimeSessions,
     loadRuntimeTasks,
     loadToolDiagnostics,
+  ]);
+
+  const handleApplyRuntimePerfPreset = useCallback((presetId: string) => {
+    const preset = RUNTIME_PERF_PRESETS.find((item) => item.id === presetId) || RUNTIME_PERF_PRESETS[0];
+    setRuntimePerfPresetId(preset.id);
+    setRuntimePerfMessage(preset.message);
+  }, []);
+
+  const ensureRuntimePerfSession = useCallback(async (
+    mode: RuntimePerfBenchmarkMode,
+    index: number,
+  ): Promise<{ id: string }> => {
+    const contextType = runtimePerfContextTypeForMode(mode);
+    const timestamp = Date.now();
+    const contextId = `developer-runtime-perf-${mode}-${timestamp}-${index}`;
+    const title = `Runtime Perf · ${mode} · ${formatRuntimePerfRunIndex(index)}`;
+    if (mode === 'diagnostics') {
+      return await window.ipcRenderer.chat.createDiagnosticsSession({
+        title,
+        contextId,
+        contextType,
+      }) as { id: string };
+    }
+    return await window.ipcRenderer.chat.createContextSession({
+      contextId,
+      contextType,
+      title,
+    }) as { id: string };
+  }, []);
+
+  const handleClearRuntimePerfResults = useCallback(() => {
+    runtimePerfCollectorRef.current = null;
+    setActiveRuntimePerfRunId('');
+    setRuntimePerfResults([]);
+    setRuntimePerfStatusMessage('');
+  }, []);
+
+  const handleRunRuntimePerfBenchmark = useCallback(async () => {
+    const trimmedMessage = runtimePerfMessage.trim();
+    if (!trimmedMessage || isRuntimePerfRunning) return;
+
+    setIsRuntimePerfRunning(true);
+    setRuntimePerfStatusMessage(`准备执行 ${runtimePerfIterations} 轮 runtime benchmark...`);
+
+    try {
+      for (let iterationIndex = 0; iterationIndex < runtimePerfIterations; iterationIndex += 1) {
+        const runNumber = ++runtimePerfRunCounterRef.current;
+        const session = await ensureRuntimePerfSession(runtimePerfMode, runNumber);
+        const sessionId = String(session?.id || '').trim();
+        if (!sessionId) {
+          throw new Error('性能测试未拿到有效 sessionId');
+        }
+
+        const startedAt = Date.now();
+        const runId = `runtime-perf-${startedAt}-${runNumber}`;
+        const collector: RuntimePerfCollector = {
+          runId,
+          sessionId,
+          startedAt,
+          toolCalls: 0,
+          toolSuccessCount: 0,
+          toolFailureCount: 0,
+          checkpointCount: 0,
+          checkpointTypes: [],
+          timeline: [],
+        };
+        runtimePerfCollectorRef.current = collector;
+        setActiveRuntimePerfRunId(runId);
+        setSelectedRuntimeSessionId(sessionId);
+        appendRuntimePerfTimeline(collector, {
+          at: startedAt,
+          eventType: 'run:start',
+          label: '测试开始',
+          detail: `${runtimePerfMode} · ${formatRuntimePerfRunIndex(runNumber)}`,
+          tone: 'neutral',
+          offsetMs: 0,
+        });
+        const pendingRun: RuntimePerfRunResult = {
+          id: runId,
+          index: runNumber,
+          runtimeMode: runtimePerfMode,
+          sessionId,
+          presetId: runtimePerfPresetId,
+          message: trimmedMessage,
+          status: 'running',
+          startedAt,
+          toolCalls: 0,
+          toolSuccessCount: 0,
+          toolFailureCount: 0,
+          checkpointCount: 0,
+          checkpointTypes: [],
+          timeline: [...collector.timeline],
+        };
+        setRuntimePerfResults((prev) => [
+          pendingRun,
+          ...prev,
+        ].slice(0, RUNTIME_PERF_HISTORY_LIMIT));
+
+        setRuntimePerfStatusMessage(`执行中：第 ${iterationIndex + 1}/${runtimePerfIterations} 轮`);
+
+        let finalStatus: RuntimePerfRunResult['status'] = 'completed';
+        let finalError = '';
+        let finalResponseChars = 0;
+        let routeValue: unknown = null;
+        let orchestrationValue: unknown = null;
+
+        try {
+          const result = await window.ipcRenderer.runtime.query({
+            sessionId,
+            message: trimmedMessage,
+          }) as {
+            success?: boolean;
+            response?: string;
+            route?: unknown;
+            orchestration?: unknown;
+          };
+          if (result?.success === false) {
+            throw new Error('runtime query returned success=false');
+          }
+          finalResponseChars = String(result?.response || '').length;
+          routeValue = result?.route;
+          orchestrationValue = result?.orchestration;
+        } catch (error) {
+          finalStatus = 'failed';
+          finalError = error instanceof Error ? error.message : String(error);
+        }
+
+        const completedAt = Date.now();
+        appendRuntimePerfTimeline(collector, {
+          at: completedAt,
+          eventType: 'run:finish',
+          label: finalStatus === 'completed' ? '测试完成' : '测试失败',
+          detail: finalError || undefined,
+          tone: finalStatus === 'completed' ? 'success' : 'error',
+        });
+
+        const [summary, checkpoints, toolResults] = await Promise.all([
+          window.ipcRenderer.debug.getRuntimeSummary(),
+          window.ipcRenderer.runtime.getCheckpoints({ sessionId, limit: 120 }),
+          window.ipcRenderer.runtime.getToolResults({ sessionId, limit: 120 }),
+        ]);
+        setRuntimeDiagnosticsSummary(summary || null);
+
+        const checkpointRows = (Array.isArray(checkpoints) ? checkpoints : []).filter((item) => {
+          const createdAt = toRuntimePerfNumber((item as Record<string, unknown>)?.createdAt) || 0;
+          return createdAt >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS);
+        }) as RuntimeSessionCheckpointItem[];
+        const toolRows = (Array.isArray(toolResults) ? toolResults : []).filter((item) => {
+          const createdAt = toRuntimePerfNumber((item as Record<string, unknown>)?.createdAt) || 0;
+          return createdAt >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS);
+        }) as RuntimeSessionToolResultItem[];
+        const recentRuntimeMetrics = Array.isArray(summary?.phase0?.runtimeQueries?.recent)
+          ? summary.phase0.runtimeQueries.recent as Array<Record<string, unknown>>
+          : [];
+        const matchingMetric = recentRuntimeMetrics.find((item) =>
+          String(item.sessionId || '').trim() === sessionId
+          && (toRuntimePerfNumber(item.createdAt) || 0) >= (startedAt - RUNTIME_PERF_CHECKPOINT_WINDOW_MS)
+        );
+
+        const toolSuccessCount = toolRows.filter((item) => Boolean(item.success)).length;
+        const toolFailureCount = toolRows.length - toolSuccessCount;
+        const checkpointTypes = checkpointRows
+          .map((item) => String(item.checkpointType || '').trim())
+          .filter(Boolean);
+
+        collector.responseChars = collector.responseChars ?? finalResponseChars;
+        collector.toolCalls = Math.max(collector.toolCalls, toolRows.length);
+        collector.toolSuccessCount = Math.max(collector.toolSuccessCount, toolSuccessCount);
+        collector.toolFailureCount = Math.max(collector.toolFailureCount, toolFailureCount);
+        collector.checkpointCount = Math.max(collector.checkpointCount, checkpointRows.length);
+        collector.checkpointTypes = checkpointTypes.length ? checkpointTypes : collector.checkpointTypes;
+
+        updateRuntimePerfRun(runId, (run) => ({
+          ...run,
+          status: finalStatus,
+          completedAt,
+          totalElapsedMs: Math.max(0, completedAt - startedAt),
+          promptChars: toRuntimePerfNumber(matchingMetric?.promptChars),
+          activeSkillCount: toRuntimePerfNumber(matchingMetric?.activeSkillCount),
+          responseChars: collector.responseChars ?? finalResponseChars,
+          toolCalls: collector.toolCalls,
+          toolSuccessCount: collector.toolSuccessCount,
+          toolFailureCount: collector.toolFailureCount,
+          checkpointCount: collector.checkpointCount,
+          checkpointTypes: [...collector.checkpointTypes],
+          route: routeValue,
+          orchestration: orchestrationValue,
+          error: finalError || undefined,
+          ...snapshotRuntimePerfCollector(collector),
+        }));
+
+        runtimePerfCollectorRef.current = null;
+        setActiveRuntimePerfRunId('');
+        await loadRuntimeSessions();
+        await loadRuntimeSessionDetails(sessionId);
+      }
+      setRuntimePerfStatusMessage(`已完成 ${runtimePerfIterations} 轮 runtime benchmark`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRuntimePerfStatusMessage(`runtime benchmark 失败：${message}`);
+      const activeCollector = runtimePerfCollectorRef.current;
+      if (activeCollector) {
+        const completedAt = Date.now();
+        appendRuntimePerfTimeline(activeCollector, {
+          at: completedAt,
+          eventType: 'run:error',
+          label: '执行异常',
+          detail: message,
+          tone: 'error',
+        });
+        updateRuntimePerfRun(activeCollector.runId, (run) => ({
+          ...run,
+          status: 'failed',
+          completedAt,
+          totalElapsedMs: Math.max(0, completedAt - run.startedAt),
+          error: message,
+          ...snapshotRuntimePerfCollector(activeCollector),
+        }));
+      }
+    } finally {
+      runtimePerfCollectorRef.current = null;
+      setActiveRuntimePerfRunId('');
+      setIsRuntimePerfRunning(false);
+    }
+  }, [
+    appendRuntimePerfTimeline,
+    ensureRuntimePerfSession,
+    isRuntimePerfRunning,
+    loadRuntimeSessionDetails,
+    loadRuntimeSessions,
+    runtimePerfIterations,
+    runtimePerfMessage,
+    runtimePerfMode,
+    runtimePerfPresetId,
+    snapshotRuntimePerfCollector,
+    updateRuntimePerfRun,
   ]);
 
   const handleCreateRuntimeTask = async () => {
@@ -1977,6 +2919,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     try {
       const settings = await window.ipcRenderer.getSettings();
       if (requestId !== settingsLoadRequestRef.current) return;
+      if (preserveViewState && aiSourceDraftDirtyRef.current) {
+        return;
+      }
       if (settings) {
         const resolveLinkedSourceIdFromList = (params: {
           endpoint?: string;
@@ -2061,6 +3006,11 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           && Number.isFinite(unlockedAtMs)
           && (Date.now() - unlockedAtMs) < DEVELOPER_MODE_TTL_MS;
 
+        setCurrentSpaceState(
+          (settings as { active_space_id?: string; activeSpaceId?: string }).active_space_id
+          || (settings as { active_space_id?: string; activeSpaceId?: string }).activeSpaceId
+        );
+
         setAiSources(sourceList);
         setDefaultAiSourceId(normalizedDefaultId);
         setActiveAiSourceId((prevActiveId) => {
@@ -2085,11 +3035,22 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
             Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
           );
         });
+        setFetchingModelsBySourceId((prev) => {
+          if (!preserveRemoteModels) {
+            return {};
+          }
+          const validSourceIds = new Set(sourceList.map((source) => source.id));
+          return Object.fromEntries(
+            Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
+          );
+        });
         setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
         setMcpServers(parseMcpServers(settings.mcp_servers_json));
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
         setImageSourceId(resolvedImageSourceId);
+        setNotificationSettings(parseNotificationSettings(settings.notifications_json));
+        clearAiSourceDraftDirty();
         console.log('[settings][ai] loadSettings-applied', {
           sourceCount: sourceList.length,
           defaultAiSourceId: normalizedDefaultId,
@@ -2135,7 +3096,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           video_model: settings.video_model || REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'],
           image_aspect_ratio: settings.image_aspect_ratio || '3:4',
           image_size: '',
-          image_quality: settings.image_quality || 'standard',
+          image_quality: settings.image_quality || 'auto',
           model_name_wander: settings.model_name_wander || '',
           model_name_chatroom: settings.model_name_chatroom || '',
           model_name_knowledge: settings.model_name_knowledge || '',
@@ -2148,6 +3109,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           chat_max_tokens_deepseek: sanitizeChatMaxTokensInput(String(settings.chat_max_tokens_deepseek || DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK), DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK),
           wander_deep_think_enabled: Boolean(settings.wander_deep_think_enabled),
           debug_log_enabled: Boolean(settings.debug_log_enabled),
+          diagnostics_upload_consent: settings.diagnostics_upload_consent === 'approved'
+            ? 'approved'
+            : settings.diagnostics_upload_consent === 'none'
+              ? 'none'
+              : 'prompt',
+          diagnostics_include_advanced_context: Boolean(settings.diagnostics_include_advanced_context),
+          diagnostics_auto_send_same_crash: Boolean(settings.diagnostics_auto_send_same_crash),
+          diagnostics_last_prompted_at: String(settings.diagnostics_last_prompted_at || ''),
+          release_log_retention_days: String(settings.release_log_retention_days || 7),
+          release_log_max_file_mb: String(settings.release_log_max_file_mb || 10),
           developer_mode_enabled: developerModeEnabled,
           developer_mode_unlocked_at: developerModeEnabled ? unlockedAt : '',
         });
@@ -2157,6 +3128,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         }
       } else {
         if (requestId !== settingsLoadRequestRef.current) return;
+        setCurrentSpaceState(DEFAULT_SPACE_ID);
         setAiSources([]);
         setDefaultAiSourceId('redbox_official_auto');
         setActiveAiSourceId((prevActiveId) => {
@@ -2166,14 +3138,17 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
           return 'redbox_official_auto';
         });
         setModelsBySource((prev) => (preserveRemoteModels ? prev : {}));
+        setFetchingModelsBySourceId((prev) => (preserveRemoteModels ? prev : {}));
         setDetectedAiProtocol('openai');
         setMcpServers([]);
+        setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS);
+        clearAiSourceDraftDirty();
       }
     } catch (e) {
       if (requestId !== settingsLoadRequestRef.current) return;
       console.error("Failed to load settings", e);
     }
-  }, [isDeprecatedEmptyOpenAiSource, persistDeveloperModeState]);
+  }, [clearAiSourceDraftDirty, isDeprecatedEmptyOpenAiSource, persistDeveloperModeState, setCurrentSpaceState]);
 
   const reloadCustomAiSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     await loadSettings({
@@ -2182,6 +3157,16 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       ...options,
     });
   }, [loadSettings]);
+
+  const loadNotificationPermissionState = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.notifications.getPermissionState();
+      setNotificationPermissionState(normalizeNotificationPermissionState(result?.state));
+    } catch (error) {
+      console.warn('Failed to load notification permission state:', error);
+      setNotificationPermissionState('unknown');
+    }
+  }, []);
 
 
   useEffect(() => {
@@ -2204,6 +3189,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     return () => window.clearTimeout(timer);
   }, [expireDeveloperMode, formData.developer_mode_enabled, formData.developer_mode_unlocked_at]);
 
+  useEffect(() => {
+    void loadNotificationPermissionState();
+  }, [loadNotificationPermissionState]);
+
   const checkTools = useCallback(async () => {
     try {
       const status = await window.ipcRenderer.checkYtdlp();
@@ -2212,6 +3201,303 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       console.error(e);
     }
   }, []);
+
+  const upsertCliRuntimeInstallQueueItem = useCallback((item: CliRuntimeInstallQueueItem) => {
+    setCliRuntimeInstallQueue((prev) => {
+      const next = prev.filter((entry) => entry.installId !== item.installId);
+      next.unshift(item);
+      return next
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, 8);
+    });
+  }, []);
+
+  const loadCliRuntimeDashboard = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setIsCliRuntimeRefreshing(true);
+    }
+    try {
+      const [detectResult, environmentsResult] = await Promise.all([
+        window.ipcRenderer.cliRuntime.detect(),
+        window.ipcRenderer.cliRuntime.listEnvironments(),
+      ]);
+      const detectedToolsRaw = Array.isArray(detectResult)
+        ? detectResult
+        : Array.isArray((detectResult as { tools?: unknown[] } | null)?.tools)
+          ? (detectResult as { tools?: unknown[] }).tools || []
+          : [];
+      const nextTools = detectedToolsRaw
+        .map(normalizeCliRuntimeToolRecord)
+        .filter((item): item is CliRuntimeToolRecord => Boolean(item))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      const nextEnvironments = (Array.isArray(environmentsResult) ? environmentsResult : [])
+        .map(normalizeCliRuntimeEnvironmentRecord)
+        .filter((item): item is CliRuntimeEnvironmentRecord => Boolean(item))
+        .sort((left, right) => left.scope.localeCompare(right.scope) || left.id.localeCompare(right.id));
+      setCliRuntimeTools(nextTools);
+      setCliRuntimeEnvironments(nextEnvironments);
+      if (!options?.silent) {
+        setCliRuntimeStatusMessage(`已刷新 CLI runtime：${nextTools.length} 个工具，${nextEnvironments.length} 个环境`);
+      }
+      setCliRuntimeInstallDraft((current) => {
+        if (current.environmentId && nextEnvironments.some((item) => item.id === current.environmentId)) {
+          return current;
+        }
+        const fallbackEnvironment = nextEnvironments[0]?.id || '';
+        if (!fallbackEnvironment || fallbackEnvironment === current.environmentId) {
+          return current;
+        }
+        return {
+          ...current,
+          environmentId: fallbackEnvironment,
+        };
+      });
+    } catch (error) {
+      console.error('Failed to load CLI runtime dashboard', error);
+      if (!options?.silent) {
+        setCliRuntimeStatusMessage(`刷新 CLI runtime 失败：${String(error)}`);
+      }
+    } finally {
+      if (!options?.silent) {
+        setIsCliRuntimeRefreshing(false);
+      }
+    }
+  }, []);
+
+  const handleInspectCliRuntimeTool = useCallback(async (toolId: string) => {
+    const normalizedToolId = String(toolId || '').trim();
+    if (!normalizedToolId) return;
+    setCliRuntimeInspectingToolId(normalizedToolId);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.inspect({ toolId: normalizedToolId });
+      const normalized = normalizeCliRuntimeToolRecord(result);
+      if (normalized) {
+        setCliRuntimeTools((prev) => {
+          const next = prev.map((item) => (item.id === normalizedToolId ? { ...item, ...normalized } : item));
+          if (!next.some((item) => item.id === normalizedToolId)) {
+            next.unshift(normalized);
+          }
+          return next.sort((left, right) => left.name.localeCompare(right.name));
+        });
+        setCliRuntimeStatusMessage(`已检查 ${normalized.name || normalized.executable}`);
+      } else {
+        setCliRuntimeStatusMessage(`未返回 ${normalizedToolId} 的 inspect 数据`);
+      }
+    } catch (error) {
+      console.error('Failed to inspect CLI runtime tool', error);
+      setCliRuntimeStatusMessage(`Inspect 失败：${String(error)}`);
+    } finally {
+      setCliRuntimeInspectingToolId('');
+    }
+  }, []);
+
+  const handleDiagnoseCliRuntimeCommand = useCallback(async () => {
+    const command = String(cliRuntimeDiagnosticCommand || '').trim();
+    if (!command) {
+      setCliRuntimeStatusMessage('请先输入要诊断的 CLI 命令名，例如 lark-cli');
+      return;
+    }
+    setCliRuntimeInspectingToolId(command);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.inspect({ command, executable: command });
+      const normalized = normalizeCliRuntimeToolRecord(result);
+      if (normalized) {
+        setCliRuntimeTools((prev) => {
+          const next = prev.filter((item) => item.id !== normalized.id);
+          next.unshift(normalized);
+          return next.sort((left, right) => left.name.localeCompare(right.name));
+        });
+        setCliRuntimeStatusMessage(
+          normalized.resolvedPath
+            ? `已解析 ${command}：${normalized.resolvedPath}`
+            : `未在当前 PATH 中解析到 ${command}`,
+        );
+      } else {
+        setCliRuntimeStatusMessage(`未返回 ${command} 的诊断数据`);
+      }
+    } catch (error) {
+      console.error('Failed to diagnose CLI runtime command', error);
+      setCliRuntimeStatusMessage(`诊断失败：${String(error)}`);
+    } finally {
+      setCliRuntimeInspectingToolId('');
+    }
+  }, [cliRuntimeDiagnosticCommand]);
+
+  const handleDiscoverCliRuntimeTools = useCallback(async () => {
+    setCliRuntimeDiscovering(true);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.discover({
+        query: String(cliRuntimeDiscoverQuery || '').trim() || undefined,
+        limit: 80,
+      });
+      const discoveredToolsRaw = Array.isArray((result as { tools?: unknown[] } | null)?.tools)
+        ? (result as { tools?: unknown[] }).tools || []
+        : Array.isArray(result)
+          ? result
+          : [];
+      const normalizedTools = discoveredToolsRaw
+        .map(normalizeCliRuntimeToolRecord)
+        .filter((item): item is CliRuntimeToolRecord => Boolean(item))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      setCliRuntimeDiscoverResults(normalizedTools);
+      setCliRuntimeStatusMessage(
+        normalizedTools.length > 0
+          ? `已搜索 PATH，命中 ${normalizedTools.length} 个 CLI`
+          : '当前 PATH 搜索没有命中结果',
+      );
+    } catch (error) {
+      console.error('Failed to discover CLI runtime tools', error);
+      setCliRuntimeStatusMessage(`PATH 搜索失败：${String(error)}`);
+    } finally {
+      setCliRuntimeDiscovering(false);
+    }
+  }, [cliRuntimeDiscoverQuery]);
+
+  const handleCreateCliRuntimeEnvironment = useCallback(async (scope: CliRuntimeEnvironmentScope) => {
+    setCliRuntimeCreatingEnvironment(scope);
+    try {
+      const workspaceRoot = scope === 'workspace-local'
+        ? String(formData.workspace_dir || '').trim() || undefined
+        : undefined;
+      const result = await window.ipcRenderer.cliRuntime.createEnvironment({ scope, workspaceRoot });
+      const normalized = normalizeCliRuntimeEnvironmentRecord(result);
+      if (normalized) {
+        setCliRuntimeEnvironments((prev) => {
+          const next = prev.filter((item) => item.id !== normalized.id);
+          next.unshift(normalized);
+          return next.sort((left, right) => left.scope.localeCompare(right.scope) || left.id.localeCompare(right.id));
+        });
+        setCliRuntimeStatusMessage(`已创建环境 ${normalized.id}`);
+      } else if ((result as { success?: boolean; error?: string } | null)?.success === false) {
+        setCliRuntimeStatusMessage((result as { error?: string }).error || '创建 CLI environment 失败');
+      } else {
+        await loadCliRuntimeDashboard({ silent: true });
+        setCliRuntimeStatusMessage(`已触发环境创建：${scope}`);
+      }
+    } catch (error) {
+      console.error('Failed to create CLI runtime environment', error);
+      setCliRuntimeStatusMessage(`创建环境失败：${String(error)}`);
+    } finally {
+      setCliRuntimeCreatingEnvironment('');
+    }
+  }, [formData.workspace_dir, loadCliRuntimeDashboard]);
+
+  const handleInstallCliRuntimeTool = useCallback(async () => {
+    const environmentId = String(cliRuntimeInstallDraft.environmentId || '').trim()
+      || cliRuntimeEnvironments[0]?.id
+      || '';
+    const spec = String(cliRuntimeInstallDraft.spec || '').trim();
+    const toolName = String(cliRuntimeInstallDraft.toolName || '').trim();
+    if (!environmentId) {
+      setCliRuntimeStatusMessage('请先选择一个 CLI environment');
+      return;
+    }
+    if (!spec) {
+      setCliRuntimeStatusMessage('请填写要安装的 spec，例如 ffmpeg-static 或 @scope/tool');
+      return;
+    }
+    setCliRuntimeInstalling(true);
+    try {
+      const result = await window.ipcRenderer.cliRuntime.install({
+        environmentId,
+        installMethod: cliRuntimeInstallDraft.installMethod,
+        spec,
+        toolName: toolName || undefined,
+      });
+      const installId = String((result as { installId?: string } | null)?.installId || '').trim();
+      if (installId) {
+        upsertCliRuntimeInstallQueueItem({
+          installId,
+          toolName: String((result as { toolName?: string } | null)?.toolName || toolName || spec),
+          environmentId,
+          installMethod: cliRuntimeInstallDraft.installMethod,
+          spec,
+          status: String((result as { status?: string } | null)?.status || 'queued'),
+          summary: String((result as { summary?: string } | null)?.summary || ''),
+          updatedAt: Date.now(),
+        });
+      }
+      await loadCliRuntimeDashboard({ silent: true });
+      setCliRuntimeStatusMessage(
+        String((result as { summary?: string } | null)?.summary || `已触发安装：${toolName || spec}`),
+      );
+      setCliRuntimeInstallDraft((current) => ({
+        ...current,
+        toolName: '',
+        spec: '',
+        environmentId,
+      }));
+    } catch (error) {
+      console.error('Failed to install CLI runtime tool', error);
+      setCliRuntimeStatusMessage(`安装失败：${String(error)}`);
+    } finally {
+      setCliRuntimeInstalling(false);
+    }
+  }, [
+    cliRuntimeEnvironments,
+    cliRuntimeInstallDraft,
+    loadCliRuntimeDashboard,
+    upsertCliRuntimeInstallQueueItem,
+  ]);
+
+  const handleOpenCliRuntimeEnvironmentRoot = useCallback(async (rootPath: string) => {
+    const normalizedPath = String(rootPath || '').trim();
+    if (!normalizedPath) return;
+    try {
+      const result = await window.ipcRenderer.openPath(normalizedPath);
+      if (!result?.success) {
+        throw new Error(result?.error || '打开目录失败');
+      }
+    } catch (error) {
+      console.error('Failed to open CLI runtime environment root', error);
+      setCliRuntimeStatusMessage(`打开目录失败：${String(error)}`);
+    }
+  }, []);
+
+  useEffect(() => subscribeRuntimeEventStream({
+    onCliInstallStarted: ({
+      installId,
+      toolName,
+      environmentId,
+      installMethod,
+      spec,
+    }) => {
+      const normalizedInstallId = String(installId || '').trim();
+      if (!normalizedInstallId) return;
+      upsertCliRuntimeInstallQueueItem({
+        installId: normalizedInstallId,
+        toolName,
+        environmentId,
+        installMethod,
+        spec,
+        status: 'running',
+        summary: `正在安装 ${toolName}`,
+        updatedAt: Date.now(),
+      });
+    },
+    onCliInstallFinished: ({
+      installId,
+      toolName,
+      environmentId,
+      status,
+      summary,
+      raw,
+    }) => {
+      const normalizedInstallId = String(installId || '').trim();
+      if (!normalizedInstallId) return;
+      upsertCliRuntimeInstallQueueItem({
+        installId: normalizedInstallId,
+        toolName,
+        environmentId,
+        installMethod: typeof raw.installMethod === 'string' ? raw.installMethod : undefined,
+        spec: typeof raw.spec === 'string' ? raw.spec : undefined,
+        status,
+        summary,
+        updatedAt: Date.now(),
+      });
+      void loadCliRuntimeDashboard({ silent: true });
+    },
+  }), [loadCliRuntimeDashboard, upsertCliRuntimeInstallQueueItem]);
 
   const loadBrowserPluginStatus = useCallback(async () => {
     try {
@@ -2230,6 +3516,34 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (!isActive || activeTab !== 'tools') return;
+    let refreshTimer: number | null = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer != null) {
+        window.clearTimeout(refreshTimer);
+      }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        void loadCliRuntimeDashboard({ silent: true });
+      }, 450);
+    };
+    const handleRuntimeEvent = (_event: unknown, envelope?: unknown) => {
+      const record = envelope && typeof envelope === 'object' ? envelope as Record<string, unknown> : {};
+      const eventType = String(record.eventType || '').trim();
+      if (eventType.startsWith('runtime:cli-')) {
+        scheduleRefresh();
+      }
+    };
+    window.ipcRenderer.on('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+    return () => {
+      window.ipcRenderer.off('runtime:event', handleRuntimeEvent as (...args: unknown[]) => void);
+      if (refreshTimer != null) {
+        window.clearTimeout(refreshTimer);
+      }
+    };
+  }, [activeTab, isActive, loadCliRuntimeDashboard]);
 
   const withTimeout = useCallback(<T,>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
     return new Promise<T>((resolve, reject) => {
@@ -2465,10 +3779,17 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
+          loadLoggingStatus(),
+          loadPendingDiagnosticReports(),
         ]);
+      } else if (tab === 'profile') {
+        await loadRedclawProfileBundle({
+          preserveDraft: true,
+        });
       } else if (tab === 'tools') {
         await Promise.all([
           checkTools(),
+          loadCliRuntimeDashboard({ silent: true }),
           loadBrowserPluginStatus(),
           loadMcpRuntimeData(),
         ]);
@@ -2496,11 +3817,15 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     checkTools,
     formData.developer_mode_enabled,
     isActive,
+    loadRedclawProfileBundle,
+    loadCliRuntimeDashboard,
     loadAppVersion,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
+    loadLoggingStatus,
     loadMcpRuntimeData,
+    loadPendingDiagnosticReports,
     loadRecentDebugLogs,
     loadRuntimeHooks,
     loadRuntimeRoles,
@@ -2547,8 +3872,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
       if (!preserveLocalFormState) {
         void ensureBaseSettingsLoaded(true);
       }
+      tabWarmRef.current.profile = false;
       if (activeTab === 'remote') {
         scheduleRemoteTabWarmup();
+      }
+      if (activeTab === 'profile' && !redclawProfileDirtyRef.current) {
+        void ensureTabResourcesLoaded('profile', true);
       }
       if (activeTab === 'general' || activeTab === 'tools') {
         tabWarmRef.current[activeTab] = false;
@@ -2562,6 +3891,40 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
   }, [activeTab, ensureBaseSettingsLoaded, ensureTabResourcesLoaded, isActive, scheduleRemoteTabWarmup]);
 
   useEffect(() => {
+    if (!isActive) return;
+    const handleSpaceChanged = (payload?: { spaceId?: string; activeSpaceId?: string }) => {
+      const nextSpaceId = setCurrentSpaceState(payload?.activeSpaceId || payload?.spaceId);
+      tabWarmRef.current.profile = false;
+      resetRedclawProfileState();
+      if (activeTab === 'profile') {
+        void loadRedclawProfileBundle({ expectedSpaceId: nextSpaceId });
+      }
+    };
+    window.ipcRenderer.on('space:changed', handleSpaceChanged);
+    return () => {
+      window.ipcRenderer.off('space:changed', handleSpaceChanged);
+    };
+  }, [activeTab, isActive, loadRedclawProfileBundle, resetRedclawProfileState, setCurrentSpaceState]);
+
+  useEffect(() => {
+    if (!redclawOnboardingVersion) return;
+    void loadRedclawProfileBundle({ expectedSpaceId: currentSpaceIdRef.current });
+  }, [loadRedclawProfileBundle, redclawOnboardingVersion]);
+
+  useEffect(() => {
+    const handleDiagnosticsReportPending = () => {
+      void Promise.all([
+        loadLoggingStatus(),
+        loadPendingDiagnosticReports(),
+      ]);
+    };
+    window.ipcRenderer.on('diagnostics:report-pending', handleDiagnosticsReportPending);
+    return () => {
+      window.ipcRenderer.off('diagnostics:report-pending', handleDiagnosticsReportPending);
+    };
+  }, [loadLoggingStatus, loadPendingDiagnosticReports]);
+
+  useEffect(() => {
     if (!isActive) {
       return;
     }
@@ -2572,6 +3935,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     let backgroundTaskPollTimer: number | null = null;
     if (activeTab === 'remote') {
       scheduleRemoteTabWarmup();
+    }
+    if (activeTab === 'general') {
+      void ensureTabResourcesLoaded('general');
+    }
+    if (activeTab === 'profile') {
+      void ensureTabResourcesLoaded('profile');
     }
     if (activeTab === 'tools') {
       void ensureTabResourcesLoaded('tools');
@@ -2670,7 +4039,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         return;
       }
       await loadBrowserPluginStatus();
-      void appAlert(`插件已准备完成。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
+      void appAlert(`插件已同步到最新内置版本。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
     } catch (error) {
       console.error('Failed to prepare browser plugin', error);
       void appAlert(`插件准备失败：${String(error)}`);
@@ -2733,44 +4102,67 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (aiSourceAutosaveTimerRef.current != null) {
+      window.clearTimeout(aiSourceAutosaveTimerRef.current);
+      aiSourceAutosaveTimerRef.current = null;
+    }
     setStatus('saving');
     try {
-      let sanitizedSources: AiSourceConfig[] = aiSources.map((source) => ({
-        ...source,
-        name: source.name.trim(),
-        presetId: source.presetId.trim() || 'custom',
-        baseURL: source.baseURL.trim(),
-        apiKey: source.apiKey.trim(),
-        models: normalizeSourceModels([...(source.models || []), source.model]),
-        modelsMeta: normalizeAiModelDescriptors([
-          ...(source.modelsMeta || []),
-          ...(source.models || []).map((id) => ({ id })),
-          source.model ? { id: source.model } : null,
-        ]),
-        model: String(source.model || '').trim(),
-        protocol: source.protocol || findAiPresetById(source.presetId)?.protocol || 'openai',
-      })).map((source) => ({
-        ...source,
-        model: source.model || source.models?.[0] || '',
-        models: normalizeSourceModels([...(source.models || []), source.model]),
-        modelsMeta: normalizeAiModelDescriptors([
-          ...(source.modelsMeta || []),
-          ...(source.models || []).map((id) => ({ id })),
-          source.model ? { id: source.model } : null,
-        ]),
-      })).filter((source) => !isDeprecatedEmptyOpenAiSource(source));
+      if (activeTab === 'profile') {
+        const userMarkdown = String(redclawProfileDraft.user || '').trim();
+        const creatorProfileMarkdown = String(redclawProfileDraft.creatorProfile || '').trim();
+        if (!userMarkdown) {
+          throw new Error('用户画像不能为空');
+        }
+        if (!creatorProfileMarkdown) {
+          throw new Error('创作档案不能为空');
+        }
+        let savedDocCount = 0;
+        await window.ipcRenderer.redclawProfile.updateDoc({
+          docType: 'user',
+          markdown: userMarkdown,
+          reason: 'settings-user-profile-save',
+        });
+        savedDocCount += 1;
+        await window.ipcRenderer.redclawProfile.updateDoc({
+          docType: 'creator_profile',
+          markdown: creatorProfileMarkdown,
+          reason: 'settings-user-profile-save',
+        });
+        savedDocCount += 1;
+        const nextDraft: RedclawProfileDraft = {
+          user: userMarkdown,
+          creatorProfile: creatorProfileMarkdown,
+        };
+        setSavedRedclawProfileDraft(nextDraft);
+        setRedclawProfileDraft(nextDraft);
+        setRedclawProfileDirtyState(false);
+        setRedclawProfileMessage({
+          tone: 'success',
+          text: savedDocCount === 2
+            ? '用户档案已保存，RedClaw 后续会直接读取这两份长期档案。'
+            : '用户档案已保存。',
+        });
+        tabWarmRef.current.profile = true;
+        setStatus('saved');
+        setTimeout(() => setStatus('idle'), 2000);
+        return;
+      }
 
-      const resolvedDefaultSourceId = defaultAiSourceId;
-      const defaultSource = sanitizedSources.find((source) => source.id === resolvedDefaultSourceId) || sanitizedSources[0];
+      const {
+        sanitizedSources,
+        resolvedDefaultSourceId,
+        defaultSource,
+        resolvedApiEndpoint,
+        resolvedApiKey,
+        resolvedModelName,
+      } = buildAiSourcePersistenceSnapshot();
       if (defaultSource?.baseURL && (defaultSource?.apiKey || isLocalAiSource(defaultSource))) {
         const normalizedModel = (defaultSource.model || '').trim();
         if (!normalizedModel) {
           throw new Error('请为默认 AI 源填写模型名称（可手动填写，或从模型列表选择）');
         }
       }
-      const resolvedApiEndpoint = defaultSource?.baseURL || '';
-      const resolvedApiKey = String(defaultSource?.apiKey || '').trim();
-      const resolvedModelName = String(defaultSource?.model || '').trim();
       const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || defaultSource || null;
       const resolvedEmbeddingSource = getAiSourceById(embeddingSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
@@ -2796,6 +4188,8 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         formData.chat_max_tokens_deepseek,
         DEFAULT_CHAT_MAX_TOKENS_DEEPSEEK,
       ));
+      const releaseLogRetentionDays = Math.max(1, Number(formData.release_log_retention_days || 7) || 7);
+      const releaseLogMaxFileMb = Math.max(1, Number(formData.release_log_max_file_mb || 10) || 10);
       if (formData.proxy_enabled && !String(formData.proxy_url || '').trim()) {
         throw new Error('启用代理时必须填写代理地址，例如 http://127.0.0.1:7890');
       }
@@ -2831,6 +4225,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         mcp_servers_json: JSON.stringify(mcpServers),
         redclaw_compact_target_tokens: compactTargetTokens,
         debug_log_enabled: Boolean(formData.debug_log_enabled),
+        diagnostics_upload_consent: formData.diagnostics_upload_consent,
+        diagnostics_include_advanced_context: Boolean(formData.diagnostics_include_advanced_context),
+        diagnostics_auto_send_same_crash: Boolean(formData.diagnostics_auto_send_same_crash),
+        diagnostics_last_prompted_at: formData.diagnostics_last_prompted_at || null,
+        release_log_retention_days: releaseLogRetentionDays,
+        release_log_max_file_mb: releaseLogMaxFileMb,
+        notifications_json: JSON.stringify(notificationSettings),
         developer_mode_enabled: Boolean(formData.developer_mode_enabled),
         developer_mode_unlocked_at: formData.developer_mode_enabled
           ? (formData.developer_mode_unlocked_at || new Date().toISOString())
@@ -2838,13 +4239,24 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
         chat_max_tokens_default: chatMaxTokensDefault,
         chat_max_tokens_deepseek: chatMaxTokensDeepseek,
       });
+      clearAiSourceDraftDirty();
       if (formData.debug_log_enabled) {
         await loadRecentDebugLogs();
       }
+      await Promise.all([
+        loadLoggingStatus(),
+        loadPendingDiagnosticReports(),
+      ]);
       setStatus('saved');
       setTimeout(() => setStatus('idle'), 2000);
     } catch (e) {
       console.error(e);
+      if (activeTab === 'profile') {
+        setRedclawProfileMessage({
+          tone: 'error',
+          text: e instanceof Error ? e.message : String(e),
+        });
+      }
       if (e instanceof Error && e.message) {
         setTestStatus('error');
         setTestMsg(e.message);
@@ -2853,9 +4265,48 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
     }
   };
 
+  const handleTestNotificationSound = useCallback(async () => {
+    try {
+      await playTestNotificationSound('attention', notificationSettings.sound.volume);
+      setNotificationStatusMessage('已播放测试提醒音。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotificationStatusMessage(`播放测试提醒音失败：${message}`);
+    }
+  }, [notificationSettings.sound.volume]);
+
+  const handleRequestNotificationPermission = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.notifications.requestPermission();
+      const state = normalizeNotificationPermissionState(result?.state);
+      setNotificationPermissionState(state);
+      setNotificationStatusMessage(`系统通知权限状态：${state}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotificationStatusMessage(`请求系统通知权限失败：${message}`);
+    }
+  }, []);
+
+  const handleSendTestSystemNotification = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.notifications.showSystem({
+        title: 'RedBox 通知测试',
+        body: '这是一条系统通知测试消息。',
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || '系统通知发送失败');
+      }
+      setNotificationStatusMessage('系统通知已发送。');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setNotificationStatusMessage(`系统通知测试失败：${message}`);
+    }
+  }, []);
+
   const tabs = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
     { id: 'general', label: '常规设置', icon: LayoutGrid },
+    { id: 'profile', label: '用户档案', icon: FileText },
     { id: 'tools', label: '工具管理', icon: Wrench },
   ] as const;
 
@@ -2892,6 +4343,13 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 appVersion={appVersion}
                 formData={formData}
                 setFormData={setFormData}
+                notificationSettings={notificationSettings}
+                setNotificationSettings={setNotificationSettings}
+                notificationPermissionState={notificationPermissionState}
+                notificationStatusMessage={notificationStatusMessage}
+                handleTestNotificationSound={handleTestNotificationSound}
+                handleRequestNotificationPermission={handleRequestNotificationPermission}
+                handleSendTestSystemNotification={handleSendTestSystemNotification}
                 handlePickWorkspaceDir={handlePickWorkspaceDir}
                 handleResetWorkspaceDir={handleResetWorkspaceDir}
                 handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
@@ -2899,6 +4357,12 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 isDebugLogsLoading={isDebugLogsLoading}
                 handleRefreshDebugLogs={loadRecentDebugLogs}
                 handleOpenDebugLogDir={openDebugLogDirectory}
+                logStatus={logStatus}
+                pendingReports={pendingDiagnosticReports}
+                diagnosticsActionBusy={diagnosticsActionBusy}
+                handleExportDiagnosticBundle={handleExportDiagnosticBundle}
+                handleUploadPendingReport={handleUploadPendingReport}
+                handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
               />
             )}
@@ -2983,6 +4447,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                             value={defaultAiSourceId}
                             sources={aiSources}
                             onChange={(nextSourceId) => {
+                              markAiSourceDraftDirty();
                               setDefaultAiSourceId(nextSourceId);
                               setActiveAiSourceId(nextSourceId);
                               setAiSourceExpandState((prev) => ({ ...prev, [nextSourceId]: true }));
@@ -3106,7 +4571,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         const isOfficialSourcePending = isOfficialSource && officialAuthPending;
                         const isOfficialSourceLoggedIn = isOfficialSource && officialAuthLoggedIn;
                         const isOfficialSourceUnavailable = isOfficialSource && !officialAuthLoggedIn;
-                        const sourceModelsForDisplay = isOfficialSourceLoggedIn ? sourceModels : [];
+                        const sourceModelsForDisplay = isOfficialSource
+                          ? (isOfficialSourceLoggedIn ? sourceModels : [])
+                          : sourceModels;
                         const localGuide = getLocalGuideForSource(source);
                         const allowEmptyKey = isLocalAiSource(source);
 
@@ -3156,6 +4623,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      markAiSourceDraftDirty();
                                       setDefaultAiSourceId(source.id);
                                       setActiveAiSourceId(source.id);
                                     }}
@@ -3329,10 +4797,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                                             setActiveAiSourceId(source.id);
                                             void fetchModelsForSource(source, { manual: true });
                                           }}
-                                          disabled={isTesting}
+                                          disabled={Boolean(fetchingModelsBySourceId[source.id])}
                                           className="flex items-center gap-1 px-2 py-1 text-[11px] border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                                         >
-                                          <RefreshCw className={clsx('w-3 h-3', isTesting && activeAiSourceId === source.id && 'animate-spin')} />
+                                          <RefreshCw className={clsx('w-3 h-3', fetchingModelsBySourceId[source.id] && 'animate-spin')} />
                                           拉取候选
                                         </button>
                                       </div>
@@ -3696,9 +5164,139 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
               </div>
             )}
 
+            {/* Profile Tab */}
+            {activeTab === 'profile' && (
+              <div className="space-y-6">
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-lg font-medium text-text-primary">用户创作档案</h2>
+                        <button
+                          type="button"
+                          onClick={() => onOpenRedClawOnboarding?.()}
+                          className="text-xs font-medium text-text-tertiary underline-offset-4 transition-colors hover:text-text-primary hover:underline"
+                        >
+                          {redclawOnboardingCompleted ? '重新自定义风格' : '去定义风格'}
+                        </button>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-xs text-text-tertiary">
+                        <span
+                          className="rounded-full bg-surface-secondary px-2 py-1 font-mono"
+                          title={redclawProfileRoot || undefined}
+                        >
+                          空间：{currentSpaceId}
+                        </span>
+                        <span className={clsx(
+                          'rounded-full px-2 py-1',
+                          redclawProfileDirty
+                            ? 'bg-amber-500/10 text-amber-600'
+                            : 'bg-emerald-500/10 text-emerald-600'
+                        )}>
+                          {redclawProfileDirty ? '未保存' : '已同步'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void loadRedclawProfileBundle()}
+                        disabled={isRedclawProfileLoading}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                      >
+                        <RefreshCw className={clsx('h-3.5 w-3.5', isRedclawProfileLoading && 'animate-spin')} />
+                        {isRedclawProfileLoading ? '刷新中' : '刷新'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRedclawProfileDraft(savedRedclawProfileDraft);
+                          setRedclawProfileDirtyState(false);
+                          setRedclawProfileMessage(null);
+                          setStatus('idle');
+                        }}
+                        disabled={!redclawProfileDirty}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                      >
+                        还原
+                      </button>
+                    </div>
+                  </div>
+
+                  {redclawProfileMessage && (
+                    <div className={clsx(
+                      'rounded-xl border px-4 py-3 text-sm',
+                      redclawProfileMessage.tone === 'error'
+                        ? 'border-red-500/25 bg-red-500/5 text-red-600'
+                        : 'border-emerald-500/25 bg-emerald-500/5 text-emerald-600'
+                    )}>
+                      {redclawProfileMessage.text}
+                    </div>
+                  )}
+                </section>
+
+                <section className="space-y-4">
+                  <div className="rounded-xl border border-border bg-surface-secondary/20 p-4">
+                    <div className="mb-3">
+                      <h3 className="text-sm font-medium text-text-primary">用户画像</h3>
+                      <p className="mt-1 text-xs leading-6 text-text-tertiary">
+                        对应 `user.md`。适合记录称呼、长期目标、目标用户、内容赛道、风格偏好和发布节奏。
+                      </p>
+                    </div>
+                    <textarea
+                      value={redclawProfileDraft.user}
+                      onChange={(event) => handleRedclawProfileDraftChange('user', event.target.value)}
+                      placeholder="# user.md"
+                      spellCheck={false}
+                      className="min-h-[280px] w-full rounded-lg border border-border bg-surface-primary px-4 py-3 font-mono text-sm leading-6 text-text-primary focus:border-accent-primary focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="rounded-xl border border-border bg-surface-secondary/20 p-4">
+                    <div className="mb-3">
+                      <h3 className="text-sm font-medium text-text-primary">创作档案</h3>
+                      <p className="mt-1 text-xs leading-6 text-text-tertiary">
+                        对应 `CreatorProfile.md`。适合记录内容定位、受众痛点、视觉风格、运营策略、商业目标和长期边界。
+                      </p>
+                    </div>
+                    <textarea
+                      value={redclawProfileDraft.creatorProfile}
+                      onChange={(event) => handleRedclawProfileDraftChange('creatorProfile', event.target.value)}
+                      placeholder="# CreatorProfile.md"
+                      spellCheck={false}
+                      className="min-h-[360px] w-full rounded-lg border border-border bg-surface-primary px-4 py-3 font-mono text-sm leading-6 text-text-primary focus:border-accent-primary focus:outline-none"
+                    />
+                  </div>
+                </section>
+              </div>
+            )}
+
             {/* Tools Tab */}
             {activeTab === 'tools' && (
               <ToolsSettingsSection
+                cliRuntimeTools={cliRuntimeTools}
+                cliRuntimeEnvironments={cliRuntimeEnvironments}
+                cliRuntimeInstallDraft={cliRuntimeInstallDraft}
+                setCliRuntimeInstallDraft={setCliRuntimeInstallDraft}
+                cliRuntimeInstallQueue={cliRuntimeInstallQueue}
+                cliRuntimeStatusMessage={cliRuntimeStatusMessage}
+                isCliRuntimeRefreshing={isCliRuntimeRefreshing}
+                cliRuntimeInstalling={cliRuntimeInstalling}
+                cliRuntimeInspectingToolId={cliRuntimeInspectingToolId}
+                cliRuntimeDiagnosticCommand={cliRuntimeDiagnosticCommand}
+                setCliRuntimeDiagnosticCommand={setCliRuntimeDiagnosticCommand}
+                cliRuntimeDiscoverQuery={cliRuntimeDiscoverQuery}
+                setCliRuntimeDiscoverQuery={setCliRuntimeDiscoverQuery}
+                cliRuntimeDiscoverResults={cliRuntimeDiscoverResults}
+                cliRuntimeDiscovering={cliRuntimeDiscovering}
+                cliRuntimeCreatingEnvironment={cliRuntimeCreatingEnvironment}
+                handleRefreshCliRuntime={loadCliRuntimeDashboard}
+                handleInspectCliRuntimeTool={handleInspectCliRuntimeTool}
+                handleDiagnoseCliRuntimeCommand={handleDiagnoseCliRuntimeCommand}
+                handleDiscoverCliRuntimeTools={handleDiscoverCliRuntimeTools}
+                handleCreateCliRuntimeEnvironment={handleCreateCliRuntimeEnvironment}
+                handleInstallCliRuntimeTool={handleInstallCliRuntimeTool}
+                handleOpenCliRuntimeEnvironmentRoot={handleOpenCliRuntimeEnvironmentRoot}
                 isSyncingMcp={isSyncingMcp}
                 handleDiscoverAndImportMcp={handleDiscoverAndImportMcp}
                 handleAddMcpServer={handleAddMcpServer}
@@ -3736,6 +5334,22 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 handleRefreshToolDiagnostics={loadToolDiagnostics}
                 handleRunAllDirectToolDiagnostics={() => runAllToolDiagnostics('direct')}
                 handleRunAllAiToolDiagnostics={() => runAllToolDiagnostics('ai')}
+                runtimePerfPresets={RUNTIME_PERF_PRESETS}
+                runtimePerfMode={runtimePerfMode}
+                setRuntimePerfMode={setRuntimePerfMode}
+                runtimePerfPresetId={runtimePerfPresetId}
+                setRuntimePerfPresetId={setRuntimePerfPresetId}
+                runtimePerfMessage={runtimePerfMessage}
+                setRuntimePerfMessage={setRuntimePerfMessage}
+                runtimePerfIterations={runtimePerfIterations}
+                setRuntimePerfIterations={setRuntimePerfIterations}
+                runtimePerfResults={runtimePerfResults}
+                activeRuntimePerfRunId={activeRuntimePerfRunId}
+                isRuntimePerfRunning={isRuntimePerfRunning}
+                runtimePerfStatusMessage={runtimePerfStatusMessage}
+                handleApplyRuntimePerfPreset={handleApplyRuntimePerfPreset}
+                handleRunRuntimePerfBenchmark={handleRunRuntimePerfBenchmark}
+                handleClearRuntimePerfResults={handleClearRuntimePerfResults}
                 runtimeTasks={runtimeTasks}
                 runtimeRoles={runtimeRoles}
                 runtimeDiagnosticsSummary={runtimeDiagnosticsSummary}
@@ -3748,6 +5362,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                 setSelectedRuntimeSessionId={setSelectedRuntimeSessionId}
                 selectedBackgroundTaskId={selectedBackgroundTaskId}
                 setSelectedBackgroundTaskId={setSelectedBackgroundTaskId}
+                selectedBackgroundTask={selectedBackgroundTaskDetail}
                 runtimeTaskTraces={runtimeTaskTraces}
                 runtimeSessionTranscript={runtimeSessionTranscript}
                 runtimeSessionCheckpoints={runtimeSessionCheckpoints}
@@ -3920,7 +5535,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                   <div className="min-w-0">
                     <h3 className="text-base font-semibold text-text-primary truncate">添加模型</h3>
                     <p className="text-xs text-text-tertiary mt-1 truncate">
-                      {addModelModalSource.name || '未命名模型源'} · 候选模型 {addModelModalRemoteModels.length} 个
+                      {addModelModalSource.name || '未命名模型源'} · 候选模型 {addModelModalRemoteModels.length} 个，可手动输入模型 ID
                     </p>
                   </div>
                   <button
@@ -3934,7 +5549,7 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
 
                 <div className="px-5 py-4 space-y-3">
                   <div className="text-[12px] text-text-tertiary">
-                    仅展示候选，不会自动加入常用列表；点击确认后才会加入当前模型源。
+                    候选列表仅用于辅助选择；也可以直接手动输入模型 ID，点击确认后才会加入当前模型源。
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr),160px,auto] gap-2">
                     <input
@@ -3972,10 +5587,10 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         setActiveAiSourceId(addModelModalSource.id);
                         void fetchModelsForSource(addModelModalSource, { manual: true });
                       }}
-                      disabled={isTesting}
+                      disabled={Boolean(fetchingModelsBySourceId[addModelModalSource.id])}
                       className="px-3 py-2 text-xs border border-border rounded hover:bg-surface-secondary transition-colors disabled:opacity-50"
                     >
-                      {isTesting && activeAiSourceId === addModelModalSource.id ? '拉取中...' : '刷新候选'}
+                      {fetchingModelsBySourceId[addModelModalSource.id] ? '拉取中...' : '刷新候选'}
                     </button>
                   </div>
                   <div className="max-h-40 overflow-auto rounded border border-border bg-surface-secondary/20 p-2">
@@ -4024,7 +5639,9 @@ export function Settings({ isActive = true }: { isActive?: boolean }) {
                         ))}
                       </div>
                     ) : (
-                      <div className="text-xs text-text-tertiary">暂无候选模型，可点击“刷新候选”拉取。</div>
+                      <div className="text-xs text-text-tertiary">
+                        暂无候选模型，可直接手动输入模型 ID，或点击“刷新候选”拉取。
+                      </div>
                     )}
                   </div>
                 </div>

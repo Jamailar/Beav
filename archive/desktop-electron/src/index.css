@@ -120,6 +120,7 @@ select {
 .editor-ui-shell [contenteditable='true'],
 .editor-ui-shell .cm-content,
 .editor-ui-shell .cm-editor,
+.editor-ui-shell .cm-scroller,
 .editor-ui-shell .chat-ai-content,
 .editor-ui-shell .chat-markdown-body,
 .editor-ui-shell .chat-user-bubble {
@@ -134,6 +135,19 @@ select {
 .manuscript-editor-shell .cm-gutters {
   background-color: rgb(var(--color-surface-primary) / 1) !important;
   color: rgb(var(--color-text-primary) / 1) !important;
+}
+
+.manuscript-editor-shell,
+.manuscript-editor-shell * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.manuscript-editor-shell .cm-editor,
+.manuscript-editor-shell .cm-scroller,
+.manuscript-editor-shell .cm-content,
+.manuscript-editor-shell .cm-line {
+  cursor: text !important;
 }
 
 .manuscript-editor-shell .cm-activeLine {
@@ -510,56 +524,554 @@ select {
 }
 
 .tippy-box[data-theme~='redbox-tour'] {
-  background: #ffffff;
-  color: #0f172a;
-  border: 1px solid rgba(148, 163, 184, 0.5);
-  border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.18);
+  background:
+    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.98) 0%, rgb(var(--color-surface-secondary) / 0.98) 100%);
+  color: rgb(var(--color-text-primary) / 1);
+  border: 1px solid rgb(var(--color-border) / 0.9);
+  border-radius: 18px;
+  box-shadow: 0 22px 54px rgba(18, 18, 18, 0.18);
+  backdrop-filter: blur(14px) saturate(1.05);
 }
 
 .tippy-box[data-theme~='redbox-tour'] > .tippy-arrow::before {
-  color: #ffffff;
+  color: rgb(var(--color-surface-primary) / 1);
 }
 
 .redbox-tour-content {
-  min-width: 280px;
+  min-width: 304px;
+  padding: 2px;
+}
+
+.redbox-tour-kicker {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(var(--color-accent-primary) / 1);
+  background: rgb(var(--color-accent-primary) / 0.1);
+  margin-bottom: 10px;
 }
 
 .redbox-tour-title {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.3;
   font-weight: 700;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .redbox-tour-desc {
   font-size: 12px;
-  line-height: 1.55;
-  color: #475569;
+  line-height: 1.6;
+  color: rgb(var(--color-text-secondary) / 1);
   white-space: normal;
 }
 
-.redbox-tour-actions {
-  margin-top: 10px;
+.redbox-tour-dots {
   display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.redbox-tour-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: rgb(var(--color-border) / 0.8);
+}
+
+.redbox-tour-dot--active {
+  width: 18px;
+  background:
+    linear-gradient(90deg, rgb(var(--color-accent-primary) / 1) 0%, rgb(var(--color-brand-red) / 0.78) 100%);
+}
+
+.redbox-tour-actions {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.redbox-tour-actions-group {
+  display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
 
 .redbox-tour-btn {
   border: 0;
-  border-radius: 8px;
-  padding: 5px 10px;
+  border-radius: 10px;
+  padding: 7px 12px;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .redbox-tour-btn-ghost {
-  background: #f1f5f9;
-  color: #334155;
+  background: transparent;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-btn-secondary {
+  background: rgb(var(--color-surface-secondary) / 1);
+  color: rgb(var(--color-text-primary) / 1);
 }
 
 .redbox-tour-btn-primary {
-  background: #2563eb;
+  background:
+    linear-gradient(135deg, rgb(var(--color-accent-primary) / 1) 0%, rgb(var(--color-brand-red) / 0.82) 100%);
   color: #ffffff;
+  box-shadow: 0 10px 24px rgb(var(--color-brand-red) / 0.18);
+}
+
+[data-redbox-tour-target='active'] {
+  position: relative;
+  z-index: 2;
+  box-shadow:
+    0 0 0 1px rgb(var(--color-surface-primary) / 0.7),
+    0 0 0 6px rgb(var(--color-accent-primary) / 0.16),
+    0 18px 38px rgba(15, 23, 42, 0.18);
+}
+
+.redbox-tour-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+}
+
+.redbox-tour-backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(700px 300px at 18% 16%, rgb(var(--color-accent-primary) / 0.18), transparent 65%),
+    radial-gradient(520px 260px at 86% 14%, rgb(var(--color-brand-red) / 0.16), transparent 62%),
+    linear-gradient(180deg, rgb(17 17 17 / 0.32) 0%, rgb(17 17 17 / 0.52) 100%);
+  animation: redbox-tour-fade-in 320ms ease-out both;
+}
+
+.redbox-tour-panel {
+  position: relative;
+  width: min(920px, calc(100vw - 56px));
+  border-radius: 28px;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.98) 0%, rgb(var(--color-surface-secondary) / 0.98) 100%);
+  border: 1px solid rgb(var(--color-border) / 0.85);
+  box-shadow:
+    0 30px 80px rgba(16, 18, 27, 0.22),
+    0 8px 24px rgba(16, 18, 27, 0.12);
+  animation: redbox-tour-panel-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.redbox-tour-hero {
+  position: relative;
+  min-height: 216px;
+  overflow: hidden;
+  padding: 26px 28px 20px;
+  background:
+    radial-gradient(420px 220px at 18% 18%, rgb(var(--color-accent-primary) / 0.16), transparent 70%),
+    radial-gradient(380px 200px at 84% 24%, rgb(var(--color-brand-red) / 0.16), transparent 68%),
+    linear-gradient(135deg, rgb(var(--color-surface-secondary) / 1) 0%, rgb(var(--color-surface-primary) / 1) 100%);
+}
+
+.redbox-tour-hero-orbit {
+  position: absolute;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--color-border) / 0.6);
+  animation: redbox-tour-orbit 16s linear infinite;
+}
+
+.redbox-tour-hero-orbit--one {
+  inset: 24px auto auto 22px;
+  width: 180px;
+  height: 180px;
+}
+
+.redbox-tour-hero-orbit--two {
+  inset: auto 54px 14px auto;
+  width: 240px;
+  height: 240px;
+  animation-direction: reverse;
+  animation-duration: 22s;
+}
+
+.redbox-tour-hero-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+  min-height: 170px;
+}
+
+.redbox-tour-hero-grid--compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  min-height: 132px;
+}
+
+.redbox-tour-hero-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgb(var(--color-border) / 0.7);
+  background: rgb(var(--color-surface-primary) / 0.78);
+  color: rgb(var(--color-text-primary) / 1);
+  box-shadow: 0 12px 32px rgba(16, 18, 27, 0.08);
+  backdrop-filter: blur(10px);
+  animation: redbox-tour-card-float 6s ease-in-out infinite;
+}
+
+.redbox-tour-hero-card--compact {
+  grid-column: span 1;
+  min-height: 52px;
+}
+
+.redbox-tour-hero-card span {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.redbox-tour-hero-card--knowledge {
+  grid-column: span 2;
+}
+
+.redbox-tour-hero-card--wander {
+  grid-column: span 2;
+  margin-top: 18px;
+  animation-delay: 0.5s;
+}
+
+.redbox-tour-hero-card--draft {
+  grid-column: span 2;
+  animation-delay: 1s;
+}
+
+.redbox-tour-hero-card--generate {
+  grid-column: span 3;
+  animation-delay: 1.5s;
+}
+
+.redbox-tour-hero-card--automation {
+  grid-column: span 3;
+  margin-bottom: 8px;
+  animation-delay: 2s;
+}
+
+.redbox-tour-panel-body {
+  padding: 28px;
+}
+
+.redbox-tour-panel-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgb(var(--color-accent-primary) / 0.08);
+  color: rgb(var(--color-accent-primary) / 1);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.redbox-tour-panel-title {
+  margin: 16px 0 10px;
+  font-size: clamp(28px, 3.6vw, 38px);
+  line-height: 1.06;
+  letter-spacing: -0.03em;
+}
+
+.redbox-tour-panel-desc {
+  margin: 0;
+  max-width: 640px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-highlight-list {
+  list-style: none;
+  padding: 0;
+  margin: 18px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.redbox-tour-highlight-item {
+  position: relative;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-highlight-item::before {
+  content: '';
+  position: absolute;
+  top: 8px;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, rgb(var(--color-accent-primary) / 1) 0%, rgb(var(--color-brand-red) / 0.82) 100%);
+}
+
+.redbox-tour-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.redbox-tour-shortcut-btn {
+  border: 1px solid rgb(var(--color-border) / 0.82);
+  background: rgb(var(--color-surface-primary) / 0.88);
+  color: rgb(var(--color-text-primary) / 1);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.redbox-tour-shortcut-btn:hover {
+  background: rgb(var(--color-surface-secondary) / 1);
+}
+
+.redbox-tour-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.redbox-tour-feature-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgb(var(--color-border) / 0.75);
+  background: rgb(var(--color-surface-primary) / 0.82);
+}
+
+.redbox-tour-feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgb(var(--color-accent-primary) / 0.16) 0%, rgb(var(--color-brand-red) / 0.14) 100%);
+  color: rgb(var(--color-text-primary) / 1);
+  flex-shrink: 0;
+}
+
+.redbox-tour-feature-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.redbox-tour-feature-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-path {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgb(var(--color-surface-secondary) / 0.9);
+  border: 1px solid rgb(var(--color-border) / 0.75);
+  font-size: 13px;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-path-label {
+  margin-right: 2px;
+  color: rgb(var(--color-text-primary) / 1);
+  font-weight: 700;
+}
+
+.redbox-tour-path strong {
+  color: rgb(var(--color-text-primary) / 1);
+}
+
+.redbox-tour-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.redbox-tour-panel-btn {
+  border: 0;
+  border-radius: 14px;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.redbox-tour-panel-btn-ghost {
+  background: rgb(var(--color-surface-secondary) / 1);
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.redbox-tour-panel-btn-primary {
+  background:
+    linear-gradient(135deg, rgb(var(--color-accent-primary) / 1) 0%, rgb(var(--color-brand-red) / 0.82) 100%);
+  color: #ffffff;
+  box-shadow: 0 16px 30px rgb(var(--color-brand-red) / 0.18);
+}
+
+@keyframes redbox-tour-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes redbox-tour-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes redbox-tour-orbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes redbox-tour-card-float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@media (max-width: 920px) {
+  .redbox-tour-overlay {
+    padding: 18px;
+  }
+
+  .redbox-tour-panel {
+    width: min(100%, 760px);
+  }
+
+  .redbox-tour-hero-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .redbox-tour-hero-grid--compact {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .redbox-tour-hero-card,
+  .redbox-tour-hero-card--compact,
+  .redbox-tour-hero-card--knowledge,
+  .redbox-tour-hero-card--wander,
+  .redbox-tour-hero-card--draft,
+  .redbox-tour-hero-card--generate,
+  .redbox-tour-hero-card--automation {
+    grid-column: span 1;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .redbox-tour-panel-body,
+  .redbox-tour-hero {
+    padding: 22px 20px;
+  }
+
+  .redbox-tour-feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .redbox-tour-panel-actions {
+    justify-content: stretch;
+  }
+
+  .redbox-tour-panel-btn {
+    flex: 1 1 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .redbox-tour-backdrop,
+  .redbox-tour-panel,
+  .redbox-tour-hero-orbit,
+  .redbox-tour-hero-card {
+    animation: none !important;
+  }
+}
+
+.recording-wave-bar {
+  transform-origin: center;
+  animation: recording-wave-bounce 1.18s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+@keyframes recording-wave-bounce {
+  0%, 100% {
+    transform: scaleY(0.42);
+    opacity: 0.34;
+  }
+  28% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+  58% {
+    transform: scaleY(0.68);
+    opacity: 0.58;
+  }
+  82% {
+    transform: scaleY(0.9);
+    opacity: 0.88;
+  }
 }

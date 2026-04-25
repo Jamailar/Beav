@@ -3,6 +3,11 @@ import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Pl
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
+import type { PendingChatMessage } from '../App';
+import {
+  AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+  AUTHORING_ALLOWED_TOOLS,
+} from '../utils/redclawAuthoring';
 import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
 import { usePageRefresh } from '../hooks/usePageRefresh';
 import { uiDebug } from '../utils/uiDebug';
@@ -16,15 +21,46 @@ interface WanderItem {
   meta?: Record<string, unknown>;
 }
 
+interface WanderMaterialRef {
+  kind?: string;
+  sourceType?: string;
+  storageRoot?: string;
+  folderPath?: string;
+  workspacePath?: string;
+  explorationHint?: string;
+  namingRules?: string[];
+  displayTitle?: string;
+  sourceUrl?: string;
+  exists?: boolean;
+}
+
 interface WanderResult {
   content_direction: string;
   thinking_process: string[];
+  direction_frame: {
+    target_reader: string;
+    core_tension: string;
+    angle: string;
+    material_entry: string;
+  };
   topic: { title: string; connections: number[] };
   options?: Array<{
     content_direction: string;
+    direction_frame: {
+      target_reader: string;
+      core_tension: string;
+      angle: string;
+      material_entry: string;
+    };
     topic: { title: string; connections: number[] };
   }>;
   selected_index?: number;
+}
+
+interface WanderValidationIssue {
+  path: string;
+  code: string;
+  message: string;
 }
 
 interface WanderHistoryRecord {
@@ -48,23 +84,7 @@ interface WanderProps {
   isActive?: boolean;
   onExecutionStateChange?: (active: boolean) => void;
   onNavigateToManuscript?: (filePath: string) => void;
-  onNavigateToRedClaw?: (payload: {
-    content: string;
-    displayContent?: string;
-    taskHints?: AuthoringTaskHints;
-    attachment?: {
-      type: 'wander-references';
-      title?: string;
-      items: Array<{
-        title: string;
-        itemType: 'note' | 'video';
-        tag?: string;
-        folderPath?: string;
-        summary?: string;
-        cover?: string;
-      }>;
-    };
-  }) => void;
+  onNavigateToRedClaw?: (payload: PendingChatMessage) => void;
 }
 
 export function Wander({ isActive = true, onExecutionStateChange, onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
@@ -72,11 +92,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
-  const [skillLoadingEnabled, setSkillLoadingEnabled] = useState(true);
-  const [isSavingSkillLoading, setIsSavingSkillLoading] = useState(false);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [validationIssues, setValidationIssues] = useState<WanderValidationIssue[]>([]);
   const [phase, setPhase] = useState<'idle' | 'running' | 'done'>('idle');
   const [showFinal, setShowFinal] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -87,6 +106,8 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const activeRequestIdRef = useRef('');
   const historyListRef = useRef<WanderHistoryRecord[]>([]);
   const activeItemsRef = useRef<WanderItem[]>([]);
+  const activeOption = parsedResult?.options?.[selectedOptionIndex];
+  const activeDirectionFrame = activeOption?.direction_frame || parsedResult?.direction_frame;
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -199,13 +220,22 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     if (!embedded || typeof embedded !== 'object' || !embedded.topic) {
       return result;
     }
+    const embeddedFrame = embedded.direction_frame && typeof embedded.direction_frame === 'object'
+      ? embedded.direction_frame
+      : undefined;
     return {
       content_direction: String(embedded.content_direction || result.content_direction || '').trim(),
       thinking_process: Array.isArray(result.thinking_process) && result.thinking_process.length > 0
         ? result.thinking_process
         : (Array.isArray(embedded.thinking_process) ? embedded.thinking_process.map((item) => String(item || '').trim()).filter(Boolean) : []),
+      direction_frame: {
+        target_reader: String(embeddedFrame?.target_reader || result.direction_frame?.target_reader || '').trim(),
+        core_tension: String(embeddedFrame?.core_tension || result.direction_frame?.core_tension || '').trim(),
+        angle: String(embeddedFrame?.angle || result.direction_frame?.angle || '').trim(),
+        material_entry: String(embeddedFrame?.material_entry || result.direction_frame?.material_entry || '').trim(),
+      },
       topic: {
-        title: String(embedded.topic?.title || result.topic?.title || '未命名选题').trim() || '未命名选题',
+        title: String(embedded.topic?.title || result.topic?.title || '').trim(),
         connections: Array.isArray(embedded.topic?.connections)
           ? embedded.topic.connections.map((item) => Number(item)).filter((item) => Number.isFinite(item))
           : (result.topic?.connections || []),
@@ -215,8 +245,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         : (Array.isArray(embedded.options)
           ? embedded.options.map((option) => ({
               content_direction: String(option?.content_direction || '').trim(),
+              direction_frame: {
+                target_reader: String(option?.direction_frame?.target_reader || '').trim(),
+                core_tension: String(option?.direction_frame?.core_tension || '').trim(),
+                angle: String(option?.direction_frame?.angle || '').trim(),
+                material_entry: String(option?.direction_frame?.material_entry || '').trim(),
+              },
               topic: {
-                title: String(option?.topic?.title || '未命名选题').trim() || '未命名选题',
+                title: String(option?.topic?.title || '').trim(),
                 connections: Array.isArray(option?.topic?.connections)
                   ? option.topic.connections.map((item) => Number(item)).filter((item) => Number.isFinite(item))
                   : [],
@@ -248,11 +284,16 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const topicPayload = payload.topic && typeof payload.topic === 'object'
       ? payload.topic as Record<string, unknown>
       : {};
+    const directionFramePayload = payload.direction_frame && typeof payload.direction_frame === 'object'
+      ? payload.direction_frame as Record<string, unknown>
+      : (payload.directionFrame && typeof payload.directionFrame === 'object'
+        ? payload.directionFrame as Record<string, unknown>
+        : {});
     const title = String(
       topicPayload.title
       || payload.title
-      || '未命名选题'
-    ).trim() || '未命名选题';
+      || ''
+    ).trim();
     const contentDirection = String(
       payload.content_direction
       || payload.direction
@@ -261,6 +302,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     ).trim();
     return {
       content_direction: contentDirection,
+      direction_frame: {
+        target_reader: String(directionFramePayload.target_reader || directionFramePayload.targetReader || '').trim(),
+        core_tension: String(directionFramePayload.core_tension || directionFramePayload.coreTension || '').trim(),
+        angle: String(directionFramePayload.angle || '').trim(),
+        material_entry: String(directionFramePayload.material_entry || directionFramePayload.materialEntry || '').trim(),
+      },
       topic: {
         title,
         connections: normalizeWanderConnections(topicPayload.connections ?? payload.connections),
@@ -322,12 +369,34 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     return repairWanderResult({
       content_direction: primary.content_direction,
       thinking_process: thinkingProcessRaw.map((item) => String(item || '').trim()).filter(Boolean),
+      direction_frame: primary.direction_frame,
       topic: primary.topic,
       options: normalizedOptions.length > 0 ? normalizedOptions : undefined,
       selected_index: Number.isFinite(Number(payload.selected_index ?? payload.selectedIndex))
         ? Math.max(0, Number(payload.selected_index ?? payload.selectedIndex))
         : 0,
     });
+  }
+
+  function normalizeWanderValidationIssues(raw: unknown): WanderValidationIssue[] {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    return raw
+      .map((item) => {
+        const payload = item && typeof item === 'object'
+          ? item as Record<string, unknown>
+          : null;
+        if (!payload) return null;
+        const message = String(payload.message || '').trim();
+        if (!message) return null;
+        return {
+          path: String(payload.path || '').trim(),
+          code: String(payload.code || '').trim(),
+          message,
+        };
+      })
+      .filter((item): item is WanderValidationIssue => Boolean(item));
   }
 
   function resolveSelectedOptionIndex(result: WanderResult | null): number {
@@ -349,8 +418,46 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       || '未命名选题';
   }
 
+  const resolveWanderMaterialRef = (item: WanderItem): WanderMaterialRef | null => {
+    const meta = (item.meta || {}) as Record<string, unknown>;
+    const materialRef = meta.materialRef;
+    if (!materialRef || typeof materialRef !== 'object') {
+      return null;
+    }
+    const payload = materialRef as Record<string, unknown>;
+    return {
+      kind: typeof payload.kind === 'string' ? payload.kind : undefined,
+      sourceType: typeof payload.sourceType === 'string' ? payload.sourceType : undefined,
+      storageRoot: typeof payload.storageRoot === 'string' ? payload.storageRoot : undefined,
+      folderPath: typeof payload.folderPath === 'string' ? payload.folderPath : undefined,
+      workspacePath: typeof payload.workspacePath === 'string' ? payload.workspacePath : undefined,
+      explorationHint: typeof payload.explorationHint === 'string' ? payload.explorationHint : undefined,
+      namingRules: Array.isArray(payload.namingRules)
+        ? payload.namingRules.map((value) => String(value || '').trim()).filter(Boolean)
+        : undefined,
+      displayTitle: typeof payload.displayTitle === 'string' ? payload.displayTitle : undefined,
+      sourceUrl: typeof payload.sourceUrl === 'string' ? payload.sourceUrl : undefined,
+      exists: typeof payload.exists === 'boolean' ? payload.exists : undefined,
+    };
+  };
+
   const buildKnowledgeFolderReference = (item: WanderItem) => {
     const meta = (item.meta || {}) as Record<string, unknown>;
+    const materialRef = resolveWanderMaterialRef(item);
+    if (materialRef) {
+      const workspacePath = String(materialRef.workspacePath || '').trim();
+      const folderPath = workspacePath || String(materialRef.folderPath || '').trim();
+      const fallbackName = folderPath.split(/[\\/]/).filter(Boolean).pop() || item.id;
+      const namingRulesHint = (materialRef.namingRules || []).length > 0
+        ? `识别规则：${(materialRef.namingRules || []).join('；')}`
+        : '';
+      return {
+        folderName: fallbackName,
+        folderPath: folderPath || `material://${item.id}`,
+        metaPath: folderPath || `material://${item.id}`,
+        contentHint: [materialRef.explorationHint, namingRulesHint].filter(Boolean).join(' '),
+      };
+    }
     if (meta.sourceType === 'document') {
       const filePath = String(meta.filePath || '').trim();
       const relativePath = String(meta.relativePath || '').trim();
@@ -360,30 +467,22 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         folderName: relativePath || item.id,
         folderPath: filePath || `document://${item.id}`,
         metaPath: filePath || `document://${item.id}`,
-        contentHint: `这是文档知识源（${sourceName || sourceKind || 'document'}），请直接读取该文件内容并结合上下文创作。`,
+        contentHint: `这是文档知识源（${sourceName || sourceKind || 'document'}），先列目录，再根据文件名和样例文件自行判断该读什么正文。`,
       };
     }
 
-    const sourceRoot = item.type === 'video' ? 'knowledge/youtube' : 'knowledge/redbook';
-    const folderName = item.id;
-    const folderPath = `${sourceRoot}/${folderName}`;
+    const fallbackFolderPath = typeof meta.folderPath === 'string' && meta.folderPath.trim()
+      ? meta.folderPath.trim()
+      : `${item.type === 'video' ? 'knowledge/youtube' : 'knowledge/redbook'}/${item.id}`;
+    const folderName = fallbackFolderPath.split(/[\\/]/).filter(Boolean).pop() || item.id;
     return {
       folderName,
-      folderPath,
-      metaPath: `${folderPath}/meta.json`,
+      folderPath: fallbackFolderPath,
+      metaPath: fallbackFolderPath,
       contentHint: item.type === 'video'
-        ? '先读 meta.json，若有 transcriptFile 字段，再读取对应转录文件；否则读取 description'
-        : '先读 meta.json，若有 content.md 则继续读取 content.md',
+        ? '先列目录，再优先读 meta.json，然后根据 transcript / subtitle / content / description 等命名线索自行寻找相关文件。'
+        : '先列目录，再优先读 meta.json，然后根据 content / body / article / note 等命名线索自行寻找正文文件。',
     };
-  };
-
-  const buildSuggestedManuscriptPath = (title: string) => {
-    const safeName = String(title || 'wander-draft')
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 80) || 'wander-draft';
-    return `wander/${safeName}.redpost`;
   };
 
   const startCreateInRedClaw = () => {
@@ -391,8 +490,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     const selectedOption = parsedResult.options?.[selectedOptionIndex];
     const activeTopic = selectedOption?.topic || parsedResult.topic;
     const activeDirection = selectedOption?.content_direction || parsedResult.content_direction;
-    const suggestedManuscriptPath = buildSuggestedManuscriptPath(activeTopic.title);
-
     const connectedSet = new Set(activeTopic.connections || []);
     const referenceCards = items.map((item, index) => {
       const folderRef = buildKnowledgeFolderReference(item);
@@ -407,64 +504,66 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     });
     const materialText = items.map((item, index) => {
       const order = index + 1;
-      const connectedTag = connectedSet.has(order) ? '核心关联素材' : '辅助素材';
       const folderRef = buildKnowledgeFolderReference(item);
       return [
-        `素材${order}（${connectedTag}）`,
+        `素材${order}`,
         `类型：${item.type === 'video' ? '视频笔记' : ((item.meta as Record<string, unknown> | undefined)?.sourceType === 'document' ? '文档' : '图文笔记')}`,
         `标题：${item.title || '(无标题)'}`,
-        `文件夹名：${folderRef.folderName}`,
-        `文件夹路径：${folderRef.folderPath}`,
-        `必读文件：${folderRef.metaPath}`,
-        `读取提示：${folderRef.contentHint}`,
+        `素材路径：${folderRef.folderPath}`,
       ].join('\n');
-    }).join('\n\n---\n\n');
-
-    const folderListText = items.map((item, index) => {
-      const folderRef = buildKnowledgeFolderReference(item);
-      return `${index + 1}. ${folderRef.folderPath}`;
-    }).join('\n');
+    }).join('\n\n');
 
     const content = [
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
       '',
-      '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材文件夹中的文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
-      '请优先读取每个素材目录下的 meta.json，并按需要继续读取正文/转录文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
-      skillLoadingEnabled
-        ? '开始写作前，请先加载 writing-style 技能，再按这份写作风格技能完成标题候选、正文、标签建议和封面文案，不要写成模板化的 AI 文案。'
-        : '本次不要额外加载 writing-style 技能。请直接基于素材完成标题候选、正文、标签建议和封面文案，但仍然避免模板化表达。',
+      '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材目录中的真实文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
+      '优先使用 `redbox_fs(action="workspace.list" | "workspace.read", payload={ ... })` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达该读取动作时，才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
+      '',
+      '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
+      '',
+      '开始写作前必须先激活 `writing-style` 技能；不要假定它已经预加载。先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，然后再继续读取素材、读取档案和写正文。',
+      '再次强调：这是写作任务，不要跳过 `writing-style`。开始写作前必须先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`。',
+      '最后再强调一次：先激活 `writing-style`，再写作；先激活 `writing-style`，再写作；先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，再继续后续步骤。',
+      '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md，再基于素材完成最终标题和正文，避免模板化表达。',
       '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
       '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
+      '写正文时不要插入控制字符、占位分隔线或额外格式标记；正文只保留正常段落结构。',
+      '完稿前自行做一次风格与事实自检，再保存。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
       `内容方向：${activeDirection || ''}`,
-      `建议保存稿件路径：${suggestedManuscriptPath}`,
-      '',
-      '## 需要先读取的素材文件夹（当前工作空间下）',
-      folderListText,
       '',
       '## 参考素材（来自漫步）',
       materialText,
       '',
       '## 输出要求',
-      '1. 先给出标题候选（至少5个，含强钩子）。',
-      '2. 给出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。',
-      '3. 给出标签建议（8-12个）。',
-      '4. 给出封面文案建议（2-3个）。',
-      '5. 这是小红书图文任务，必须保存成 `.redpost` 工程，不要保存成单个 `.md` 文件。',
-      `6. 如目标工程不存在，先调用 app_cli 创建 \`.redpost\` 工程，再写入正文；也可以直接写入该工程路径，让宿主自动建包。推荐路径：${suggestedManuscriptPath}。`,
-      `7. 完成后必须调用 app_cli 将完整稿件保存到 manuscripts。优先使用：app_cli(command="manuscripts write --path \\"${suggestedManuscriptPath}\\"", payload={ content: "...完整 markdown..." })。`,
-      '8. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
-      `9. 最终回复里只有在工具成功后才能回显保存路径，并且必须使用工具返回的真实路径；不要只复述建议路径 ${suggestedManuscriptPath}。`,
+      '1. 只输出一个最终标题，不要再输出标题候选、备选标题或标题列表。',
+      '2. 只输出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。不要额外输出推荐 tag、标签建议、封面文案或其它附加栏目。',
+      '3. 这是小红书图文任务，必须保存成 `.redpost` 工程。',
+      '4. 如目标工程不存在，先调用 `app_cli(action="manuscripts.createProject", payload={ "kind": "redpost", "parent": "wander", "title": "<最终标题>" })` 获取规范工程路径。不要把标题直接当成工程文件名。',
+      '5. 创建成功后，宿主会把该工程绑定为当前写稿目标；你只需要生成最终标题和完整正文，不要展开描述工程内部文件结构，也不要自己管理其他工程文件。',
+      '6. 完成后必须调用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "<完整正文>" })` 保存完整稿件；不要重新创建工程，也不要再重复传 path。',
+      '7. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
     ].join('\n');
 
     onNavigateToRedClaw({
       content,
       displayContent: `基于漫步灵感开始创作：${parsedResult.topic.title}`,
+      sessionRouting: 'new',
       taskHints: {
         intent: 'manuscript_creation',
-        activeSkills: skillLoadingEnabled ? ['writing-style'] : [],
+        allowedTools: AUTHORING_ALLOWED_TOOLS,
+        allowedAppCliActions: AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+        requireSourceRead: true,
+        requireProfileRead: true,
+        requireSave: true,
+        saveArtifact: 'redpost',
+        saveSubdir: 'wander',
+        platform: 'xiaohongshu',
+        taskType: 'direct_write',
+        formatTarget: 'markdown',
+        sourceMode: 'knowledge',
       },
       attachment: {
         type: 'wander-references',
@@ -478,7 +577,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     try {
       const settings = await window.ipcRenderer.getSettings();
       setMultiChoiceEnabled(Boolean(settings?.wander_deep_think_enabled));
-      setSkillLoadingEnabled(settings?.wander_skill_loading_enabled !== false);
     } catch (error) {
       console.error('Failed to load wander settings:', error);
     }
@@ -486,7 +584,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
   const persistWanderSettings = useCallback(async (patch: {
     wander_deep_think_enabled?: boolean;
-    wander_skill_loading_enabled?: boolean;
   }) => {
     const settings = await window.ipcRenderer.getSettings();
     await window.ipcRenderer.saveSettings({
@@ -515,7 +612,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       mcp_servers_json: settings?.mcp_servers_json,
       redclaw_compact_target_tokens: settings?.redclaw_compact_target_tokens,
       wander_deep_think_enabled: patch.wander_deep_think_enabled ?? settings?.wander_deep_think_enabled,
-      wander_skill_loading_enabled: patch.wander_skill_loading_enabled ?? settings?.wander_skill_loading_enabled,
+      wander_skill_loading_enabled: settings?.wander_skill_loading_enabled,
     });
   }, []);
 
@@ -534,24 +631,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       setMultiChoiceEnabled(!nextValue);
     } finally {
       setIsSavingMode(false);
-    }
-  };
-
-  const handleToggleSkillLoading = async () => {
-    if (isSavingSkillLoading || loading) return;
-    const nextValue = !skillLoadingEnabled;
-    setSkillLoadingEnabled(nextValue);
-    setIsSavingSkillLoading(true);
-
-    try {
-      await persistWanderSettings({
-        wander_skill_loading_enabled: nextValue,
-      });
-    } catch (error) {
-      console.error('Failed to persist wander skill loading setting:', error);
-      setSkillLoadingEnabled(!nextValue);
-    } finally {
-      setIsSavingSkillLoading(false);
     }
   };
 
@@ -707,19 +786,25 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       }
 
       const error = String(data.error || '').trim();
+      const resultText = typeof data.result === 'string'
+        ? data.result.trim()
+        : '';
+      const historyId = String(data.historyId || '').trim();
+      const normalizedResult = normalizeWanderResultPayload(resultText);
+      const normalizedIssues = normalizeWanderValidationIssues(data.validationIssues);
       if (error) {
-        setParsedResult(null);
+        setParsedResult(normalizedResult);
         setParseError(error);
+        setValidationIssues(normalizedIssues);
+        if (normalizedResult) {
+          setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
+        }
         setLiveStatus(toStableTwoLineText('漫步失败'));
       } else {
-        const resultText = typeof data.result === 'string'
-          ? data.result.trim()
-          : '';
-        const historyId = String(data.historyId || '').trim();
-        const normalizedResult = normalizeWanderResultPayload(resultText);
         if (normalizedResult) {
           setParsedResult(normalizedResult);
           setSelectedOptionIndex(resolveSelectedOptionIndex(normalizedResult));
+          setValidationIssues([]);
           setItems(activeItemsRef.current);
           setLiveStatus(toStableTwoLineText('漫步完成'));
           if (historyId) {
@@ -754,6 +839,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     setParsedResult(null);
     setSelectedOptionIndex(0);
     setParseError(null);
+    setValidationIssues([]);
     setItems([]);
     setShowFinal(false);
     setCurrentHistoryId(null);
@@ -777,7 +863,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
         items: randomItems,
         options: {
           multiChoice: multiChoiceEnabled,
-          loadWritingStyleSkill: skillLoadingEnabled,
           requestId,
         },
       });
@@ -842,22 +927,6 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
             </>
           )}
-          <div className={clsx('flex items-center gap-3', phase !== 'idle' && 'ml-1 pl-4 border-l border-black/[0.06]')}>
-            <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
-              技能加载
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleToggleSkillLoading()}
-              disabled={isSavingSkillLoading || loading}
-              className="ui-switch-track shrink-0 disabled:opacity-50"
-              data-size="sm"
-              data-state={skillLoadingEnabled ? 'on' : 'off'}
-            >
-              <div className="ui-switch-thumb" />
-            </button>
-          </div>
-          <div className="w-[1px] h-4 bg-black/[0.06]" />
           <div className="flex items-center gap-3">
             <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
               多选题
@@ -1043,21 +1112,52 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
                         <div className="space-y-6">
                             <h2 className="text-3xl font-black text-text-primary leading-[1.15] tracking-tight">
-                                {(parsedResult.options?.[selectedOptionIndex]?.topic.title || parsedResult.topic.title)}
+                                {(activeOption?.topic.title || parsedResult.topic.title || '未命名选题')}
                             </h2>
 
                             <div className="flex items-start gap-3">
                                 <div className="mt-1.5 w-1.5 h-1.5 rounded-full bg-accent-primary shrink-0" />
                                 <div className="text-[15px] font-bold text-text-secondary leading-relaxed">
-                                    {(parsedResult.options?.[selectedOptionIndex]?.content_direction || parsedResult.content_direction)}
+                                    {(activeOption?.content_direction || parsedResult.content_direction)}
                                 </div>
                             </div>
+
+                            {activeDirectionFrame && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {[
+                                      ['目标读者', activeDirectionFrame.target_reader],
+                                      ['核心矛盾', activeDirectionFrame.core_tension],
+                                      ['叙事角度', activeDirectionFrame.angle],
+                                      ['素材切口', activeDirectionFrame.material_entry],
+                                    ].map(([label, value]) => (
+                                      <div key={label} className="rounded-2xl border border-black/[0.05] bg-black/[0.015] px-4 py-3">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-text-tertiary">{label}</div>
+                                        <div className="mt-1 text-[13px] font-bold leading-relaxed text-text-primary">{value || '待补充'}</div>
+                                      </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         {parseError && (
-                            <div className="mt-6 flex items-center gap-2 text-[12px] font-bold text-red-500 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
-                                <X className="w-4 h-4 shrink-0" />
-                                {parseError}
+                            <div className="mt-6 space-y-3">
+                                <div className="flex items-center gap-2 text-[12px] font-bold text-red-500 bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+                                    <X className="w-4 h-4 shrink-0" />
+                                    {parseError}
+                                </div>
+                                {validationIssues.length > 0 && (
+                                    <div className="rounded-2xl border border-red-100 bg-red-50/60 px-4 py-4">
+                                        <div className="text-[11px] font-black uppercase tracking-widest text-red-500">需要补强</div>
+                                        <div className="mt-2 space-y-2">
+                                            {validationIssues.slice(0, 6).map((issue) => (
+                                                <div key={`${issue.path}-${issue.code}`} className="flex items-start gap-2 text-[12px] font-bold text-red-500">
+                                                    <div className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-red-400" />
+                                                    <span>{issue.message}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                   </div>
@@ -1140,8 +1240,17 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
               )}
 
               {showFinal && !parsedResult && parseError && (
-                <div className="text-sm text-text-secondary bg-surface-secondary border border-border rounded-lg p-6 text-center">
-                  {parseError}
+                <div className="space-y-3 rounded-lg border border-border bg-surface-secondary p-6">
+                  <div className="text-sm text-center text-text-secondary">{parseError}</div>
+                  {validationIssues.length > 0 && (
+                    <div className="space-y-2">
+                      {validationIssues.slice(0, 6).map((issue) => (
+                        <div key={`${issue.path}-${issue.code}`} className="text-[12px] font-bold text-red-500">
+                          {issue.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

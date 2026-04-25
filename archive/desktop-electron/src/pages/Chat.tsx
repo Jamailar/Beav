@@ -2,9 +2,14 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
+import { supportsAttachmentKindDirectInput } from '../../shared/modelCapabilities';
+import {
+  CliEscalationDialog,
+  type CliEscalationRequestModel,
+  type CliEscalationScope,
+} from '../components/CliEscalationDialog';
 import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
 import {
-  blobToBase64,
   buildChatModelOptions,
   ChatComposer,
   type ChatComposerHandle,
@@ -16,7 +21,11 @@ import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/Messa
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { type AudioRecordingClip } from '../features/audio-input/audioInput';
+import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
+import { useAudioRecording } from '../features/audio-input/useAudioRecording';
+import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
+import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
 import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
@@ -33,6 +42,12 @@ interface ChatRoom {
   name: string;
   advisorIds: string[];
   createdAt: string;
+}
+
+interface ChatShortcut {
+  label: string;
+  text: string;
+  action?: 'send' | 'inject';
 }
 
 // 选中文字菜单状态
@@ -52,8 +67,8 @@ interface ChatProps {
   fixedSessionId?: string | null;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
-  shortcuts?: Array<{ label: string; text: string }>;
-  welcomeShortcuts?: Array<{ label: string; text: string }>;
+  shortcuts?: ChatShortcut[];
+  welcomeShortcuts?: ChatShortcut[];
   showWelcomeShortcuts?: boolean;
   showComposerShortcuts?: boolean;
   fixedSessionContextIndicatorMode?: 'top' | 'corner-ring' | 'none';
@@ -62,17 +77,21 @@ interface ChatProps {
   welcomeIconSrc?: string;
   welcomeAvatarText?: string;
   welcomeIconVariant?: 'default' | 'avatar';
-  welcomeActions?: Array<{ label: string; text?: string; url?: string; icon?: React.ReactNode; color?: string }>;
+  welcomeActions?: Array<{ label: string; text?: string; url?: string; onClick?: () => void; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
   allowFileUpload?: boolean;
   messageWorkflowPlacement?: 'top' | 'bottom';
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
+  messageWorkflowDisplayMode?: 'all' | 'thoughts-only';
   embeddedTheme?: 'default' | 'dark' | 'auto';
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
   emptyStateVerticalAlign?: 'center' | 'lower';
+  showComposer?: boolean;
+  showMessageAttachments?: boolean;
+  collapseEmptyFixedSession?: boolean;
 }
 
 interface ChatContextUsage {
@@ -97,11 +116,48 @@ interface ChatRuntimeState {
 
 interface ChatErrorEventPayload {
   message?: string;
+  title?: string;
   raw?: string;
+  detail?: string;
   hint?: string;
   statusCode?: number;
+  httpStatus?: number;
   errorCode?: string;
   category?: string;
+  layer?: string;
+  retryable?: boolean;
+  transportMode?: string;
+  modelName?: string;
+}
+
+interface StructuredChatErrorNotice {
+  title: string;
+  hint?: string;
+  detail?: string;
+  metaParts?: string[];
+}
+
+function stripTransientAttachmentPreview(
+  attachment?: UploadedFileAttachment,
+): UploadedFileAttachment | undefined {
+  if (!attachment) return undefined;
+  const { thumbnailDataUrl: _thumbnailDataUrl, ...persisted } = attachment;
+  return persisted;
+}
+
+function applyAttachmentDeliveryMode(
+  attachment: UploadedFileAttachment | undefined,
+  modelName?: string,
+): UploadedFileAttachment | undefined {
+  if (!attachment) return undefined;
+  const directInput = Boolean(
+    modelName
+    && supportsAttachmentKindDirectInput(modelName, String(attachment.kind || '').trim().toLowerCase()),
+  );
+  return {
+    ...attachment,
+    deliveryMode: directInput ? 'direct-input' : 'tool-read',
+  };
 }
 
 type FixedSessionWarmSnapshot = {
@@ -142,7 +198,8 @@ function writeFixedSessionWarmSnapshot(
 
 const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 80;
 const STREAM_CHUNK_DEDUPE_WINDOW_MS = 120;
-const STREAM_UPDATE_INTERVAL_MS = 48;
+const STREAM_UPDATE_INTERVAL_MS = 72;
+const CLI_LOG_PREVIEW_LIMIT = 4000;
 const COMPACT_TOKEN_FORMATTER = new Intl.NumberFormat('en-US', {
   notation: 'compact',
   maximumFractionDigits: 1,
@@ -180,6 +237,89 @@ function mergeThoughtDelta(currentThought: string, incomingThought: string): str
   if (current.endsWith(incoming)) return current;
   if (incoming.startsWith(current)) return incoming;
   return `${current}${incoming}`;
+}
+
+function appendCliLogPreview(currentPreview: string, incomingChunk: string): string {
+  const current = String(currentPreview || '');
+  const incoming = String(incomingChunk || '');
+  if (!incoming) return current;
+  if (!current) {
+    return incoming.slice(-CLI_LOG_PREVIEW_LIMIT);
+  }
+  if (incoming.startsWith(current)) {
+    return incoming.slice(-CLI_LOG_PREVIEW_LIMIT);
+  }
+  if (current.endsWith(incoming)) {
+    return current.slice(-CLI_LOG_PREVIEW_LIMIT);
+  }
+  return `${current}${current.endsWith('\n') ? '' : '\n'}${incoming}`.slice(-CLI_LOG_PREVIEW_LIMIT);
+}
+
+function findLatestTimelineItemIndex(
+  timeline: ProcessItem[],
+  predicate: (item: ProcessItem) => boolean,
+): number {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    if (predicate(timeline[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function normalizeCliProcessStatus(status: string): ProcessItem['status'] {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (!normalized || normalized === 'pending' || normalized === 'running' || normalized === 'waiting-approval') {
+    return 'running';
+  }
+  if (
+    normalized === 'completed'
+    || normalized === 'success'
+    || normalized === 'resolved'
+    || normalized === 'approved'
+  ) {
+    return 'done';
+  }
+  return 'failed';
+}
+
+function isThinkingMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType === 'thinking');
+}
+
+function isAssistantReplyMessage(message: Message | null | undefined): boolean {
+  return Boolean(message && message.role === 'ai' && message.messageType !== 'thinking');
+}
+
+function findLastAssistantReplyIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isAssistantReplyMessage(messages[index])) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findLastRunningThinkingIndex(messages: Message[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isThinkingMessage(message) && message.isStreaming) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function hasCommittedAssistantReply(messages: Message[]): boolean {
+  const lastReplyIndex = findLastAssistantReplyIndex(messages);
+  if (lastReplyIndex === -1) return false;
+  const message = messages[lastReplyIndex];
+  return Boolean(
+    message
+    && message.role === 'ai'
+    && !message.isStreaming
+    && String(message.content || '').trim().length > 0
+  );
 }
 
 function parseMessageTimestampMs(value: unknown): number | undefined {
@@ -223,101 +363,27 @@ function parseEmbeddedHttpError(rawValue: string): Partial<ChatErrorEventPayload
   };
 }
 
-function deriveChatErrorPresentation(payload: ChatErrorEventPayload | string | null | undefined): { formatted: string; notice: string } {
+function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null | undefined): StructuredChatErrorNotice {
   const embedded = parseEmbeddedHttpError(typeof payload === 'string'
     ? payload
     : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
   const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
-  const title = String(data.message || 'AI 请求失败').trim();
-  const detail = String(data.raw || '').trim();
-  const lower = `${title}\n${detail}`.toLowerCase();
-  const detectedInsufficientBalance =
-    lower.includes('insufficient balance') ||
-    lower.includes('insufficient_balance') ||
-    lower.includes('insufficient_quota') ||
-    /\b1008\b/.test(lower);
-  const detectedInvalidKey =
-    lower.includes('invalid api key') ||
-    lower.includes('incorrect api key') ||
-    lower.includes('invalid_api_key') ||
-    lower.includes('authentication_error') ||
-    lower.includes('unauthorized');
-  const detectedRateLimit =
-    Number(data.statusCode) === 429 ||
-    lower.includes('rate limit') ||
-    lower.includes('too many requests');
-
-  const category = detectedInsufficientBalance
-    ? 'quota'
-    : detectedInvalidKey
-      ? 'auth'
-      : detectedRateLimit
-        ? 'rate_limit'
-        : String(data.category || '').trim();
-
-  const isValidationError = category === 'validation';
-  const isExecutionError = category === 'execution';
-
-  const hint = detectedInsufficientBalance
-    ? '账号余额/额度不足。请充值、升级套餐或切换到有余额的 AI 源。'
-    : detectedInvalidKey
-      ? '请检查 API Key 是否正确、是否过期，以及该模型是否有调用权限。'
-      : detectedRateLimit
-        ? '请求频率过高。请稍后重试，或降低并发与调用频率。'
-        : isValidationError
-          ? String(data.hint || '').trim() || '当前结果未通过执行校验，请先修复素材读取、证据链或保存回执问题。'
-          : isExecutionError
-            ? String(data.hint || '').trim() || '执行阶段发生错误，请检查素材读取、工具调用、文件路径或权限。'
-        : String(data.hint || '').trim() || '请检查 AI 源配置后重试。';
+  const title = String(data.title || data.message || '').trim() || '请求失败';
+  const detail = String(data.detail || data.raw || '').trim();
+  const hint = String(data.hint || '').trim();
+  const layer = String(data.layer || data.category || '').trim();
   const metaParts = [
-    data.statusCode ? `HTTP ${data.statusCode}` : '',
+    (data.httpStatus || data.statusCode) ? `HTTP ${data.httpStatus || data.statusCode}` : '',
     data.errorCode ? String(data.errorCode) : '',
-    category || '',
+    layer || '',
+    data.transportMode ? `transport:${String(data.transportMode)}` : '',
+    data.retryable ? '可重试' : '',
   ].filter(Boolean);
-
-  const userFacingTitle = detectedInsufficientBalance
-    ? 'AI 账号余额不足（供应商返回）'
-    : detectedInvalidKey
-      ? 'AI API Key 无效或无权限（供应商返回）'
-      : detectedRateLimit
-        ? 'AI 请求被限流（供应商返回）'
-        : isValidationError
-          ? '执行校验未通过'
-          : isExecutionError
-            ? '任务执行失败'
-        : title;
-
-  const lines: string[] = [`❌ ${userFacingTitle}`];
-  lines.push(
-    isValidationError || isExecutionError
-      ? '说明：这是任务执行阶段返回的错误，不是 AI 源鉴权或 App 崩溃。'
-      : '说明：这是 AI 源接口返回的错误，不是 App 崩溃。'
-  );
-  if (hint) lines.push(`处理建议：${hint}`);
-  if (metaParts.length > 0) lines.push(`标识：${metaParts.join(' · ')}`);
-  if (detail) {
-    lines.push('');
-    lines.push('错误详情（用于反馈）：');
-    lines.push('```text');
-    lines.push(detail.slice(0, 3000));
-    lines.push('```');
-  }
-
-  const notice = detectedInsufficientBalance
-    ? `AI 源余额不足${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请充值或切换有余额的 AI 源。`
-    : detectedInvalidKey
-      ? `AI 源鉴权失败${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请检查 API Key。`
-      : detectedRateLimit
-        ? `AI 请求被限流${data.statusCode ? `（HTTP ${data.statusCode}）` : ''}，请稍后重试。`
-        : isValidationError
-          ? '执行校验未通过，请先修复 reviewer 指出的问题。'
-          : isExecutionError
-            ? '任务执行失败，请检查素材读取、工具调用和文件权限。'
-        : `AI 请求失败：${userFacingTitle}${metaParts.length > 0 ? `（${metaParts.join(' / ')}）` : ''}`;
-
   return {
-    formatted: lines.join('\n'),
-    notice,
+    title,
+    hint: hint || undefined,
+    detail: detail || undefined,
+    metaParts: metaParts.length > 0 ? metaParts : undefined,
   };
 }
 
@@ -347,10 +413,14 @@ export function Chat({
   messageWorkflowPlacement = 'bottom',
   messageWorkflowVariant = 'compact',
   messageWorkflowEmphasis = 'default',
+  messageWorkflowDisplayMode = 'all',
   embeddedTheme = 'default',
   showWelcomeHeader = true,
   emptyStateComposerPlacement = 'inline',
   emptyStateVerticalAlign = 'center',
+  showComposer = true,
+  showMessageAttachments = true,
+  collapseEmptyFixedSession = false,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -361,6 +431,7 @@ export function Chat({
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
+  const [cliEscalationRequest, setCliEscalationRequest] = useState<CliEscalationRequestModel | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const saved = localStorage.getItem("chat:sidebarCollapsed");
     return saved ? JSON.parse(saved) : defaultCollapsed;
@@ -377,10 +448,11 @@ export function Chat({
   const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
   ));
-  const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [errorNotice, setErrorNotice] = useState<string | StructuredChatErrorNotice | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
+  const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
 
   useEffect(() => {
     onExecutionStateChange?.(isProcessing);
@@ -400,7 +472,6 @@ export function Chat({
     };
   }, [onExecutionStateChange]);
   const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
-  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -409,9 +480,6 @@ export function Chat({
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
   const composerRef = useRef<ChatComposerHandle>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaChunksRef = useRef<Blob[]>([]);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
   
   // Throttle buffer for streaming updates
   const pendingUpdateRef = useRef<{ content: string } | null>(null);
@@ -490,14 +558,16 @@ export function Chat({
       lastTimelineRunning: runningTimelineCount,
       lastContentChars: String(lastMessage?.content || '').length,
       hasConfirmRequest: Boolean(confirmRequest),
+      hasCliEscalationRequest: Boolean(cliEscalationRequest),
       visibleBusy: Boolean(
         isProcessing
           || lastMessage?.isStreaming
           || runningTimelineCount > 0
           || confirmRequest
+          || cliEscalationRequest
       ),
     });
-  }, [confirmRequest, debugUi, isProcessing, messages]);
+  }, [cliEscalationRequest, confirmRequest, debugUi, isProcessing, messages]);
   const blurComposer = useCallback((reason: string) => {
     const element = composerRef.current?.getTextarea();
     if (!element) return;
@@ -626,6 +696,14 @@ export function Chat({
     });
   }, []);
 
+  useEffect(() => {
+    setPendingAttachment(loadAttachmentDraft('chat', attachmentDraftScopeId));
+  }, [attachmentDraftScopeId]);
+
+  useEffect(() => {
+    saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachment);
+  }, [attachmentDraftScopeId, pendingAttachment]);
+
   const loadChatModelOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
     try {
@@ -677,20 +755,6 @@ export function Chat({
     };
   }, [selectedChatModel]);
 
-  const cleanupAudioCapture = useCallback(() => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.ondataavailable = null;
-      mediaRecorderRef.current.onstop = null;
-      mediaRecorderRef.current.onerror = null;
-      mediaRecorderRef.current = null;
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-    mediaChunksRef.current = [];
-  }, []);
-
   const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
     if (fixedSessionId) return;
     const requestId = ++chatRoomsRequestIdRef.current;
@@ -734,12 +798,6 @@ export function Chat({
     if (!isActive) return;
     void loadChatModelOptions();
   }, [isActive, loadChatModelOptions]);
-
-  useEffect(() => {
-    return () => {
-      cleanupAudioCapture();
-    };
-  }, [cleanupAudioCapture]);
 
   useEffect(() => {
     if (!isActive || messages.length === 0) return;
@@ -842,8 +900,15 @@ export function Chat({
       } else {
         try {
           // 使用视频标题作为会话标题
-          const sessionTitle = pendingMessage.attachment?.title
-            ? `AI 脑爆: ${pendingMessage.attachment.title.substring(0, 30)}${pendingMessage.attachment.title.length > 30 ? '...' : ''}`
+          const attachmentTitle = pendingMessage.attachment
+            ? ('title' in pendingMessage.attachment
+              ? String(pendingMessage.attachment.title || '').trim()
+              : ('name' in pendingMessage.attachment
+                ? String(pendingMessage.attachment.name || '').trim()
+                : ''))
+            : '';
+          const sessionTitle = attachmentTitle
+            ? `AI 脑爆: ${attachmentTitle.substring(0, 30)}${attachmentTitle.length > 30 ? '...' : ''}`
             : 'AI 脑爆';
           const session = await window.ipcRenderer.chat.createSession(sessionTitle);
 
@@ -867,6 +932,10 @@ export function Chat({
         console.error('Failed to resolve pending chat model config:', error);
         resolvedModelConfig = undefined;
       }
+      const resolvedAttachment = applyAttachmentDeliveryMode(
+        pendingMessage.attachment as UploadedFileAttachment | undefined,
+        resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
+      );
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
@@ -875,7 +944,7 @@ export function Chat({
         role: 'user',
         content: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
-        attachment: pendingMessage.attachment,
+        attachment: resolvedAttachment as Message['attachment'],
         tools: [],
         timeline: []
       };
@@ -883,6 +952,7 @@ export function Chat({
       const aiPlaceholder: Message = {
         id: (processingStartedAt + 1).toString(),
         role: 'ai',
+        messageType: 'reply',
         content: '',
         tools: [],
         timeline: (
@@ -908,7 +978,7 @@ export function Chat({
         sessionId: sessionId,
         message: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
-        attachment: pendingMessage.attachment,
+        attachment: stripTransientAttachmentPreview(resolvedAttachment),
         modelConfig: resolvedModelConfig,
         taskHints: pendingMessage.taskHints,
       });
@@ -932,7 +1002,11 @@ export function Chat({
       }
       const normalizedList = Array.isArray(list) ? list : [];
       setSessions(normalizedList);
-      if (normalizedList.length > 0 && !currentSessionIdRef.current) {
+      if (
+        normalizedList.length > 0
+        && !currentSessionIdRef.current
+        && !loadAttachmentDraft('chat', '__new__')
+      ) {
         void selectSession(normalizedList[0].id);
       }
     } catch (error) {
@@ -942,6 +1016,7 @@ export function Chat({
 
   const selectSession = async (sessionId: string) => {
     if (!isActiveRef.current) return;
+    setErrorNotice(null);
     setCurrentSessionId(sessionId);
     if (fixedSessionId && sessionId === fixedSessionId) {
       const warm = readFixedSessionWarmSnapshot(sessionId);
@@ -1021,6 +1096,7 @@ export function Chat({
         return {
           id: msg.id,
           role, // Simplified mapping
+          messageType: role === 'ai' ? 'reply' : undefined,
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
@@ -1049,6 +1125,7 @@ export function Chat({
           uiMessages.push({
             id: `streaming_${Date.now()}`,
             role: 'ai',
+            messageType: 'reply',
             content: restoredContent,
             tools: [],
             timeline: [],
@@ -1058,6 +1135,7 @@ export function Chat({
         } else {
           uiMessages[uiMessages.length - 1] = {
             ...lastMsg,
+            messageType: 'reply',
             content: restoredContent || lastMsg.content || '',
             isStreaming: true,
             processingStartedAt: lastMsg.processingStartedAt ?? lastUserCreatedAt ?? Date.now(),
@@ -1087,6 +1165,7 @@ export function Chat({
       const session = await window.ipcRenderer.chat.createSession('New Chat');
       setSessions(prev => [session, ...prev]);
       setCurrentSessionId(session.id);
+      setErrorNotice(null);
       setMessages([]);
     } catch (error) {
       console.error('Failed to create session:', error);
@@ -1104,6 +1183,7 @@ export function Chat({
       flushPendingAssistantChunk();
       setIsProcessing(false);
       setConfirmRequest(null);
+      setCliEscalationRequest(null);
       setErrorNotice(null);
       setMessages([]);
     } catch (error) {
@@ -1144,6 +1224,31 @@ export function Chat({
     setConfirmRequest(null);
   }, []);
 
+  const handleApproveCliEscalation = useCallback(async (
+    escalationId: string,
+    scope: CliEscalationScope,
+  ) => {
+    try {
+      await window.ipcRenderer.cliRuntime.approveEscalation({ escalationId, scope });
+      setCliEscalationRequest((current) => (
+        current?.escalationId === escalationId ? null : current
+      ));
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  const handleDenyCliEscalation = useCallback(async (escalationId: string) => {
+    try {
+      await window.ipcRenderer.cliRuntime.denyEscalation({ escalationId });
+      setCliEscalationRequest((current) => (
+        current?.escalationId === escalationId ? null : current
+      ));
+    } catch (error) {
+      setErrorNotice(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
   // 复制消息内容
   const handleCopyMessage = useCallback((messageId: string, content: string) => {
     navigator.clipboard.writeText(content).then(() => {
@@ -1159,17 +1264,21 @@ export function Chat({
         return prev;
       }
 
-      const lastMsg = prev[prev.length - 1];
-      if (!lastMsg || lastMsg.role !== 'ai') {
+      const lastReplyIndex = findLastAssistantReplyIndex(prev);
+      if (lastReplyIndex === -1) {
         return prev;
       }
+      const lastMsg = prev[lastReplyIndex];
 
       missedChunksRef.current = consumeBufferedChunk(missedChunksRef.current, chunk);
-      return [...prev.slice(0, -1), {
+      const next = [...prev];
+      next[lastReplyIndex] = {
         ...lastMsg,
         content: lastMsg.content + chunk,
         isStreaming: true,
-      }];
+        messageType: 'reply',
+      };
+      return next;
     });
   }, []);
 
@@ -1199,6 +1308,19 @@ export function Chat({
     };
   }, [fixedSessionId, isActive, loadChatRooms]);
 
+  useEffect(() => {
+    if (!isActive) return;
+    const refreshChatModels = () => {
+      void loadChatModelOptions();
+    };
+    window.ipcRenderer.on('settings:updated', refreshChatModels);
+    window.ipcRenderer.on('auth:data-changed', refreshChatModels);
+    return () => {
+      window.ipcRenderer.off('settings:updated', refreshChatModels);
+      window.ipcRenderer.off('auth:data-changed', refreshChatModels);
+    };
+  }, [isActive, loadChatModelOptions]);
+
   const handleCancel = useCallback(() => {
     if (currentSessionId) {
       window.ipcRenderer.chat.cancel({ sessionId: currentSessionId });
@@ -1206,6 +1328,7 @@ export function Chat({
       window.ipcRenderer.chat.cancel();
     }
     setIsProcessing(false);
+    setCliEscalationRequest(null);
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -1218,10 +1341,12 @@ export function Chat({
       if (!isActiveRef.current) return;
       if (name === 'thinking') {
         responseCompletedRef.current = false;
+        setErrorNotice(null);
       }
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         const now = Date.now();
         const newTimeline = [...lastMsg.timeline];
@@ -1246,7 +1371,9 @@ export function Chat({
           timestamp: now
         });
 
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, timeline: newTimeline, messageType: 'reply' };
+        return next;
       });
     };
 
@@ -1254,26 +1381,30 @@ export function Chat({
     const handleThoughtStart = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex !== -1) return prev;
 
-        const newTimeline = [...lastMsg.timeline];
-        
-        // Check if we already have a running thought (shouldn't happen with correct agent logic, but safe to check)
-        const lastItem = newTimeline[newTimeline.length - 1];
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            return prev; // Already thinking
-        }
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
 
-        newTimeline.push({
-          id: Math.random().toString(36),
-          type: 'thought',
+        const now = Date.now();
+        const next = [...prev];
+        next[lastReplyIndex] = {
+          ...next[lastReplyIndex],
+          messageType: 'reply',
+          suppressPendingIndicator: true,
+        };
+        next.splice(lastReplyIndex, 0, {
+          id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          role: 'ai',
+          messageType: 'thinking',
           content: '',
-          status: 'running',
-          timestamp: Date.now()
+          tools: [],
+          timeline: [],
+          isStreaming: true,
+          processingStartedAt: now,
         });
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline }];
+        return next;
       });
     };
 
@@ -1282,36 +1413,47 @@ export function Chat({
       if (!isActiveRef.current) return;
       const content = data?.content;
       if (!content) return;
+      if (responseCompletedRef.current) {
+        debugUi('thought_delta:ignored_after_response_end', {
+          sessionId: currentSessionIdRef.current,
+          chunkChars: content.length,
+        });
+        return;
+      }
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        let runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        let next = [...prev];
 
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            // Update existing thought
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                content: mergeThoughtDelta(String(lastItem.content || ''), content)
-            };
-        } else {
-            // No running thought? Create one (fallback)
-            newTimeline.push({
-                id: Math.random().toString(36),
-                type: 'thought',
-                content: content,
-                status: 'running',
-                timestamp: Date.now()
-            });
+        if (runningThinkingIndex === -1) {
+          const lastReplyIndex = findLastAssistantReplyIndex(next);
+          if (lastReplyIndex === -1) return prev;
+          const now = Date.now();
+          next[lastReplyIndex] = {
+            ...next[lastReplyIndex],
+            messageType: 'reply',
+            suppressPendingIndicator: true,
+          };
+          next.splice(lastReplyIndex, 0, {
+            id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            role: 'ai',
+            messageType: 'thinking',
+            content,
+            tools: [],
+            timeline: [],
+            isStreaming: true,
+            processingStartedAt: now,
+          });
+          return next;
         }
 
-        return [...prev.slice(0, -1), {
-          ...lastMsg,
-          timeline: newTimeline,
-          thinking: mergeThoughtDelta(lastMsg.thinking || '', content),
-        }];
+        const thinkingMessage = next[runningThinkingIndex];
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          content: mergeThoughtDelta(thinkingMessage.content || '', content),
+          isStreaming: true,
+        };
+        return next;
       });
     };
 
@@ -1319,22 +1461,18 @@ export function Chat({
     const handleThoughtEnd = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        const newTimeline = [...lastMsg.timeline];
-        const lastItemIndex = newTimeline.length - 1;
-        const lastItem = newTimeline[lastItemIndex];
-
-        if (lastItem && lastItem.type === 'thought' && lastItem.status === 'running') {
-            newTimeline[lastItemIndex] = {
-                ...lastItem,
-                status: 'done',
-                duration: Date.now() - lastItem.timestamp
-            };
-        }
-
-        return [...prev.slice(0, -1), { ...lastMsg, timeline: newTimeline, thinking: lastMsg.thinking || '' }];
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        const thinkingMessage = next[runningThinkingIndex];
+        const finishedAt = Date.now();
+        next[runningThinkingIndex] = {
+          ...thinkingMessage,
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: finishedAt,
+        };
+        return next;
       });
     };
 
@@ -1346,6 +1484,25 @@ export function Chat({
         return;
       }
       if (!content) return;
+      if (responseCompletedRef.current) {
+        debugUi('response_chunk:ignored_after_response_end', {
+          sessionId: currentSessionIdRef.current,
+          chunkChars: content.length,
+        });
+        return;
+      }
+      setMessages(prev => {
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        if (runningThinkingIndex === -1) return prev;
+        const next = [...prev];
+        next[runningThinkingIndex] = {
+          ...next[runningThinkingIndex],
+          messageType: 'thinking',
+          isStreaming: false,
+          processingFinishedAt: Date.now(),
+        };
+        return next;
+      });
 
       const now = performance.now();
       const lastChunk = lastStreamChunkRef.current;
@@ -1394,8 +1551,19 @@ export function Chat({
     const handleToolStart = (_: unknown, toolData: { callId: string; name: string; input: unknown; description?: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        if (runningThinkingIndex !== -1) {
+          next[runningThinkingIndex] = {
+            ...next[runningThinkingIndex],
+            messageType: 'thinking',
+            isStreaming: false,
+            processingFinishedAt: Date.now(),
+          };
+        }
+        const lastMsg = next[lastReplyIndex];
 
         const newTimeline = [...lastMsg.timeline];
 
@@ -1423,19 +1591,22 @@ export function Chat({
           status: 'running'
         };
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: [...lastMsg.tools, newTool] 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolEnd = (_: unknown, toolData: { callId: string; name: string; output: { success: boolean; content: string } }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
 
         // Update Timeline
         const newTimeline = [...lastMsg.timeline];
@@ -1478,22 +1649,32 @@ export function Chat({
 
         // Update Legacy Tools
         const updatedTools = lastMsg.tools.map(t =>
-          t.callId === toolData.callId ? { ...t, status: 'done', output: toolData.output } as ToolEvent : t
+          t.callId === toolData.callId
+            ? {
+                ...t,
+                status: toolData.output?.success ? 'done' : 'failed',
+                output: toolData.output,
+              } as ToolEvent
+            : t
         );
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             tools: updatedTools 
-        }];
+        };
+        return next;
       });
     };
 
     const handleToolUpdate = (_: unknown, toolData: { callId: string; name: string; partial: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         if (!toolData?.partial) return prev;
 
         const newTimeline = [...lastMsg.timeline];
@@ -1541,18 +1722,347 @@ export function Chat({
           },
         };
 
-        return [...prev.slice(0, -1), {
+        const next = [...prev];
+        next[lastReplyIndex] = {
           ...lastMsg,
+          messageType: 'reply',
           timeline: newTimeline,
-        }];
+        };
+        return next;
+      });
+    };
+
+    const handleCliInstallStarted = (_: unknown, cliData: {
+      installId?: string;
+      toolId?: string;
+      toolName: string;
+      environmentId?: string;
+      installMethod?: string;
+      spec?: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      const installId = cliData.installId || cliData.toolId || cliData.toolName || `install_${Date.now()}`;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-install' && item.cliData?.installId === installId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-install_${installId}`,
+          type: 'cli-install',
+          title: cliData.toolName || 'CLI 安装',
+          content: cliData.spec || cliData.installMethod || '安装外部工具',
+          status: 'running',
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            installId,
+            toolName: cliData.toolName,
+            environmentId: cliData.environmentId,
+            installMethod: cliData.installMethod,
+            spec: cliData.spec,
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliInstallFinished = (_: unknown, cliData: {
+      installId?: string;
+      toolId?: string;
+      toolName: string;
+      environmentId?: string;
+      status: string;
+      summary: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      const installId = cliData.installId || cliData.toolId || cliData.toolName || '';
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-install' && (
+            item.cliData?.installId === installId
+            || item.cliData?.toolName === cliData.toolName
+          ),
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          content: cliData.summary || target.content,
+          status: normalizeCliProcessStatus(cliData.status),
+          duration: Date.now() - target.timestamp,
+          cliData: {
+            ...target.cliData,
+            environmentId: cliData.environmentId || target.cliData?.environmentId,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', cliData.summary || ''),
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliExecutionStarted = (_: unknown, cliData: {
+      executionId: string;
+      environmentId?: string;
+      toolId?: string;
+      toolName: string;
+      argv: string[];
+      cwd?: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      setMessages((prev) => {
+        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        if (runningThinkingIndex !== -1) {
+          next[runningThinkingIndex] = {
+            ...next[runningThinkingIndex],
+            messageType: 'thinking',
+            isStreaming: false,
+            processingFinishedAt: Date.now(),
+          };
+        }
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-exec_${cliData.executionId}`,
+          type: 'cli-exec',
+          title: cliData.toolName || 'CLI 执行',
+          content: cliData.argv.join(' '),
+          status: 'running',
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            executionId: cliData.executionId,
+            toolName: cliData.toolName,
+            environmentId: cliData.environmentId,
+            argv: cliData.argv,
+            cwd: cliData.cwd,
+            commandPreview: cliData.argv.join(' '),
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliExecutionLog = (_: unknown, cliData: {
+      executionId: string;
+      chunk: string;
+    }) => {
+      if (!isActiveRef.current || !cliData.chunk) return;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          cliData: {
+            ...target.cliData,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', cliData.chunk),
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliExecutionStatus = (_: unknown, cliData: {
+      executionId: string;
+      status: string;
+      summary: string;
+      exitCode?: number;
+    }) => {
+      if (!isActiveRef.current) return;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-exec' && item.cliData?.executionId === cliData.executionId,
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        const summaryText = cliData.exitCode == null
+          ? cliData.summary
+          : `${cliData.summary || ''}${cliData.summary ? '\n' : ''}exitCode=${cliData.exitCode}`;
+        timeline[existingIndex] = {
+          ...target,
+          content: cliData.summary || target.content,
+          status: normalizeCliProcessStatus(cliData.status),
+          duration: Date.now() - target.timestamp,
+          cliData: {
+            ...target.cliData,
+            logPreview: appendCliLogPreview(target.cliData?.logPreview || '', summaryText),
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliEscalationRequested = (_: unknown, cliData: CliEscalationRequestModel) => {
+      if (!isActiveRef.current) return;
+      setCliEscalationRequest(cliData);
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-escalation' && item.cliData?.escalationId === cliData.escalationId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-escalation_${cliData.escalationId}`,
+          type: 'cli-escalation',
+          title: cliData.title || '权限确认',
+          content: cliData.reason || cliData.description || 'CLI 请求额外权限',
+          status: 'running',
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            escalationId: cliData.escalationId,
+            executionId: cliData.executionId,
+            commandPreview: cliData.commandPreview,
+            permissions: cliData.permissionSummary,
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliEscalationResolved = (_: unknown, cliData: {
+      escalationId: string;
+      executionId?: string;
+      status: string;
+      scope?: string;
+      summary: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      setCliEscalationRequest((current) => (
+        current?.escalationId === cliData.escalationId ? null : current
+      ));
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-escalation' && item.cliData?.escalationId === cliData.escalationId,
+        );
+        if (existingIndex === -1) return prev;
+        const target = timeline[existingIndex];
+        timeline[existingIndex] = {
+          ...target,
+          content: cliData.summary || target.content,
+          status: normalizeCliProcessStatus(cliData.status),
+          duration: Date.now() - target.timestamp,
+          cliData: {
+            ...target.cliData,
+            executionId: cliData.executionId || target.cliData?.executionId,
+            resolutionScope: cliData.scope,
+          },
+        };
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
+      });
+    };
+
+    const handleCliVerificationFinished = (_: unknown, cliData: {
+      executionId: string;
+      status: string;
+      summary: string;
+    }) => {
+      if (!isActiveRef.current) return;
+      setMessages((prev) => {
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const existingIndex = findLatestTimelineItemIndex(
+          timeline,
+          (item) => item.type === 'cli-verify' && item.cliData?.executionId === cliData.executionId,
+        );
+        const nextItem: ProcessItem = {
+          id: existingIndex >= 0 ? timeline[existingIndex].id : `cli-verify_${cliData.executionId}`,
+          type: 'cli-verify',
+          title: '结果校验',
+          content: cliData.summary || 'CLI 执行完成，等待校验',
+          status: normalizeCliProcessStatus(cliData.status),
+          timestamp: existingIndex >= 0 ? timeline[existingIndex].timestamp : Date.now(),
+          duration: existingIndex >= 0 ? Date.now() - timeline[existingIndex].timestamp : undefined,
+          cliData: {
+            ...timeline[existingIndex]?.cliData,
+            executionId: cliData.executionId,
+            verificationSummary: cliData.summary,
+          },
+        };
+        if (existingIndex >= 0) {
+          timeline[existingIndex] = nextItem;
+        } else {
+          timeline.push(nextItem);
+        }
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', timeline };
+        return next;
       });
     };
 
     const handleSkillActivated = (_: unknown, skillData: { name: string; description: string }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
         
         // Add to Timeline
         const newTimeline = [...lastMsg.timeline, {
@@ -1564,11 +2074,14 @@ export function Chat({
             skillData: skillData
         }];
 
-        return [...prev.slice(0, -1), { 
-            ...lastMsg, 
+        const next = [...prev];
+        next[lastReplyIndex] = { 
+            ...lastMsg,
+            messageType: 'reply',
             timeline: newTimeline,
             activatedSkill: skillData 
-        }];
+        };
+        return next;
       });
     };
 
@@ -1623,6 +2136,7 @@ export function Chat({
           source,
         });
         setIsProcessing(false);
+        setCliEscalationRequest(null);
         setErrorNotice(null);
         debugUi('response_end:state_calls_issued', {
           chatInstanceId: chatInstanceIdRef.current,
@@ -1631,7 +2145,8 @@ export function Chat({
           source,
         });
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           debugUi('response_end:set_messages', {
             chatInstanceId: chatInstanceIdRef.current,
             sessionId: currentSessionIdRef.current,
@@ -1656,13 +2171,17 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), {
+            const next = [...prev];
+            next[lastReplyIndex] = {
               ...lastMsg,
+              messageType: 'reply',
               content: mergedContent,
               timeline,
               isStreaming: false,
+              suppressPendingIndicator: false,
               processingFinishedAt: now,
-            }];
+            };
+            return next;
           }
           if (finalContent) {
             const now = Date.now();
@@ -1671,6 +2190,7 @@ export function Chat({
               {
                 id: now.toString(),
                 role: 'ai',
+                messageType: 'reply',
                 content: finalContent,
                 tools: [],
                 timeline: [],
@@ -1718,9 +2238,11 @@ export function Chat({
       flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
+        setCliEscalationRequest(null);
         setErrorNotice(null);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (!lastMsg || lastMsg.role !== 'ai' || !lastMsg.isStreaming) return prev;
           const now = Date.now();
           const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
@@ -1731,7 +2253,25 @@ export function Chat({
               duration: now - item.timestamp,
             } as ProcessItem;
           });
-          return [...prev.slice(0, -1), { ...lastMsg, timeline, isStreaming: false, processingFinishedAt: now }];
+          const next = [...prev];
+          next[lastReplyIndex] = {
+            ...lastMsg,
+            messageType: 'reply',
+            timeline,
+            isStreaming: false,
+            suppressPendingIndicator: false,
+            processingFinishedAt: now,
+          };
+          const runningThinkingIndex = findLastRunningThinkingIndex(next);
+          if (runningThinkingIndex !== -1) {
+            next[runningThinkingIndex] = {
+              ...next[runningThinkingIndex],
+              messageType: 'thinking',
+              isStreaming: false,
+              processingFinishedAt: now,
+            };
+          }
+          return next;
         });
       });
     };
@@ -1746,18 +2286,31 @@ export function Chat({
     const handlePlanUpdated = (_: unknown, { steps }: { steps: any[] }) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const lastMsg = prev[prev.length - 1];
-        if (!lastMsg || lastMsg.role !== 'ai') return prev;
-
-        return [...prev.slice(0, -1), { ...lastMsg, plan: steps }];
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const lastMsg = prev[lastReplyIndex];
+        const next = [...prev];
+        next[lastReplyIndex] = { ...lastMsg, messageType: 'reply', plan: steps };
+        return next;
       });
     };
 
     const handleError = (_: unknown, error: ChatErrorEventPayload | string) => {
       if (!isActiveRef.current) return;
+      if (responseCompletedRef.current) {
+        debugUi('response_error:ignored_after_response_end', {
+          sessionId: currentSessionIdRef.current,
+          error: typeof error === 'string' ? error : error?.message || 'unknown',
+        });
+        setMessages((prev) => {
+          if (!hasCommittedAssistantReply(prev)) return prev;
+          return prev;
+        });
+        return;
+      }
       suppressComposerFocus('error', 3000);
       blurComposer('error');
-      const { formatted, notice } = deriveChatErrorPresentation(error);
+      const notice = normalizeChatErrorNotice(error);
       debugUi('response_error', {
         sessionId: currentSessionIdRef.current,
         error: typeof error === 'string' ? error : error?.message || 'unknown',
@@ -1766,41 +2319,48 @@ export function Chat({
       flushSync(() => {
         setIsProcessing(false);
         setConfirmRequest(null);
+        setCliEscalationRequest(null);
         setErrorNotice(notice);
         setMessages(prev => {
-          const lastMsg = prev[prev.length - 1];
+          const lastReplyIndex = findLastAssistantReplyIndex(prev);
+          const lastMsg = lastReplyIndex >= 0 ? prev[lastReplyIndex] : null;
           if (lastMsg && lastMsg.role === 'ai' && lastMsg.isStreaming) {
             const now = Date.now();
             const timeline: ProcessItem[] = (lastMsg.timeline || []).map((item) => {
               if (item.status !== 'running') return item;
               return {
                 ...item,
-                status: item.type === 'tool-call' ? 'failed' : 'done',
+                status: (
+                  item.type === 'tool-call'
+                  || item.type === 'cli-install'
+                  || item.type === 'cli-exec'
+                  || item.type === 'cli-escalation'
+                  || item.type === 'cli-verify'
+                ) ? 'failed' : 'done',
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
-            return [...prev.slice(0, -1), {
+            const next = [...prev];
+            next[lastReplyIndex] = {
               ...lastMsg,
-              content: formatted,
+              messageType: 'reply',
               timeline,
               isStreaming: false,
+              suppressPendingIndicator: false,
               processingFinishedAt: now,
-            }];
-          }
-          const now = Date.now();
-          return [
-            ...prev,
-            {
-              id: now.toString(),
-              role: 'ai',
-              content: formatted,
-              tools: [],
-              timeline: [],
-              isStreaming: false,
-              processingStartedAt: now,
-              processingFinishedAt: now,
+            };
+            const runningThinkingIndex = findLastRunningThinkingIndex(next);
+            if (runningThinkingIndex !== -1) {
+              next[runningThinkingIndex] = {
+                ...next[runningThinkingIndex],
+                messageType: 'thinking',
+                isStreaming: false,
+                processingFinishedAt: now,
+              };
             }
-          ];
+            return next;
+          }
+          return prev;
         });
       });
     };
@@ -1915,7 +2475,49 @@ export function Chat({
         handleSkillActivated(null, { name, description });
       },
       onChatToolConfirmRequest: ({ request }) => {
-        handleConfirmRequest(null, request as unknown as ToolConfirmRequest);
+        handleConfirmRequest(null, request as ToolConfirmRequestPayload);
+      },
+      onCliInstallStarted: ({ installId, toolId, toolName, environmentId, installMethod, spec }) => {
+        handleCliInstallStarted(null, { installId, toolId, toolName, environmentId, installMethod, spec });
+      },
+      onCliInstallFinished: ({ installId, toolId, toolName, environmentId, status, summary }) => {
+        handleCliInstallFinished(null, { installId, toolId, toolName, environmentId, status, summary });
+      },
+      onCliExecutionStarted: ({ executionId, environmentId, toolId, toolName, argv, cwd }) => {
+        handleCliExecutionStarted(null, { executionId, environmentId, toolId, toolName, argv, cwd });
+      },
+      onCliExecutionLog: ({ executionId, chunk }) => {
+        handleCliExecutionLog(null, { executionId, chunk });
+      },
+      onCliExecutionStatus: ({ executionId, status, summary, exitCode }) => {
+        handleCliExecutionStatus(null, { executionId, status, summary, exitCode });
+      },
+      onCliEscalationRequested: ({
+        escalationId,
+        executionId,
+        title,
+        description,
+        reason,
+        commandPreview,
+        permissionSummary,
+        scopeOptions,
+      }) => {
+        handleCliEscalationRequested(null, {
+          escalationId,
+          executionId,
+          title,
+          description,
+          reason,
+          commandPreview,
+          permissionSummary,
+          scopeOptions,
+        });
+      },
+      onCliEscalationResolved: ({ escalationId, executionId, status, scope, summary }) => {
+        handleCliEscalationResolved(null, { escalationId, executionId, status, scope, summary });
+      },
+      onCliVerificationFinished: ({ executionId, status, summary }) => {
+        handleCliVerificationFinished(null, { executionId, status, summary });
       },
     });
 
@@ -1963,22 +2565,25 @@ export function Chat({
     };
   }, [selectedChatModel]);
 
-  const transcribeAudioBlob = useCallback(async (blob: Blob) => {
+  const transcribeAudioClip = useCallback(async (clip: AudioRecordingClip) => {
     setIsTranscribingAudio(true);
     setErrorNotice(null);
     try {
-      const audioBase64 = await blobToBase64(blob);
       const result = await window.ipcRenderer.chat.transcribeAudio({
-        audioBase64,
-        mimeType: blob.type || 'audio/webm',
-        fileName: `chat_audio_${Date.now()}.webm`,
+        audioBase64: clip.audioBase64,
+        mimeType: clip.mimeType || 'audio/wav',
+        fileName: clip.fileName || `chat_audio_${Date.now()}.wav`,
       });
-      if (!result?.success || !String(result.text || '').trim()) {
-        throw new Error(result?.error || '语音转文字失败');
+      const resolved = resolveUsableTranscript(result);
+      if (resolved.error) {
+        throw new Error(resolved.error || '语音转文字失败');
+      }
+      if (!resolved.text) {
+        return;
       }
       setInput((prev) => {
         const current = String(prev || '').trim();
-        const next = String(result.text || '').trim();
+        const next = resolved.text || '';
         return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
       });
       requestAnimationFrame(() => {
@@ -1992,69 +2597,33 @@ export function Chat({
     }
   }, []);
 
-  const stopAudioRecording = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder) return;
-    if (recorder.state !== 'inactive') {
-      recorder.stop();
-    } else {
-      cleanupAudioCapture();
-      setIsRecordingAudio(false);
-    }
-  }, [cleanupAudioCapture]);
+  const audioRecording = useAudioRecording({
+    onCaptured: transcribeAudioClip,
+  });
+
+  useEffect(() => {
+    if (!audioRecording.error) return;
+    setErrorNotice(audioRecording.error);
+  }, [audioRecording.error]);
 
   const startAudioRecording = useCallback(async () => {
-    if (isProcessing || isTranscribingAudio) return;
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setErrorNotice('当前环境不支持麦克风录音');
-      return;
-    }
+    if (isProcessing || isTranscribingAudio || audioRecording.isWorking) return;
+    setErrorNotice(null);
+    await audioRecording.startRecording();
+  }, [audioRecording, isProcessing, isTranscribingAudio]);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferredMimeType = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, preferredMimeType ? { mimeType: preferredMimeType } : undefined);
-      mediaStreamRef.current = stream;
-      mediaRecorderRef.current = recorder;
-      mediaChunksRef.current = [];
-
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          mediaChunksRef.current.push(event.data);
-        }
-      };
-      recorder.onerror = () => {
-        setErrorNotice('录音失败，请检查麦克风权限');
-        cleanupAudioCapture();
-        setIsRecordingAudio(false);
-      };
-      recorder.onstop = () => {
-        const chunks = [...mediaChunksRef.current];
-        cleanupAudioCapture();
-        setIsRecordingAudio(false);
-        if (!chunks.length) return;
-        void transcribeAudioBlob(new Blob(chunks, { type: recorder.mimeType || preferredMimeType || 'audio/webm' }));
-      };
-
-      recorder.start();
-      setIsRecordingAudio(true);
-      setErrorNotice(null);
-    } catch (error) {
-      cleanupAudioCapture();
-      setIsRecordingAudio(false);
-      setErrorNotice(error instanceof Error ? error.message : '无法访问麦克风');
-    }
-  }, [cleanupAudioCapture, isProcessing, isTranscribingAudio, transcribeAudioBlob]);
+  const stopAudioRecording = useCallback(() => {
+    if (audioRecording.isWorking) return;
+    void audioRecording.stopRecording();
+  }, [audioRecording]);
 
   const handleAudioInput = useCallback(() => {
-    if (isRecordingAudio) {
+    if (audioRecording.isRecording) {
       stopAudioRecording();
       return;
     }
     void startAudioRecording();
-  }, [isRecordingAudio, startAudioRecording, stopAudioRecording]);
+  }, [audioRecording.isRecording, startAudioRecording, stopAudioRecording]);
 
   const sendMessage = async (content: string, attachment?: UploadedFileAttachment) => {
     uiTraceInteraction('chat', 'send_message', {
@@ -2083,6 +2652,7 @@ export function Chat({
     const aiPlaceholder: Message = {
       id: (processingStartedAt + 1).toString(),
       role: 'ai',
+      messageType: 'reply',
       content: '',
       tools: [],
       timeline: [],
@@ -2103,12 +2673,16 @@ export function Chat({
       console.error('Failed to resolve chat model config:', error);
       resolvedModelConfig = undefined;
     }
+    const resolvedAttachment = applyAttachmentDeliveryMode(
+      attachment,
+      resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
+    );
 
     dispatchChatSend({
       sessionId: currentSessionId || undefined,
       message: normalizedContent || displayText,
       displayContent: displayText,
-      attachment,
+      attachment: stripTransientAttachmentPreview(resolvedAttachment),
       modelConfig: resolvedModelConfig || getChatModelConfig(),
       taskHints: undefined,
     });
@@ -2127,6 +2701,20 @@ export function Chat({
     { label: '🔍 内容分析', text: '请深度分析当前内容，提炼核心观点。' },
     { label: '💡 创作建议', text: '请基于当前内容提供一些创作方向的建议。' }
   ];
+
+  const applyShortcut = useCallback((shortcut: ChatShortcut) => {
+    const action = shortcut.action || 'send';
+    if (action === 'inject') {
+      setErrorNotice(null);
+      setInput(shortcut.text);
+      requestAnimationFrame(() => {
+        composerRef.current?.focus();
+        composerRef.current?.syncHeight();
+      });
+      return;
+    }
+    void sendMessage(shortcut.text);
+  }, [sendMessage]);
 
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
@@ -2191,6 +2779,15 @@ export function Chat({
   );
   const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedEffectiveTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
+  const shouldCollapseEmptyFixedSession = Boolean(
+    collapseEmptyFixedSession &&
+    fixedSessionId &&
+    isEmptySession &&
+    !showComposer &&
+    !showWelcomeHeader &&
+    !showWelcomeShortcuts &&
+    welcomeActions.length === 0
+  );
   const composerContextUsageIndicator = showComposerContextUsageIndicator ? (
     <div className="relative">
       <button
@@ -2243,6 +2840,11 @@ export function Chat({
     },
   ) => (
     <>
+      <CliEscalationDialog
+        request={cliEscalationRequest}
+        onApprove={handleApproveCliEscalation}
+        onDeny={handleDenyCliEscalation}
+      />
       <ToolConfirmDialog request={confirmRequest} onConfirm={handleConfirmTool} onCancel={handleCancelTool} />
       <ChatComposer
         ref={composerRef}
@@ -2260,7 +2862,7 @@ export function Chat({
         selectedModelKey={selectedChatModelKey}
         onSelectedModelKeyChange={setSelectedChatModelKey}
         isBusy={isProcessing}
-        audioState={isTranscribingAudio ? 'transcribing' : isRecordingAudio ? 'recording' : 'idle'}
+        audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}
         onAudioAction={handleAudioInput}
         onCancel={handleCancel}
         showCancelWhenBusy={options?.showCancelWhenBusy}
@@ -2323,7 +2925,7 @@ export function Chat({
       {welcomeShortcuts.map((shortcut) => (
         <button
           key={shortcut.label}
-          onClick={() => sendMessage(shortcut.text)}
+          onClick={() => applyShortcut(shortcut)}
           className={darkEmbedded
             ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
             : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
@@ -2334,7 +2936,11 @@ export function Chat({
     </div>
   ) : null;
 
-  const handleWelcomeAction = useCallback(async (action: { label: string; text?: string; url?: string }) => {
+  const handleWelcomeAction = useCallback(async (action: { label: string; text?: string; url?: string; onClick?: () => void }) => {
+    if (action.onClick) {
+      action.onClick();
+      return;
+    }
     if (action.url) {
       try {
         await window.ipcRenderer.invoke('app:open-path', { path: action.url });
@@ -2384,6 +2990,10 @@ export function Chat({
     '问我任何问题，使用 @ 引用文件，/ 执行指令...',
     { showContextUsage: true, showCancelWhenBusy: false },
   );
+
+  if (shouldCollapseEmptyFixedSession) {
+    return null;
+  }
 
   return (
     <div className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}>
@@ -2506,7 +3116,7 @@ export function Chat({
                   {welcomeShortcuts.map((shortcut) => (
                     <button
                       key={shortcut.label}
-                      onClick={() => sendMessage(shortcut.text)}
+                      onClick={() => applyShortcut(shortcut)}
                       className={darkEmbedded
                         ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
                         : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
@@ -2518,10 +3128,10 @@ export function Chat({
               )}
 
               {/* 居中的输入框 (Codex Style) */}
-              {renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+              {showComposer ? renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
                 className: 'mt-10',
                 showCancelWhenBusy: false,
-              })}
+              }) : null}
             </div>
             {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
             <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
@@ -2552,6 +3162,8 @@ export function Chat({
                           workflowPlacement={messageWorkflowPlacement}
                           workflowVariant={messageWorkflowVariant}
                           workflowEmphasis={messageWorkflowEmphasis}
+                          workflowDisplayMode={messageWorkflowDisplayMode}
+                          showAttachments={showMessageAttachments}
                         />
                       </ErrorBoundary>
                     ))}
@@ -2562,6 +3174,7 @@ export function Chat({
             </div>
 
             {/* Input Area - Bottom Fixed */}
+            {showComposer ? (
             <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
               <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
                 {dockedEmptyState ? (
@@ -2570,14 +3183,35 @@ export function Chat({
                   <>
                 {errorNotice && (
                   <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
-                    <div className="font-medium">本次 AI 请求失败</div>
-                    <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                    {typeof errorNotice === 'string' ? (
+                      <>
+                        <div className="font-medium">请求失败</div>
+                        <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-medium">{errorNotice.title}</div>
+                        {errorNotice.hint && (
+                          <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
+                        )}
+                        {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
+                          <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
+                            {errorNotice.metaParts.join(' · ')}
+                          </div>
+                        )}
+                        {errorNotice.detail && (
+                          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
+                            {errorNotice.detail}
+                          </pre>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
                 {showComposerShortcuts && shortcuts.length > 0 && (
                   <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
                     {shortcuts.map((shortcut) => (
-                      <button key={shortcut.label} onClick={() => sendMessage(shortcut.text)} disabled={isProcessing} className={shortcutChipClass}>
+                      <button key={shortcut.label} onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
                         {shortcut.label}
                       </button>
                     ))}
@@ -2592,6 +3226,7 @@ export function Chat({
                 )}
               </div>
             </div>
+            ) : null}
           </>
         )}
       </div>

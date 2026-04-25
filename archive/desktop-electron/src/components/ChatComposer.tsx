@@ -33,6 +33,8 @@ export interface UploadedFileAttachment {
   name: string;
   ext?: string;
   size?: number;
+  thumbnailDataUrl?: string;
+  workspaceRelativePath?: string;
   absolutePath?: string;
   originalAbsolutePath?: string;
   localUrl?: string;
@@ -41,6 +43,7 @@ export interface UploadedFileAttachment {
   storageMode?: 'staged' | string;
   directUploadEligible?: boolean;
   processingStrategy?: string;
+  deliveryMode?: 'direct-input' | 'tool-read';
   summary?: string;
   requiresMultimodal?: boolean;
 }
@@ -72,6 +75,7 @@ export interface ChatComposerHandle {
 
 type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
 type ChatComposerAudioState = 'idle' | 'recording' | 'transcribing';
+const RECORDING_WAVE_BARS = [0.3, 0.58, 0.92, 0.42, 0.74, 0.98, 0.5, 0.8, 0.64, 0.9, 0.46, 0.7, 1, 0.62, 0.84, 0.54, 0.95, 0.4, 0.78, 0.34, 0.88, 0.56, 0.72, 0.44];
 
 interface ComposerAttachmentPreviewProps {
   attachment: UploadedFileAttachment;
@@ -140,13 +144,18 @@ function modelSupportsChat(model: string | { id?: unknown; capability?: unknown;
 }
 
 function getAttachmentSource(attachment: UploadedFileAttachment): string {
-  const candidate = String(
-    attachment.localUrl
+  const preferred = String(
+    attachment.thumbnailDataUrl
+      || attachment.localUrl
       || attachment.absolutePath
       || attachment.originalAbsolutePath
       || '',
   ).trim();
-  return candidate ? resolveAssetUrl(candidate) : '';
+  if (!preferred) return '';
+  if (preferred.startsWith('data:')) {
+    return preferred;
+  }
+  return resolveAssetUrl(preferred);
 }
 
 function getAttachmentExtLabel(attachment: UploadedFileAttachment): string {
@@ -181,6 +190,13 @@ function formatAttachmentSize(size?: number): string {
   return `${Math.round(size)} B`;
 }
 
+function formatRecordingDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 function getAttachmentKindLabel(kind: ComposerAttachmentVisualKind): string {
   switch (kind) {
     case 'image':
@@ -211,6 +227,42 @@ function getAttachmentKindIcon(kind: ComposerAttachmentVisualKind, className: st
   }
 }
 
+function ComposerRecordingStatus({
+  darkEmbedded,
+  elapsedMs,
+}: {
+  darkEmbedded: boolean;
+  elapsedMs: number;
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-1" aria-live="polite">
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className={clsx('h-2 w-2 rounded-full', darkEmbedded ? 'bg-red-400/90' : 'bg-[#dd6b5b]', 'animate-pulse')} />
+      </div>
+      <div className="flex min-w-0 flex-1 items-center">
+        <div className="relative z-[1] flex h-5 min-w-0 flex-1 items-center justify-center gap-[3px] px-1">
+          {RECORDING_WAVE_BARS.map((height, index) => (
+            <span
+              key={`${index}-${height}`}
+              className={clsx(
+                'recording-wave-bar w-[2px] shrink-0 rounded-full',
+                darkEmbedded ? 'bg-white/68' : 'bg-[#697885]',
+              )}
+              style={{
+                height: `${5 + Math.round(height * 9)}px`,
+                animationDelay: `${index * 70}ms`,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+      <div className={clsx('shrink-0 text-[11px] font-medium tabular-nums', darkEmbedded ? 'text-white/58' : 'text-[#8a94a0]')}>
+        {formatRecordingDuration(elapsedMs)}
+      </div>
+    </div>
+  );
+}
+
 function isImeComposingEvent(event: React.KeyboardEvent<HTMLTextAreaElement>): boolean {
   const synthetic = event as React.KeyboardEvent<HTMLTextAreaElement> & { isComposing?: boolean };
   const native = event.nativeEvent as KeyboardEvent & { isComposing?: boolean; keyCode?: number };
@@ -238,6 +290,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
   const options: ChatModelOption[] = [];
   const defaultSourceId = String(settings.default_ai_source_id || '').trim();
   const prefersOfficialDefault = defaultSourceId.toLowerCase() === 'redbox_official_auto';
+  let hasExplicitDefaultSource = false;
 
   try {
     const parsed = JSON.parse(String(settings.ai_sources_json || '[]')) as Array<Record<string, unknown>>;
@@ -245,6 +298,9 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
       for (const item of parsed) {
         if (!item || typeof item !== 'object') continue;
         const sourceId = String(item.id || '').trim();
+        if (sourceId && sourceId === defaultSourceId) {
+          hasExplicitDefaultSource = true;
+        }
         const sourceName = String(item.name || sourceId || 'AI 源').trim();
         const baseURL = String(item.baseURL || item.baseUrl || '').trim();
         const apiKey = String(item.apiKey || item.key || '').trim();
@@ -282,7 +338,12 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
   }
 
   const fallbackModel = String(settings.model_name || '').trim();
-  if (!prefersOfficialDefault && fallbackModel && modelSupportsChat(fallbackModel)) {
+  if (
+    !prefersOfficialDefault
+    && !hasExplicitDefaultSource
+    && fallbackModel
+    && modelSupportsChat(fallbackModel)
+  ) {
     options.push({
       key: `fallback::${fallbackModel}`,
       modelName: fallbackModel,
@@ -295,11 +356,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
 
   const deduped = new Map<string, ChatModelOption>();
   for (const option of options) {
-    const uniqueKey = `${option.baseURL}::${option.modelName}`;
-    const existing = deduped.get(uniqueKey);
-    if (!existing || option.isDefault) {
-      deduped.set(uniqueKey, option);
-    }
+    deduped.set(option.key, option);
   }
 
   return Array.from(deduped.values());
@@ -313,12 +370,18 @@ function ComposerAttachmentPreview({
   children,
 }: ComposerAttachmentPreviewProps) {
   const visualKind = getAttachmentVisualKind(attachment);
+  const isImageAttachment = visualKind === 'image';
   const previewSrc = visualKind === 'image' ? getAttachmentSource(attachment) : '';
   const extLabel = getAttachmentExtLabel(attachment);
   const sizeLabel = formatAttachmentSize(attachment.size);
   const typeLabel = getAttachmentKindLabel(visualKind);
-  const frameClass = variant === 'empty' ? 'h-[92px] w-[70px]' : 'h-[78px] w-[58px]';
-  const metaClass = darkEmbedded ? 'text-white/46' : 'text-text-tertiary';
+  const frameClass = isImageAttachment
+    ? variant === 'empty' ? 'h-[88px] w-[88px]' : 'h-[72px] w-[72px]'
+    : variant === 'empty' ? 'h-[92px] w-[70px]' : 'h-[78px] w-[58px]';
+  const frameRadiusClass = isImageAttachment
+    ? variant === 'empty' ? 'rounded-[18px]' : 'rounded-[16px]'
+    : 'rounded-[22px]';
+  const metaClass = darkEmbedded ? 'text-white/34' : 'text-text-tertiary/70';
   const titleClass = darkEmbedded ? 'text-white/88' : 'text-text-primary';
   const badgeClass = darkEmbedded
     ? 'border-white/10 bg-white/[0.05] text-white/58'
@@ -336,17 +399,19 @@ function ComposerAttachmentPreview({
       <div className="relative shrink-0">
         {previewSrc ? (
           <div className={clsx(
-            'overflow-hidden rounded-[22px] border',
+            'overflow-hidden border',
             frameClass,
-            variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]',
+            frameRadiusClass,
+            isImageAttachment ? 'rotate-0' : (variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]'),
             previewShellClass,
           )}>
             <img src={previewSrc} alt={attachment.name} className="h-full w-full object-cover" />
           </div>
         ) : (
           <div className={clsx(
-            'flex items-center justify-center rounded-[22px] border',
+            'flex items-center justify-center border',
             frameClass,
+            frameRadiusClass,
             previewShellClass,
           )}>
             <div className="flex flex-col items-center gap-1.5 px-2 text-center">
@@ -376,27 +441,34 @@ function ComposerAttachmentPreview({
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="min-w-0 flex-1 pt-1">
-        <div className={clsx('text-[11px] font-medium tracking-[0.08em]', metaClass)}>已添加文件</div>
-        <div className={clsx(
-          'mt-1 truncate font-medium',
-          variant === 'empty' ? 'text-[15px]' : 'text-[13px]',
-          titleClass,
-        )} title={attachment.name}>
-          {attachment.name}
-        </div>
-        {infoTokens.length > 0 ? (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {infoTokens.map((token) => (
-              <span
-                key={token}
-                className={clsx('rounded-full border px-2 py-0.5 text-[10px] font-medium', badgeClass)}
-              >
-                {token}
-              </span>
-            ))}
+      <div className="min-w-0 flex-1 pt-0.5">
+        <div className="flex items-center gap-2">
+          <div className={clsx('shrink-0 text-[9px] font-medium tracking-[0.12em]', metaClass)}>已添加文件</div>
+          <div className={clsx(
+            'min-w-0 truncate font-medium opacity-78',
+            variant === 'empty' ? 'text-[11px]' : 'text-[10px]',
+            titleClass,
+          )} title={attachment.name}>
+            {attachment.name}
           </div>
-        ) : null}
+        </div>
+        <div className={clsx(
+          'mt-2',
+          children ? '' : 'mb-0.5',
+        )}>
+          {infoTokens.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {infoTokens.map((token) => (
+                <span
+                  key={token}
+                  className={clsx('rounded-full border px-2 py-0.5 text-[10px] font-medium', badgeClass)}
+                >
+                  {token}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
         {children}
       </div>
     </div>
@@ -435,6 +507,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const darkEmbedded = theme === 'dark';
   const palette = getChatComposerPalette(theme);
   const selectedModel = useMemo(
@@ -480,6 +553,19 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [showModelPicker]);
+
+  useEffect(() => {
+    if (audioState !== 'recording') {
+      setRecordingElapsedMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setRecordingElapsedMs(0);
+    const timer = window.setInterval(() => {
+      setRecordingElapsedMs(Date.now() - startedAt);
+    }, 120);
+    return () => window.clearInterval(timer);
+  }, [audioState]);
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
@@ -561,8 +647,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           </div>
         ) : textarea}
 
-        <div className={clsx('flex items-center justify-between', variant === 'empty' ? 'px-2 pb-1' : 'px-1.5 pb-0.5')}>
-          <div className="flex items-center gap-1">
+        <div className={clsx('flex items-center gap-2', variant === 'empty' ? 'px-2 pb-1' : 'px-1.5 pb-0.5')}>
+          <div className="flex shrink-0 items-center gap-1">
             {showAttachmentButton ? (
               <button type="button" onClick={() => void onPickAttachment?.()} className={clsx('p-2 transition-colors', subtleButtonClass)} title="添加文件">
                 <Plus className="h-[18px] w-[18px]" />
@@ -612,7 +698,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             ) : null}
           </div>
 
-          <div className="flex items-center gap-2">
+          {audioState === 'recording' ? (
+            <ComposerRecordingStatus darkEmbedded={darkEmbedded} elapsedMs={recordingElapsedMs} />
+          ) : (
+            <div className="flex-1" />
+          )}
+
+          <div className="flex shrink-0 items-center gap-2">
             {showCancelButton ? (
               <button
                 type="button"

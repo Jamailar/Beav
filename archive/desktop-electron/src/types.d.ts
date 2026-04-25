@@ -34,6 +34,44 @@ export interface ToolDiagnosticRunResult {
   executionSucceeded?: boolean;
 }
 
+export interface NotificationSettingsPayload {
+  enabled: boolean;
+  inApp: {
+    enabled: boolean;
+    maxVisible: number;
+    autoCloseMs: number;
+  };
+  sound: {
+    enabled: boolean;
+    volume: number;
+    muteWhenFocused: boolean;
+    success: boolean;
+    failure: boolean;
+    attention: boolean;
+  };
+  system: {
+    enabled: boolean;
+  };
+  quietHours: {
+    enabled: boolean;
+    start: string;
+    end: string;
+  };
+  rules: {
+    runtimeBackgroundDone: boolean;
+    runtimeFailed: boolean;
+    runtimeNeedsApproval: boolean;
+    generationCompleted: boolean;
+    generationFailed: boolean;
+    redclawCompleted: boolean;
+    redclawFailed: boolean;
+  };
+}
+
+export interface NotificationPermissionState {
+  state: 'granted' | 'denied' | 'prompt' | 'unknown';
+}
+
 export interface AgentTaskNode {
   id: string;
   type: string;
@@ -119,6 +157,15 @@ export type RuntimeUnifiedEventType =
   | 'runtime:subagent-started'
   | 'runtime:subagent-finished'
   | 'runtime:checkpoint'
+  | 'runtime:cli-tool-detected'
+  | 'runtime:cli-install-started'
+  | 'runtime:cli-install-finished'
+  | 'runtime:cli-execution-started'
+  | 'runtime:cli-execution-log'
+  | 'runtime:cli-execution-status'
+  | 'runtime:cli-escalation-requested'
+  | 'runtime:cli-escalation-resolved'
+  | 'runtime:cli-verification-finished'
   | 'stream_start'
   | 'text_delta'
   | 'tool_request'
@@ -138,6 +185,121 @@ export interface RuntimeUnifiedEvent {
   timestamp: number;
 }
 
+export type CliRuntimeToolSource =
+  | 'system'
+  | 'app-managed'
+  | 'workspace-managed'
+  | 'user-declared'
+  | 'unknown';
+
+export type CliRuntimeToolHealth =
+  | 'unknown'
+  | 'ready'
+  | 'missing'
+  | 'broken';
+
+export type CliRuntimeResolvedFrom =
+  | 'host-shell-path'
+  | 'extra-bin-path'
+  | 'managed-environment'
+  | 'explicit-path'
+  | 'unknown';
+
+export type CliRuntimeEnvironmentScope =
+  | 'app-global'
+  | 'workspace-local'
+  | 'task-ephemeral';
+
+export type CliRuntimeExecutionStatus =
+  | 'pending'
+  | 'running'
+  | 'waiting-approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type CliRuntimeEscalationScope = 'once' | 'session' | 'always';
+
+export interface CliRuntimeToolRecord {
+  id: string;
+  name: string;
+  executable: string;
+  resolvedPath?: string | null;
+  resolvedFrom?: CliRuntimeResolvedFrom | null;
+  source: CliRuntimeToolSource;
+  installMethod?: string | null;
+  installSpec?: string | null;
+  version?: string | null;
+  health: CliRuntimeToolHealth;
+  manifestId?: string | null;
+  environmentId?: string | null;
+  lastCheckedAt?: number | null;
+  effectivePathPreview?: string[];
+  searchedPathEntriesCount?: number | null;
+  isInDefaultDetectCatalog?: boolean;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeEnvironmentRecord {
+  id: string;
+  scope: CliRuntimeEnvironmentScope;
+  rootPath: string;
+  workspaceRoot?: string | null;
+  pathEntries: string[];
+  installedToolIds: string[];
+  runtimes?: Record<string, unknown> | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeVerificationRecord {
+  ruleType?: string;
+  status?: 'passed' | 'failed' | 'skipped' | 'unknown';
+  summary?: string;
+  detail?: string;
+  payload?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeExecutionRecord {
+  id: string;
+  sessionId?: string | null;
+  taskId?: string | null;
+  runtimeId?: string | null;
+  environmentId?: string | null;
+  toolId?: string | null;
+  toolName?: string | null;
+  argv: string[];
+  cwd?: string | null;
+  commandPreview?: string | null;
+  status: CliRuntimeExecutionStatus;
+  usePty?: boolean;
+  exitCode?: number | null;
+  summary?: string | null;
+  lastLogChunk?: string | null;
+  startedAt?: number | null;
+  updatedAt?: number | null;
+  completedAt?: number | null;
+  verificationResults?: CliRuntimeVerificationRecord[];
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface CliRuntimeEscalationRequest {
+  escalationId: string;
+  sessionId?: string | null;
+  taskId?: string | null;
+  runtimeId?: string | null;
+  executionId?: string | null;
+  title: string;
+  description: string;
+  reason?: string;
+  commandPreview?: string;
+  permissionSummary?: string[];
+  scopeOptions?: CliRuntimeEscalationScope[];
+  requestedAt?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface SessionRuntimeRecord {
   id: number;
   sessionId: string;
@@ -146,6 +308,36 @@ export interface SessionRuntimeRecord {
   content: string;
   payload?: unknown;
   createdAt: number;
+}
+
+export interface DiagnosticsLogStatus {
+  enabled: boolean;
+  logDirectory: string;
+  reportDirectory?: string;
+  retentionDays?: number;
+  maxFileMb?: number;
+  recentPreviewLimit?: number;
+  uploadConfigured?: boolean;
+  uploadEndpoint?: string | null;
+  pendingCount?: number;
+  debugVerboseEnabled?: boolean;
+  previousUncleanShutdown?: boolean;
+}
+
+export interface DiagnosticsPendingReport {
+  id: string;
+  trigger: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  summary: string;
+  includeAdvancedContext: boolean;
+  lastError?: string | null;
+  uploadedAt?: string | null;
+  lastAttemptAt?: string | null;
+  dedupeKey?: string | null;
+  bundleFileName?: string | null;
+  metadata?: unknown;
 }
 
 export interface SessionCheckpointRecord {
@@ -344,8 +536,43 @@ declare global {
 
   interface Window {
     ipcRenderer: {
-      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number }) => Promise<unknown>;
-      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number } | undefined>;
+      audio: {
+        getCaptureCapability: () => Promise<{
+          success?: boolean;
+          available?: boolean;
+          activeRecording?: boolean;
+          platform?: string;
+          reason?: string | null;
+          message?: string;
+          error?: string;
+          deviceName?: string;
+          sampleRate?: number;
+          channels?: number;
+          sampleFormat?: string;
+        }>;
+        startRecording: () => Promise<{ success?: boolean; error?: string; reason?: string; message?: string }>;
+        stopRecording: () => Promise<{
+          success?: boolean;
+          error?: string;
+          reason?: string;
+          message?: string;
+          clip?: {
+            audioBase64: string;
+            mimeType: string;
+            fileName: string;
+            durationMs?: number;
+            byteLength?: number;
+            sampleRate?: number;
+            channels?: number;
+            deviceName?: string;
+            strategy?: string;
+          };
+        }>;
+        cancelRecording: () => Promise<{ success?: boolean; error?: string; reason?: string; durationMs?: number; discarded?: boolean }>;
+        openMicrophoneSettings: () => Promise<{ success?: boolean; error?: string; path?: string }>;
+      };
+      saveSettings: (settings: { api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: Record<string, string> | string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number; notifications_json?: string }) => Promise<unknown>;
+      getSettings: () => Promise<{ api_endpoint: string; api_key: string; model_name: string; model_name_wander?: string; model_name_chatroom?: string; model_name_knowledge?: string; model_name_redclaw?: string; search_provider?: string; search_endpoint?: string; search_api_key?: string; proxy_enabled?: boolean; proxy_url?: string; proxy_bypass?: string; workspace_dir?: string; active_space_id?: string; role_mapping?: string; transcription_model?: string; transcription_endpoint?: string; transcription_key?: string; embedding_endpoint?: string; embedding_key?: string; embedding_model?: string; ai_sources_json?: string; default_ai_source_id?: string; image_provider?: string; image_endpoint?: string; image_api_key?: string; image_model?: string; video_endpoint?: string; video_api_key?: string; video_model?: string; image_provider_template?: string; image_aspect_ratio?: string; image_size?: string; image_quality?: string; mcp_servers_json?: string; redclaw_compact_target_tokens?: number; wander_deep_think_enabled?: boolean; wander_skill_loading_enabled?: boolean; debug_log_enabled?: boolean; developer_mode_enabled?: boolean; developer_mode_unlocked_at?: string | null; chat_max_tokens_default?: number; chat_max_tokens_deepseek?: number; diagnostics_upload_consent?: 'none' | 'prompt' | 'approved'; diagnostics_include_advanced_context?: boolean; diagnostics_auto_send_same_crash?: boolean; diagnostics_last_prompted_at?: string | null; release_log_retention_days?: number; release_log_max_file_mb?: number; notifications_json?: string } | undefined>;
       pickWorkspaceDir: () => Promise<{ success: boolean; canceled?: boolean; path?: string | null; error?: string }>;
       debug: {
         getStatus: () => Promise<{ enabled: boolean; logDirectory: string }>;
@@ -410,6 +637,17 @@ declare global {
           };
         }>;
         openLogDir: () => Promise<{ success: boolean; error?: string; path: string }>;
+      };
+      logs: {
+        getStatus: () => Promise<DiagnosticsLogStatus>;
+        getRecent: (limit?: number) => Promise<{ lines: string[] }>;
+        openDir: () => Promise<{ success: boolean; error?: string; path: string }>;
+        listPendingReports: () => Promise<DiagnosticsPendingReport[]>;
+        exportBundle: (reportId?: string, payload?: { includeAdvancedContext?: boolean }) => Promise<{ success: boolean; reportId: string; path: string; error?: string }>;
+        uploadReport: (reportId: string) => Promise<{ success: boolean; report?: DiagnosticsPendingReport; response?: { reportId: string; receivedAt: string; retentionDays: number; dedupeKey: string }; error?: string }>;
+        dismissReport: (reportId: string) => Promise<{ success: boolean; reportId: string; error?: string }>;
+        setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => Promise<{ success: boolean; error?: string }>;
+        appendRenderer: (payload: { level?: 'trace' | 'debug' | 'info' | 'warn' | 'error'; category?: string; event?: string; message?: string; fields?: unknown }) => Promise<{ success: boolean; error?: string }>;
       };
       startupMigration: {
         getStatus: () => Promise<{
@@ -936,6 +1174,11 @@ declare global {
         showInFolder: (payload: { source: string }) => Promise<unknown>;
         copyImage: (payload: { source: string }) => Promise<unknown>;
       };
+      notifications: {
+        getPermissionState: () => Promise<NotificationPermissionState>;
+        requestPermission: () => Promise<NotificationPermissionState>;
+        showSystem: (payload: { title: string; body?: string; sound?: string }) => Promise<{ success: boolean; error?: string }>;
+      };
 
       // YouTube Import
       checkYtdlp: () => Promise<{ installed: boolean; version?: string; path?: string }>;
@@ -977,15 +1220,16 @@ declare global {
         };
       }) => void;
         pickAttachment: (payload?: { sessionId?: string }) => Promise<{ success?: boolean; canceled?: boolean; error?: string; attachment?: unknown }>;
-        transcribeAudio: (payload: { audioBase64: string; mimeType?: string; fileName?: string }) => Promise<{ success?: boolean; text?: string; error?: string }>;
+        createInlineAttachment: (payload: { dataUrl: string; fileName?: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; attachment?: unknown }>;
+        transcribeAudio: (payload: { audioBase64: string; mimeType?: string; fileName?: string }) => Promise<{ success?: boolean; text?: string; error?: string; reason?: string; diagnostic?: string }>;
         cancel: (data?: { sessionId?: string } | string) => void;
         confirmTool: (callId: string, confirmed: boolean) => void;
         getSessions: () => Promise<ChatSession[]>;
         createSession: (title?: string) => Promise<ChatSession>;
         createDiagnosticsSession: (payload?: { title?: string; contextId?: string; contextType?: string }) => Promise<ChatSession>;
         listContextSessions: (payload: { contextId: string; contextType: string }) => Promise<ContextChatSessionListItem[]>;
-        createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string }) => Promise<ChatSession>;
-        getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string }) => Promise<ChatSession>;
+        createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
+        getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;
         getMessages: (sessionId: string) => Promise<ChatMessage[]>;
         clearMessages: (sessionId: string) => Promise<{ success: boolean }>;
@@ -1014,6 +1258,22 @@ declare global {
           partialResponse: string;
           updatedAt: number;
         }>;
+      };
+      generation: {
+        submitImage: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        submitVideo: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; jobId?: string; status?: string }>;
+        listJobSummaries: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
+        listJobs: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
+        getJob: (jobId: string) => Promise<Record<string, unknown> | null>;
+        getJobArtifacts: (jobId: string) => Promise<{ success?: boolean; items?: Array<Record<string, unknown>> }>;
+        awaitJob: (payload: { jobId: string; timeoutMs?: number }) => Promise<Record<string, unknown> | null>;
+        cancelJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; error?: string }>;
+        retryJob: (jobId: string) => Promise<{ success?: boolean; jobId?: string; status?: string; attemptNo?: number; error?: string }>;
+        getRuntimeStatus: () => Promise<{ success?: boolean; runtimeReady?: boolean; runtimeRunning?: boolean }>;
+        onJobUpdated: (listener: (...args: any[]) => void) => void;
+        offJobUpdated: (listener: (...args: any[]) => void) => void;
+        onJobLog: (listener: (...args: any[]) => void) => void;
+        offJobLog: (listener: (...args: any[]) => void) => void;
       };
       redclawRunner: {
         getStatus: () => Promise<{
@@ -1182,16 +1442,109 @@ declare global {
         removeLongCycle: (payload: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
         setLongCycleEnabled: (payload: { taskId: string; enabled: boolean }) => Promise<{ success: boolean; error?: string }>;
         runLongCycleNow: (payload: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
+        taskPreview: (payload: Record<string, unknown>) => Promise<unknown>;
+        taskCreate: (payload: Record<string, unknown>) => Promise<unknown>;
+        taskConfirm: (payload: { draftId: string; confirm: boolean }) => Promise<unknown>;
+        taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => Promise<unknown>;
+        taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => Promise<unknown>;
+        taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => Promise<{
+          success?: boolean;
+          items?: Array<{
+            definitionId: string;
+            title: string;
+            kind: 'scheduled' | 'long_cycle' | string;
+            sourceKind?: 'scheduled' | 'long_cycle' | string | null;
+            sourceTaskId?: string | null;
+            enabled: boolean;
+            ownerScope?: string | null;
+            createdBy?: string | null;
+            creatorMode?: string | null;
+            requiresConfirmation: boolean;
+            policySignature?: string | null;
+            definitionFingerprint?: string | null;
+            triggerKind: 'interval' | 'daily' | 'weekly' | 'once' | string;
+            progressionKind?: 'single_run' | 'multi_round' | string;
+            nextDueAt?: string | null;
+            draftId?: string | null;
+            timezone?: string | null;
+            missedRunPolicy?: 'drop' | 'single' | 'catchup' | string | null;
+            cooldown?: {
+              state?: string;
+              activatedAt?: string;
+              consecutiveFailures?: number;
+              reason?: string;
+            } | null;
+            policyDecision?: 'allow' | 'require_confirm' | 'reject' | string | null;
+            policyWarnings?: string[] | null;
+            actionType?: string | null;
+            goal?: string | null;
+            prompt?: string | null;
+            objective?: string | null;
+            stepPrompt?: string | null;
+            riskRationale?: string | null;
+            totalRounds?: number | null;
+            completedRounds?: number | null;
+            lastUpdatedReason?: string | null;
+            latestExecution?: {
+              executionId: string;
+              runId?: string | null;
+              status: 'queued' | 'leased' | 'running' | 'retrying' | 'succeeded' | 'completed' | 'failed' | 'cancelled' | 'dead_lettered' | string;
+              scheduledForAt?: string | null;
+              attemptNo?: number | null;
+              retryBucket?: string | null;
+              lastHeartbeatAt?: string | null;
+              lastError?: string | null;
+              updatedAt: string;
+            } | null;
+            updatedAt: string;
+            createdAt: string;
+          }>;
+          count?: number;
+        }>;
+        taskStats: () => Promise<{
+          success?: boolean;
+          definitions?: {
+            total?: number;
+            drafts?: number;
+            active?: number;
+          };
+          executions?: {
+            total?: number;
+            running?: number;
+            failed?: number;
+            recent?: Array<{
+              executionId: string;
+              runId?: string | null;
+              definitionId: string;
+              status: string;
+              scheduledForAt?: string | null;
+              attemptNo?: number | null;
+              retryBucket?: string | null;
+              lastError?: string | null;
+            }>;
+          };
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{
+          activeSpaceId?: string;
           profileRoot?: string;
+          success?: boolean;
           agent?: string;
           soul?: string;
           identity?: string;
           user?: string;
           creatorProfile?: string;
           bootstrap?: string;
+          styleProfile?: Record<string, unknown>;
+          files?: {
+            agent?: string;
+            soul?: string;
+            identity?: string;
+            user?: string;
+            creatorProfile?: string;
+            bootstrap?: string;
+          };
           onboardingState?: Record<string, unknown>;
         }>;
         updateDoc: (payload: { docType: 'agent' | 'soul' | 'user' | 'creator_profile'; markdown: string; reason?: string }) => Promise<{
@@ -1211,6 +1564,24 @@ declare global {
           handled?: boolean;
           completed?: boolean;
           responseText?: string;
+        }>;
+        saveInitializationProgress: (payload: { stepIndex: number; answers: Record<string, unknown> }) => Promise<{
+          success?: boolean;
+          state?: Record<string, unknown>;
+        }>;
+        completeInitialization: (payload: { answers: Record<string, unknown> }) => Promise<{
+          success?: boolean;
+          summary?: {
+            headline?: string;
+            chips?: string[];
+            lines?: string[];
+          };
+          styleProfile?: Record<string, unknown>;
+          skill?: {
+            name?: string;
+            path?: string;
+          };
+          onboardingState?: Record<string, unknown>;
         }>;
       };
       assistantDaemon: {

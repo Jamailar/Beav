@@ -213,7 +213,24 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };
   }
-  if (channel === 'file:show-in-folder' || channel === 'file:copy-image') {
+  if (channel === 'audio:get-capture-capability') {
+    return {
+      success: true,
+      available: false,
+      activeRecording: false,
+      reason: 'host_unavailable',
+      message: `RedBox audio capture unavailable: ${message}`,
+    };
+  }
+  if (
+    channel === 'audio:start-recording'
+    || channel === 'audio:stop-recording'
+    || channel === 'audio:cancel-recording'
+    || channel === 'audio:open-microphone-settings'
+  ) {
+    return { success: false, error: `RedBox audio action failed for "${channel}": ${message}` };
+  }
+  if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as') {
     return { success: false, error: `RedBox file action failed for "${channel}": ${message}` };
   }
   if (channel === 'youtube:check-ytdlp') {
@@ -231,11 +248,55 @@ function buildFallbackResponse(channel: string, error: unknown): any {
       bundledPath: '',
     };
   }
+  if (channel === 'cli-runtime:detect') {
+    return {
+      success: true,
+      tools: [],
+    };
+  }
+  if (channel === 'cli-runtime:discover') {
+    return {
+      success: true,
+      tools: [],
+      query: null,
+      limit: 100,
+      truncated: false,
+    };
+  }
+  if (channel === 'cli-runtime:list-tools' || channel === 'cli-runtime:list-environments') {
+    return [];
+  }
+  if (channel === 'cli-runtime:inspect' || channel === 'cli-runtime:poll-execution') {
+    return null;
+  }
+  if (
+    channel === 'cli-runtime:create-environment'
+    || channel === 'cli-runtime:install'
+    || channel === 'cli-runtime:execute'
+    || channel === 'cli-runtime:cancel-execution'
+    || channel === 'cli-runtime:verify'
+    || channel === 'cli-runtime:approve-escalation'
+    || channel === 'cli-runtime:deny-escalation'
+  ) {
+    return { success: false, error: `RedBox CLI runtime action failed for "${channel}": ${message}` };
+  }
   if (channel === 'indexing:get-stats') {
     return { totalStats: { vectors: 0, documents: 0 }, queue: [] };
   }
   if (channel === 'manuscripts:get-layout') {
     return {};
+  }
+  if (channel === 'generation:list-jobs') {
+    return { success: true, items: [] };
+  }
+  if (channel === 'generation:list-job-summaries') {
+    return { success: true, items: [] };
+  }
+  if (channel === 'generation:get-runtime-status') {
+    return { success: true, runtimeReady: false, runtimeRunning: false };
+  }
+  if (channel === 'generation:get-job') {
+    return null;
   }
   if (channel === 'wechat-official:get-status') {
     return { success: true, activeBinding: null, bindings: [] };
@@ -247,6 +308,7 @@ function buildFallbackResponse(channel: string, error: unknown): any {
     return {
       generatedAt: Date.now(),
       runtimeWarm: { lastWarmedAt: 0, entries: [] },
+      approvals: { pendingCount: 0, resolvedCount: 0, pending: [], recent: [] },
       phase0: {
         personaGeneration: { count: 0, byAdvisor: [], recent: [] },
         knowledgeIngest: { count: 0, byAdvisor: [], recent: [] },
@@ -255,6 +317,37 @@ function buildFallbackResponse(channel: string, error: unknown): any {
         toolCalls: { count: 0, successCount: 0, successRate: 0, byAdvisor: [], byTool: [], recent: [] },
       }
     };
+  }
+  if (channel === 'logs:get-status') {
+    return {
+      enabled: true,
+      logDirectory: '',
+      reportDirectory: '',
+      retentionDays: 7,
+      maxFileMb: 10,
+      recentPreviewLimit: 200,
+      uploadConfigured: false,
+      uploadEndpoint: null,
+      pendingCount: 0,
+      debugVerboseEnabled: false,
+      previousUncleanShutdown: false,
+    };
+  }
+  if (channel === 'logs:get-recent') {
+    return { lines: [] };
+  }
+  if (channel === 'logs:list-pending-reports') {
+    return [];
+  }
+  if (
+    channel === 'logs:open-dir'
+    || channel === 'logs:export-bundle'
+    || channel === 'logs:upload-report'
+    || channel === 'logs:dismiss-report'
+    || channel === 'logs:set-upload-consent'
+    || channel === 'logs:append-renderer'
+  ) {
+    return { success: false, error: `RedBox diagnostics action failed for "${channel}": ${message}` };
   }
   if (
     channel.endsWith(':list')
@@ -509,6 +602,22 @@ function createIpcRenderer() {
     files: {
       showInFolder: (payload: { source: string }) => invokeChannel('file:show-in-folder', payload),
       copyImage: (payload: { source: string }) => invokeChannel('file:copy-image', payload),
+      saveAs: (payload: { source: string; defaultName?: string }) => invokeChannel('file:save-as', payload),
+    },
+    notifications: {
+      getPermissionState: () => invokeCommandGuarded('notifications_permission_state', undefined, {
+        fallback: { state: 'unknown' },
+      }),
+      requestPermission: () => invokeCommandGuarded('notifications_request_permission', undefined, {
+        fallback: { state: 'unknown' },
+      }),
+      showSystem: (payload: { title: string; body?: string; sound?: string }) => invokeCommandGuarded(
+        'notifications_show_system',
+        payload,
+        {
+          fallback: { success: false, error: 'System notifications unavailable' },
+        },
+      ),
     },
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
@@ -519,6 +628,17 @@ function createIpcRenderer() {
       getRecent: (limit?: number) => invokeChannel('debug:get-recent', { limit }),
       getRuntimeSummary: () => invokeChannel('debug:get-runtime-summary'),
       openLogDir: () => invokeChannel('debug:open-log-dir')
+    },
+    logs: {
+      getStatus: () => invokeChannel('logs:get-status'),
+      getRecent: (limit?: number) => invokeChannel('logs:get-recent', { limit }),
+      openDir: () => invokeChannel('logs:open-dir'),
+      listPendingReports: () => invokeChannel('logs:list-pending-reports'),
+      exportBundle: (reportId?: string, payload?: { includeAdvancedContext?: boolean }) => invokeChannel('logs:export-bundle', { reportId, ...(payload || {}) }),
+      uploadReport: (reportId: string) => invokeChannel('logs:upload-report', { reportId }),
+      dismissReport: (reportId: string) => invokeChannel('logs:dismiss-report', { reportId }),
+      setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => invokeChannel('logs:set-upload-consent', payload),
+      appendRenderer: (payload: { level?: 'trace' | 'debug' | 'info' | 'warn' | 'error'; category?: string; event?: string; message?: string; fields?: unknown }) => invokeChannel('logs:append-renderer', payload),
     },
     startupMigration: {
       getStatus: <T = Record<string, unknown>>() => invokeChannelGuarded<T>(
@@ -594,7 +714,41 @@ function createIpcRenderer() {
       forkSession: (payload: { sessionId: string }) => invokeChannel('runtime:fork-session', payload),
       getTrace: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-trace', payload),
       getCheckpoints: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-checkpoints', payload),
-      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload)
+      getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
+      listApprovals: () => invokeChannel('runtime:list-approvals')
+    },
+    cliRuntime: {
+      detect: (payload?: { commands?: string[] }) => invokeChannel('cli-runtime:detect', payload || {}),
+      discover: (payload?: { query?: string; limit?: number }) => invokeChannel('cli-runtime:discover', payload || {}),
+      listTools: () => invokeChannel('cli-runtime:list-tools'),
+      inspect: (payload: { toolId?: string; command?: string; executable?: string }) => invokeChannel('cli-runtime:inspect', payload),
+      listEnvironments: () => invokeChannel('cli-runtime:list-environments'),
+      createEnvironment: (payload: {
+        scope: 'app-global' | 'workspace-local' | 'task-ephemeral';
+        workspaceRoot?: string;
+        taskId?: string;
+      }) => invokeChannel('cli-runtime:create-environment', payload),
+      install: (payload: {
+        environmentId?: string;
+        installMethod: string;
+        spec: string;
+        toolName?: string;
+      }) => invokeChannel('cli-runtime:install', payload),
+      execute: (payload: {
+        environmentId: string;
+        toolId?: string;
+        argv: string[];
+        cwd: string;
+        usePty?: boolean;
+        verificationRules?: unknown[];
+      }) => invokeChannel('cli-runtime:execute', payload),
+      cancelExecution: (payload: { executionId: string }) => invokeChannel('cli-runtime:cancel-execution', payload),
+      pollExecution: (payload: { executionId: string }) => invokeChannel('cli-runtime:poll-execution', payload),
+      verify: (payload: { executionId: string; rules: unknown[] }) => invokeChannel('cli-runtime:verify', payload),
+      approveEscalation: (payload: { escalationId: string; scope: 'once' | 'session' | 'always' }) =>
+        invokeChannel('cli-runtime:approve-escalation', payload),
+      denyEscalation: (payload: { escalationId: string; reason?: string }) =>
+        invokeChannel('cli-runtime:deny-escalation', payload),
     },
     toolHooks: {
       list: () => invokeChannel('tools:hooks:list'),
@@ -646,6 +800,13 @@ function createIpcRenderer() {
     clipboardReadText: () => invokeChannel('clipboard:read-text'),
     openKnowledgeApiGuide: () => invokeChannel('app:open-knowledge-api-guide'),
     openRichpostThemeGuide: () => invokeChannel('app:open-richpost-theme-guide'),
+    audio: {
+      getCaptureCapability: () => invokeChannel('audio:get-capture-capability'),
+      startRecording: () => invokeChannel('audio:start-recording'),
+      stopRecording: () => invokeChannel('audio:stop-recording'),
+      cancelRecording: () => invokeChannel('audio:cancel-recording'),
+      openMicrophoneSettings: () => invokeChannel('audio:open-microphone-settings'),
+    },
     browserPlugin: {
       getStatus: () => invokeChannel('plugin:browser-extension-status'),
       prepare: () => invokeChannel('plugin:prepare-browser-extension'),
@@ -663,6 +824,8 @@ function createIpcRenderer() {
     chat: {
       send: (data: Record<string, unknown>) => sendChannel('chat:send-message', data),
       pickAttachment: (payload?: { sessionId?: string }) => invokeChannel('chat:pick-attachment', payload || {}),
+      createInlineAttachment: (payload: { dataUrl: string; fileName?: string; sessionId?: string }) =>
+        invokeChannel('chat:create-inline-attachment', payload),
       transcribeAudio: (payload: Record<string, unknown>) => invokeChannel('chat:transcribe-audio', payload),
       cancel: (data?: { sessionId?: string } | string) => sendChannel('chat:cancel', data),
       confirmTool: (callId: string, confirmed: boolean) => sendChannel('chat:confirm-tool', { callId, confirmed }),
@@ -672,15 +835,36 @@ function createIpcRenderer() {
         invokeChannel('chat:create-diagnostics-session', payload || {}),
       listContextSessions: (payload: { contextId: string; contextType: string }) =>
         invokeChannel('chat:list-context-sessions', payload),
-      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string }) =>
+      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; metadata?: Record<string, unknown> }) =>
         invokeChannel('chat:create-context-session', payload),
-      getOrCreateContextSession: (params: Record<string, unknown>) => invokeChannel('chat:getOrCreateContextSession', params),
+      getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; metadata?: Record<string, unknown> }) =>
+        invokeChannel('chat:getOrCreateContextSession', params),
       deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
       getMessages: (sessionId: string) => invokeChannel('chat:get-messages', sessionId),
       clearMessages: (sessionId: string) => invokeChannel('chat:clear-messages', sessionId),
       compactContext: (sessionId: string) => invokeChannel('chat:compact-context', sessionId),
       getContextUsage: (sessionId: string) => invokeChannel('chat:get-context-usage', sessionId),
       getRuntimeState: (sessionId: string) => invokeChannel('chat:get-runtime-state', sessionId)
+    },
+    manuscripts: {
+      confirmPackageScript: (payload: { filePath: string }) =>
+        invokeChannel('manuscripts:confirm-package-script', payload),
+    },
+    generation: {
+      submitImage: (payload: Record<string, unknown>) => invokeChannel('generation:submit-image', payload),
+      submitVideo: (payload: Record<string, unknown>) => invokeChannel('generation:submit-video', payload),
+      listJobSummaries: (payload?: Record<string, unknown>) => invokeChannel('generation:list-job-summaries', payload || {}),
+      listJobs: (payload?: Record<string, unknown>) => invokeChannel('generation:list-jobs', payload || {}),
+      getJob: (jobId: string) => invokeChannel('generation:get-job', { jobId }),
+      getJobArtifacts: (jobId: string) => invokeChannel('generation:get-job-artifacts', { jobId }),
+      awaitJob: (payload: { jobId: string; timeoutMs?: number }) => invokeChannel('generation:await-job', payload),
+      cancelJob: (jobId: string) => invokeChannel('generation:cancel-job', { jobId }),
+      retryJob: (jobId: string) => invokeChannel('generation:retry-job', { jobId }),
+      getRuntimeStatus: () => invokeChannel('generation:get-runtime-status'),
+      onJobUpdated: (listener: Listener) => on('generation:job-updated', listener),
+      offJobUpdated: (listener: Listener) => off('generation:job-updated', listener),
+      onJobLog: (listener: Listener) => on('generation:job-log', listener),
+      offJobLog: (listener: Listener) => off('generation:job-log', listener),
     },
     redclawRunner: {
       getStatus: () => invokeCommandGuarded('redclaw_runner_status', undefined, {
@@ -701,7 +885,14 @@ function createIpcRenderer() {
       addLongCycle: (payload: Record<string, unknown>) => invokeChannel('redclaw:runner-add-long-cycle', payload),
       removeLongCycle: (payload: { taskId: string }) => invokeChannel('redclaw:runner-remove-long-cycle', payload),
       setLongCycleEnabled: (payload: { taskId: string; enabled: boolean }) => invokeChannel('redclaw:runner-set-long-cycle-enabled', payload),
-      runLongCycleNow: (payload: { taskId: string }) => invokeChannel('redclaw:runner-run-long-cycle-now', payload)
+      runLongCycleNow: (payload: { taskId: string }) => invokeChannel('redclaw:runner-run-long-cycle-now', payload),
+      taskPreview: (payload: Record<string, unknown>) => invokeChannel('redclaw:task-preview', payload),
+      taskCreate: (payload: Record<string, unknown>) => invokeChannel('redclaw:task-create', payload),
+      taskConfirm: (payload: { draftId: string; confirm: boolean }) => invokeChannel('redclaw:task-confirm', payload),
+      taskUpdate: (payload: { jobDefinitionId: string; patch: Record<string, unknown>; reason: string }) => invokeChannel('redclaw:task-update', payload),
+      taskCancel: (payload: { jobDefinitionId: string; reason?: string }) => invokeChannel('redclaw:task-cancel', payload),
+      taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => invokeChannel('redclaw:task-list', payload || {}),
+      taskStats: () => invokeChannel('redclaw:task-stats'),
     },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
@@ -709,6 +900,10 @@ function createIpcRenderer() {
         invokeChannel('redclaw:profile:update-doc', payload),
       getOnboardingStatus: () => invokeChannel('redclaw:profile:onboarding-status'),
       onboardingTurn: (payload: { input: string }) => invokeChannel('redclaw:profile:onboarding-turn', payload),
+      saveInitializationProgress: (payload: { stepIndex: number; answers: Record<string, unknown> }) =>
+        invokeChannel('redclaw:profile:save-initialization-progress', payload),
+      completeInitialization: (payload: { answers: Record<string, unknown> }) =>
+        invokeChannel('redclaw:profile:complete-initialization', payload),
     },
     assistantDaemon: {
       getStatus: () => invokeChannel('assistant:daemon-status'),

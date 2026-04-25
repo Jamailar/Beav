@@ -1,13 +1,13 @@
-import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
-import ReactMarkdown, { Components, UrlTransform } from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Components, UrlTransform } from 'react-markdown';
 import { Copy, Check } from 'lucide-react';
 import { ProcessTimeline, ProcessItem } from './ProcessTimeline';
 import { SkillActivatedBadge, ThinkingIndicator } from './ThinkingBubble';
 import { TodoList, PlanStep } from './TodoList';
 import { resolveAssetUrl, isLocalAssetUrl } from '../utils/pathManager';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
+import { StreamingMarkdown } from './chat/StreamingMarkdown';
 import './chat-message.css';
 
 const copyTextWithClipboard = async (text: string): Promise<boolean> => {
@@ -45,6 +45,21 @@ const extractNodeText = (value: React.ReactNode): string => {
 const isVideoAssetUrl = (value: string): boolean => {
   const normalized = String(value || '').trim().toLowerCase();
   return ['.mp4', '.webm', '.mov', '.m4v'].some((ext) => normalized.includes(ext));
+};
+
+const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
+
+const INTERNAL_PROTOCOL_BLOCKS = [
+  /<tool_call>[\s\S]*?<\/tool_call>/gi,
+  /<activated_skill\b[\s\S]*?<\/activated_skill>/gi,
+];
+
+const stripInternalProtocolMarkup = (value: string): string => {
+  let sanitized = String(value || '');
+  for (const pattern of INTERNAL_PROTOCOL_BLOCKS) {
+    sanitized = sanitized.replace(pattern, '');
+  }
+  return sanitized.replace(/\n{3,}/g, '\n\n').trim();
 };
 
 function InlineCopyButton({ text, label = '复制' }: { text: string; label?: string }) {
@@ -117,7 +132,7 @@ export interface ToolEvent {
   input: unknown;
   output?: { success: boolean; content: string };
   description?: string;
-  status: 'running' | 'done';
+  status: 'running' | 'done' | 'failed';
 }
 
 export interface SkillEvent {
@@ -128,6 +143,7 @@ export interface SkillEvent {
 export interface Message {
   id: string;
   role: 'user' | 'ai';
+  messageType?: 'reply' | 'thinking';
   content: string;
   displayContent?: string;
   attachment?: {
@@ -151,6 +167,8 @@ export interface Message {
     name: string;
     ext?: string;
     size?: number;
+    thumbnailDataUrl?: string;
+    workspaceRelativePath?: string;
     absolutePath?: string;
     originalAbsolutePath?: string;
     localUrl?: string;
@@ -159,6 +177,7 @@ export interface Message {
     storageMode?: 'staged' | string;
     directUploadEligible?: boolean;
     processingStrategy?: string;
+    deliveryMode?: 'direct-input' | 'tool-read';
     summary?: string;
     requiresMultimodal?: boolean;
   };
@@ -175,6 +194,7 @@ export interface Message {
   isStreaming?: boolean;
   processingStartedAt?: number;
   processingFinishedAt?: number;
+  suppressPendingIndicator?: boolean;
 }
 
 interface MessageItemProps {
@@ -184,6 +204,8 @@ interface MessageItemProps {
   workflowPlacement?: 'top' | 'bottom';
   workflowVariant?: 'default' | 'compact';
   workflowEmphasis?: 'default' | 'thoughts-first';
+  workflowDisplayMode?: 'all' | 'thoughts-only';
+  showAttachments?: boolean;
 }
 
 interface ImageContextMenuState {
@@ -191,6 +213,7 @@ interface ImageContextMenuState {
   x: number;
   y: number;
   src: string;
+  actionSource: string;
 }
 
 function formatProcessingElapsed(totalMs: number): string {
@@ -308,8 +331,14 @@ export const MessageItem = memo(({
   workflowPlacement = 'top',
   workflowVariant = 'default',
   workflowEmphasis = 'default',
+  workflowDisplayMode = 'all',
+  showAttachments = true,
 }: MessageItemProps) => {
   const isUser = msg.role === 'user';
+  const isThinkingMessage = !isUser && msg.messageType === 'thinking';
+  const sanitizedAssistantContent = !isUser
+    ? stripInternalProtocolMarkup(String(msg.content || ''))
+    : String(msg.content || '');
   const aiContentRef = useRef<HTMLDivElement | null>(null);
   const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const [imageMenu, setImageMenu] = useState<ImageContextMenuState>({
@@ -317,15 +346,29 @@ export const MessageItem = memo(({
     x: 0,
     y: 0,
     src: '',
+    actionSource: '',
   });
-  const hasAssistantResponseContent = !isUser && Boolean(String(msg.content || '').trim());
-  const showPendingThinkingIndicator = !isUser && Boolean(msg.isStreaming && !hasAssistantResponseContent);
-  const showProcessingTimer = !isUser && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
+  const filteredTimeline = useMemo(
+    () => workflowDisplayMode === 'thoughts-only'
+      ? (msg.timeline || []).filter((item) => item.type === 'thought')
+      : (msg.timeline || []),
+    [msg.timeline, workflowDisplayMode],
+  );
+  const showWorkflowDetails = workflowDisplayMode !== 'thoughts-only';
+  const hasAssistantResponseContent = !isUser && Boolean(sanitizedAssistantContent);
+  const showPendingThinkingIndicator = !isUser
+    && !isThinkingMessage
+    && !msg.suppressPendingIndicator
+    && Boolean(msg.isStreaming && !hasAssistantResponseContent);
+  const showProcessingTimer = !isUser && !isThinkingMessage && typeof msg.processingStartedAt === 'number' && Number.isFinite(msg.processingStartedAt);
   const hasRenderableMessageContent = isUser
     ? Boolean(msg.displayContent || msg.content || (msg.isStreaming && !msg.thinking))
     : hasAssistantResponseContent || showPendingThinkingIndicator;
-  const showTimeline = !isUser && msg.timeline && msg.timeline.length > 0;
-  const showLegacyWorkflow = !isUser && (!msg.timeline || msg.timeline.length === 0) && (msg.thinking || msg.tools.length > 0 || msg.activatedSkill);
+  const showTimeline = !isUser && !isThinkingMessage && filteredTimeline.length > 0;
+  const showLegacyWorkflow = !isUser
+    && !isThinkingMessage
+    && filteredTimeline.length === 0
+    && (msg.thinking || (showWorkflowDetails && (msg.tools.length > 0 || msg.activatedSkill)));
   const showWorkflowOnTop = workflowPlacement === 'top';
   const latestTimelineThought = !isUser
     ? [...(msg.timeline || [])]
@@ -333,9 +376,9 @@ export const MessageItem = memo(({
         .find((item) => item.type === 'thought' && String(item.content || '').trim())
     : undefined;
   const activeThoughtContent = !isUser
-    ? String(latestTimelineThought?.content || msg.thinking || '').trim()
+    ? stripInternalProtocolMarkup(String(latestTimelineThought?.content || msg.thinking || ''))
     : '';
-  const showStreamingThought = !isUser && Boolean(msg.isStreaming && activeThoughtContent);
+  const showStreamingThought = !isUser && !isThinkingMessage && Boolean(msg.isStreaming && activeThoughtContent);
 
   useEffect(() => {
     if (!imageMenu.visible) return;
@@ -346,36 +389,43 @@ export const MessageItem = memo(({
     };
   }, [imageMenu.visible]);
 
-  const handleImageContextMenu = (event: React.MouseEvent<HTMLImageElement>, source: string) => {
-    event.preventDefault();
+  const openImageMenu = useCallback((x: number, y: number, source: string, actionSource?: string) => {
     const normalized = resolveAssetUrl(String(source || '').trim());
-    if (!normalized) return;
+    const rawActionSource = String(actionSource || source || '').trim();
+    if (!normalized || !rawActionSource) return;
     setImageMenu({
       visible: true,
-      x: event.clientX,
-      y: event.clientY,
+      x,
+      y,
       src: normalized,
+      actionSource: rawActionSource,
     });
-  };
+  }, []);
 
-  const handleMediaContextMenu = (event: React.MouseEvent<HTMLElement>, source: string) => {
+  const handleImageContextMenu = useCallback((
+    event: React.MouseEvent<HTMLImageElement>,
+    source: string,
+    actionSource?: string,
+  ) => {
     event.preventDefault();
-    const normalized = resolveAssetUrl(String(source || '').trim());
-    if (!normalized) return;
-    setImageMenu({
-      visible: true,
-      x: event.clientX,
-      y: event.clientY,
-      src: normalized,
-    });
-  };
+    openImageMenu(event.clientX, event.clientY, source, actionSource);
+  }, [openImageMenu]);
+
+  const handleMediaContextMenu = useCallback((
+    event: React.MouseEvent<HTMLElement>,
+    source: string,
+    actionSource?: string,
+  ) => {
+    event.preventDefault();
+    openImageMenu(event.clientX, event.clientY, source, actionSource);
+  }, [openImageMenu]);
 
   const handleCopyImage = async () => {
-    if (!imageMenu.src) return;
+    if (!imageMenu.actionSource) return;
     try {
-      const result = await window.ipcRenderer.invoke('file:copy-image', { source: imageMenu.src }) as { success?: boolean };
-      if (!result?.success && /^https?:\/\//i.test(imageMenu.src) && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(imageMenu.src);
+      const result = await window.ipcRenderer.invoke('file:copy-image', { source: imageMenu.actionSource }) as { success?: boolean };
+      if (!result?.success && /^https?:\/\//i.test(imageMenu.actionSource) && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(imageMenu.actionSource);
       }
     } catch (error) {
       console.error('Failed to copy image:', error);
@@ -385,13 +435,13 @@ export const MessageItem = memo(({
   };
 
   const handleShowInFolder = async () => {
-    if (!imageMenu.src) return;
-    if (!isLocalAssetUrl(imageMenu.src)) {
+    if (!imageMenu.actionSource) return;
+    if (!isLocalAssetUrl(imageMenu.actionSource)) {
       setImageMenu((prev) => ({ ...prev, visible: false }));
       return;
     }
     try {
-      await window.ipcRenderer.invoke('file:show-in-folder', { source: imageMenu.src });
+      await window.ipcRenderer.invoke('file:show-in-folder', { source: imageMenu.actionSource });
     } catch (error) {
       console.error('Failed to show image in folder:', error);
     } finally {
@@ -399,12 +449,13 @@ export const MessageItem = memo(({
     }
   };
 
-  const menuSupportsReveal = isLocalAssetUrl(imageMenu.src);
+  const menuSupportsReveal = isLocalAssetUrl(imageMenu.actionSource);
 
   const markdownComponents = useMemo<Components>(() => ({
     ...MARKDOWN_COMPONENTS,
     img({ src, alt }: any) {
-      const mediaUrl = resolveAssetUrl(String(src || '').trim());
+      const rawSource = String(src || '').trim();
+      const mediaUrl = resolveAssetUrl(rawSource);
       if (!mediaUrl) return <span className="text-xs text-text-tertiary">资源地址无效</span>;
       if (isVideoAssetUrl(mediaUrl)) {
         return (
@@ -413,7 +464,7 @@ export const MessageItem = memo(({
             controls
             preload="metadata"
             className="my-3 max-h-[32rem] w-full max-w-full rounded-xl border border-border bg-surface-secondary shadow-sm"
-            onContextMenu={(event) => handleMediaContextMenu(event, mediaUrl)}
+            onContextMenu={(event) => handleMediaContextMenu(event, mediaUrl, rawSource)}
             title="右键复制或在文件夹中打开"
           />
         );
@@ -424,12 +475,47 @@ export const MessageItem = memo(({
           alt={alt || ''}
           className="my-3 max-h-[28rem] w-auto max-w-full cursor-zoom-in rounded-xl border border-border bg-surface-secondary object-contain shadow-sm"
           onClick={() => setPreviewImage({ src: mediaUrl, alt: alt || '' })}
-          onContextMenu={(event) => handleImageContextMenu(event, mediaUrl)}
+          onContextMenu={(event) => handleImageContextMenu(event, mediaUrl, rawSource)}
           title="点击预览，右键复制或在文件夹中打开"
         />
       );
     },
-  }), []);
+  }), [handleImageContextMenu, handleMediaContextMenu]);
+
+  const isUploadedImageAttachment = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const kind = String(attachment.kind || '').trim().toLowerCase();
+    const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+    const source = String(
+      attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || attachment.name
+        || '',
+    ).trim().toLowerCase();
+
+    return kind === 'image' || mimeType.startsWith('image/') || IMAGE_ATTACHMENT_EXT_RE.test(source);
+  }, []);
+
+  const resolveUploadedAttachmentSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const preferred = String(
+      attachment.thumbnailDataUrl
+        || attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || '',
+    ).trim();
+    if (!preferred) return '';
+    return preferred.startsWith('data:') ? preferred : resolveAssetUrl(preferred);
+  }, []);
+
+  const resolveUploadedAttachmentActionSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => (
+    String(
+      attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || '',
+    ).trim()
+  ), []);
 
   const renderYoutubeCard = (card: { title: string; thumbnailUrl?: string }) => (
     <div className="bg-white/10 rounded-lg overflow-hidden">
@@ -497,46 +583,63 @@ export const MessageItem = memo(({
     </div>
   );
 
-  const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => (
-    <div className="mt-2 w-full max-w-[520px] rounded-xl border border-border bg-surface-primary/90 p-3">
-      <div className="flex items-start gap-3">
-        <div className="h-10 w-10 rounded-lg bg-surface-secondary border border-border flex items-center justify-center text-sm">
-          📎
+  const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const imageSrc = isUploadedImageAttachment(attachment) ? resolveUploadedAttachmentSource(attachment) : '';
+    const actionSource = resolveUploadedAttachmentActionSource(attachment);
+    if (imageSrc) {
+      return (
+        <div className="mt-2">
+          <img
+            src={imageSrc}
+            alt={attachment.name}
+            className="h-24 w-24 cursor-zoom-in rounded-2xl border border-border bg-surface-secondary object-cover shadow-sm"
+            onClick={() => setPreviewImage({ src: imageSrc, alt: attachment.name })}
+            onContextMenu={(event) => handleImageContextMenu(event, imageSrc, actionSource)}
+            title={attachment.name}
+          />
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-xs text-text-tertiary">上传文件</div>
-          <div className="mt-0.5 truncate text-sm font-medium text-text-primary" title={attachment.name}>
-            {attachment.name}
+      );
+    }
+
+    return (
+      <div className="mt-2 w-full max-w-[520px] rounded-xl border border-border bg-surface-primary/90 p-3">
+        <div className="flex items-start gap-3">
+          <div className="h-10 w-10 rounded-lg bg-surface-secondary border border-border flex items-center justify-center text-sm">
+            📎
           </div>
-          <div className="mt-1 text-[11px] text-text-tertiary flex flex-wrap gap-x-2 gap-y-1">
-            {attachment.kind && <span>类型: {attachment.kind}</span>}
-            {typeof attachment.size === 'number' && <span>大小: {Math.max(0, Math.round(attachment.size / 1024))} KB</span>}
-            {attachment.ext && <span>.{String(attachment.ext).replace(/^\./, '')}</span>}
-            {attachment.storageMode === 'staged' && <span>已暂存</span>}
-            {attachment.directUploadEligible && <span>可直传</span>}
-          </div>
-          {attachment.summary && (
-            <div className="mt-1.5 line-clamp-2 text-xs text-text-secondary">
-              {attachment.summary}
+          <div className="min-w-0 flex-1">
+            <div className="text-xs text-text-tertiary">上传文件</div>
+            <div className="mt-0.5 truncate text-sm font-medium text-text-primary" title={attachment.name}>
+              {attachment.name}
             </div>
-          )}
+            <div className="mt-1 text-[11px] text-text-tertiary flex flex-wrap gap-x-2 gap-y-1">
+              {attachment.kind && <span>类型: {attachment.kind}</span>}
+              {typeof attachment.size === 'number' && <span>大小: {Math.max(0, Math.round(attachment.size / 1024))} KB</span>}
+              {attachment.ext && <span>.{String(attachment.ext).replace(/^\./, '')}</span>}
+              {attachment.storageMode === 'staged' && <span>已暂存</span>}
+              {attachment.directUploadEligible && <span>可直传</span>}
+            </div>
+            {attachment.summary && (
+              <div className="mt-1.5 line-clamp-2 text-xs text-text-secondary">
+                {attachment.summary}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderThoughtText = (content: string) => (
     <div className="chat-ai-shell">
       <div className="chat-ai-content">
-        <div className="chat-markdown-body text-text-secondary">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={markdownComponents}
-            urlTransform={transformMarkdownUrl}
-          >
-            {content}
-          </ReactMarkdown>
-        </div>
+        <StreamingMarkdown
+          content={content}
+          isStreaming={msg.isStreaming}
+          components={markdownComponents}
+          urlTransform={transformMarkdownUrl}
+          className="chat-markdown-body text-text-secondary"
+        />
       </div>
     </div>
   );
@@ -550,7 +653,7 @@ export const MessageItem = memo(({
       )}
 
       {showWorkflowOnTop && showTimeline && (
-        <ProcessTimeline items={msg.timeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
+        <ProcessTimeline items={filteredTimeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
       )}
 
       {/* AI 工作流可视化 (兼容旧版：思考、工具、技能) - 仅当 timeline 为空时显示 */}
@@ -558,11 +661,11 @@ export const MessageItem = memo(({
         <div className="mb-4 w-full max-w-3xl space-y-3">
           {/* Thinking Bubble */}
           {msg.thinking && (
-            renderThoughtText(msg.thinking)
+            renderThoughtText(stripInternalProtocolMarkup(msg.thinking))
           )}
 
           {/* Activated Skill */}
-          {msg.activatedSkill && (
+          {showWorkflowDetails && msg.activatedSkill && (
             <SkillActivatedBadge
               name={msg.activatedSkill.name}
               description={msg.activatedSkill.description}
@@ -570,7 +673,7 @@ export const MessageItem = memo(({
           )}
 
           {/* Tool Calls */}
-          {msg.tools.length > 0 && (
+          {showWorkflowDetails && msg.tools.length > 0 && (
             <div className="rounded-lg border border-border/70 bg-surface-primary/60 px-3 py-2 text-xs text-text-tertiary">
               查看工具调用 ({msg.tools.length})
             </div>
@@ -612,13 +715,13 @@ export const MessageItem = memo(({
                   )}
                   <div className="whitespace-pre-wrap">{displayText}</div>
                 </div>
-                {msg.attachment?.type === 'youtube-video' && !videoCard && (
+                {showAttachments && msg.attachment?.type === 'youtube-video' && !videoCard && (
                   <div className="mt-2 w-full max-w-[420px]">
                     {renderYoutubeCard(msg.attachment)}
                   </div>
                 )}
-                {msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
-                {msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
+                {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
+                {showAttachments && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
               </div>
             );
           })()
@@ -633,30 +736,31 @@ export const MessageItem = memo(({
               />
             )}
             <div ref={aiContentRef} className={clsx('chat-ai-content', msg.isStreaming && 'chat-ai-content-streaming')}>
-              <div className={clsx('chat-markdown-body text-text-primary', showPendingThinkingIndicator && 'chat-markdown-body-pending')}>
+              <div className={clsx(
+                'chat-markdown-body',
+                isThinkingMessage ? 'text-text-secondary' : 'text-text-primary',
+                showPendingThinkingIndicator && 'chat-markdown-body-pending',
+              )}>
                 {showPendingThinkingIndicator ? (
                   <ThinkingIndicator />
-                ) : msg.isStreaming ? (
-                  <div className="whitespace-pre-wrap break-words">{msg.content}</div>
                 ) : (
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                  <StreamingMarkdown
+                    content={sanitizedAssistantContent}
+                    isStreaming={msg.isStreaming}
                     components={markdownComponents}
                     urlTransform={transformMarkdownUrl}
-                  >
-                    {msg.content}
-                  </ReactMarkdown>
+                  />
                 )}
                 {msg.isStreaming && !showPendingThinkingIndicator && (
-                  <span className="ml-1 inline-block h-4 w-2 animate-pulse align-middle bg-accent-primary" />
+                  <span className="chat-streaming-caret" />
                 )}
               </div>
             </div>
             {/* 复制按钮 */}
-            {!msg.isStreaming && msg.content && (
+            {!msg.isStreaming && sanitizedAssistantContent && (
               <div className="chat-ai-actions opacity-0 transition-opacity group-hover:opacity-100">
                 <button
-                  onClick={() => onCopyMessage(msg.id, msg.content)}
+                  onClick={() => onCopyMessage(msg.id, sanitizedAssistantContent)}
                   className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
                   title="复制内容"
                 >
@@ -680,21 +784,21 @@ export const MessageItem = memo(({
 
       {/* AI 工作流可视化 (底部渲染) */}
       {!showWorkflowOnTop && showTimeline && (
-        <ProcessTimeline items={msg.timeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
+        <ProcessTimeline items={filteredTimeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
       )}
 
       {!showWorkflowOnTop && showLegacyWorkflow && (
         <div className="mt-3 w-full max-w-3xl space-y-3">
           {msg.thinking && (
-            renderThoughtText(msg.thinking)
+            renderThoughtText(stripInternalProtocolMarkup(msg.thinking))
           )}
-          {msg.activatedSkill && (
+          {showWorkflowDetails && msg.activatedSkill && (
             <SkillActivatedBadge
               name={msg.activatedSkill.name}
               description={msg.activatedSkill.description}
             />
           )}
-          {msg.tools.length > 0 && (
+          {showWorkflowDetails && msg.tools.length > 0 && (
             <div className="rounded-lg border border-border/70 bg-surface-primary/60 px-3 py-2 text-xs text-text-tertiary">
               查看工具调用 ({msg.tools.length})
             </div>
@@ -751,9 +855,11 @@ export const MessageItem = memo(({
   // 忽略父组件其他无关 State 变化导致的重绘
   const msgChanged = 
     prevProps.msg.content !== nextProps.msg.content ||
+    prevProps.msg.messageType !== nextProps.msg.messageType ||
     prevProps.msg.isStreaming !== nextProps.msg.isStreaming ||
     prevProps.msg.processingStartedAt !== nextProps.msg.processingStartedAt ||
     prevProps.msg.processingFinishedAt !== nextProps.msg.processingFinishedAt ||
+    prevProps.msg.suppressPendingIndicator !== nextProps.msg.suppressPendingIndicator ||
     prevProps.msg.thinking !== nextProps.msg.thinking ||
     prevProps.msg.tools !== nextProps.msg.tools ||
     prevProps.msg.plan !== nextProps.msg.plan || // Check plan changes
@@ -770,7 +876,9 @@ export const MessageItem = memo(({
   const workflowStyleChanged =
     prevProps.workflowPlacement !== nextProps.workflowPlacement ||
     prevProps.workflowVariant !== nextProps.workflowVariant ||
-    prevProps.workflowEmphasis !== nextProps.workflowEmphasis;
+    prevProps.workflowEmphasis !== nextProps.workflowEmphasis ||
+    prevProps.workflowDisplayMode !== nextProps.workflowDisplayMode ||
+    prevProps.showAttachments !== nextProps.showAttachments;
 
   return !msgChanged && !copyStatusChanged && !workflowStyleChanged;
 });

@@ -4,7 +4,6 @@ import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-    blobToBase64,
     buildChatModelOptions,
     ChatComposer,
     type ChatComposerHandle,
@@ -12,6 +11,10 @@ import {
     type ChatSettingsSnapshot,
     type UploadedFileAttachment,
 } from '../components/ChatComposer';
+import { type AudioRecordingClip } from '../features/audio-input/audioInput';
+import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
+import { useAudioRecording } from '../features/audio-input/useAudioRecording';
+import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -138,15 +141,12 @@ export function CreativeChat({
     const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
     const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
     const [selectedChatModelKey, setSelectedChatModelKey] = useState('');
-    const [isRecordingAudio, setIsRecordingAudio] = useState(false);
     const [isTranscribingAudio, setIsTranscribingAudio] = useState(false);
     const [pendingRoomClear, setPendingRoomClear] = useState<ChatRoom | null>(null);
     const [pendingRoomDelete, setPendingRoomDelete] = useState<ChatRoom | null>(null);
+    const attachmentDraftScopeId = selectedRoom?.id || '__none__';
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const composerRef = useRef<ChatComposerHandle>(null);
-    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-    const mediaChunksRef = useRef<Blob[]>([]);
-    const mediaStreamRef = useRef<MediaStream | null>(null);
     const selectedRoomIdRef = useRef<string | null>(null);
     const selectedRoomRef = useRef<ChatRoom | null>(null);
     const roomsRef = useRef<ChatRoom[]>([]);
@@ -342,6 +342,19 @@ export function CreativeChat({
         });
     }, []);
 
+    useEffect(() => {
+        if (!selectedRoom?.id) {
+            setPendingAttachment(null);
+            return;
+        }
+        setPendingAttachment(loadAttachmentDraft('creative-chat', attachmentDraftScopeId));
+    }, [attachmentDraftScopeId, selectedRoom?.id]);
+
+    useEffect(() => {
+        if (!selectedRoom?.id) return;
+        saveAttachmentDraft('creative-chat', attachmentDraftScopeId, pendingAttachment);
+    }, [attachmentDraftScopeId, pendingAttachment, selectedRoom?.id]);
+
     const loadChatModelOptions = useCallback(async () => {
         if (!isActiveRef.current) return;
         try {
@@ -361,26 +374,6 @@ export function CreativeChat({
         if (!isActive) return;
         void loadChatModelOptions();
     }, [isActive, loadChatModelOptions]);
-
-    const cleanupAudioCapture = useCallback(() => {
-        if (mediaRecorderRef.current) {
-            mediaRecorderRef.current.ondataavailable = null;
-            mediaRecorderRef.current.onstop = null;
-            mediaRecorderRef.current.onerror = null;
-            mediaRecorderRef.current = null;
-        }
-        if (mediaStreamRef.current) {
-            mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-            mediaStreamRef.current = null;
-        }
-        mediaChunksRef.current = [];
-    }, []);
-
-    useEffect(() => {
-        return () => {
-            cleanupAudioCapture();
-        };
-    }, [cleanupAudioCapture]);
 
     const pickAttachment = useCallback(async () => {
         if (isSending) return;
@@ -415,22 +408,25 @@ export function CreativeChat({
         };
     }, [selectedChatModel]);
 
-    const transcribeAudioBlob = useCallback(async (blob: Blob) => {
+    const transcribeAudioClip = useCallback(async (clip: AudioRecordingClip) => {
         setIsTranscribingAudio(true);
         setErrorNotice(null);
         try {
-            const audioBase64 = await blobToBase64(blob);
             const result = await window.ipcRenderer.chat.transcribeAudio({
-                audioBase64,
-                mimeType: blob.type || 'audio/webm',
-                fileName: `creative_chat_audio_${Date.now()}.webm`,
+                audioBase64: clip.audioBase64,
+                mimeType: clip.mimeType || 'audio/wav',
+                fileName: clip.fileName || `creative_chat_audio_${Date.now()}.wav`,
             });
-            if (!result?.success || !String(result.text || '').trim()) {
-                throw new Error(result?.error || '语音转文字失败');
+            const resolved = resolveUsableTranscript(result);
+            if (resolved.error) {
+                throw new Error(resolved.error || '语音转文字失败');
+            }
+            if (!resolved.text) {
+                return;
             }
             setInputValue((prev) => {
                 const current = String(prev || '').trim();
-                const next = String(result.text || '').trim();
+                const next = resolved.text || '';
                 return current ? `${current}${current.endsWith('\n') ? '' : '\n'}${next}` : next;
             });
             requestAnimationFrame(() => {
@@ -444,69 +440,33 @@ export function CreativeChat({
         }
     }, []);
 
-    const stopAudioRecording = useCallback(() => {
-        const recorder = mediaRecorderRef.current;
-        if (!recorder) return;
-        if (recorder.state !== 'inactive') {
-            recorder.stop();
-        } else {
-            cleanupAudioCapture();
-            setIsRecordingAudio(false);
-        }
-    }, [cleanupAudioCapture]);
+    const audioRecording = useAudioRecording({
+        onCaptured: transcribeAudioClip,
+    });
+
+    useEffect(() => {
+        if (!audioRecording.error) return;
+        setErrorNotice(audioRecording.error);
+    }, [audioRecording.error]);
 
     const startAudioRecording = useCallback(async () => {
-        if (isSending || isTranscribingAudio) return;
-        if (!navigator.mediaDevices?.getUserMedia) {
-            setErrorNotice('当前环境不支持麦克风录音');
-            return;
-        }
+        if (isSending || isTranscribingAudio || audioRecording.isWorking) return;
+        setErrorNotice(null);
+        await audioRecording.startRecording();
+    }, [audioRecording, isSending, isTranscribingAudio]);
 
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const preferredMimeType = typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? 'audio/webm;codecs=opus'
-                : 'audio/webm';
-            const recorder = new MediaRecorder(stream, preferredMimeType ? { mimeType: preferredMimeType } : undefined);
-            mediaStreamRef.current = stream;
-            mediaRecorderRef.current = recorder;
-            mediaChunksRef.current = [];
-
-            recorder.ondataavailable = (event) => {
-                if (event.data && event.data.size > 0) {
-                    mediaChunksRef.current.push(event.data);
-                }
-            };
-            recorder.onerror = () => {
-                setErrorNotice('录音失败，请检查麦克风权限');
-                cleanupAudioCapture();
-                setIsRecordingAudio(false);
-            };
-            recorder.onstop = () => {
-                const chunks = [...mediaChunksRef.current];
-                cleanupAudioCapture();
-                setIsRecordingAudio(false);
-                if (!chunks.length) return;
-                void transcribeAudioBlob(new Blob(chunks, { type: recorder.mimeType || preferredMimeType || 'audio/webm' }));
-            };
-
-            recorder.start();
-            setIsRecordingAudio(true);
-            setErrorNotice(null);
-        } catch (error) {
-            cleanupAudioCapture();
-            setIsRecordingAudio(false);
-            setErrorNotice(error instanceof Error ? error.message : '无法访问麦克风');
-        }
-    }, [cleanupAudioCapture, isSending, isTranscribingAudio, transcribeAudioBlob]);
+    const stopAudioRecording = useCallback(() => {
+        if (audioRecording.isWorking) return;
+        void audioRecording.stopRecording();
+    }, [audioRecording]);
 
     const handleAudioInput = useCallback(() => {
-        if (isRecordingAudio) {
+        if (audioRecording.isRecording) {
             stopAudioRecording();
             return;
         }
         void startAudioRecording();
-    }, [isRecordingAudio, startAudioRecording, stopAudioRecording]);
+    }, [audioRecording.isRecording, startAudioRecording, stopAudioRecording]);
 
     const handleCancelSend = useCallback(async () => {
         if (!selectedRoom) return;
@@ -1077,7 +1037,7 @@ export function CreativeChat({
             selectedModelKey={selectedChatModelKey}
             onSelectedModelKeyChange={setSelectedChatModelKey}
             isBusy={isSending}
-            audioState={isTranscribingAudio ? 'transcribing' : isRecordingAudio ? 'recording' : 'idle'}
+            audioState={isTranscribingAudio ? 'transcribing' : audioRecording.isRecording ? 'recording' : 'idle'}
             onAudioAction={handleAudioInput}
             onCancel={() => void handleCancelSend()}
             showCancelWhenBusy={true}

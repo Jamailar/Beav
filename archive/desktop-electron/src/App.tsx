@@ -5,6 +5,9 @@ import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
+import { NotificationsHost } from './notifications/NotificationsHost';
+import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
+import { RedClawOnboardingFlowHost } from './pages/redclaw/RedClawOnboardingFlowHost';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -19,10 +22,11 @@ const WanderPage = lazy(async () => ({ default: (await import('./pages/Wander'))
 const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw')).RedClaw }));
 const MediaLibraryPage = lazy(async () => ({ default: (await import('./pages/MediaLibrary')).MediaLibrary }));
 const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/CoverStudio')).CoverStudio }));
+const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages/GenerationStudio')).GenerationStudio }));
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
 
-export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'subjects' | 'workboard';
+export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'group-chat' | 'members';
 
@@ -40,6 +44,7 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'redclaw',
   'media-library',
   'cover-studio',
+  'generation-studio',
   'subjects',
   'workboard',
 ]);
@@ -47,7 +52,6 @@ const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 const OFFICIAL_AUTH_NOTICE_ENABLED = false;
 const OFFICIAL_AUTH_NOTICE_TEXT = '当前账号登陆失效，请重新登陆。';
 const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
-  'redbox-auth:display-session',
   'redbox-auth:panel-display',
 ] as const;
 
@@ -55,6 +59,7 @@ const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
 export interface PendingChatMessage {
   content: string;          // 实际发送给 AI 的完整内容
   displayContent?: string;  // UI 上显示的简短内容
+  sessionRouting?: 'current' | 'new';
   taskHints?: AuthoringTaskHints;
   attachment?: {
     type: 'youtube-video';
@@ -72,6 +77,39 @@ export interface PendingChatMessage {
       summary?: string;
       cover?: string;
     }>;
+  } | {
+    type: 'uploaded-file';
+    name: string;
+    ext?: string;
+    size?: number;
+    thumbnailDataUrl?: string;
+    workspaceRelativePath?: string;
+    absolutePath?: string;
+    originalAbsolutePath?: string;
+    localUrl?: string;
+    kind?: 'text' | 'image' | 'audio' | 'video' | 'binary' | string;
+    mimeType?: string;
+    storageMode?: 'staged' | string;
+    directUploadEligible?: boolean;
+    processingStrategy?: string;
+    deliveryMode?: 'direct-input' | 'tool-read';
+    summary?: string;
+    requiresMultimodal?: boolean;
+  };
+}
+
+export interface GenerationIntent {
+  mode: 'image' | 'video';
+  source: 'standalone' | 'media-library' | 'manuscripts' | 'cover-studio';
+  sourceTitle?: string;
+  bindTarget?: {
+    manuscriptPath?: string;
+    projectId?: string;
+  };
+  preset?: {
+    aspectRatio?: string;
+    resolution?: '720p' | '1080p';
+    durationSeconds?: number;
   };
 }
 
@@ -218,9 +256,12 @@ function App() {
 
   const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
+  const [redclawOnboardingOpen, setRedclawOnboardingOpen] = useState(false);
+  const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
   const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
+  const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['manuscripts']));
   const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
   const [clipboardCandidate, setClipboardCandidate] = useState<YouTubeClipboardCandidate | null>(null);
@@ -310,6 +351,20 @@ function App() {
   }, [currentView, immersiveMode]);
 
   useEffect(() => {
+    const handleNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<{ view?: ViewType }>).detail;
+      const nextView = detail?.view;
+      if (!nextView) return;
+      setCurrentView(nextView);
+    };
+
+    window.addEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
+    return () => {
+      window.removeEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     capturePromptOpenRef.current = isCapturePromptOpen;
   }, [isCapturePromptOpen]);
 
@@ -328,6 +383,10 @@ function App() {
   const clearPendingMessage = () => {
     setPendingChatMessage(null);
   };
+
+  const openRedClawOnboarding = useCallback(() => {
+    setRedclawOnboardingOpen(true);
+  }, []);
 
   const navigateToRedClaw = (message: PendingChatMessage) => {
     uiTraceInteraction('app', 'nav_to_redclaw', { to: 'redclaw' });
@@ -349,6 +408,16 @@ function App() {
   // 稿件页面消费后清除
   const clearPendingManuscriptFile = () => {
     setPendingManuscriptFile(null);
+  };
+
+  const navigateToGenerationStudio = (intent: GenerationIntent) => {
+    uiTraceInteraction('app', 'nav_to_generation_studio', { to: 'generation-studio', mode: intent.mode, source: intent.source });
+    setPendingGenerationIntent(intent);
+    setCurrentView('generation-studio');
+  };
+
+  const clearPendingGenerationIntent = () => {
+    setPendingGenerationIntent(null);
   };
 
   const setViewPersistent = useCallback((view: ViewType, persistent: boolean) => {
@@ -582,7 +651,11 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'settings') && (
           <div className={currentView === 'settings' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'settings' ? <ViewLoadingFallback /> : null}>
-              <SettingsPage isActive={currentView === 'settings'} />
+              <SettingsPage
+                isActive={currentView === 'settings'}
+                onOpenRedClawOnboarding={openRedClawOnboarding}
+                redclawOnboardingVersion={redclawOnboardingVersion}
+              />
             </Suspense>
           </div>
         )}
@@ -593,6 +666,7 @@ function App() {
                 pendingFile={pendingManuscriptFile}
                 onFileConsumed={clearPendingManuscriptFile}
                 onNavigateToRedClaw={navigateToRedClaw}
+                onNavigateToGenerationStudio={navigateToGenerationStudio}
                 isActive={currentView === 'manuscripts'}
                 onImmersiveModeChange={setImmersiveMode}
               />
@@ -626,6 +700,8 @@ function App() {
                 onPendingMessageConsumed={clearPendingRedClawMessage}
                 isActive={currentView === 'redclaw' || persistentViews.has('redclaw')}
                 onExecutionStateChange={(active) => setViewPersistent('redclaw', active)}
+                onOpenRedClawOnboarding={openRedClawOnboarding}
+                redclawOnboardingVersion={redclawOnboardingVersion}
               />
             </Suspense>
           </div>
@@ -640,7 +716,10 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'media-library') && (
           <div className={currentView === 'media-library' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'media-library' ? <ViewLoadingFallback /> : null}>
-              <MediaLibraryPage isActive={currentView === 'media-library'} />
+              <MediaLibraryPage
+                isActive={currentView === 'media-library'}
+                onNavigateToGenerationStudio={navigateToGenerationStudio}
+              />
             </Suspense>
           </div>
         )}
@@ -648,6 +727,18 @@ function App() {
           <div className={currentView === 'cover-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'cover-studio' ? <ViewLoadingFallback /> : null}>
               <CoverStudioPage isActive={currentView === 'cover-studio'} />
+            </Suspense>
+          </div>
+        )}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'generation-studio') && (
+          <div className={currentView === 'generation-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'generation-studio' ? <ViewLoadingFallback /> : null}>
+              <GenerationStudioPage
+                isActive={currentView === 'generation-studio' || persistentViews.has('generation-studio')}
+                pendingIntent={pendingGenerationIntent}
+                onIntentConsumed={clearPendingGenerationIntent}
+                onExecutionStateChange={(active) => setViewPersistent('generation-studio', active)}
+              />
             </Suspense>
           </div>
         )}
@@ -713,7 +804,16 @@ function App() {
         onStart={() => void handleStartStartupMigration()}
         onClose={handleCloseStartupMigration}
       />
+      <RedClawOnboardingFlowHost
+        open={redclawOnboardingOpen}
+        onClose={() => setRedclawOnboardingOpen(false)}
+        onCompleted={() => {
+          setRedclawOnboardingOpen(false);
+          setRedclawOnboardingVersion((value) => value + 1);
+        }}
+      />
       <FirstRunTour currentView={currentView} onNavigate={setCurrentView} />
+      <NotificationsHost currentView={currentView} />
       <AppDialogsHost />
     </>
   );

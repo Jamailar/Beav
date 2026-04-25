@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { buildAudioDataUrl } from '../features/audio-input/audioInput';
+import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import {
     FolderPlus,
@@ -86,13 +88,6 @@ const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve,
     reader.readAsDataURL(file);
 });
 
-const readBlobAsDataUrl = (blob: Blob): Promise<string> => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
-    reader.readAsDataURL(blob);
-});
-
 const getAudioDurationSeconds = (src: string): Promise<number> => new Promise((resolve, reject) => {
     const audio = new Audio();
     audio.preload = 'metadata';
@@ -160,14 +155,11 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
     const [isCategoryDialogSubmitting, setIsCategoryDialogSubmitting] = useState(false);
     const [draft, setDraft] = useState<SubjectDraft>(createEmptyDraft);
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
-    const [recording, setRecording] = useState(false);
     const [recordingError, setRecordingError] = useState('');
     const [recordingHint, setRecordingHint] = useState('');
     const [recordingCountdown, setRecordingCountdown] = useState(0);
     const recordingIntervalRef = useRef<number | null>(null);
     const recordingTimeoutRef = useRef<number | null>(null);
-    const recordingStreamRef = useRef<MediaStream | null>(null);
-    const recorderRef = useRef<MediaRecorder | null>(null);
     const hasLoadedSnapshotRef = useRef(false);
     const loadDataRequestRef = useRef(0);
 
@@ -310,35 +302,6 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         }
     }, []);
 
-    const stopRecordingSession = useCallback(() => {
-        clearRecordingTimers();
-        if (recorderRef.current && recorderRef.current.state === 'recording') {
-            recorderRef.current.stop();
-        }
-        if (recordingStreamRef.current) {
-            recordingStreamRef.current.getTracks().forEach((track) => track.stop());
-            recordingStreamRef.current = null;
-        }
-        recorderRef.current = null;
-        setRecording(false);
-        setRecordingCountdown(0);
-    }, [clearRecordingTimers]);
-
-    const closeModal = useCallback(() => {
-        if (working) return;
-        stopRecordingSession();
-        setIsModalOpen(false);
-        setDraft(createEmptyDraft());
-        setInitialVoicePresent(false);
-        setError('');
-        setRecordingError('');
-        setRecordingHint('');
-    }, [stopRecordingSession, working]);
-
-    useEffect(() => () => {
-        stopRecordingSession();
-    }, [stopRecordingSession]);
-
     const updateDraft = useCallback((patch: Partial<SubjectDraft>) => {
         setDraft((current) => ({ ...current, ...patch }));
     }, []);
@@ -416,6 +379,53 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         setRecordingError('');
     }, []);
 
+    const audioRecording = useAudioRecording({
+        onCaptured: async (clip) => {
+            if ((clip.byteLength || 0) > 10 * 1024 * 1024) {
+                throw new Error('声音参考文件不能超过 10MB');
+            }
+            await saveVoiceDataUrl(
+                buildAudioDataUrl(clip),
+                clip.fileName || `voice-reference-${Date.now()}.wav`,
+            );
+        },
+    });
+
+    useEffect(() => {
+        if (!audioRecording.error) return;
+        setRecordingError(audioRecording.error);
+        setRecordingHint('');
+    }, [audioRecording.error]);
+
+    useEffect(() => {
+        if (audioRecording.isRecording) return;
+        clearRecordingTimers();
+        setRecordingCountdown(0);
+    }, [audioRecording.isRecording, clearRecordingTimers]);
+
+    const stopRecordingSession = useCallback(() => {
+        clearRecordingTimers();
+        setRecordingCountdown(0);
+        if (audioRecording.isRecording || audioRecording.isWorking) {
+            void audioRecording.cancelRecording();
+        }
+    }, [audioRecording, clearRecordingTimers]);
+
+    const closeModal = useCallback(() => {
+        if (working) return;
+        stopRecordingSession();
+        setIsModalOpen(false);
+        setDraft(createEmptyDraft());
+        setInitialVoicePresent(false);
+        setError('');
+        setRecordingError('');
+        setRecordingHint('');
+    }, [stopRecordingSession, working]);
+
+    useEffect(() => () => {
+        stopRecordingSession();
+    }, [stopRecordingSession]);
+
     const handleVoiceFileInput = useCallback(async (files: FileList | null) => {
         const file = files?.[0];
         if (!file) return;
@@ -433,78 +443,29 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
     }, [saveVoiceDataUrl]);
 
     const handleRecordVoice = useCallback(async () => {
-        if (recording) return;
-        if (typeof window === 'undefined' || !window.MediaRecorder || !navigator.mediaDevices?.getUserMedia) {
-            setRecordingError('当前环境不支持录音');
-            return;
-        }
-        setRecording(true);
+        if (audioRecording.isRecording || audioRecording.isWorking) return;
         setRecordingCountdown(SUBJECT_VOICE_RECORDING_SECONDS);
         setRecordingError('');
         setRecordingHint('点击录音后，请按正常语速清晰朗读示例句。系统会自动截取这次采样。');
+        const started = await audioRecording.startRecording();
+        if (!started) {
+            setRecordingCountdown(0);
+            setRecordingHint('');
+            return;
+        }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const chunks: BlobPart[] = [];
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
-            const recorder = new MediaRecorder(stream, { mimeType });
-            recordingStreamRef.current = stream;
-            recorderRef.current = recorder;
-
-            recorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    chunks.push(event.data);
-                }
-            };
-
-            recorder.onstop = async () => {
-                clearRecordingTimers();
-                if (recordingStreamRef.current) {
-                    recordingStreamRef.current.getTracks().forEach((track) => track.stop());
-                    recordingStreamRef.current = null;
-                }
-                recorderRef.current = null;
-                setRecording(false);
-                setRecordingCountdown(0);
-                try {
-                    const blob = new Blob(chunks, { type: mimeType });
-                    if (blob.size > 10 * 1024 * 1024) {
-                        throw new Error('声音参考文件不能超过 10MB');
-                    }
-                    const dataUrl = await readBlobAsDataUrl(blob);
-                    await saveVoiceDataUrl(dataUrl, `voice-reference-${Date.now()}.webm`);
-                } catch (e) {
-                    setRecordingError(e instanceof Error ? e.message : '录音保存失败');
-                    setRecordingHint('');
-                }
-            };
-
-            recorder.onerror = () => {
-                clearRecordingTimers();
-                stream.getTracks().forEach((track) => track.stop());
-                recordingStreamRef.current = null;
-                recorderRef.current = null;
-                setRecording(false);
-                setRecordingCountdown(0);
-                setRecordingError('录音失败，请重试');
-                setRecordingHint('');
-            };
-
-            recorder.start();
             recordingIntervalRef.current = window.setInterval(() => {
                 setRecordingCountdown((current) => Math.max(0, current - 1));
             }, 1000);
             recordingTimeoutRef.current = window.setTimeout(() => {
-                if (recorder.state === 'recording') {
-                    recorder.stop();
-                }
+                void audioRecording.stopRecording();
             }, SUBJECT_VOICE_RECORDING_SECONDS * 1000);
         } catch (e) {
             stopRecordingSession();
-            setRecording(false);
             setRecordingError(e instanceof Error ? e.message : '无法启动录音');
             setRecordingHint('');
         }
-    }, [clearRecordingTimers, recording, saveVoiceDataUrl, stopRecordingSession]);
+    }, [audioRecording, stopRecordingSession]);
 
     const submitCategoryDialog = useCallback(async () => {
         const trimmedName = categoryDialogName.trim();
@@ -937,7 +898,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                         ) : (
                                             <div className="space-y-3">
                                                 {draft.attributes.map((attribute, index) => (
-                                                    <div key={`${index}-${attribute.key}-${attribute.value}`} className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)_40px] gap-3">
+                                                    <div key={index} className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)_40px] gap-3">
                                                         <input
                                                             value={attribute.key}
                                                             onChange={(event) => handleAttributeChange(index, { key: event.target.value })}
@@ -1042,12 +1003,12 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                             <button
                                                 type="button"
                                                 onClick={() => void handleRecordVoice()}
-                                                disabled={recording}
+                                                disabled={audioRecording.isRecording || audioRecording.isWorking}
                                                 className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary disabled:opacity-60"
                                             >
                                                 <span className="inline-flex items-center gap-1">
                                                     <Mic className="w-4 h-4" />
-                                                    {recording ? `录音中 ${recordingCountdown}s` : '点击录音'}
+                                                    {audioRecording.isRecording ? `录音中 ${recordingCountdown}s` : '点击录音'}
                                                 </span>
                                             </button>
                                             <label className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary cursor-pointer">
@@ -1073,7 +1034,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                             )}
                                         </div>
 
-                                        {recording && (
+                                        {audioRecording.isRecording && (
                                             <div className="rounded-lg border border-accent-primary/25 bg-accent-primary/8 px-3 py-2 text-xs text-accent-primary">
                                                 采样倒计时：{recordingCountdown} 秒。请持续朗读示例句，录音会自动结束。
                                             </div>

@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { Loader2, Sparkles, MessageSquarePlus, Heart } from 'lucide-react';
-import { clsx } from 'clsx';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, MessageSquarePlus, Heart, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { Chat } from './Chat';
 import type { PendingChatMessage } from '../App';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
@@ -9,9 +8,6 @@ import {
     LONG_TEMPLATES,
     REDCLAW_CONTEXT_TYPE,
     REDCLAW_SHORTCUTS,
-    REDCLAW_SIDEBAR_DEFAULT_WIDTH,
-    REDCLAW_SIDEBAR_MAX_WIDTH,
-    REDCLAW_SIDEBAR_MIN_WIDTH,
     REDCLAW_WELCOME_ICON_SRC,
     REDCLAW_WELCOME_SHORTCUTS,
     RUNNER_INTERVAL_OPTIONS,
@@ -31,6 +27,9 @@ import {
     sortContextSessionItems,
 } from './redclaw/helpers';
 import { RedClawHistoryDrawer } from './redclaw/RedClawHistoryDrawer';
+import {
+    isRedClawOnboardingCompleted,
+} from './redclaw/onboardingState';
 import { RedClawSidebar } from './redclaw/RedClawSidebar';
 import type {
     LongDraft,
@@ -46,6 +45,8 @@ interface RedClawProps {
     onPendingMessageConsumed?: () => void;
     isActive?: boolean;
     onExecutionStateChange?: (active: boolean) => void;
+    onOpenRedClawOnboarding?: () => void;
+    redclawOnboardingVersion?: number;
 }
 
 interface RedClawSpaceListPayload {
@@ -89,11 +90,18 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     return sessionId || null;
 }
 
+function canReuseAsFreshSession(sessionItem: ContextChatSessionListItem | null | undefined): boolean {
+    if (!sessionItem) return false;
+    return Number(sessionItem.messageCount || 0) === 0;
+}
+
 export function RedClaw({
     pendingMessage,
     onPendingMessageConsumed,
     isActive = true,
     onExecutionStateChange,
+    onOpenRedClawOnboarding,
+    redclawOnboardingVersion = 0,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -112,13 +120,6 @@ export function RedClaw({
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
     const [sidebarTab, setSidebarTab] = useState<SidebarTab>('skills');
-    const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-        if (typeof window === 'undefined') return REDCLAW_SIDEBAR_DEFAULT_WIDTH;
-        const raw = Number(localStorage.getItem('redclaw:sidebarWidth') || REDCLAW_SIDEBAR_DEFAULT_WIDTH);
-        if (!Number.isFinite(raw)) return REDCLAW_SIDEBAR_DEFAULT_WIDTH;
-        return Math.min(REDCLAW_SIDEBAR_MAX_WIDTH, Math.max(REDCLAW_SIDEBAR_MIN_WIDTH, raw));
-    });
-    const [isSidebarResizing, setIsSidebarResizing] = useState(false);
 
     const [skills, setSkills] = useState<SkillDefinition[]>([]);
     const [isSkillsLoading, setIsSkillsLoading] = useState(false);
@@ -129,6 +130,9 @@ export function RedClaw({
     const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
     const [automationLoading, setAutomationLoading] = useState(false);
     const [automationMessage, setAutomationMessage] = useState('');
+    const [onboardingState, setOnboardingState] = useState<Record<string, unknown> | null>(null);
+    const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
+    const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
 
     const [runnerIntervalMinutes, setRunnerIntervalMinutes] = useState<number>(20);
     const [runnerMaxAutomationPerTick, setRunnerMaxAutomationPerTick] = useState<number>(2);
@@ -150,9 +154,11 @@ export function RedClaw({
     const sessionListRef = useRef<ContextChatSessionListItem[]>([]);
     const runnerStatusRequestIdRef = useRef(0);
     const skillsRequestIdRef = useRef(0);
+    const onboardingRequestIdRef = useRef(0);
     const hasSessionSnapshotRef = useRef(false);
     const hasRunnerSnapshotRef = useRef(false);
     const hasSkillsSnapshotRef = useRef(false);
+    const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
 
     useEffect(() => {
         activeSessionIdRef.current = activeSessionId;
@@ -167,6 +173,95 @@ export function RedClaw({
     useEffect(() => {
         sessionListRef.current = sessionList;
     }, [sessionList]);
+
+    useEffect(() => {
+        if (!pendingMessage) {
+            routedPendingMessageRef.current = null;
+            setResolvedPendingMessage(null);
+            return;
+        }
+
+        if (routedPendingMessageRef.current === pendingMessage) {
+            setResolvedPendingMessage(pendingMessage);
+            return;
+        }
+
+        const routing = pendingMessage.sessionRouting || 'current';
+        if (routing !== 'new') {
+            routedPendingMessageRef.current = pendingMessage;
+            setResolvedPendingMessage(pendingMessage);
+            return;
+        }
+
+        if (!hasSessionSnapshotRef.current || isSessionLoading) {
+            setResolvedPendingMessage(null);
+            return;
+        }
+
+        const activeSession = activeSessionIdRef.current
+            ? sessionListRef.current.find((item) => item.id === activeSessionIdRef.current) || null
+            : null;
+        if (canReuseAsFreshSession(activeSession)) {
+            routedPendingMessageRef.current = pendingMessage;
+            setResolvedPendingMessage(pendingMessage);
+            return;
+        }
+
+        let cancelled = false;
+        setResolvedPendingMessage(null);
+
+        const prepareFreshSession = async () => {
+            const nextActiveSpaceId = activeSpaceId || 'default';
+            const nextSpaceName = activeSpaceName || nextActiveSpaceId;
+            const contextId = buildRedClawContextId(nextActiveSpaceId);
+            try {
+                const session = await uiMeasure('redclaw', 'sessions:create_for_pending_message', async () => (
+                    window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                        contextId,
+                        contextType: REDCLAW_CONTEXT_TYPE,
+                        title: buildRedClawSessionTitle(nextSpaceName),
+                        initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
+                    }, {
+                        timeoutMs: 3200,
+                        fallback: null,
+                    })
+                ), { activeSpaceId: nextActiveSpaceId, spaceName: nextSpaceName });
+
+                if (!session) {
+                    throw new Error('create context session timed out');
+                }
+                if (cancelled) return;
+
+                const nextItem = createContextSessionListItem(session);
+                setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
+                setActiveSessionId(session.id);
+                hasSessionSnapshotRef.current = true;
+                routedPendingMessageRef.current = pendingMessage;
+                setResolvedPendingMessage(pendingMessage);
+                debugUi('sessions:create_for_pending_message_done', {
+                    sessionId: session.id,
+                    activeSpaceId: nextActiveSpaceId,
+                });
+            } catch (error) {
+                console.error('Failed to create RedClaw context session for pending message:', error);
+                if (!cancelled) {
+                    setChatActionMessage('为创作任务创建新对话失败，请稍后重试');
+                }
+            }
+        };
+
+        void prepareFreshSession();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        activeSpaceId,
+        activeSpaceName,
+        debugUi,
+        isSessionLoading,
+        pendingMessage,
+    ]);
 
     const loadContextSessions = useCallback(async (
         nextActiveSpaceId: string,
@@ -368,6 +463,21 @@ export function RedClaw({
         }
     }, []);
 
+    const loadOnboardingBundle = useCallback(async () => {
+        const requestId = ++onboardingRequestIdRef.current;
+        try {
+            const bundle = await uiMeasure('redclaw', 'load_onboarding_bundle', async () => (
+                window.ipcRenderer.redclawProfile.getBundle()
+            )) as {
+                onboardingState?: Record<string, unknown>;
+            } | null;
+            if (requestId !== onboardingRequestIdRef.current) return;
+            setOnboardingState(bundle?.onboardingState || null);
+        } catch (error) {
+            console.error('Failed to load RedClaw onboarding bundle:', error);
+        }
+    }, []);
+
     useEffect(() => {
         debugUi(isActive ? 'view_activate' : 'view_deactivate', { sessionId: activeSessionId });
         if (!isActive) {
@@ -390,17 +500,36 @@ export function RedClaw({
     }, [initSession, isActive, loadRunnerStatus]);
 
     useEffect(() => {
+        if (!isActive || !activeSessionId) return;
+        void loadOnboardingBundle();
+    }, [activeSessionId, isActive, loadOnboardingBundle]);
+
+    useEffect(() => {
+        if (!redclawOnboardingVersion) return;
+        void loadOnboardingBundle();
+        void loadSkills();
+        setHideOnboardingPrompt(true);
+        setChatActionMessage('已完成这个空间的风格定义');
+    }, [loadOnboardingBundle, loadSkills, redclawOnboardingVersion]);
+
+    useEffect(() => {
         if (!isActive) return;
         const onSpaceChanged = () => {
             void initSession();
             void loadRunnerStatus(true);
             void loadSkills();
+            void loadOnboardingBundle();
+            setHideOnboardingPrompt(false);
         };
         window.ipcRenderer.on('space:changed', onSpaceChanged);
         return () => {
             window.ipcRenderer.off('space:changed', onSpaceChanged);
         };
-    }, [initSession, isActive, loadRunnerStatus, loadSkills]);
+    }, [initSession, isActive, loadOnboardingBundle, loadRunnerStatus, loadSkills]);
+
+    useEffect(() => {
+        setHideOnboardingPrompt(false);
+    }, [activeSpaceId]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -459,10 +588,6 @@ export function RedClaw({
         const timer = window.setTimeout(() => setChatActionMessage(''), 2600);
         return () => window.clearTimeout(timer);
     }, [chatActionMessage]);
-
-    useEffect(() => {
-        localStorage.setItem('redclaw:sidebarWidth', String(Math.round(sidebarWidth)));
-    }, [sidebarWidth]);
 
     useEffect(() => {
         if (!automationMessage) return;
@@ -949,45 +1074,40 @@ export function RedClaw({
         }
     }, [loadRunnerStatus]);
 
-    const startSidebarResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setIsSidebarResizing(true);
-        const startX = event.clientX;
-        const startWidth = sidebarWidth;
+    const onboardingCompleted = useMemo(() => isRedClawOnboardingCompleted(onboardingState), [onboardingState]);
 
-        const handleMouseMove = (moveEvent: MouseEvent) => {
-            const delta = startX - moveEvent.clientX;
-            const next = Math.min(
-                REDCLAW_SIDEBAR_MAX_WIDTH,
-                Math.max(REDCLAW_SIDEBAR_MIN_WIDTH, startWidth + delta)
-            );
-            setSidebarWidth(next);
-        };
-
-        const handleMouseUp = () => {
-            setIsSidebarResizing(false);
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
-    }, [sidebarWidth]);
-
-    const welcomeActions = useMemo(() => [
-        {
-            label: '想吐槽或提建议?',
-            url: 'https://github.com/Jamailar/RedBox/issues',
-            icon: <MessageSquarePlus className="w-5 h-5" />,
-        },
-        {
-            label: '喜欢我就点个 Star 吧',
-            url: 'https://github.com/Jamailar/RedBox',
-            icon: <Heart className="w-5 h-5 fill-current" />,
-            color: 'text-rose-500'
+    const welcomeActions = useMemo(() => {
+        const actions = [];
+        if (!onboardingCompleted) {
+            actions.push({
+                label: '定义这个空间',
+                onClick: () => onOpenRedClawOnboarding?.(),
+                icon: <Sparkles className="w-5 h-5" />,
+                color: 'text-amber-500',
+            });
+        } else {
+            actions.push({
+                label: '重新定义空间风格',
+                onClick: () => onOpenRedClawOnboarding?.(),
+                icon: <SlidersHorizontal className="w-5 h-5" />,
+                color: 'text-stone-700',
+            });
         }
-    ], []);
+        actions.push(
+            {
+                label: '想吐槽或提建议?',
+                url: 'https://github.com/Jamailar/RedBox/issues',
+                icon: <MessageSquarePlus className="w-5 h-5" />,
+            },
+            {
+                label: '喜欢我就点个 Star 吧',
+                url: 'https://github.com/Jamailar/RedBox',
+                icon: <Heart className="w-5 h-5 fill-current" />,
+                color: 'text-rose-500'
+            }
+        );
+        return actions;
+    }, [onOpenRedClawOnboarding, onboardingCompleted]);
 
 
     return (
@@ -1003,19 +1123,55 @@ export function RedClaw({
                 ) : activeSessionId ? (
                     <div className="h-full min-h-0 flex flex-col">
                         <div className="relative min-h-0 flex-1 overflow-hidden">
+                            {!onboardingCompleted && !hideOnboardingPrompt && (
+                                <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center px-4">
+                                    <div className="pointer-events-auto w-full max-w-2xl rounded-[28px] border border-amber-300/20 bg-[linear-gradient(135deg,rgba(24,18,14,0.96),rgba(17,13,15,0.94))] p-5 text-white shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl">
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div className="space-y-3">
+                                                <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/6 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/58">
+                                                    <Sparkles className="h-3.5 w-3.5 text-amber-300" />
+                                                    来自 RedClaw
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <div className="text-lg font-semibold">先定义这个空间的经营方向和写作风格</div>
+                                                    <p className="max-w-xl text-sm leading-6 text-white/68">
+                                                        这会影响我后续怎么帮你定调性、写内容、安排转化。先做完这组 10 题，再开始长期创作会更准。
+                                                    </p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onOpenRedClawOnboarding?.()}
+                                                    className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black transition hover:scale-[0.99]"
+                                                >
+                                                    <SlidersHorizontal className="h-4 w-4" />
+                                                    开始定义这个空间
+                                                </button>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setHideOnboardingPrompt(true)}
+                                                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/6 text-white/65 transition hover:bg-white/10"
+                                                aria-label="稍后再说"
+                                            >
+                                                <X className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
                             <Chat
                                 isActive={isActive}
                                 onExecutionStateChange={onExecutionStateChange}
                                 key={`redclaw:${chatRefreshKey}`}
                                 fixedSessionId={activeSessionId}
-                                pendingMessage={pendingMessage}
+                                pendingMessage={resolvedPendingMessage}
                                 onMessageConsumed={onPendingMessageConsumed}
                                 defaultCollapsed={true}
-                                showClearButton={true}
+                                showClearButton={false}
                                 fixedSessionBannerText=""
-                                showWelcomeShortcuts={false}
-                                showComposerShortcuts={false}
-                                fixedSessionContextIndicatorMode={sidebarCollapsed ? 'corner-ring' : 'none'}
+                                showWelcomeShortcuts={true}
+                                showComposerShortcuts={true}
+                                fixedSessionContextIndicatorMode="corner-ring"
                                 shortcuts={REDCLAW_SHORTCUTS}
                                 welcomeShortcuts={REDCLAW_WELCOME_SHORTCUTS}
                                 embeddedTheme="auto"
@@ -1023,7 +1179,7 @@ export function RedClaw({
                                 welcomeSubtitle=""
                                 welcomeIconSrc={REDCLAW_WELCOME_ICON_SRC}
                                 welcomeActions={welcomeActions}
-                                contentLayout={sidebarCollapsed ? 'wide' : 'default'}
+                                contentLayout="wide"
                                 contentWidthPreset="narrow"
                                 allowFileUpload={true}
                                 messageWorkflowPlacement="bottom"
@@ -1042,23 +1198,21 @@ export function RedClaw({
                                 onSwitchSession={switchSession}
                                 onDeleteSession={(sessionId) => void deleteHistorySession(sessionId)}
                             />
-                            <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                                    className={clsx(
-                                        'flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium shadow-sm backdrop-blur-md transition-all active:scale-95',
-                                        !sidebarCollapsed
-                                            ? 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary'
-                                            : 'border-border bg-surface-primary/80 text-text-secondary hover:border-accent-primary/30 hover:bg-surface-primary hover:text-text-primary'
-                                    )}
-                                    title={sidebarCollapsed ? "展开技能面板" : "收起技能面板"}
-                                    aria-label="切换技能面板"
-                                >
-                                    <Sparkles className="w-4 h-4" />
-                                    <span className="hidden sm:inline">技能</span>
-                                </button>
-                            </div>
+                            <RedClawSidebar
+                                open={!sidebarCollapsed}
+                                chatActionMessage={chatActionMessage}
+                                skills={skills}
+                                isSkillsLoading={isSkillsLoading}
+                                skillsMessage={skillsMessage}
+                                enabledSkillCount={enabledSkillCount}
+                                installSource={installSource}
+                                isInstallingSkill={isInstallingSkill}
+                                onToggleOpen={() => setSidebarCollapsed((value) => !value)}
+                                onCollapse={() => setSidebarCollapsed(true)}
+                                onInstallSourceChange={setInstallSource}
+                                onInstallSkill={() => void installSkill()}
+                                onToggleSkill={(skill) => void toggleSkill(skill)}
+                            />
                         </div>
                     </div>
                 ) : (
@@ -1067,28 +1221,6 @@ export function RedClaw({
                     </div>
                 )}
             </div>
-            <RedClawSidebar
-                collapsed={sidebarCollapsed}
-                sidebarWidth={sidebarWidth}
-                isSidebarResizing={isSidebarResizing}
-                activeSpaceName={activeSpaceName}
-                sidebarTab={sidebarTab}
-                chatActionLoading={chatActionLoading}
-                chatActionMessage={chatActionMessage}
-                skills={skills}
-                isSkillsLoading={isSkillsLoading}
-                skillsMessage={skillsMessage}
-                enabledSkillCount={enabledSkillCount}
-                installSource={installSource}
-                isInstallingSkill={isInstallingSkill}
-                onSidebarResizeStart={startSidebarResize}
-                onCollapse={() => setSidebarCollapsed(true)}
-                onSelectTab={setSidebarTab}
-                onCompactContext={() => void compactRedClawContext()}
-                onInstallSourceChange={setInstallSource}
-                onInstallSkill={() => void installSkill()}
-                onToggleSkill={(skill) => void toggleSkill(skill)}
-            />
         </div>
     );
 }

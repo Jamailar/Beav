@@ -1,7 +1,16 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Activity, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
+import type {
+  CliRuntimeEnvironmentRecord,
+  CliRuntimeEnvironmentScope,
+  CliRuntimeToolRecord,
+  DiagnosticsLogStatus,
+  DiagnosticsPendingReport,
+  NotificationPermissionState,
+  NotificationSettingsPayload,
+} from '../../types';
 import type {
   AgentTaskSnapshot,
   AgentTaskTrace,
@@ -14,6 +23,9 @@ import type {
   MemoryMaintenanceStatus,
     MemorySearchResult,
     RoleSpec,
+    RuntimePerfBenchmarkMode,
+    RuntimePerfPreset,
+    RuntimePerfRunResult,
     RuntimeToolResultItem,
     ToolDiagnosticDescriptor,
     ToolDiagnosticRunResult,
@@ -23,6 +35,12 @@ import type {
 type SettingsFormData = {
     workspace_dir: string;
     debug_log_enabled: boolean;
+    diagnostics_upload_consent: 'none' | 'prompt' | 'approved';
+    diagnostics_include_advanced_context: boolean;
+    diagnostics_auto_send_same_crash: boolean;
+    diagnostics_last_prompted_at: string;
+    release_log_retention_days: string;
+    release_log_max_file_mb: string;
     proxy_enabled: boolean;
     proxy_url: string;
     proxy_bypass: string;
@@ -56,7 +74,26 @@ type RuntimeDiagnosticsSummary = {
             systemPromptChars: number;
             longTermContextChars: number;
             hasModelConfig: boolean;
+            contextBundle?: {
+                runtimeMode?: string;
+                toolCount?: number;
+                activeSkillCount?: number;
+                projectContextChars?: number;
+                hostContextChars?: number;
+                advisorContextChars?: number;
+                memoryChars?: number;
+                subjectsChars?: number;
+                promptPrefixChars?: number;
+                promptSuffixChars?: number;
+                finalPromptChars?: number;
+            };
         }>;
+    };
+    approvals?: {
+        pendingCount?: number;
+        resolvedCount?: number;
+        pending?: Array<Record<string, unknown>>;
+        recent?: Array<Record<string, unknown>>;
     };
     phase0?: {
         personaGeneration?: {
@@ -204,6 +241,10 @@ function DiagnosticCopyButton({ text, label = '复制' }: { text: string; label?
     );
 }
 
+function formatRuntimePerfRunIndex(index: number): string {
+    return `Run ${String(index).padStart(2, '0')}`;
+}
+
 type AssistantDaemonDraft = {
     enabled: boolean;
     autoStart: boolean;
@@ -251,9 +292,16 @@ type AssistantDaemonWeixinLoginState = {
 };
 
 interface GeneralSettingsSectionProps {
-    appVersion: string;
+    appVersion: string | null;
     formData: SettingsFormData;
     setFormData: Dispatch<SetStateAction<any>>;
+    notificationSettings: NotificationSettingsPayload;
+    setNotificationSettings: Dispatch<SetStateAction<NotificationSettingsPayload>>;
+    notificationPermissionState: NotificationPermissionState['state'];
+    notificationStatusMessage: string;
+    handleTestNotificationSound: () => Promise<void>;
+    handleRequestNotificationPermission: () => Promise<void>;
+    handleSendTestSystemNotification: () => Promise<void>;
     handlePickWorkspaceDir: () => Promise<void>;
     handleResetWorkspaceDir: () => void;
     handleOpenKnowledgeApiGuide: () => Promise<void>;
@@ -261,6 +309,12 @@ interface GeneralSettingsSectionProps {
     isDebugLogsLoading: boolean;
     handleRefreshDebugLogs: () => Promise<void>;
     handleOpenDebugLogDir: () => Promise<void>;
+    logStatus: DiagnosticsLogStatus | null;
+    pendingReports: DiagnosticsPendingReport[];
+    diagnosticsActionBusy: string | null;
+    handleExportDiagnosticBundle: (reportId?: string) => Promise<void>;
+    handleUploadPendingReport: (reportId: string) => Promise<void>;
+    handleDismissPendingReport: (reportId: string) => Promise<void>;
     handleVersionTap: () => void;
 }
 
@@ -285,6 +339,13 @@ function GeneralSettingsSectionInner({
     appVersion,
     formData,
     setFormData,
+    notificationSettings,
+    setNotificationSettings,
+    notificationPermissionState,
+    notificationStatusMessage,
+    handleTestNotificationSound,
+    handleRequestNotificationPermission,
+    handleSendTestSystemNotification,
     handlePickWorkspaceDir,
     handleResetWorkspaceDir,
     handleOpenKnowledgeApiGuide,
@@ -292,6 +353,12 @@ function GeneralSettingsSectionInner({
     isDebugLogsLoading,
     handleRefreshDebugLogs,
     handleOpenDebugLogDir,
+    logStatus,
+    pendingReports,
+    diagnosticsActionBusy,
+    handleExportDiagnosticBundle,
+    handleUploadPendingReport,
+    handleDismissPendingReport,
     handleVersionTap,
 }: GeneralSettingsSectionProps) {
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
@@ -305,7 +372,7 @@ function GeneralSettingsSectionInner({
                     <div>
                         <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
                             <Info className="w-4 h-4" />
-                            红盒子 RedBox
+                            应用版本
                         </h3>
                         <p className="text-xs text-text-tertiary mt-1">
                             当前版本:{' '}
@@ -314,7 +381,7 @@ function GeneralSettingsSectionInner({
                                 onClick={handleVersionTap}
                                 className="font-mono hover:text-text-primary transition-colors"
                             >
-                                {appVersion || '加载中...'}
+                                {appVersion ?? '加载中...'}
                             </button>
                         </p>
                         <p className="text-xs text-text-tertiary mt-1">
@@ -370,6 +437,196 @@ function GeneralSettingsSectionInner({
                 <p className="text-[10px] text-text-tertiary mt-2">
                     不要直接选择现有的稿件目录、<code className="bg-surface-secondary px-1 rounded">manuscripts</code> 目录或 <code className="bg-surface-secondary px-1 rounded">documents</code> 目录，否则应用会在其中创建 <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> 等完整工作区结构。
                 </p>
+            </div>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
+                            <Bell className="w-4 h-4" />
+                            通知中心
+                        </h3>
+                        <p className="text-xs text-text-tertiary mt-1">
+                            统一控制后台 AI、媒体生成和 RedClaw 任务的声音、弹窗和系统通知。
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setNotificationSettings((current) => ({ ...current, enabled: !current.enabled }))}
+                        className={clsx(
+                            'h-8 px-3 rounded-md border text-xs font-medium transition-colors',
+                            notificationSettings.enabled
+                                ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                                : 'border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+                        )}
+                    >
+                        {notificationSettings.enabled ? '已开启' : '已关闭'}
+                    </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">应用内弹窗</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">用统一 toast 提醒关键任务状态。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.inApp.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                inApp: { ...current.inApp, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">声音提醒</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">成功、失败、待确认使用不同提示音。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.sound.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                sound: { ...current.sound, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">系统通知</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">窗口不在前台时可补充 OS 级通知。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.system.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                system: { ...current.system, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">静默时段</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">默认在该时段不播放成功提示音。</div>
+                        </div>
+                        <input
+                            type="checkbox"
+                            checked={notificationSettings.quietHours.enabled}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                quietHours: { ...current.quietHours, enabled: event.target.checked },
+                            }))}
+                        />
+                    </label>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                        <label className="block text-[11px] font-medium text-text-secondary mb-2">提示音音量</label>
+                        <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={notificationSettings.sound.volume}
+                            onChange={(event) => setNotificationSettings((current) => ({
+                                ...current,
+                                sound: { ...current.sound, volume: Number(event.target.value) },
+                            }))}
+                            className="w-full"
+                        />
+                        <div className="mt-1 text-[11px] text-text-tertiary">
+                            {Math.round(notificationSettings.sound.volume * 100)}%
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-[11px] font-medium text-text-secondary mb-2">静默开始</label>
+                            <input
+                                type="time"
+                                value={notificationSettings.quietHours.start}
+                                onChange={(event) => setNotificationSettings((current) => ({
+                                    ...current,
+                                    quietHours: { ...current.quietHours, start: event.target.value },
+                                }))}
+                                className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-[11px] font-medium text-text-secondary mb-2">静默结束</label>
+                            <input
+                                type="time"
+                                value={notificationSettings.quietHours.end}
+                                onChange={(event) => setNotificationSettings((current) => ({
+                                    ...current,
+                                    quietHours: { ...current.quietHours, end: event.target.value },
+                                }))}
+                                className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    {([
+                        ['runtimeBackgroundDone', 'AI 后台完成'],
+                        ['runtimeFailed', 'AI 失败'],
+                        ['runtimeNeedsApproval', 'AI 待确认'],
+                        ['generationCompleted', '媒体生成完成'],
+                        ['generationFailed', '媒体生成失败'],
+                        ['redclawCompleted', 'RedClaw 完成'],
+                        ['redclawFailed', 'RedClaw 失败'],
+                    ] as const).map(([ruleKey, label]) => (
+                        <label key={ruleKey} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                            <div className="text-xs text-text-primary">{label}</div>
+                            <input
+                                type="checkbox"
+                                checked={notificationSettings.rules[ruleKey]}
+                                onChange={(event) => setNotificationSettings((current) => ({
+                                    ...current,
+                                    rules: {
+                                        ...current.rules,
+                                        [ruleKey]: event.target.checked,
+                                    },
+                                }))}
+                            />
+                        </label>
+                    ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => void handleTestNotificationSound()}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        测试提醒音
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleRequestNotificationPermission()}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        请求系统通知权限
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void handleSendTestSystemNotification()}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        测试系统通知
+                    </button>
+                    <div className="text-[11px] text-text-tertiary">
+                        权限状态：{notificationPermissionState}
+                    </div>
+                </div>
+
+                {notificationStatusMessage ? (
+                    <div className="text-[11px] text-text-tertiary">{notificationStatusMessage}</div>
+                ) : null}
             </div>
 
             <div className={clsx(
@@ -449,9 +706,9 @@ function GeneralSettingsSectionInner({
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-4">
                     <div>
-                        <h3 className="text-sm font-medium text-text-primary">调试日志</h3>
+                        <h3 className="text-sm font-medium text-text-primary">诊断与日志</h3>
                         <p className="text-xs text-text-tertiary mt-1">
-                            开启后会保留当前运行期间的主进程日志、聊天日志和工具诊断日志预览，便于追踪 RedClaw 工具调用失败。
+                            正式版本地日志默认常开。这里控制 verbose 调试 trace、诊断包高级上下文，以及待发送报告的导出和上传。
                         </p>
                     </div>
                     <button
@@ -464,7 +721,98 @@ function GeneralSettingsSectionInner({
                         <span className="ui-switch-thumb" />
                     </button>
                 </div>
+                <div className="grid gap-3 rounded-lg border border-border bg-surface-primary/40 p-3 text-xs text-text-secondary md:grid-cols-2">
+                    <div>
+                        <div className="text-[11px] text-text-tertiary">日志目录</div>
+                        <div className="mt-1 break-all text-text-primary">
+                            {logStatus?.logDirectory || '未初始化'}
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-[11px] text-text-tertiary">待发送报告</div>
+                        <div className="mt-1 text-text-primary">
+                            {logStatus?.pendingCount ?? pendingReports.length} 份
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-[11px] text-text-tertiary">保留天数 / 单文件上限</div>
+                        <div className="mt-1 text-text-primary">
+                            {logStatus?.retentionDays ?? '--'} 天 / {logStatus?.maxFileMb ?? '--'} MB
+                        </div>
+                    </div>
+                    <div>
+                        <div className="text-[11px] text-text-tertiary">上传端点</div>
+                        <div className="mt-1 break-all text-text-primary">
+                            {logStatus?.uploadEndpoint || '未配置'}
+                        </div>
+                    </div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                    <label className="rounded-lg border border-border bg-surface-primary/40 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm font-medium text-text-primary">附带高级诊断数据</span>
+                            <input
+                                type="checkbox"
+                                checked={formData.diagnostics_include_advanced_context}
+                                onChange={(e) => setFormData((prev: any) => ({ ...prev, diagnostics_include_advanced_context: e.target.checked }))}
+                            />
+                        </div>
+                        <p className="mt-2 text-[11px] text-text-tertiary">
+                            导出或上传诊断包时附带 session/task trace。
+                        </p>
+                    </label>
+                    <label className="rounded-lg border border-border bg-surface-primary/40 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm font-medium text-text-primary">同类崩溃记住上传选择</span>
+                            <input
+                                type="checkbox"
+                                checked={formData.diagnostics_auto_send_same_crash}
+                                onChange={(e) => setFormData((prev: any) => ({ ...prev, diagnostics_auto_send_same_crash: e.target.checked }))}
+                            />
+                        </div>
+                        <p className="mt-2 text-[11px] text-text-tertiary">
+                            只记录用户是否允许再次发送，不会绕过手动同意。
+                        </p>
+                    </label>
+                </div>
+                <div className="grid gap-4 md:grid-cols-3">
+                    <label className="space-y-2">
+                        <span className="text-xs text-text-tertiary">上传同意策略</span>
+                        <select
+                            value={formData.diagnostics_upload_consent}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, diagnostics_upload_consent: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                        >
+                            <option value="none">每次手动确认</option>
+                            <option value="prompt">异常时提示</option>
+                            <option value="approved">允许手动上传</option>
+                        </select>
+                    </label>
+                    <label className="space-y-2">
+                        <span className="text-xs text-text-tertiary">日志保留天数</span>
+                        <input
+                            value={formData.release_log_retention_days}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, release_log_retention_days: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                        />
+                    </label>
+                    <label className="space-y-2">
+                        <span className="text-xs text-text-tertiary">单文件上限 (MB)</span>
+                        <input
+                            value={formData.release_log_max_file_mb}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, release_log_max_file_mb: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                        />
+                    </label>
+                </div>
                 <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => void handleExportDiagnosticBundle()}
+                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                    >
+                        导出当前诊断包
+                    </button>
                     <button
                         type="button"
                         onClick={() => void handleRefreshDebugLogs()}
@@ -477,8 +825,68 @@ function GeneralSettingsSectionInner({
                         onClick={() => void handleOpenDebugLogDir()}
                         className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                     >
-                        打开数据目录
+                        打开日志目录
                     </button>
+                </div>
+                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="text-[11px] text-text-tertiary">待发送诊断报告</div>
+                        <div className="text-[11px] text-text-tertiary">
+                            {pendingReports.length ? `最近提示：${formData.diagnostics_last_prompted_at || '未记录'}` : '当前没有待处理报告'}
+                        </div>
+                    </div>
+                    {pendingReports.length ? (
+                        <div className="space-y-2">
+                            {pendingReports.map((report) => (
+                                <div
+                                    key={report.id}
+                                    className="rounded border border-border bg-surface-primary px-3 py-2"
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <div className="text-sm text-text-primary">{report.summary}</div>
+                                            <div className="mt-1 text-[11px] text-text-tertiary">
+                                                {report.trigger} · {report.createdAt}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleExportDiagnosticBundle(report.id)}
+                                                disabled={diagnosticsActionBusy === report.id}
+                                                className="px-2 py-1 border border-border rounded text-[11px] hover:bg-surface-secondary transition-colors disabled:opacity-60"
+                                            >
+                                                导出
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleUploadPendingReport(report.id)}
+                                                disabled={diagnosticsActionBusy === report.id}
+                                                className="px-2 py-1 border border-border rounded text-[11px] hover:bg-surface-secondary transition-colors disabled:opacity-60"
+                                            >
+                                                上传
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleDismissPendingReport(report.id)}
+                                                disabled={diagnosticsActionBusy === report.id}
+                                                className="px-2 py-1 border border-border rounded text-[11px] hover:bg-surface-secondary transition-colors disabled:opacity-60"
+                                            >
+                                                删除
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {report.lastError ? (
+                                        <div className="mt-2 text-[11px] text-red-500">{report.lastError}</div>
+                                    ) : null}
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="text-[11px] text-text-tertiary">
+                            崩溃恢复或手动导出时生成的诊断报告会显示在这里。
+                        </div>
+                    )}
                 </div>
                 <div className="rounded-lg border border-border bg-surface-primary/60 p-3">
                     <div className="text-[11px] text-text-tertiary mb-2">最近日志预览</div>
@@ -1657,6 +2065,48 @@ export function MemorySettingsSection({
 }
 
 interface ToolsSettingsSectionProps {
+    cliRuntimeTools: CliRuntimeToolRecord[];
+    cliRuntimeDiscoverResults: CliRuntimeToolRecord[];
+    cliRuntimeEnvironments: CliRuntimeEnvironmentRecord[];
+    cliRuntimeInstallDraft: {
+        environmentId: string;
+        installMethod: 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+        spec: string;
+        toolName: string;
+    };
+    setCliRuntimeInstallDraft: Dispatch<SetStateAction<{
+        environmentId: string;
+        installMethod: 'npm' | 'pnpm' | 'python' | 'uv' | 'cargo' | 'go' | 'binary';
+        spec: string;
+        toolName: string;
+    }>>;
+    cliRuntimeInstallQueue: Array<{
+        installId: string;
+        toolName: string;
+        environmentId?: string;
+        installMethod?: string;
+        spec?: string;
+        status: string;
+        summary?: string;
+        updatedAt: number;
+    }>;
+    cliRuntimeStatusMessage: string;
+    isCliRuntimeRefreshing: boolean;
+    cliRuntimeInstalling: boolean;
+    cliRuntimeInspectingToolId: string;
+    cliRuntimeDiagnosticCommand: string;
+    setCliRuntimeDiagnosticCommand: Dispatch<SetStateAction<string>>;
+    cliRuntimeDiscoverQuery: string;
+    setCliRuntimeDiscoverQuery: Dispatch<SetStateAction<string>>;
+    cliRuntimeDiscovering: boolean;
+    cliRuntimeCreatingEnvironment: CliRuntimeEnvironmentScope | '';
+    handleRefreshCliRuntime: () => Promise<void>;
+    handleInspectCliRuntimeTool: (toolId: string) => Promise<void>;
+    handleDiagnoseCliRuntimeCommand: () => Promise<void>;
+    handleDiscoverCliRuntimeTools: () => Promise<void>;
+    handleCreateCliRuntimeEnvironment: (scope: CliRuntimeEnvironmentScope) => Promise<void>;
+    handleInstallCliRuntimeTool: () => Promise<void>;
+    handleOpenCliRuntimeEnvironmentRoot: (rootPath: string) => Promise<void>;
     isSyncingMcp: boolean;
     handleDiscoverAndImportMcp: () => Promise<void>;
     handleAddMcpServer: () => void;
@@ -1694,6 +2144,22 @@ interface ToolsSettingsSectionProps {
     handleRefreshToolDiagnostics: () => Promise<void>;
     handleRunAllDirectToolDiagnostics: () => Promise<void>;
     handleRunAllAiToolDiagnostics: () => Promise<void>;
+    runtimePerfPresets: RuntimePerfPreset[];
+    runtimePerfMode: RuntimePerfBenchmarkMode;
+    setRuntimePerfMode: Dispatch<SetStateAction<RuntimePerfBenchmarkMode>>;
+    runtimePerfPresetId: string;
+    setRuntimePerfPresetId: Dispatch<SetStateAction<string>>;
+    runtimePerfMessage: string;
+    setRuntimePerfMessage: Dispatch<SetStateAction<string>>;
+    runtimePerfIterations: number;
+    setRuntimePerfIterations: Dispatch<SetStateAction<number>>;
+    runtimePerfResults: RuntimePerfRunResult[];
+    activeRuntimePerfRunId: string;
+    isRuntimePerfRunning: boolean;
+    runtimePerfStatusMessage: string;
+    handleApplyRuntimePerfPreset: (presetId: string) => void;
+    handleRunRuntimePerfBenchmark: () => Promise<void>;
+    handleClearRuntimePerfResults: () => void;
     runtimeTasks: AgentTaskSnapshot[];
     runtimeRoles: RoleSpec[];
     runtimeDiagnosticsSummary: RuntimeDiagnosticsSummary | null;
@@ -1717,6 +2183,7 @@ interface ToolsSettingsSectionProps {
     setSelectedRuntimeSessionId: Dispatch<SetStateAction<string>>;
     selectedBackgroundTaskId: string;
     setSelectedBackgroundTaskId: Dispatch<SetStateAction<string>>;
+    selectedBackgroundTask: BackgroundTaskItem | null;
     runtimeTaskTraces: AgentTaskTrace[];
     runtimeSessionTranscript: Array<{
         id: number;
@@ -1762,6 +2229,29 @@ interface ToolsSettingsSectionProps {
 }
 
 export function ToolsSettingsSection({
+    cliRuntimeTools,
+    cliRuntimeDiscoverResults,
+    cliRuntimeEnvironments,
+    cliRuntimeInstallDraft,
+    setCliRuntimeInstallDraft,
+    cliRuntimeInstallQueue,
+    cliRuntimeStatusMessage,
+    isCliRuntimeRefreshing,
+    cliRuntimeInstalling,
+    cliRuntimeInspectingToolId,
+    cliRuntimeDiagnosticCommand,
+    setCliRuntimeDiagnosticCommand,
+    cliRuntimeDiscoverQuery,
+    setCliRuntimeDiscoverQuery,
+    cliRuntimeDiscovering,
+    cliRuntimeCreatingEnvironment,
+    handleRefreshCliRuntime,
+    handleInspectCliRuntimeTool,
+    handleDiagnoseCliRuntimeCommand,
+    handleDiscoverCliRuntimeTools,
+    handleCreateCliRuntimeEnvironment,
+    handleInstallCliRuntimeTool,
+    handleOpenCliRuntimeEnvironmentRoot,
     isSyncingMcp,
     handleDiscoverAndImportMcp,
     handleAddMcpServer,
@@ -1799,6 +2289,22 @@ export function ToolsSettingsSection({
     handleRefreshToolDiagnostics,
     handleRunAllDirectToolDiagnostics,
     handleRunAllAiToolDiagnostics,
+    runtimePerfPresets,
+    runtimePerfMode,
+    setRuntimePerfMode,
+    runtimePerfPresetId,
+    setRuntimePerfPresetId,
+    runtimePerfMessage,
+    setRuntimePerfMessage,
+    runtimePerfIterations,
+    setRuntimePerfIterations,
+    runtimePerfResults,
+    activeRuntimePerfRunId,
+    isRuntimePerfRunning,
+    runtimePerfStatusMessage,
+    handleApplyRuntimePerfPreset,
+    handleRunRuntimePerfBenchmark,
+    handleClearRuntimePerfResults,
     runtimeTasks,
     runtimeRoles,
     runtimeDiagnosticsSummary,
@@ -1811,6 +2317,7 @@ export function ToolsSettingsSection({
     setSelectedRuntimeSessionId,
     selectedBackgroundTaskId,
     setSelectedBackgroundTaskId,
+    selectedBackgroundTask,
     runtimeTaskTraces,
     runtimeSessionTranscript,
     runtimeSessionCheckpoints,
@@ -1891,6 +2398,85 @@ export function ToolsSettingsSection({
         return Number.isNaN(date.getTime()) ? '未使用' : date.toLocaleString();
     };
 
+    const formatCliTime = (value?: number | null) => {
+        if (!value) return '未检测';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? '未检测' : date.toLocaleString();
+    };
+
+    const cliToolHealthTone = (health: CliRuntimeToolRecord['health']) => {
+        switch (health) {
+            case 'ready':
+                return 'bg-green-500/10 text-green-600';
+            case 'missing':
+                return 'bg-amber-500/10 text-amber-600';
+            case 'broken':
+                return 'bg-red-500/10 text-red-600';
+            default:
+                return 'bg-surface-secondary border border-border text-text-tertiary';
+        }
+    };
+
+    const cliToolSourceLabel = (source: CliRuntimeToolRecord['source']) => {
+        switch (source) {
+            case 'app-managed':
+                return 'App 托管';
+            case 'workspace-managed':
+                return 'Workspace 托管';
+            case 'user-declared':
+                return '用户声明';
+            case 'system':
+                return '系统环境';
+            default:
+                return '未知';
+        }
+    };
+
+    const cliResolvedFromLabel = (resolvedFrom?: CliRuntimeToolRecord['resolvedFrom'] | null) => {
+        switch (resolvedFrom) {
+            case 'host-shell-path':
+                return '宿主 PATH';
+            case 'extra-bin-path':
+                return '补充 bin 目录';
+            case 'managed-environment':
+                return '托管环境 PATH';
+            case 'explicit-path':
+                return '显式路径';
+            default:
+                return '未解析';
+        }
+    };
+
+    const cliEnvironmentScopeLabel = (scope: CliRuntimeEnvironmentRecord['scope']) => {
+        switch (scope) {
+            case 'app-global':
+                return 'app-global';
+            case 'workspace-local':
+                return 'workspace-local';
+            case 'task-ephemeral':
+                return 'task-ephemeral';
+            default:
+                return scope;
+        }
+    };
+
+    const cliInstallStatusTone = (status: string) => {
+        switch (status) {
+            case 'completed':
+                return 'bg-green-500/10 text-green-600';
+            case 'running':
+            case 'pending':
+                return 'bg-blue-500/10 text-blue-600';
+            case 'waiting-approval':
+                return 'bg-amber-500/10 text-amber-600';
+            case 'failed':
+            case 'cancelled':
+                return 'bg-red-500/10 text-red-600';
+            default:
+                return 'bg-surface-secondary border border-border text-text-tertiary';
+        }
+    };
+
     const availabilityTone = (tool: ToolDiagnosticDescriptor) => {
         switch (tool.availabilityStatus) {
             case 'available':
@@ -1908,8 +2494,6 @@ export function ToolsSettingsSection({
 
     const selectedRuntimeTask = runtimeTasks.find((task) => task.id === selectedRuntimeTaskId) || null;
     const selectedRuntimeSession = runtimeSessions.find((session) => session.id === selectedRuntimeSessionId) || null;
-    const selectedBackgroundTask = backgroundTasks.find((task) => task.id === selectedBackgroundTaskId) || null;
-
     const runtimeSessionMetaText = useMemo(() => {
         if (!selectedRuntimeSession) return '';
         return [
@@ -1989,6 +2573,39 @@ export function ToolsSettingsSection({
         selectedRuntimeSession,
     ]);
 
+    const selectedRuntimePerfPreset = useMemo(
+        () => runtimePerfPresets.find((item) => item.id === runtimePerfPresetId) || runtimePerfPresets[0] || null,
+        [runtimePerfPresetId, runtimePerfPresets],
+    );
+
+    const runtimePerfSummary = useMemo(() => {
+        const completedRuns = runtimePerfResults.filter((item) => item.status === 'completed');
+        if (completedRuns.length === 0) {
+            return null;
+        }
+        const average = (values: number[]) => {
+            if (values.length === 0) return 0;
+            return values.reduce((sum, value) => sum + value, 0) / values.length;
+        };
+        const completedCount = completedRuns.length;
+        const toolCallCount = completedRuns.reduce((sum, item) => sum + item.toolCalls, 0);
+        const toolSuccessCount = completedRuns.reduce((sum, item) => sum + item.toolSuccessCount, 0);
+        return {
+            completedCount,
+            avgTotalElapsedMs: average(completedRuns.map((item) => item.totalElapsedMs || 0)),
+            avgFirstResponseMs: average(completedRuns.map((item) => item.firstResponseMs || 0).filter((item) => item > 0)),
+            avgThinkingStartedMs: average(completedRuns.map((item) => item.thinkingStartedMs || 0).filter((item) => item > 0)),
+            avgPromptChars: average(completedRuns.map((item) => item.promptChars || 0).filter((item) => item > 0)),
+            avgResponseChars: average(completedRuns.map((item) => item.responseChars || 0).filter((item) => item > 0)),
+            toolSuccessRate: toolCallCount > 0 ? toolSuccessCount / toolCallCount : 0,
+        };
+    }, [runtimePerfResults]);
+
+    const runtimePerfResultsText = useMemo(() => {
+        if (runtimePerfResults.length === 0) return '暂无 benchmark 结果。';
+        return JSON.stringify(runtimePerfResults, null, 2);
+    }, [runtimePerfResults]);
+
     const availabilityLabel = (tool: ToolDiagnosticDescriptor) => {
         switch (tool.availabilityStatus) {
             case 'available':
@@ -2058,6 +2675,392 @@ export function ToolsSettingsSection({
     return (
         <section className="space-y-6">
             <h2 className="text-lg font-medium text-text-primary mb-6">外部工具管理</h2>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <h3 className="text-sm font-medium text-text-primary">CLI Runtime 控制面</h3>
+                        <p className="text-xs text-text-tertiary mt-1">
+                            展示本机 CLI 探测结果和运行环境，作为 AI 外部命令执行的统一管理入口。
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => void handleCreateCliRuntimeEnvironment('app-global')}
+                            disabled={cliRuntimeCreatingEnvironment === 'app-global'}
+                            className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                        >
+                            {cliRuntimeCreatingEnvironment === 'app-global' ? '创建中...' : '新增 app-global'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleCreateCliRuntimeEnvironment('workspace-local')}
+                            disabled={cliRuntimeCreatingEnvironment === 'workspace-local'}
+                            className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                        >
+                            {cliRuntimeCreatingEnvironment === 'workspace-local' ? '创建中...' : '新增 workspace-local'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleRefreshCliRuntime()}
+                            disabled={isCliRuntimeRefreshing}
+                            className="px-3 py-1.5 bg-accent-primary text-white rounded text-xs hover:opacity-90 disabled:opacity-50"
+                        >
+                            {isCliRuntimeRefreshing ? '检测中...' : '刷新检测'}
+                        </button>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                        <div className="text-[11px] text-text-tertiary">已发现工具</div>
+                        <div className="mt-1 text-xl font-semibold text-text-primary">{cliRuntimeTools.length}</div>
+                    </div>
+                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                        <div className="text-[11px] text-text-tertiary">环境数量</div>
+                        <div className="mt-1 text-xl font-semibold text-text-primary">{cliRuntimeEnvironments.length}</div>
+                    </div>
+                    <div className="rounded-lg border border-border bg-surface-primary/50 p-3">
+                        <div className="text-[11px] text-text-tertiary">task-ephemeral</div>
+                        <div className="mt-1 text-xl font-semibold text-text-primary">
+                            {cliRuntimeEnvironments.filter((item) => item.scope === 'task-ephemeral').length}
+                        </div>
+                    </div>
+                </div>
+
+                {cliRuntimeStatusMessage ? (
+                    <div className="text-xs text-text-secondary border border-border rounded px-3 py-2 bg-surface-primary/60">
+                        {cliRuntimeStatusMessage}
+                    </div>
+                ) : null}
+
+                <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                    <div>
+                        <div className="text-xs font-medium text-text-primary">CLI 诊断面板</div>
+                        <div className="text-[11px] text-text-tertiary mt-1">
+                            已知命令优先 Diagnose，模糊查找再用 PATH 搜索。不要再依赖只读 bash 做 `which` 或 `command -v`。
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-4">
+                        <div className="space-y-3">
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">Diagnose 命令名</div>
+                                <div className="flex gap-2">
+                                    <input
+                                        value={cliRuntimeDiagnosticCommand}
+                                        onChange={(event) => setCliRuntimeDiagnosticCommand(event.target.value)}
+                                        placeholder="例如：lark-cli、ffmpeg、wrangler"
+                                        className="flex-1 rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleDiagnoseCliRuntimeCommand()}
+                                        disabled={cliRuntimeInspectingToolId === cliRuntimeDiagnosticCommand.trim()}
+                                        className="px-3 py-2 rounded bg-accent-primary text-white text-sm hover:opacity-90 disabled:opacity-50"
+                                    >
+                                        {cliRuntimeInspectingToolId === cliRuntimeDiagnosticCommand.trim() ? '诊断中...' : 'Diagnose'}
+                                    </button>
+                                </div>
+                            </label>
+
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">PATH 搜索</div>
+                                <div className="flex gap-2">
+                                    <input
+                                        value={cliRuntimeDiscoverQuery}
+                                        onChange={(event) => setCliRuntimeDiscoverQuery(event.target.value)}
+                                        placeholder="例如：lark、node、python"
+                                        className="flex-1 rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleDiscoverCliRuntimeTools()}
+                                        disabled={cliRuntimeDiscovering}
+                                        className="px-3 py-2 border border-border rounded text-sm hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                    >
+                                        {cliRuntimeDiscovering ? '搜索中...' : '搜索 PATH'}
+                                    </button>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                            <div className="text-xs font-medium text-text-primary">最近 PATH 搜索结果</div>
+                            {cliRuntimeDiscoverResults.length === 0 ? (
+                                <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                    暂无 PATH 搜索结果。输入关键字后可直接枚举当前宿主 PATH 中的命令。
+                                </div>
+                            ) : (
+                                <div className="space-y-2 max-h-60 overflow-auto">
+                                    {cliRuntimeDiscoverResults.map((tool) => (
+                                        <button
+                                            key={`${tool.id}:${tool.resolvedPath || tool.executable}`}
+                                            type="button"
+                                            onClick={() => {
+                                                setCliRuntimeDiagnosticCommand(tool.executable);
+                                                void handleInspectCliRuntimeTool(tool.id);
+                                            }}
+                                            className="w-full rounded border border-border bg-surface-primary/60 px-3 py-2 text-left hover:bg-surface-secondary transition-colors"
+                                        >
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-sm font-medium text-text-primary">{tool.name || tool.executable}</div>
+                                                <span className="text-[10px] text-text-tertiary">{cliResolvedFromLabel(tool.resolvedFrom)}</span>
+                                            </div>
+                                            <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                {tool.resolvedPath || tool.executable}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                    <div>
+                        <div className="text-xs font-medium text-text-primary">受控安装入口</div>
+                        <div className="text-[11px] text-text-tertiary mt-1">
+                            通过 CLI Runtime 安装工具到托管环境，并在下方保留最近安装队列。
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)] gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">目标环境</div>
+                                <select
+                                    value={cliRuntimeInstallDraft.environmentId}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        environmentId: event.target.value,
+                                    }))}
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                >
+                                    {cliRuntimeEnvironments.map((environment) => (
+                                        <option key={environment.id} value={environment.id}>
+                                            {environment.id} · {cliEnvironmentScopeLabel(environment.scope)}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">安装方式</div>
+                                <select
+                                    value={cliRuntimeInstallDraft.installMethod}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        installMethod: event.target.value as typeof current.installMethod,
+                                    }))}
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                >
+                                    {['pnpm', 'npm', 'uv', 'python', 'cargo', 'go', 'binary'].map((method) => (
+                                        <option key={method} value={method}>
+                                            {method}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label className="space-y-1 md:col-span-2">
+                                <div className="text-[11px] text-text-tertiary">Spec</div>
+                                <input
+                                    value={cliRuntimeInstallDraft.spec}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        spec: event.target.value,
+                                    }))}
+                                    placeholder="例如：ffmpeg-static、@larksuiteoapi/cli 或 https://example.com/tool"
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <div className="text-[11px] text-text-tertiary">工具名（可选）</div>
+                                <input
+                                    value={cliRuntimeInstallDraft.toolName}
+                                    onChange={(event) => setCliRuntimeInstallDraft((current) => ({
+                                        ...current,
+                                        toolName: event.target.value,
+                                    }))}
+                                    placeholder="例如：ffmpeg"
+                                    className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                                />
+                            </label>
+                            <div className="flex items-end">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleInstallCliRuntimeTool()}
+                                    disabled={cliRuntimeInstalling || cliRuntimeEnvironments.length === 0}
+                                    className="w-full px-3 py-2 rounded bg-accent-primary text-white text-sm hover:opacity-90 disabled:opacity-50"
+                                >
+                                    {cliRuntimeInstalling ? '安装中...' : '开始安装'}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                            <div className="text-xs font-medium text-text-primary">最近安装队列</div>
+                            {cliRuntimeInstallQueue.length === 0 ? (
+                                <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                    暂无最近安装记录。
+                                </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {cliRuntimeInstallQueue.map((item) => (
+                                        <div key={item.installId} className="rounded border border-border bg-surface-primary/60 px-3 py-2 space-y-1.5">
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="text-sm font-medium text-text-primary">{item.toolName}</div>
+                                                <span className={clsx('px-1.5 py-0.5 rounded text-[10px]', cliInstallStatusTone(item.status))}>
+                                                    {item.status}
+                                                </span>
+                                            </div>
+                                            <div className="text-[11px] text-text-secondary break-all">
+                                                {(item.installMethod || 'install')} · {item.spec || 'n/a'}
+                                            </div>
+                                            <div className="text-[11px] text-text-tertiary">
+                                                env: {item.environmentId || 'n/a'} · {formatCliTime(item.updatedAt)}
+                                            </div>
+                                            {item.summary ? (
+                                                <div className="text-[11px] text-text-secondary">{item.summary}</div>
+                                            ) : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-4">
+                    <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">工具发现结果</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">
+                                点击 inspect 可重新拉取某个 CLI 的路径、版本和健康状态。
+                            </div>
+                        </div>
+
+                        {cliRuntimeTools.length === 0 ? (
+                            <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                暂未检测到 CLI 工具。可先点击“刷新检测”，或等待 host 侧完成接线。
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {cliRuntimeTools.map((tool) => (
+                                    <div key={tool.id} className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <div className="text-sm font-medium text-text-primary">{tool.name || tool.executable}</div>
+                                                    <span className={clsx('px-1.5 py-0.5 rounded text-[10px]', cliToolHealthTone(tool.health))}>
+                                                        {tool.health}
+                                                    </span>
+                                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-surface-secondary border border-border text-text-tertiary">
+                                                        {cliToolSourceLabel(tool.source)}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                    {tool.resolvedPath || tool.executable}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleInspectCliRuntimeTool(tool.id)}
+                                                disabled={cliRuntimeInspectingToolId === tool.id}
+                                                className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                            >
+                                                {cliRuntimeInspectingToolId === tool.id ? 'Inspecting...' : 'Inspect'}
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-text-secondary">
+                                            <div>version: {tool.version || 'unknown'}</div>
+                                            <div>executable: {tool.executable || 'unknown'}</div>
+                                            <div>resolved from: {cliResolvedFromLabel(tool.resolvedFrom)}</div>
+                                            <div>install: {tool.installMethod || 'n/a'}</div>
+                                            <div>manifest: {tool.manifestId || 'n/a'}</div>
+                                            <div>environment: {tool.environmentId || '未绑定'}</div>
+                                            <div>checked: {formatCliTime(tool.lastCheckedAt)}</div>
+                                            <div>commands: {String(tool.metadata?.commandCount || 'n/a')}</div>
+                                            <div>json: {tool.metadata?.supportsJsonOutput ? 'yes' : 'no'}</div>
+                                            <div>detect catalog: {tool.isInDefaultDetectCatalog ? 'yes' : 'no'}</div>
+                                            <div>searched path entries: {String(tool.searchedPathEntriesCount || 'n/a')}</div>
+                                        </div>
+
+                                        {typeof tool.metadata?.helpExcerpt === 'string' && tool.metadata.helpExcerpt.trim() ? (
+                                            <div className="rounded border border-border bg-surface-primary/60 px-2.5 py-2 text-[10px] text-text-tertiary font-mono whitespace-pre-wrap break-all max-h-28 overflow-auto">
+                                                {tool.metadata.helpExcerpt}
+                                            </div>
+                                        ) : null}
+
+                                        {Array.isArray(tool.effectivePathPreview) && tool.effectivePathPreview.length > 0 ? (
+                                            <div className="rounded border border-border bg-surface-primary/60 px-2.5 py-2 text-[10px] text-text-tertiary font-mono whitespace-pre-wrap break-all max-h-28 overflow-auto">
+                                                {tool.effectivePathPreview.join('\n')}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-surface-primary/40 p-3 space-y-3">
+                        <div>
+                            <div className="text-xs font-medium text-text-primary">运行环境</div>
+                            <div className="text-[11px] text-text-tertiary mt-1">
+                                `task-ephemeral` 通常由运行时按任务自动创建；这里主要负责观察与打开 root。
+                            </div>
+                        </div>
+
+                        {cliRuntimeEnvironments.length === 0 ? (
+                            <div className="text-[11px] text-text-tertiary border border-dashed border-border rounded px-3 py-4 text-center">
+                                暂无 CLI environment。
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {cliRuntimeEnvironments.map((environment) => (
+                                    <div key={environment.id} className="rounded-lg border border-border bg-surface-secondary/20 p-3 space-y-2">
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <div className="text-sm font-medium text-text-primary">{cliEnvironmentScopeLabel(environment.scope)}</div>
+                                                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-surface-secondary border border-border text-text-tertiary">
+                                                        {environment.id}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                    {environment.rootPath}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleOpenCliRuntimeEnvironmentRoot(environment.rootPath)}
+                                                className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                            >
+                                                打开目录
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-1 text-[11px] text-text-secondary">
+                                            <div>workspace: {environment.workspaceRoot || 'n/a'}</div>
+                                            <div>tools: {environment.installedToolIds.length}</div>
+                                            <div>path entries: {environment.pathEntries.length}</div>
+                                            <div>updated: {formatCliTime(environment.updatedAt)}</div>
+                                        </div>
+
+                                        {environment.pathEntries.length > 0 ? (
+                                            <div className="rounded border border-border bg-surface-primary/60 px-2.5 py-2 text-[10px] text-text-tertiary font-mono max-h-28 overflow-auto whitespace-pre-wrap break-all">
+                                                {environment.pathEntries.join('\n')}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-3">
@@ -2567,12 +3570,365 @@ export function ToolsSettingsSection({
                                             <div className="text-[10px] text-text-tertiary mt-1">
                                                 long-term {entry.longTermContextChars} chars
                                             </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                tools {Number(entry.contextBundle?.toolCount ?? 0)} / skills {Number(entry.contextBundle?.activeSkillCount ?? 0)}
+                                            </div>
+                                            <div className="text-[10px] text-text-tertiary mt-1">
+                                                memory {Number(entry.contextBundle?.memoryChars ?? 0)} / subjects {Number(entry.contextBundle?.subjectsChars ?? 0)}
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
                             ) : (
                                 <div className="text-[11px] text-text-tertiary">暂无 runtime warm 数据。</div>
                             )}
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="text-xs font-medium text-text-primary">Approval Runtime</div>
+                                <div className="text-[10px] text-text-tertiary">
+                                    pending {runtimeDiagnosticsSummary?.approvals?.pendingCount ?? 0} / resolved {runtimeDiagnosticsSummary?.approvals?.resolvedCount ?? 0}
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div className="space-y-2">
+                                    <div className="text-[11px] text-text-tertiary">待确认</div>
+                                    {(runtimeDiagnosticsSummary?.approvals?.pending ?? []).length ? (
+                                        <div className="space-y-2">
+                                            {(runtimeDiagnosticsSummary?.approvals?.pending ?? []).slice(0, 6).map((row, index) => (
+                                                <div key={`${String(row.approvalId ?? 'pending')}:${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="text-[11px] font-medium text-text-primary">
+                                                            {String((row.details as Record<string, unknown> | undefined)?.title ?? row.name ?? '待确认')}
+                                                        </div>
+                                                        <div className="text-[10px] text-amber-600 bg-amber-500/10 rounded px-1.5 py-0.5">pending</div>
+                                                    </div>
+                                                    <div className="text-[10px] text-text-tertiary mt-1">
+                                                        {String(row.sourceKey ?? row.approvalId ?? '')}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-[11px] text-text-tertiary">当前没有待确认事项。</div>
+                                    )}
+                                </div>
+                                <div className="space-y-2">
+                                    <div className="text-[11px] text-text-tertiary">最近已处理</div>
+                                    {(runtimeDiagnosticsSummary?.approvals?.recent ?? []).length ? (
+                                        <div className="space-y-2">
+                                            {(runtimeDiagnosticsSummary?.approvals?.recent ?? []).slice(0, 6).map((row, index) => (
+                                                <div key={`${String(row.approvalId ?? 'recent')}:${index}`} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <div className="text-[11px] font-medium text-text-primary">
+                                                            {String((row.details as Record<string, unknown> | undefined)?.title ?? row.name ?? '已处理')}
+                                                        </div>
+                                                        <div className={clsx(
+                                                            'text-[10px] rounded px-1.5 py-0.5',
+                                                            row.confirmed === false ? 'bg-red-500/10 text-red-600' : 'bg-green-500/10 text-green-600'
+                                                        )}>
+                                                            {row.confirmed === false ? 'rejected' : 'confirmed'}
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-[10px] text-text-tertiary mt-1">
+                                                        {String(row.sourceKey ?? row.approvalId ?? '')}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="text-[11px] text-text-tertiary">暂无已处理审批记录。</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 className="text-sm font-medium text-text-primary">AI Runtime 性能测试</h3>
+                                <p className="text-xs text-text-tertiary mt-1">
+                                    用真实 `runtime.query` 跑 benchmark，采集 `runtime:event` 时间线，并把耗时、checkpoint、tool 调用结果结构化保留下来。
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {runtimePerfResults.length > 0 ? (
+                                    <DiagnosticCopyButton text={runtimePerfResultsText} label="复制 JSON" />
+                                ) : null}
+                                <button
+                                    type="button"
+                                    onClick={() => void handleClearRuntimePerfResults()}
+                                    disabled={isRuntimePerfRunning || runtimePerfResults.length === 0}
+                                    className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors disabled:opacity-50"
+                                >
+                                    清空结果
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 xl:grid-cols-[340px_minmax(0,1fr)] gap-4">
+                            <div className="space-y-4">
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="text-xs font-medium text-text-primary">测试配置</div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">Runtime Mode</label>
+                                        <select
+                                            value={runtimePerfMode}
+                                            onChange={(event) => setRuntimePerfMode(event.target.value as RuntimePerfBenchmarkMode)}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            <option value="diagnostics">diagnostics</option>
+                                            <option value="chatroom">chatroom</option>
+                                            <option value="knowledge">knowledge</option>
+                                            <option value="advisor-discussion">advisor-discussion</option>
+                                            <option value="redclaw">redclaw</option>
+                                            <option value="background-maintenance">background-maintenance</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">Benchmark Preset</label>
+                                        <select
+                                            value={runtimePerfPresetId}
+                                            onChange={(event) => {
+                                                setRuntimePerfPresetId(event.target.value);
+                                                handleApplyRuntimePerfPreset(event.target.value);
+                                            }}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            {runtimePerfPresets.map((preset) => (
+                                                <option key={preset.id} value={preset.id}>{preset.label}</option>
+                                            ))}
+                                        </select>
+                                        <div className="text-[11px] text-text-tertiary">
+                                            {selectedRuntimePerfPreset?.description || '选择一个预设后会自动填充 prompt。'}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">执行轮次</label>
+                                        <select
+                                            value={String(runtimePerfIterations)}
+                                            onChange={(event) => setRuntimePerfIterations(Math.max(1, Number(event.target.value) || 1))}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        >
+                                            <option value="1">1 轮</option>
+                                            <option value="3">3 轮</option>
+                                            <option value="5">5 轮</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[11px] font-medium text-text-secondary">测试 Prompt</label>
+                                        <textarea
+                                            value={runtimePerfMessage}
+                                            onChange={(event) => setRuntimePerfMessage(event.target.value)}
+                                            rows={6}
+                                            disabled={isRuntimePerfRunning}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
+                                        />
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => void handleRunRuntimePerfBenchmark()}
+                                        disabled={isRuntimePerfRunning || !runtimePerfMessage.trim()}
+                                        className="w-full px-3 py-2 bg-accent-primary text-white rounded text-xs font-medium hover:opacity-90 disabled:opacity-50"
+                                    >
+                                        {isRuntimePerfRunning ? 'Benchmark 执行中...' : '运行 Runtime Benchmark'}
+                                    </button>
+
+                                    <div className="text-[11px] text-text-tertiary">
+                                        {runtimePerfStatusMessage || '每轮都会创建独立 session，避免历史上下文污染结果。'}
+                                    </div>
+                                </div>
+
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="text-xs font-medium text-text-primary">聚合指标</div>
+                                    {!runtimePerfSummary ? (
+                                        <div className="text-[11px] text-text-tertiary">先执行 benchmark，再看均值对比。</div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 gap-2">
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">已完成轮次</div>
+                                                <div className="text-sm font-medium text-text-primary">{runtimePerfSummary.completedCount}</div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均总耗时</div>
+                                                <div className="text-sm font-medium text-text-primary">{runtimePerfSummary.avgTotalElapsedMs.toFixed(1)} ms</div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均首个响应</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgFirstResponseMs > 0 ? `${runtimePerfSummary.avgFirstResponseMs.toFixed(1)} ms` : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均 thinking 开始</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgThinkingStartedMs > 0 ? `${runtimePerfSummary.avgThinkingStartedMs.toFixed(1)} ms` : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">平均 prompt chars</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {runtimePerfSummary.avgPromptChars > 0 ? runtimePerfSummary.avgPromptChars.toFixed(1) : '未采到'}
+                                                </div>
+                                            </div>
+                                            <div className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                <div className="text-[10px] text-text-tertiary">工具成功率</div>
+                                                <div className="text-sm font-medium text-text-primary">
+                                                    {(runtimePerfSummary.toolSuccessRate * 100).toFixed(1)}%
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="text-xs font-medium text-text-primary">Run 结果</div>
+                                        <span className="text-[11px] text-text-tertiary">最近 {runtimePerfResults.length} 条</span>
+                                    </div>
+                                    {runtimePerfResults.length === 0 ? (
+                                        <div className="text-[11px] text-text-tertiary">暂无 runtime benchmark 结果。</div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {runtimePerfResults.map((run) => {
+                                                const isActiveRun = activeRuntimePerfRunId === run.id;
+                                                return (
+                                                    <div
+                                                        key={run.id}
+                                                        className={clsx(
+                                                            'rounded border p-3 space-y-3',
+                                                            isActiveRun
+                                                                ? 'border-accent-primary bg-accent-primary/5'
+                                                                : 'border-border bg-surface-secondary/20'
+                                                        )}
+                                                    >
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <div className="flex items-center gap-2 flex-wrap">
+                                                                    <div className="text-sm font-medium text-text-primary">{formatRuntimePerfRunIndex(run.index)}</div>
+                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-secondary border border-border text-text-tertiary">
+                                                                        {run.runtimeMode}
+                                                                    </span>
+                                                                    <span className={clsx(
+                                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                                        run.status === 'completed'
+                                                                            ? 'bg-green-500/10 text-green-600'
+                                                                            : run.status === 'failed'
+                                                                                ? 'bg-red-500/10 text-red-600'
+                                                                                : 'bg-blue-500/10 text-blue-600'
+                                                                    )}>
+                                                                        {run.status}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="mt-1 text-[11px] text-text-tertiary font-mono break-all">
+                                                                    {run.sessionId}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setSelectedRuntimeSessionId(run.sessionId)}
+                                                                className="px-2.5 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                                                            >
+                                                                查看 Session
+                                                            </button>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">总耗时</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.totalElapsedMs != null ? `${run.totalElapsedMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">首个响应</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.firstResponseMs != null ? `${run.firstResponseMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">thinking</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.thinkingStartedMs != null ? `${run.thinkingStartedMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">首个工具</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.firstToolStartMs != null ? `${run.firstToolStartMs} ms` : '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">prompt chars</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.promptChars ?? '--'}</div>
+                                                            </div>
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2">
+                                                                <div className="text-[10px] text-text-tertiary">response chars</div>
+                                                                <div className="text-xs font-medium text-text-primary">{run.responseChars ?? '--'}</div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-3">
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2 space-y-1 text-[11px] text-text-secondary">
+                                                                <div>tool calls: {run.toolCalls}</div>
+                                                                <div>tool success: {run.toolSuccessCount}</div>
+                                                                <div>tool failed: {run.toolFailureCount}</div>
+                                                                <div>checkpoints: {run.checkpointCount}</div>
+                                                                <div>active skills: {run.activeSkillCount ?? '--'}</div>
+                                                                {run.checkpointTypes.length > 0 ? (
+                                                                    <div className="text-text-tertiary break-words">
+                                                                        checkpoint types: {run.checkpointTypes.join(', ')}
+                                                                    </div>
+                                                                ) : null}
+                                                                {run.error ? <div className="text-red-600 break-words">error: {run.error}</div> : null}
+                                                            </div>
+
+                                                            <div className="rounded border border-border bg-surface-primary/60 p-2 space-y-2">
+                                                                <div className="text-[11px] font-medium text-text-primary">事件时间线</div>
+                                                                {run.timeline.length === 0 ? (
+                                                                    <div className="text-[11px] text-text-tertiary">暂无事件。</div>
+                                                                ) : (
+                                                                    <div className="space-y-2 max-h-72 overflow-auto pr-1">
+                                                                        {run.timeline.map((item) => (
+                                                                            <div key={item.id} className="rounded border border-border bg-surface-secondary/20 p-2">
+                                                                                <div className="flex items-center justify-between gap-2">
+                                                                                    <div className="text-[11px] font-medium text-text-primary">{item.label}</div>
+                                                                                    <span className={clsx(
+                                                                                        'text-[10px] px-1.5 py-0.5 rounded',
+                                                                                        item.tone === 'success'
+                                                                                            ? 'bg-green-500/10 text-green-600'
+                                                                                            : item.tone === 'warning'
+                                                                                                ? 'bg-amber-500/10 text-amber-600'
+                                                                                                : item.tone === 'error'
+                                                                                                    ? 'bg-red-500/10 text-red-600'
+                                                                                                    : 'bg-surface-secondary border border-border text-text-tertiary'
+                                                                                    )}>
+                                                                                        +{item.offsetMs} ms
+                                                                                    </span>
+                                                                                </div>
+                                                                                <div className="mt-1 text-[10px] text-text-tertiary">{item.eventType}</div>
+                                                                                {item.detail ? (
+                                                                                    <div className="mt-1 text-[11px] text-text-secondary whitespace-pre-wrap break-words">
+                                                                                        {item.detail}
+                                                                                    </div>
+                                                                                ) : null}
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -3333,14 +4689,16 @@ export function ToolsSettingsSection({
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'tools' | 'memory' | 'remote';
+    activeTab: 'general' | 'ai' | 'tools' | 'profile' | 'memory' | 'remote';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
-    if (activeTab !== 'general' && activeTab !== 'ai') {
+    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile') {
         return null;
     }
+
+    const buttonLabel = activeTab === 'profile' ? '保存档案' : '保存配置';
 
     return (
         <div className="fixed bottom-0 left-48 right-0 p-4 bg-surface-primary border-t border-border flex items-center justify-between z-10 transition-all">
@@ -3355,7 +4713,7 @@ export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
                 className="flex items-center px-6 py-2 bg-text-primary text-background text-sm font-medium rounded-md hover:opacity-90 transition-opacity disabled:opacity-50 shadow-sm"
             >
                 <Save className="w-4 h-4 mr-2" />
-                {status === 'saving' ? '保存中...' : '保存配置'}
+                {status === 'saving' ? '保存中...' : buttonLabel}
             </button>
         </div>
     );

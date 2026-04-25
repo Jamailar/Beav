@@ -55,6 +55,45 @@ fn planned_image_string_field(value: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn build_planned_image_generation_prompt(item: &Value) -> Option<String> {
+    if let Some(compiled_prompt) = planned_image_string_field(item, &["compiledPrompt"]) {
+        return Some(compiled_prompt);
+    }
+
+    let visual_prompt =
+        planned_image_string_field(item, &["prompt", "visual", "description", "picture"])?;
+    let visible_copy = planned_image_string_field(
+        item,
+        &[
+            "copy",
+            "visibleText",
+            "visible_text",
+            "text",
+            "textContent",
+            "onscreenText",
+        ],
+    );
+    let mut prompt_parts = Vec::new();
+
+    if let Some(copy) = visible_copy {
+        prompt_parts.push(format!(
+            "Visible text to render exactly, and no other planning labels: {copy}"
+        ));
+    } else {
+        prompt_parts.push(
+            "Do not render planning labels, page numbers, card numbers, storyboard labels, table headers, framework names, or internal reasoning text as visible image text."
+                .to_string(),
+        );
+    }
+    prompt_parts.push(format!("Visual brief: {visual_prompt}"));
+    prompt_parts.push(
+        "Treat imagePlanItems.title/name/label, sequenceGoal, page order, and planning table labels as internal metadata only. Do not place them in the image. Do not render words like 第1页, 第2页, 卡片1, 冲突页, 反转页, 方法页, 行动页, thinking_process, direction_frame, framework, storyboard, prompt, or layout unless they are explicitly included in the visible text above."
+            .to_string(),
+    );
+
+    Some(prompt_parts.join("\n"))
+}
+
 fn extract_planned_image_generation_items(payload: &Value) -> Vec<PlannedImageGenerationItem> {
     payload_field(payload, "imagePlanItems")
         .and_then(Value::as_array)
@@ -64,16 +103,7 @@ fn extract_planned_image_generation_items(payload: &Value) -> Vec<PlannedImageGe
                 .take(MAX_IMAGE_BATCH_ITEMS)
                 .filter(|item| item.is_object())
                 .filter_map(|item| {
-                    let prompt = planned_image_string_field(
-                        item,
-                        &[
-                            "compiledPrompt",
-                            "prompt",
-                            "visual",
-                            "description",
-                            "picture",
-                        ],
-                    )?;
+                    let prompt = build_planned_image_generation_prompt(item)?;
                     Some(PlannedImageGenerationItem {
                         title: planned_image_string_field(item, &["title", "name", "label"]),
                         prompt,
@@ -141,9 +171,6 @@ fn execute_planned_image_generation_item(
     if let Some(object) = request_payload.as_object_mut() {
         object.insert("prompt".to_string(), json!(request_prompt.clone()));
         object.insert("count".to_string(), json!(1));
-        if let Some(request_title) = request_title.clone() {
-            object.insert("title".to_string(), json!(request_title));
-        }
         object.remove("imagePlanItems");
         object.remove("planConfirmed");
         object.remove("sharedStyleGuide");
@@ -1436,7 +1463,32 @@ mod tests {
         assert_eq!(items[0].title.as_deref(), Some("封面"));
         assert_eq!(items[0].prompt, "最终执行提示词");
         assert_eq!(items[1].title.as_deref(), Some("第二张"));
-        assert_eq!(items[1].prompt, "细节补图");
+        assert!(items[1].prompt.contains("Visual brief: 细节补图"));
+        assert!(items[1].prompt.contains("planning labels"));
+    }
+
+    #[test]
+    fn extract_planned_image_generation_items_compiles_visible_copy_without_title() {
+        let items = extract_planned_image_generation_items(&json!({
+            "imagePlanItems": [
+                {
+                    "title": "第2页冲突",
+                    "copy": "你不是缺方法，是缺反馈回路\n做产品→没反馈→再加功能→继续没人看",
+                    "prompt": "冲突模型卡片，中心为循环箭头图示"
+                }
+            ]
+        }));
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title.as_deref(), Some("第2页冲突"));
+        assert!(items[0].prompt.contains("你不是缺方法，是缺反馈回路"));
+        assert!(items[0].prompt.contains("Visual brief: 冲突模型卡片"));
+        assert!(!items[0]
+            .prompt
+            .contains("Visible text to render exactly, and no other planning labels: 第2页冲突"));
+        assert!(items[0]
+            .prompt
+            .contains("Treat imagePlanItems.title/name/label"));
     }
 
     #[test]
@@ -1454,7 +1506,7 @@ mod tests {
 
         assert_eq!(items.len(), 6);
         assert_eq!(items[5].title.as_deref(), Some("6"));
-        assert_eq!(items[5].prompt, "p6");
+        assert!(items[5].prompt.contains("Visual brief: p6"));
     }
 
     #[test]
