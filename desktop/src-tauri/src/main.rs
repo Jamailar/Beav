@@ -7467,7 +7467,7 @@ fn run_openai_interactive_chat_runtime(
             body["tools"] = interactive_runtime_tools_for_mode(state, runtime_mode, session_id);
         }
         if turn_policy.disable_thinking {
-            body["enable_thinking"] = json!(false);
+            provider_profile.apply_disable_thinking_parameter(&mut body);
         }
         if provider_profile.supports_reasoning_split()
             && !turn_policy.disable_thinking

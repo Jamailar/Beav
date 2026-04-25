@@ -1,6 +1,8 @@
 use crate::runtime::ResolvedChatConfig;
 
-use super::{ProviderCapabilities, ProviderFamily, ProviderProfile};
+use super::{
+    ProviderCapabilities, ProviderFamily, ProviderProfile, ProviderThinkingDisableParameter,
+};
 
 fn openai_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
@@ -14,6 +16,7 @@ fn openai_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: true,
         supports_parallel_tool_calls: true,
         supports_text_fallback: true,
+        thinking_disable_parameter: ProviderThinkingDisableParameter::EnableThinkingFalse,
     }
 }
 
@@ -36,6 +39,7 @@ fn model_capability_overrides(
             supports_tool_choice_none: false,
             supports_thinking: false,
             supports_reasoning_effort: false,
+            thinking_disable_parameter: ProviderThinkingDisableParameter::ThinkingTypeDisabled,
             ..capabilities
         };
     }
@@ -58,6 +62,7 @@ fn anthropic_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: false,
         supports_parallel_tool_calls: true,
         supports_text_fallback: false,
+        thinking_disable_parameter: ProviderThinkingDisableParameter::EnableThinkingFalse,
     }
 }
 
@@ -73,6 +78,7 @@ fn gemini_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: false,
         supports_parallel_tool_calls: true,
         supports_text_fallback: false,
+        thinking_disable_parameter: ProviderThinkingDisableParameter::EnableThinkingFalse,
     }
 }
 
@@ -139,7 +145,10 @@ pub(crate) fn provider_profile_from_config(config: &ResolvedChatConfig) -> Provi
 #[cfg(test)]
 mod tests {
     use super::provider_profile_from_parts;
-    use crate::provider_compat::{InteractiveToolChoice, ProviderFamily};
+    use crate::provider_compat::{
+        InteractiveToolChoice, ProviderFamily, ProviderThinkingDisableParameter,
+    };
+    use serde_json::json;
 
     #[test]
     fn qwen_profiles_disable_thinking_for_required_tool_choice() {
@@ -157,7 +166,8 @@ mod tests {
     #[test]
     fn default_openai_profiles_keep_thinking_enabled() {
         let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
-        assert!(!profile.should_disable_thinking("chat", true));
+        assert!(!profile.should_disable_thinking("chat", false));
+        assert!(profile.should_disable_thinking("redclaw", false));
         assert!(profile.capabilities.supports_tool_choice_required);
     }
 
@@ -174,6 +184,10 @@ mod tests {
         assert!(!profile.capabilities.supports_tool_choice_none);
         assert!(!profile.capabilities.supports_thinking);
         assert!(!profile.capabilities.supports_reasoning_effort);
+        assert_eq!(
+            profile.capabilities.thinking_disable_parameter,
+            ProviderThinkingDisableParameter::ThinkingTypeDisabled
+        );
         assert!(profile.should_disable_thinking("chat", false));
         assert_eq!(
             profile.api_tool_choice_value(InteractiveToolChoice::Auto),
@@ -225,5 +239,36 @@ mod tests {
             provider_profile_from_parts("openai", "https://api.ziz.hk/redbox/v1", "qwen3.5-plus");
         let policy = profile.turn_policy("redclaw", InteractiveToolChoice::Required, false);
         assert!(policy.disable_thinking);
+    }
+
+    #[test]
+    fn deepseek_uses_thinking_object_disable_parameter() {
+        let profile = provider_profile_from_parts(
+            "openai",
+            "https://api.ziz.hk/redbox/v1",
+            "deepseek-v4-pro",
+        );
+        let mut body = json!({ "model": "deepseek-v4-pro" });
+        profile.apply_disable_thinking_parameter(&mut body);
+        assert_eq!(body.get("enable_thinking"), None);
+        assert_eq!(body["thinking"], json!({ "type": "disabled" }));
+    }
+
+    #[test]
+    fn agent_runtimes_disable_internal_thinking_by_default() {
+        let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
+        for runtime_mode in ["chatroom", "image-generation", "redclaw", "wander"] {
+            assert!(
+                profile
+                    .turn_policy(runtime_mode, InteractiveToolChoice::Auto, false)
+                    .disable_thinking,
+                "{runtime_mode} should disable provider thinking"
+            );
+        }
+        assert!(
+            !profile
+                .turn_policy("chat", InteractiveToolChoice::Auto, false)
+                .disable_thinking
+        );
     }
 }
