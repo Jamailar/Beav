@@ -773,8 +773,6 @@ function createIpcRenderer() {
       listTools: () => invokeChannel('team-runtime:list-tools'),
       executeTool: (payload: { action: string; payload?: Record<string, unknown> }) =>
         invokeChannel('team-runtime:execute-tool', payload),
-      runExternalMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:run-external-member', payload),
       onEvent: (listener: Listener) => on('runtime:event', listener),
       offEvent: (listener: Listener) => off('runtime:event', listener)
     },
@@ -803,8 +801,6 @@ function createIpcRenderer() {
       listTools: () => invokeChannel('team-runtime:list-tools'),
       executeTool: (payload: { action: string; payload?: Record<string, unknown> }) =>
         invokeChannel('team-runtime:execute-tool', payload),
-      runExternalMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:run-external-member', payload),
       onEvent: (listener: Listener) => on('runtime:event', listener),
       offEvent: (listener: Listener) => off('runtime:event', listener)
     },

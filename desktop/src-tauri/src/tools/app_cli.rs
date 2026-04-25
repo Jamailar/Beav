@@ -1838,14 +1838,8 @@ impl<'a> AppCliExecutor<'a> {
                     "list-tools" => self.call_channel("team-runtime:list-tools", json!({})),
                     "execute-tool" => self.call_channel("team-runtime:execute-tool", merged()),
                     "mcp-contract" => self.call_channel("team-runtime:mcp-contract", json!({})),
-                    "mcp-bridge-config" => {
-                        self.call_channel("team-runtime:mcp-bridge-config", merged())
-                    }
                     "execute-mcp-tool" => {
                         self.call_channel("team-runtime:execute-mcp-tool", merged())
-                    }
-                    "run-external-member" | "run-acp-member" => {
-                        self.call_channel("team-runtime:run-external-member", merged())
                     }
                     _ => Err(format!("unsupported runtime team action: {sub}")),
                 }
@@ -4806,7 +4800,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "work list|ready|get|update",
             "memory list|search|add|delete",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
-            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|mcp-bridge-config|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
+            "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
             "settings summary|get|set",
             "skills list|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
@@ -4945,9 +4939,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "runtime team tick-reports --session-id <collabSessionId>",
             "runtime team list-agent-backends",
             "runtime team mcp-contract",
-            "runtime team mcp-bridge-config [payload.sessionId/memberId/taskId/command]",
             "runtime team execute-mcp-tool [payload.toolName/arguments]",
-            "runtime team run-external-member [payload.sessionId/backend/memberId/taskId/prompt/command/args]",
             "runtime session-enter-diagnostics [--title <title>]",
             "runtime session-bridge status",
             "runtime session-bridge list-sessions",
