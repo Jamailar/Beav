@@ -66,6 +66,31 @@ pub(crate) fn load_cached_document(
         .transpose()
 }
 
+pub(crate) fn load_unchanged_cached_document(
+    state: &State<'_, AppState>,
+    absolute_path: &str,
+    content_hash: &str,
+) -> Result<Option<CanonicalDocument>, String> {
+    let conn = connection(state)?;
+    let json = conn
+        .query_row(
+            r#"
+            SELECT canonical_json
+            FROM knowledge_canonical_documents
+            WHERE absolute_path = ?1
+              AND content_hash = ?2
+            ORDER BY updated_at DESC
+            LIMIT 1
+            "#,
+            params![absolute_path, content_hash],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    json.map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
+        .transpose()
+}
+
 pub(crate) fn delete_documents_for_source(
     state: &State<'_, AppState>,
     source_id: &str,

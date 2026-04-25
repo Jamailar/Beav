@@ -4,7 +4,10 @@ use crate::{
     knowledge_index::{
         document_blocks::rebuild_fts_index_for_source,
         index_status,
-        indexer::{rebuild_blocks_from_canonical, rebuild_catalog},
+        indexer::{
+            rebuild_blocks_from_canonical, rebuild_catalog,
+            rebuild_catalog_reusing_unchanged_canonical,
+        },
         migration::{self, MigrationDecision},
         schema::ensure_catalog_ready,
     },
@@ -124,7 +127,9 @@ fn spawn_rebuild(app: AppHandle, kind: RebuildJobKind) {
             RebuildJobKind::BlockAnchor { source_id } => {
                 rebuild_blocks_from_canonical(&app, &state, source_id.as_deref())
             }
-            RebuildJobKind::CanonicalReparse => rebuild_catalog(&app, &state),
+            RebuildJobKind::CanonicalReparse => {
+                rebuild_catalog_reusing_unchanged_canonical(&app, &state)
+            }
         };
         match &result {
             Ok(_) => {
