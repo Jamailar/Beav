@@ -111,6 +111,30 @@ fn integer_schema(description: &str, minimum: i64, maximum: i64) -> Value {
     })
 }
 
+fn image_aspect_ratio_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "enum": ["1:1", "3:4", "4:3", "9:16", "16:9"],
+        "description": description,
+    })
+}
+
+fn image_size_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description,
+        "enum": ["auto", "1024x1024", "1024x1536", "1536x1024"],
+    })
+}
+
+fn image_quality_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description,
+        "enum": ["auto", "standard", "high", "hd", "medium", "low"],
+    })
+}
+
 fn object_schema(
     properties: &[(&str, Value)],
     required: &[&str],
@@ -813,6 +837,25 @@ fn image_generate_input_schema() -> Value {
                 integer_schema("Number of images to generate.", 1, max_batch_items),
             ),
             (
+                "aspectRatio",
+                image_aspect_ratio_schema(
+                    "Required when the user asks for a specific image ratio. Supported values: 1:1 square, 3:4 portrait/Xiaohongshu card, 4:3 landscape, 9:16 vertical story, 16:9 wide.",
+                ),
+            ),
+            (
+                "size",
+                image_size_schema(
+                    "Optional explicit output size. Prefer aspectRatio unless the user requests exact pixels.",
+                ),
+            ),
+            (
+                "quality",
+                image_quality_schema("Optional image quality hint."),
+            ),
+            ("title", string_schema("Optional media asset title.")),
+            ("projectId", string_schema("Optional media project id.")),
+            ("model", string_schema("Optional model override.")),
+            (
                 "planConfirmed",
                 bool_schema("Whether the user has confirmed the multi-image plan."),
             ),
@@ -1214,6 +1257,51 @@ fn redbox_operation_schema() -> Value {
         "type": "string",
         "enum": ["list", "get", "create", "update", "delete", "run", "generate", "export", "confirm", "cancel", "resume", "install", "verify"],
         "description": "Generic operation for the selected resource. The host maps this stable verb to the existing RedBox action contract."
+    })
+}
+
+fn redbox_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/size/quality/referenceImages here; do not hide the requested ratio inside prompt text only.",
+        "properties": {
+            "prompt": { "type": "string", "description": "Generation or operation prompt." },
+            "count": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Number of images or generated items." },
+            "aspectRatio": image_aspect_ratio_schema("Image output ratio. Required for image generation when the user specifies square/portrait/landscape/vertical/wide or a ratio like 3:4."),
+            "ratio": image_aspect_ratio_schema("Alias for aspectRatio; prefer aspectRatio in new calls."),
+            "size": image_size_schema("Optional explicit output size. Prefer aspectRatio unless exact pixels were requested."),
+            "quality": image_quality_schema("Optional image quality hint."),
+            "generationMode": {
+                "type": "string",
+                "enum": ["text-to-image", "reference-guided", "image-to-image", "text-to-video", "first-last-frame", "continuation"],
+                "description": "Media generation mode."
+            },
+            "referenceImages": {
+                "type": "array",
+                "items": { "type": "string" },
+                "maxItems": 5,
+                "description": "Reference image URLs, data URLs, asset ids, or local paths."
+            },
+            "planConfirmed": { "type": "boolean", "description": "Whether the user approved a multi-image plan." },
+            "planExecutionMode": { "type": "string", "description": "Use user_confirmed by default; redclaw_auto_execute is only for controlled RedClaw batches." },
+            "sequenceGoal": { "type": "string", "description": "Ordering goal for a multi-image batch." },
+            "sharedStyleGuide": { "type": "string", "description": "Shared style anchor for a coordinated image batch." },
+            "imagePlanItems": {
+                "type": "array",
+                "maxItems": 6,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string" },
+                        "prompt": { "type": "string" },
+                        "copy": { "type": "string" },
+                        "compiledPrompt": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        },
+        "additionalProperties": true
     })
 }
 
@@ -2340,11 +2428,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                         "resource": redbox_resource_schema(),
                         "operation": redbox_operation_schema(),
                         "id": { "type": "string", "description": "Optional target id, such as subject id, draft id, job id, MCP server id, or runtime task id." },
-                        "input": {
-                            "type": "object",
-                            "description": "Structured operation input. Keep it small and typed; the host validates resource-specific requirements.",
-                            "additionalProperties": true
-                        }
+                        "input": redbox_input_schema()
                     },
                     "required": ["resource", "operation"],
                     "additionalProperties": false
@@ -2751,6 +2835,10 @@ mod tests {
         assert_eq!(
             redbox.pointer("/function/parameters/properties/resource/enum/0"),
             Some(&json!("manuscript"))
+        );
+        assert_eq!(
+            redbox.pointer("/function/parameters/properties/input/properties/aspectRatio/enum/1"),
+            Some(&json!("3:4"))
         );
     }
 

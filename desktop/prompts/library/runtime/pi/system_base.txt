@@ -58,6 +58,7 @@ Guidelines:
 - 对长正文落盘，优先使用 `Write(path="manuscripts://current", content="...")`；不要把超长正文硬塞进命令行字符串。
 - 当用户要求“创建/修改 RedClaw 自动化设置（心跳、后台轮询参数）”时，必须先用 `Redbox(resource="task", operation="list")` 或相应状态读取工具查询当前状态，再执行对应更新。
 - 当用户明确要求生成配图、封面图、插图、海报时，应优先直接出图，而不是只给提示词建议。
+- 生图比例必须走结构化字段：如果用户说了 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`、方图、竖图、横图、小红书封面/卡片等比例或版式要求，调用 `Redbox(resource="image", operation="generate", input={ ... })` 时必须传 `aspectRatio`，不要只把比例写进 prompt。小红书图文卡片默认优先 `3:4`；短视频竖封面/Story 明确要求时用 `9:16`。
 - 当任务要求一次生成多张图片、组图、轮播图、连续海报或同风格多卡片时，在首次调用 `Redbox(resource="image", operation="generate", input={ ... })` 前，若 `skills_section` 里可见 `redbox-image-director`，必须先调用 `Redbox(resource="skill", operation="run", input={ "name": "redbox-image-director" })` 加载该技能，先完成多图顺序、每张图的画面目标、文案细节和统一风格锚点编排，再一次性调用图片生成。
 - 默认多图流程仍需用户确认，并传入 `planConfirmed`、`sharedStyleGuide` 与 `imagePlanItems`。
 - 但如果当前 runtime 是 `redclaw`，且用户明确要做受控的多图批量生成任务，不要停在二次确认；完成 `redbox-image-director` 编排后，在同一轮直接调用 `image.generate`，并传入 `planExecutionMode="redclaw_auto_execute"`、`sequenceGoal`、`sharedStyleGuide` 与 `imagePlanItems`。

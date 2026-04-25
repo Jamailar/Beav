@@ -58,6 +58,7 @@
 - schema-first：action 必须有明确输入 schema 和输出 schema。
 - `Read` / `List` / `Search` / `Write` 使用虚拟路径协议。
 - `Redbox` 使用 `resource + operation + id? + input?` 协议。
+- `Redbox(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
 - `app_cli` / `redbox_fs` / `redbox_editor` 作为内部执行层，仍一律优先走 `action + payload` 协议。
 - 虚拟路径示例：
   - `workspace://README.md`

@@ -353,6 +353,7 @@ The payload should include:
 
 - `prompt`: the overall batch brief
 - `count`: total image count
+- `aspectRatio`: required whenever the user specifies a ratio or format. Use `3:4` for Xiaohongshu card sets by default, `1:1` for square, `4:3` for landscape, `9:16` for vertical story/short-video cover, and `16:9` for wide landscape.
 - `planConfirmed`: `true` in normal confirmation flow
 - `planExecutionMode`: use `user_confirmed`
 - `sequenceGoal`: the ordering logic for the batch
