@@ -61,3 +61,16 @@ UI 看板应使用 stale-while-revalidate：先展示最近 snapshot，再监听
 - 内部成员执行器只能通过 `team-runtime:submit-report` 和 `team-runtime:update-task` 汇报状态。
 - Workboard 不创建外部 ACP/CLI 成员，也不提供外部进程运行按钮。
 - 真实工具执行仍走现有 Runtime / tools / approval 边界，不允许在 collab runtime 内调用 agent，避免形成嵌套黑盒。
+
+## AI Coordinator Entry
+
+主 AI 不需要模拟点击 UI。正常对话 runtime 会通过 `app_cli(action, payload)` 获得模型可见的 team actions：
+
+- `team.session.create`: 创建协作项目。
+- `team.member.spawn`: 创建内部 runtime 成员。
+- `team.task.create`: 创建看板任务并分配负责人。
+- `team.message.send`: 写入成员 mailbox 消息。
+- `team.report.request`: 请求成员进度汇报。
+- `team.report.submit`: 写入结构化进度汇报。
+
+当用户要求团队协作、多角色执行、看板追踪或定期汇报时，协调者 AI 应先创建 session，再创建内部成员和任务；不要建议安装或调用外部 ACP/CLI agent。

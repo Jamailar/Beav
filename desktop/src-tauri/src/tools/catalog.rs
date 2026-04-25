@@ -577,6 +577,187 @@ fn runtime_output_schema() -> Value {
     }))
 }
 
+fn team_session_create_input_schema() -> Value {
+    object_schema(
+        &[
+            ("title", string_schema("Collaboration project title.")),
+            (
+                "objective",
+                string_schema("Concrete project objective for the internal team."),
+            ),
+            (
+                "runtimeMode",
+                string_schema("Runtime mode for the team session."),
+            ),
+            (
+                "source",
+                string_schema("Caller source, for example ai_coordinator."),
+            ),
+            (
+                "metadata",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+        ],
+        &["objective"],
+        Some("Create a Workboard collaboration project for internal runtime agents."),
+    )
+}
+
+fn team_session_get_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            (
+                "mailboxLimit",
+                integer_schema("Mailbox message limit.", 1, 500),
+            ),
+            (
+                "reportLimit",
+                integer_schema("Progress report limit.", 1, 500),
+            ),
+        ],
+        &["sessionId"],
+        None,
+    )
+}
+
+fn team_member_spawn_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("displayName", string_schema("Visible team member name.")),
+            ("roleId", string_schema("Stable internal role id.")),
+            (
+                "capabilities",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "metadata",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+        ],
+        &["sessionId", "displayName"],
+        Some("Create one internal runtime team member. Do not create external ACP/CLI members."),
+    )
+}
+
+fn team_task_create_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("memberId", string_schema("Optional assignee member id.")),
+            ("title", string_schema("Task title.")),
+            ("objective", string_schema("Task objective.")),
+            ("description", string_schema("Detailed task instructions.")),
+            ("status", string_schema("Initial Kanban status.")),
+            ("priority", integer_schema("Task priority.", 0, 100)),
+            (
+                "dependsOnTaskIds",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "metadata",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+        ],
+        &["sessionId", "title"],
+        Some("Create one structured task on the team Workboard."),
+    )
+}
+
+fn team_task_update_input_schema() -> Value {
+    object_schema(
+        &[
+            ("taskId", string_schema("Team task id.")),
+            ("memberId", string_schema("New assignee member id.")),
+            ("status", string_schema("New Kanban status.")),
+            (
+                "progressPercent",
+                integer_schema("Progress percentage.", 0, 100),
+            ),
+            ("resultSummary", string_schema("Result summary.")),
+            (
+                "artifacts",
+                json!({ "type": "array", "items": { "type": "object" } }),
+            ),
+            (
+                "metadata",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+        ],
+        &["taskId"],
+        None,
+    )
+}
+
+fn team_message_send_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("fromMemberId", string_schema("Sender member id.")),
+            ("toMemberId", string_schema("Recipient member id.")),
+            ("taskId", string_schema("Related task id.")),
+            ("subject", string_schema("Message subject.")),
+            ("body", string_schema("Message body.")),
+            ("messageType", string_schema("Message type.")),
+            (
+                "payload",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+        ],
+        &["sessionId", "body"],
+        None,
+    )
+}
+
+fn team_report_request_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            (
+                "toMemberId",
+                string_schema("Member id to request a report from."),
+            ),
+            ("taskId", string_schema("Related task id.")),
+            ("body", string_schema("Report request message.")),
+        ],
+        &["sessionId", "toMemberId"],
+        None,
+    )
+}
+
+fn team_report_submit_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("memberId", string_schema("Reporting member id.")),
+            ("taskId", string_schema("Related task id.")),
+            ("summary", string_schema("Progress summary.")),
+            ("status", string_schema("Report status.")),
+            ("reportType", string_schema("Report type.")),
+            ("nextAction", string_schema("Immediate next action.")),
+            (
+                "nextSteps",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "progressPercent",
+                integer_schema("Progress percentage.", 0, 100),
+            ),
+            (
+                "blockers",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "artifacts",
+                json!({ "type": "array", "items": { "type": "object" } }),
+            ),
+        ],
+        &["sessionId", "memberId", "summary"],
+        None,
+    )
+}
+
 fn cli_runtime_detect_input_schema() -> Value {
     object_schema(
         &[
@@ -1686,6 +1867,127 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.session.create",
+        namespace: "team.session",
+        description: "Create a Workboard collaboration project for internal runtime agents when the user asks for team collaboration, multi-role execution, or ongoing progress reporting.",
+        input_schema: team_session_create_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.session.list",
+        namespace: "team.session",
+        description: "List Workboard collaboration projects.",
+        input_schema: no_payload_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.session.get",
+        namespace: "team.session",
+        description: "Read one Workboard collaboration project snapshot with members, tasks, mailbox, and reports.",
+        input_schema: team_session_get_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.member.spawn",
+        namespace: "team.member",
+        description: "Create one internal runtime team member role inside a Workboard collaboration project. Never use this for external ACP/CLI agents.",
+        input_schema: team_member_spawn_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.members.list",
+        namespace: "team.member",
+        description: "List internal team members in a Workboard collaboration project.",
+        input_schema: team_session_get_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.task.create",
+        namespace: "team.task",
+        description: "Create a structured task for an internal team member on the Workboard Kanban.",
+        input_schema: team_task_create_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.task.update",
+        namespace: "team.task",
+        description: "Update team task owner, status, progress, result summary, blockers, or artifacts.",
+        input_schema: team_task_update_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.task.list",
+        namespace: "team.task",
+        description: "List team tasks in one Workboard collaboration project.",
+        input_schema: team_session_get_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.message.send",
+        namespace: "team.message",
+        description: "Send a durable mailbox message between internal team members or from the coordinator.",
+        input_schema: team_message_send_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.report.request",
+        namespace: "team.report",
+        description: "Request a progress report from an internal team member through the mailbox.",
+        input_schema: team_report_request_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.report.submit",
+        namespace: "team.report",
+        description: "Submit a structured progress, blocker, completion, or artifact report for a team member.",
+        input_schema: team_report_submit_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -2922,10 +3224,33 @@ mod tests {
             tool_action_family_summary("app_cli", Some("redclaw")).expect("summary should exist");
         assert!(summary.contains("memory"));
         assert!(summary.contains("manuscripts"));
+        assert!(summary.contains("team.session"));
+        assert!(summary.contains("team.member"));
+        assert!(summary.contains("team.task"));
         let fs_summary = tool_action_family_summary("redbox_fs", Some("chatroom"))
             .expect("summary should exist");
         assert!(fs_summary.contains("workspace"));
         assert!(fs_summary.contains("knowledge"));
+    }
+
+    #[test]
+    fn app_cli_schema_exposes_team_coordinator_actions() {
+        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
+            .expect("app_cli schema should exist");
+        let actions = schema
+            .pointer("/function/parameters/properties/action/enum")
+            .and_then(Value::as_array)
+            .expect("action enum should exist");
+        for action in [
+            "team.session.create",
+            "team.member.spawn",
+            "team.task.create",
+            "team.message.send",
+            "team.report.request",
+            "team.report.submit",
+        ] {
+            assert!(actions.iter().any(|item| item == action), "{action}");
+        }
     }
 
     #[test]

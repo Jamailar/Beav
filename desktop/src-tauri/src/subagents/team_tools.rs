@@ -22,13 +22,28 @@ pub struct TeamToolDescriptor {
 pub fn team_tool_descriptors() -> Vec<TeamToolDescriptor> {
     vec![
         TeamToolDescriptor {
+            name: "team.session.create",
+            description: "Create a Workboard collaboration project for internal runtime members.",
+            mutating: true,
+        },
+        TeamToolDescriptor {
+            name: "team.session.get",
+            description: "Read one collaboration session snapshot.",
+            mutating: false,
+        },
+        TeamToolDescriptor {
+            name: "team.session.list",
+            description: "List collaboration sessions.",
+            mutating: false,
+        },
+        TeamToolDescriptor {
             name: "team.members.list",
             description: "List members in one collaboration session.",
             mutating: false,
         },
         TeamToolDescriptor {
             name: "team.member.spawn",
-            description: "Register a new internal or ACP collaboration member.",
+            description: "Register a new internal runtime collaboration member.",
             mutating: true,
         },
         TeamToolDescriptor {

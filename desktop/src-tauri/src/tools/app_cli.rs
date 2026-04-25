@@ -652,6 +652,50 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["tasks".to_string(), "cancel".to_string()];
                 self.handle_runtime(&tokens, payload)
             }
+            "teamsessioncreate" => {
+                let tokens = vec!["team".to_string(), "create-session".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamsessionlist" => {
+                let tokens = vec!["team".to_string(), "list-sessions".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamsessionget" => {
+                let tokens = vec!["team".to_string(), "get-session".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teammemberslist" | "teammemberlist" => {
+                let tokens = vec!["team".to_string(), "list-members".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teammemberspawn" => {
+                let tokens = vec!["team".to_string(), "add-member".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamtaskcreate" => {
+                let tokens = vec!["team".to_string(), "create-task".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamtaskupdate" => {
+                let tokens = vec!["team".to_string(), "update-task".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamtasklist" => {
+                let tokens = vec!["team".to_string(), "list-tasks".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teammessagesend" => {
+                let tokens = vec!["team".to_string(), "send-message".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamreportrequest" => {
+                let tokens = vec!["team".to_string(), "request-report".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamreportsubmit" => {
+                let tokens = vec!["team".to_string(), "submit-report".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
             "cliruntimedetect" => {
                 let tokens = vec!["detect".to_string()];
                 self.handle_cli_runtime(&tokens, payload)
@@ -5464,6 +5508,14 @@ mod tests {
         assert_eq!(
             normalized_app_cli_action_key("redclaw/task-list"),
             "redclawtasklist"
+        );
+        assert_eq!(
+            normalized_app_cli_action_key("team.session.create"),
+            "teamsessioncreate"
+        );
+        assert_eq!(
+            normalized_app_cli_action_key("team.member.spawn"),
+            "teammemberspawn"
         );
     }
 
