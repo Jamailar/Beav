@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -66,6 +66,21 @@ fn canonical_read_paths(spec: &CliSandboxSpec, env: &BTreeMap<String, String>) -
     paths
 }
 
+fn parent_metadata_paths(paths: &[String]) -> Vec<String> {
+    let mut metadata_paths = Vec::new();
+    for path in paths {
+        for ancestor in Path::new(path).ancestors().skip(1) {
+            let text = ancestor.to_string_lossy().to_string();
+            if !text.trim().is_empty() {
+                push_unique_path(&mut metadata_paths, text);
+            }
+        }
+    }
+    metadata_paths.sort();
+    metadata_paths.dedup();
+    metadata_paths
+}
+
 fn push_unique_path(paths: &mut Vec<String>, value: impl Into<String>) {
     let value = value.into();
     if value.trim().is_empty() || paths.iter().any(|item| item == &value) {
@@ -107,6 +122,39 @@ fn push_node_package_roots(paths: &mut Vec<String>, path: &Path) {
     push_unique_path(paths, package_root);
 }
 
+fn push_homebrew_runtime_roots(paths: &mut Vec<String>, path: &Path) {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    let Some(cellar_index) = components.iter().position(|item| item == "Cellar") else {
+        return;
+    };
+    if components.len() <= cellar_index + 2 {
+        return;
+    }
+    let mut root = PathBuf::new();
+    for component in components.iter().take(cellar_index + 3) {
+        root.push(component);
+    }
+    let mut homebrew_root = PathBuf::new();
+    for component in components.iter().take(cellar_index) {
+        homebrew_root.push(component);
+    }
+    for child in ["Cellar", "opt", "lib", "etc"] {
+        let candidate = homebrew_root.join(child);
+        if candidate.exists() {
+            push_unique_path(paths, candidate.to_string_lossy().to_string());
+        }
+    }
+    for child in ["lib", "Frameworks", "share"] {
+        let candidate = root.join(child);
+        if candidate.exists() {
+            push_unique_path(paths, candidate.to_string_lossy().to_string());
+        }
+    }
+}
+
 fn push_path_and_canonical(paths: &mut Vec<String>, path: &Path) {
     if let Some(parent) = path.parent() {
         push_unique_path(paths, parent.to_string_lossy().to_string());
@@ -114,15 +162,77 @@ fn push_path_and_canonical(paths: &mut Vec<String>, path: &Path) {
     if path.is_dir() {
         push_unique_path(paths, path.to_string_lossy().to_string());
     }
+    push_homebrew_runtime_roots(paths, path);
     if let Ok(canonical) = fs::canonicalize(path) {
         if canonical.is_dir() {
             push_unique_path(paths, canonical.to_string_lossy().to_string());
         } else if let Some(parent) = canonical.parent() {
             push_unique_path(paths, parent.to_string_lossy().to_string());
         }
+        push_homebrew_runtime_roots(paths, &canonical);
         push_node_package_roots(paths, &canonical);
     }
     push_node_package_roots(paths, path);
+}
+
+fn shebang_line(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    if !bytes.starts_with(b"#!") {
+        return None;
+    }
+    let newline = bytes
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap_or(bytes.len());
+    Some(
+        String::from_utf8_lossy(&bytes[2..newline])
+            .trim()
+            .to_string(),
+    )
+}
+
+fn interpreter_from_env_args(args: &[&str], env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index];
+        if token == "-S" {
+            index += 1;
+            break;
+        }
+        if token.starts_with('-') || token.contains('=') {
+            index += 1;
+            continue;
+        }
+        return find_executable(token, env);
+    }
+    args.get(index)
+        .and_then(|token| find_executable(token, env))
+}
+
+fn shebang_interpreter_path(path: &Path, env: &BTreeMap<String, String>) -> Option<PathBuf> {
+    let line = shebang_line(path)?;
+    let parts = line.split_whitespace().collect::<Vec<_>>();
+    let interpreter = parts.first().copied()?;
+    let interpreter_path = Path::new(interpreter);
+    if interpreter_path.file_name().and_then(|name| name.to_str()) == Some("env") {
+        return interpreter_from_env_args(&parts[1..], env);
+    }
+    Some(PathBuf::from(interpreter))
+}
+
+fn push_tool_closure(
+    paths: &mut Vec<String>,
+    path: &Path,
+    env: &BTreeMap<String, String>,
+    depth: usize,
+) {
+    push_path_and_canonical(paths, path);
+    if depth == 0 {
+        return;
+    }
+    if let Some(interpreter) = shebang_interpreter_path(path, env) {
+        push_tool_closure(paths, &interpreter, env, depth - 1);
+    }
 }
 
 fn host_tool_read_paths(argv: &[String], env: &BTreeMap<String, String>) -> Vec<String> {
@@ -140,7 +250,7 @@ fn host_tool_read_paths(argv: &[String], env: &BTreeMap<String, String>) -> Vec<
     };
     let mut paths = Vec::new();
     if let Some(path) = resolved {
-        push_path_and_canonical(&mut paths, &path);
+        push_tool_closure(&mut paths, &path, env, 2);
     }
     paths
 }
@@ -155,7 +265,14 @@ fn build_macos_sandbox_profile(spec: &CliSandboxSpec, env: &BTreeMap<String, Str
         "(allow signal (target self))".to_string(),
         "(allow sysctl-read)".to_string(),
     ];
-    for path in canonical_read_paths(spec, env) {
+    let read_paths = canonical_read_paths(spec, env);
+    for path in parent_metadata_paths(&read_paths) {
+        lines.push(format!(
+            "(allow file-read-metadata (literal \"{}\"))",
+            profile_escape(&path)
+        ));
+    }
+    for path in read_paths {
         lines.push(format!(
             "(allow file-read* (subpath \"{}\"))",
             profile_escape(&path)
@@ -330,5 +447,78 @@ mod tests {
             assert_eq!(plan.program, "echo");
             assert_eq!(plan.args, vec!["hello".to_string()]);
         }
+    }
+
+    #[test]
+    fn host_tool_read_paths_includes_env_interpreter_and_homebrew_lib() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-cli-sandbox-closure-{}", crate::now_i64()));
+        let script_bin = root.join("scripts");
+        let node_bin = root
+            .join("homebrew")
+            .join("Cellar")
+            .join("node")
+            .join("25.9.0")
+            .join("bin");
+        let node_lib = root
+            .join("homebrew")
+            .join("Cellar")
+            .join("node")
+            .join("25.9.0")
+            .join("lib");
+        let homebrew_opt = root.join("homebrew").join("opt");
+        let homebrew_etc = root.join("homebrew").join("etc");
+        fs::create_dir_all(&script_bin).expect("script bin should be created");
+        fs::create_dir_all(&node_bin).expect("node bin should be created");
+        fs::create_dir_all(&node_lib).expect("node lib should be created");
+        fs::create_dir_all(&homebrew_opt).expect("homebrew opt should be created");
+        fs::create_dir_all(&homebrew_etc).expect("homebrew etc should be created");
+        fs::write(
+            script_bin.join("lark-cli"),
+            "#!/usr/bin/env node\nconsole.log('ok')\n",
+        )
+        .expect("script should be written");
+        fs::write(node_bin.join("node"), "").expect("node shim should be written");
+
+        let env = BTreeMap::from([(
+            "PATH".to_string(),
+            format!("{}:{}", script_bin.display(), node_bin.display()),
+        )]);
+        let paths = host_tool_read_paths(&["lark-cli".to_string()], &env);
+        let script_bin_text = script_bin.to_string_lossy().to_string();
+        let node_bin_text = node_bin.to_string_lossy().to_string();
+        let node_lib_text = node_lib.to_string_lossy().to_string();
+        let homebrew_cellar_text = root
+            .join("homebrew")
+            .join("Cellar")
+            .to_string_lossy()
+            .to_string();
+        let homebrew_opt_text = homebrew_opt.to_string_lossy().to_string();
+        let homebrew_etc_text = homebrew_etc.to_string_lossy().to_string();
+
+        assert!(paths.iter().any(|item| item == &script_bin_text));
+        assert!(paths.iter().any(|item| item == &node_bin_text));
+        assert!(paths.iter().any(|item| item == &node_lib_text));
+        assert!(paths.iter().any(|item| item == &homebrew_cellar_text));
+        assert!(paths.iter().any(|item| item == &homebrew_opt_text));
+        assert!(paths.iter().any(|item| item == &homebrew_etc_text));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parent_metadata_paths_adds_only_ancestor_literals() {
+        let paths = vec![
+            "/Users/Jam/.nvm/versions/node/v20.20.0/bin".to_string(),
+            "/tmp/redbox-env".to_string(),
+        ];
+        let metadata_paths = parent_metadata_paths(&paths);
+
+        assert!(metadata_paths.iter().any(|item| item == "/Users"));
+        assert!(metadata_paths.iter().any(|item| item == "/Users/Jam"));
+        assert!(metadata_paths.iter().any(|item| item == "/Users/Jam/.nvm"));
+        assert!(metadata_paths.iter().any(|item| item == "/tmp"));
+        assert!(!metadata_paths
+            .iter()
+            .any(|item| item == "/Users/Jam/.nvm/versions/node/v20.20.0/bin"));
     }
 }
