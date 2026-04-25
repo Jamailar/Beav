@@ -15,6 +15,7 @@ pub(crate) enum ProviderFamily {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ProviderCapabilities {
     pub supports_streaming: bool,
+    pub supports_tool_choice_auto: bool,
     pub supports_tool_choice_required: bool,
     pub supports_tool_choice_none: bool,
     pub supports_thinking: bool,
@@ -88,5 +89,17 @@ impl ProviderProfile {
                 && runtime_mode != "wander"
                 && self.capabilities.supports_text_fallback,
         }
+    }
+
+    pub(crate) fn api_tool_choice_value(
+        &self,
+        tool_choice: InteractiveToolChoice,
+    ) -> Option<&'static str> {
+        let supported = match tool_choice {
+            InteractiveToolChoice::Auto => self.capabilities.supports_tool_choice_auto,
+            InteractiveToolChoice::Required => self.capabilities.supports_tool_choice_required,
+            InteractiveToolChoice::None => self.capabilities.supports_tool_choice_none,
+        };
+        supported.then_some(tool_choice.as_api_value())
     }
 }

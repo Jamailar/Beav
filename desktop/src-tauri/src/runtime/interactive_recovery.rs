@@ -185,10 +185,17 @@ pub fn runtime_error_envelope_from_error(
             true,
             "网络传输异常".to_string(),
         )
-    } else if lower.contains("invalid json")
+    } else if lower.contains("does not support this tool_choice")
         || lower.contains("tool_choice parameter")
-        || lower.contains("unsupported runtime protocol")
+        || (lower.contains("tool_choice") && lower.contains("unsupported"))
     {
+        (
+            RuntimeErrorCategory::ProtocolMismatch,
+            RuntimeErrorLayer::Protocol,
+            false,
+            "模型协议不兼容".to_string(),
+        )
+    } else if lower.contains("invalid json") || lower.contains("unsupported runtime protocol") {
         (
             RuntimeErrorCategory::ProtocolMismatch,
             RuntimeErrorLayer::Protocol,
@@ -293,5 +300,19 @@ mod tests {
         assert_eq!(envelope.layer, RuntimeErrorLayer::Protocol);
         assert_eq!(envelope.category, RuntimeErrorCategory::ProtocolMismatch);
         assert_eq!(envelope.code, "protocol_mismatch");
+        assert!(!envelope.retryable);
+    }
+
+    #[test]
+    fn runtime_error_envelope_marks_unsupported_tool_choice_non_retryable() {
+        let envelope = runtime_error_envelope_from_error(
+            "AI upstream error (400): {\"error\":{\"message\":\"deepseek-reasoner does not support this tool_choice\",\"type\":\"invalid_request_error\"}}",
+            Some(&openai_profile()),
+            Some("deepseek-reasoner"),
+        );
+        assert_eq!(envelope.layer, RuntimeErrorLayer::Protocol);
+        assert_eq!(envelope.category, RuntimeErrorCategory::ProtocolMismatch);
+        assert_eq!(envelope.title, "模型协议不兼容");
+        assert!(!envelope.retryable);
     }
 }

@@ -5,6 +5,7 @@ use super::{ProviderCapabilities, ProviderFamily, ProviderProfile};
 fn openai_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
+        supports_tool_choice_auto: true,
         supports_tool_choice_required: true,
         supports_tool_choice_none: true,
         supports_thinking: true,
@@ -23,6 +24,22 @@ fn qwen_compat_capabilities() -> ProviderCapabilities {
     }
 }
 
+fn model_capability_overrides(
+    model_name: &str,
+    capabilities: ProviderCapabilities,
+) -> ProviderCapabilities {
+    let model_key = model_name.trim().to_ascii_lowercase();
+    if model_key.contains("deepseek-reasoner") {
+        return ProviderCapabilities {
+            supports_tool_choice_auto: false,
+            supports_tool_choice_required: false,
+            supports_tool_choice_none: false,
+            ..capabilities
+        };
+    }
+    capabilities
+}
+
 fn minimax_capabilities() -> ProviderCapabilities {
     openai_capabilities()
 }
@@ -30,6 +47,7 @@ fn minimax_capabilities() -> ProviderCapabilities {
 fn anthropic_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
+        supports_tool_choice_auto: false,
         supports_tool_choice_required: false,
         supports_tool_choice_none: false,
         supports_thinking: true,
@@ -44,6 +62,7 @@ fn anthropic_capabilities() -> ProviderCapabilities {
 fn gemini_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
+        supports_tool_choice_auto: false,
         supports_tool_choice_required: false,
         supports_tool_choice_none: false,
         supports_thinking: true,
@@ -94,13 +113,14 @@ pub(crate) fn provider_profile_from_parts(
             } else {
                 ProviderFamily::OpenAiCompat
             };
-            let capabilities = if provider_family == ProviderFamily::MiniMax {
+            let base_capabilities = if provider_family == ProviderFamily::MiniMax {
                 minimax_capabilities()
             } else if lower_hint.contains("qwen") || lower_hint.contains("dashscope") {
                 qwen_compat_capabilities()
             } else {
                 openai_capabilities()
             };
+            let capabilities = model_capability_overrides(model_name, base_capabilities);
             ProviderProfile {
                 key: normalized_provider_key(protocol, base_url, model_name),
                 provider_family,
@@ -137,6 +157,31 @@ mod tests {
         let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
         assert!(!profile.should_disable_thinking("chat", true));
         assert!(profile.capabilities.supports_tool_choice_required);
+    }
+
+    #[test]
+    fn deepseek_reasoner_disables_tool_choice_by_model_name() {
+        let profile = provider_profile_from_parts(
+            "openai",
+            "https://gateway.example.com/v1",
+            "deepseek-reasoner",
+        );
+        assert_eq!(profile.provider_family, ProviderFamily::OpenAiCompat);
+        assert!(!profile.capabilities.supports_tool_choice_auto);
+        assert!(!profile.capabilities.supports_tool_choice_required);
+        assert!(!profile.capabilities.supports_tool_choice_none);
+        assert_eq!(
+            profile.api_tool_choice_value(InteractiveToolChoice::Auto),
+            None
+        );
+        assert_eq!(
+            profile.api_tool_choice_value(InteractiveToolChoice::Required),
+            None
+        );
+        assert_eq!(
+            profile.api_tool_choice_value(InteractiveToolChoice::None),
+            None
+        );
     }
 
     #[test]
