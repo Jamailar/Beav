@@ -1459,10 +1459,12 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_generated_media_markdown, asset_preview_url_from_result, decode_command_json_stdout,
+        append_generated_media_markdown, asset_preview_url_from_result,
+        clear_interactive_execution_contract_metadata, decode_command_json_stdout,
         guess_mime_and_kind, interactive_execution_progress_observe_success,
         interactive_skill_activation_continuation, interactive_skill_activations,
         interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
+        message_is_successful_manuscript_write_tool_result,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
         structured_tool_error_code, validate_runtime_tool_message_sequence, GeneratedMediaPreview,
         InteractiveExecutionContract, InteractiveExecutionProgress,
@@ -1573,6 +1575,89 @@ mod tests {
             }),
         );
         assert!(progress.source_read_completed);
+    }
+
+    #[test]
+    fn clear_interactive_execution_contract_metadata_removes_task_scoped_fields_only() {
+        let mut metadata = json!({
+            "contextType": "redclaw",
+            "initialContext": "space bootstrap",
+            "taskHints": {
+                "intent": "manuscript_creation",
+                "requireSourceRead": true,
+                "requireProfileRead": true,
+                "requireSave": true
+            },
+            "intent": "manuscript_creation",
+            "platform": "xiaohongshu",
+            "taskType": "direct_write",
+            "formatTarget": "markdown",
+            "allowedTools": ["redbox_fs", "app_cli"],
+            "allowedAppCliActions": ["manuscripts.writeCurrent", "skills.invoke"],
+            "saveSubdir": "wander",
+            "sourceMode": "knowledge",
+            "currentAuthoringProjectPath": "wander/demo.redpost",
+            "currentAuthoringContentPath": "wander/demo.redpost/content.md"
+        })
+        .as_object()
+        .cloned()
+        .expect("metadata object");
+
+        assert!(clear_interactive_execution_contract_metadata(&mut metadata));
+
+        for field in [
+            "taskHints",
+            "intent",
+            "platform",
+            "taskType",
+            "formatTarget",
+            "allowedTools",
+            "allowedAppCliActions",
+            "saveSubdir",
+            "sourceMode",
+        ] {
+            assert!(metadata.get(field).is_none(), "{field} should be cleared");
+        }
+        assert_eq!(metadata.get("contextType"), Some(&json!("redclaw")));
+        assert_eq!(
+            metadata.get("initialContext"),
+            Some(&json!("space bootstrap"))
+        );
+        assert_eq!(
+            metadata.get("currentAuthoringProjectPath"),
+            Some(&json!("wander/demo.redpost"))
+        );
+        assert_eq!(
+            metadata.get("currentAuthoringContentPath"),
+            Some(&json!("wander/demo.redpost/content.md"))
+        );
+    }
+
+    #[test]
+    fn message_is_successful_manuscript_write_tool_result_matches_structured_result() {
+        assert!(message_is_successful_manuscript_write_tool_result(&json!({
+            "role": "tool",
+            "tool_name": "app_cli",
+            "content": r#"{
+                "ok": true,
+                "tool": "app_cli",
+                "action": "manuscripts.writeCurrent",
+                "data": {
+                    "projectPath": "wander/demo.redpost"
+                }
+            }"#
+        })));
+        assert!(!message_is_successful_manuscript_write_tool_result(
+            &json!({
+                "role": "tool",
+                "tool_name": "app_cli",
+                "content": r#"{
+                "ok": true,
+                "tool": "app_cli",
+                "action": "manuscripts.createProject"
+            }"#
+            })
+        ));
     }
 
     #[test]
@@ -5010,6 +5095,158 @@ fn interactive_execution_contract(
     .unwrap_or_default()
 }
 
+fn clear_interactive_execution_contract_metadata(
+    metadata_object: &mut serde_json::Map<String, Value>,
+) -> bool {
+    let task_scoped_fields = [
+        "taskHints",
+        "intent",
+        "platform",
+        "taskType",
+        "formatTarget",
+        "allowedTools",
+        "allowedAppCliActions",
+        "saveSubdir",
+        "sourcePlatform",
+        "sourceNoteId",
+        "sourceMode",
+        "sourceTitle",
+        "sourceManuscriptPath",
+        "forceMultiAgent",
+        "forceLongRunningTask",
+    ];
+    let mut changed = false;
+    for field in task_scoped_fields {
+        changed |= metadata_object.remove(field).is_some();
+    }
+    changed
+}
+
+fn clear_completed_interactive_execution_contract(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    contract: &InteractiveExecutionContract,
+    progress: &InteractiveExecutionProgress,
+) {
+    let Some(session_id) = session_id else {
+        return;
+    };
+    if !contract.requires_tool_turn() || !contract.missing_steps(progress).is_empty() {
+        return;
+    }
+    let _ = with_store_mut(state, |store| {
+        let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        else {
+            return Ok(());
+        };
+        let Some(mut metadata_object) = session
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+        else {
+            return Ok(());
+        };
+        if clear_interactive_execution_contract_metadata(&mut metadata_object) {
+            session.metadata = Some(Value::Object(metadata_object));
+            session.updated_at = now_iso();
+        }
+        Ok(())
+    });
+}
+
+fn metadata_has_interactive_execution_contract(metadata: &Value) -> bool {
+    let task_hints = metadata.get("taskHints");
+    task_hints
+        .and_then(|value| value.get("requireSourceRead"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || task_hints
+            .and_then(|value| value.get("requireProfileRead"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || task_hints
+            .and_then(|value| value.get("requireSave"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn message_is_successful_manuscript_write_tool_result(message: &Value) -> bool {
+    if message.get("role").and_then(Value::as_str) != Some("tool") {
+        return false;
+    }
+    if message.get("tool_name").and_then(Value::as_str) != Some("app_cli") {
+        return false;
+    }
+    let Some(content) = message.get("content").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(payload) = structured_tool_payload_from_text(content) else {
+        return false;
+    };
+    payload.get("ok").and_then(Value::as_bool) == Some(true)
+        && payload_string(&payload, "action").as_deref() == Some("manuscripts.writeCurrent")
+}
+
+fn session_history_has_successful_manuscript_write(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> bool {
+    runtime::load_session_bundle_messages(state, session_id)
+        .map(|messages| {
+            messages
+                .iter()
+                .any(message_is_successful_manuscript_write_tool_result)
+        })
+        .unwrap_or(false)
+}
+
+fn clear_stale_completed_interactive_execution_contract(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) {
+    let Some(session_id) = session_id else {
+        return;
+    };
+    let should_check_history = with_store(state, |store| {
+        Ok(store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|session| session.metadata.as_ref())
+            .map(metadata_has_interactive_execution_contract)
+            .unwrap_or(false))
+    })
+    .unwrap_or(false);
+    if !should_check_history || !session_history_has_successful_manuscript_write(state, session_id)
+    {
+        return;
+    }
+    let _ = with_store_mut(state, |store| {
+        let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        else {
+            return Ok(());
+        };
+        let Some(mut metadata_object) = session
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+        else {
+            return Ok(());
+        };
+        if clear_interactive_execution_contract_metadata(&mut metadata_object) {
+            session.metadata = Some(Value::Object(metadata_object));
+            session.updated_at = now_iso();
+        }
+        Ok(())
+    });
+}
+
 fn interactive_execution_contract_instruction(
     contract: &InteractiveExecutionContract,
 ) -> Option<String> {
@@ -6926,6 +7163,7 @@ fn run_openai_interactive_chat_runtime(
     let mut loop_guard = InteractiveLoopGuard::default();
     let mut in_flight_tool_calls = InteractiveToolCallGuard::new(app, state, session_id);
     let mut tool_turn = 0usize;
+    clear_stale_completed_interactive_execution_contract(state, session_id);
     let execution_contract = interactive_execution_contract(state, session_id);
     let mut execution_progress = InteractiveExecutionProgress::default();
     let mut execution_contract_nudge_count = 0usize;
@@ -7148,6 +7386,12 @@ fn run_openai_interactive_chat_runtime(
                 );
                 continue;
             }
+            clear_completed_interactive_execution_contract(
+                state,
+                session_id,
+                &execution_contract,
+                &execution_progress,
+            );
             if is_wander && !wander_saw_tool_call && tool_turn < INTERACTIVE_MAX_TOOL_TURNS {
                 let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 redbox_fs 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
                 append_internal_runtime_user_message(
