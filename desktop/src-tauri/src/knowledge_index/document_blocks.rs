@@ -7,7 +7,7 @@ use tauri::State;
 use time::OffsetDateTime;
 
 use crate::{
-    document_parse::{CanonicalDocument, LegalMetadata},
+    document_parse::{CanonicalDocument, LegalMetadata, OcrProvider, OcrProviderConfig},
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
         catalog_db_path,
@@ -18,6 +18,8 @@ use crate::{
         },
         schema::ensure_catalog_ready,
     },
+    payload_field, payload_string,
+    persistence::with_store,
     AppState,
 };
 
@@ -659,7 +661,9 @@ fn build_blocks_for_file(
     {
         cached
     } else {
-        let Some(parsed) = crate::document_parse::parse_path(source_id, root_path, file_path)?
+        let ocr_config = resolve_ocr_provider_config(state)?;
+        let Some(parsed) =
+            crate::document_parse::parse_path(source_id, root_path, file_path, &ocr_config)?
         else {
             return Ok(());
         };
@@ -700,6 +704,44 @@ fn build_blocks_for_file(
         updated_at,
     )?);
     Ok(())
+}
+
+fn resolve_ocr_provider_config(state: &State<'_, AppState>) -> Result<OcrProviderConfig, String> {
+    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let provider = match payload_string(&settings, "ocr_provider")
+        .unwrap_or_else(|| "auto".to_string())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "api" | "network" | "remote" => OcrProvider::Api,
+        "local" | "internal" | "vision" => OcrProvider::Local,
+        "disabled" | "off" | "none" => OcrProvider::Disabled,
+        _ => OcrProvider::Auto,
+    };
+    let timeout_seconds = payload_field(&settings, "ocr_timeout_seconds")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(60)
+        .clamp(10, 300);
+    let local_fallback = payload_field(&settings, "ocr_local_fallback")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true);
+    Ok(OcrProviderConfig {
+        provider,
+        endpoint: payload_string(&settings, "ocr_endpoint")
+            .or_else(|| payload_string(&settings, "ocr_api_endpoint")),
+        api_key: payload_string(&settings, "ocr_key")
+            .or_else(|| payload_string(&settings, "ocr_api_key")),
+        model: payload_string(&settings, "ocr_model"),
+        timeout_seconds,
+        local_fallback,
+    })
 }
 
 fn block_records_from_document(

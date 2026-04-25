@@ -44,6 +44,12 @@ type SettingsFormData = {
     proxy_enabled: boolean;
     proxy_url: string;
     proxy_bypass: string;
+    ocr_provider: string;
+    ocr_endpoint: string;
+    ocr_api_key: string;
+    ocr_model: string;
+    ocr_timeout_seconds: string;
+    ocr_local_fallback: boolean;
 };
 
 type YtdlpStatus = {
@@ -706,7 +712,87 @@ function GeneralSettingsSectionInner({
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-4">
                     <div>
-                        <h3 className="text-sm font-medium text-text-primary">诊断与日志</h3>
+                        <h3 className="text-sm font-medium text-text-primary">文件检索 OCR</h3>
+                        <p className="text-xs text-text-tertiary mt-1">
+                            用于扫描 PDF 和图片入库。默认 auto：配置远程接口时优先网络 OCR，失败后可回退本地 OCR。
+                        </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-text-secondary">
+                        <input
+                            type="checkbox"
+                            checked={formData.ocr_local_fallback}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_local_fallback: e.target.checked }))}
+                            className="rounded border-border"
+                        />
+                        远程失败回退本地
+                    </label>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">OCR Provider</label>
+                        <select
+                            value={formData.ocr_provider}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_provider: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        >
+                            <option value="auto">auto：远程优先，本地兜底</option>
+                            <option value="api">api：只用远程，按 fallback 设置兜底</option>
+                            <option value="local">local：只用本地 OCR</option>
+                            <option value="disabled">disabled：禁用 OCR</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">超时秒数</label>
+                        <input
+                            type="number"
+                            min={10}
+                            max={300}
+                            value={formData.ocr_timeout_seconds}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_timeout_seconds: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                </div>
+                <div>
+                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">远程 OCR Endpoint</label>
+                    <input
+                        type="text"
+                        value={formData.ocr_endpoint}
+                        onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_endpoint: e.target.value }))}
+                        placeholder="https://ocr.example.com/v1/recognize"
+                        className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                    />
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">API Key</label>
+                        <PasswordInput
+                            value={formData.ocr_api_key}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_api_key: e.target.value }))}
+                            placeholder="Bearer token，可留空"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">模型 / 引擎名</label>
+                        <input
+                            type="text"
+                            value={formData.ocr_model}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_model: e.target.value }))}
+                            placeholder="例如 paddleocr-v4、docling-ocr、vision-ocr"
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                </div>
+                <p className="text-[10px] text-text-tertiary">
+                    远程接口接收页图 base64、sourceType 和 model；返回可用 `pages/results/data/items` 或顶层 `text/output_text/markdown` 字段。
+                </p>
+            </div>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <h3 className="text-sm font-medium text-text-primary">调试日志</h3>
                         <p className="text-xs text-text-tertiary mt-1">
                             正式版本地日志默认常开。这里控制 verbose 调试 trace、诊断包高级上下文，以及待发送报告的导出和上传。
                         </p>

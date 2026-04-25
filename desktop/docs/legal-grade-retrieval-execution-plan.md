@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-23
+last_updated: 2026-04-25
 execution_stage: stage7_completed
 owner: ai-agent
 target_files:
@@ -345,10 +345,11 @@ Status: Current
 
 必须实现：
 
-1. OCR worker
+1. OCR worker / provider
 
-- 默认 `PaddleOCR`
-- `Tesseract` 作为 fallback
+- 支持 `auto | api | local | disabled`
+- `auto` 在配置远程 endpoint 时优先网络 OCR，避免弱性能客户端承担识别压力
+- 本地 OCR 作为离线 fallback，不允许把单一 OCR 引擎硬编码成唯一通道
 
 2. OCR 置信度链路
 
@@ -365,6 +366,7 @@ Status: Current
 ### Deliverables
 
 - OCR parser path
+- pluggable OCR provider config
 - OCR confidence schema
 - OCR-based anchor generation
 
@@ -383,7 +385,8 @@ Status: Current
 
 ### Progress Notes
 
-- 已新增 OCR parser path：扫描 PDF 通过 `pdftoppm` 渲染页图，再由 macOS Vision OCR 进入 canonical blocks
+- 已新增 OCR parser path：扫描 PDF 通过 `pdftoppm` 渲染页图，再由可插拔 OCR provider 进入 canonical blocks
+- 已支持远程 API OCR 优先、本地 Vision fallback、禁用 OCR 三种部署形态；配置项为 `ocr_provider`、`ocr_endpoint`/`ocr_api_endpoint`、`ocr_key`/`ocr_api_key`、`ocr_model`、`ocr_timeout_seconds`、`ocr_local_fallback`
 - 图片类文件已支持直接 OCR 入库，block 会持久化 `contentOrigin=ocr` 和 `ocrConfidence`
 - `knowledge.search/read` 已返回 OCR provenance，OCR 命中结果不会与原生文本结果混淆
 - 排序已接入 OCR 置信度惩罚，低置信结果默认显著降权

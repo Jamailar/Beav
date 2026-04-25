@@ -8,6 +8,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 
 pub(crate) use legal_metadata::LegalMetadata;
+pub(crate) use ocr::{OcrProvider, OcrProviderConfig};
 
 const PARSER_NAME: &str = "redbox-canonical";
 const PARSER_VERSION: &str = "stage5-v1";
@@ -70,6 +71,7 @@ pub(crate) fn parse_path(
     source_id: &str,
     root_path: &Path,
     path: &Path,
+    ocr_config: &OcrProviderConfig,
 ) -> Result<Option<CanonicalDocument>, String> {
     let extension = path
         .extension()
@@ -103,13 +105,15 @@ pub(crate) fn parse_path(
             })
         }
         "csv" | "tsv" => parse_delimited_file(path)?,
-        "pdf" => parse_pdf(path)?,
+        "pdf" => parse_pdf(path, ocr_config)?,
         "docx" => parse_docx(path)?,
         "pptx" => parse_pptx(path)?,
         "xlsx" => parse_xlsx(path)?,
         "eml" => parse_eml(path)?,
         "zip" => parse_zip(path)?,
-        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" => parse_image_ocr(path)?,
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" => {
+            parse_image_ocr(path, ocr_config)?
+        }
         _ => read_utf8_sections(path, "plain-text-fallback", vec!["body".to_string()])?,
     };
 
@@ -230,7 +234,10 @@ fn parse_delimited_file(path: &Path) -> Result<Option<Vec<ParsedSection>>, Strin
     )
 }
 
-fn parse_pdf(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
+fn parse_pdf(
+    path: &Path,
+    ocr_config: &OcrProviderConfig,
+) -> Result<Option<Vec<ParsedSection>>, String> {
     match pdf_extract::extract_text(path) {
         Ok(text) if !text.trim().is_empty() => Ok(Some(vec![ParsedSection {
             strategy: "pdf-extract".to_string(),
@@ -244,12 +251,15 @@ fn parse_pdf(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
             fallback_used: false,
             attachment_path: None,
         }])),
-        Ok(_) | Err(_) => ocr::ocr_pdf_to_sections(path),
+        Ok(_) | Err(_) => ocr::ocr_pdf_to_sections(path, ocr_config),
     }
 }
 
-fn parse_image_ocr(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
-    ocr::ocr_image_to_sections(path)
+fn parse_image_ocr(
+    path: &Path,
+    ocr_config: &OcrProviderConfig,
+) -> Result<Option<Vec<ParsedSection>>, String> {
+    ocr::ocr_image_to_sections(path, ocr_config)
 }
 
 fn parse_docx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
@@ -970,7 +980,9 @@ mod tests {
         )
         .unwrap();
 
-        let parsed = parse_path("source-1", &root, &path).unwrap().unwrap();
+        let parsed = parse_path("source-1", &root, &path, &OcrProviderConfig::default())
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed.language.as_deref(), Some("multilingual"));
         assert_eq!(parsed.legal_metadata.document_type.as_deref(), Some("law"));
         assert_eq!(

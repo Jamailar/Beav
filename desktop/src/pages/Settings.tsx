@@ -479,6 +479,12 @@ export function Settings({
     embedding_endpoint: '',
     embedding_key: '',
     embedding_model: '',
+    ocr_provider: 'auto',
+    ocr_endpoint: '',
+    ocr_api_key: '',
+    ocr_model: '',
+    ocr_timeout_seconds: '60',
+    ocr_local_fallback: true,
     image_provider: 'openai-compatible',
     image_endpoint: '',
     image_api_key: '',
@@ -3072,6 +3078,12 @@ export function Settings({
           embedding_endpoint: settings.embedding_endpoint || '',
           embedding_key: settings.embedding_key || '',
           embedding_model: settings.embedding_model || '',
+          ocr_provider: settings.ocr_provider || 'auto',
+          ocr_endpoint: settings.ocr_endpoint || settings.ocr_api_endpoint || '',
+          ocr_api_key: settings.ocr_api_key || settings.ocr_key || '',
+          ocr_model: settings.ocr_model || '',
+          ocr_timeout_seconds: String(settings.ocr_timeout_seconds || 60),
+          ocr_local_fallback: settings.ocr_local_fallback !== false,
           image_provider: settings.image_provider || 'openai-compatible',
           image_endpoint: settings.image_endpoint || resolveDefaultImageEndpoint(
             settings.image_provider || 'openai-compatible',
@@ -4198,6 +4210,17 @@ export function Settings({
       ));
       const releaseLogRetentionDays = Math.max(1, Number(formData.release_log_retention_days || 7) || 7);
       const releaseLogMaxFileMb = Math.max(1, Number(formData.release_log_max_file_mb || 10) || 10);
+      const normalizedOcrProvider = ['auto', 'api', 'local', 'disabled'].includes(String(formData.ocr_provider || '').trim())
+        ? String(formData.ocr_provider || '').trim()
+        : 'auto';
+      const parsedOcrTimeoutSeconds = Number(formData.ocr_timeout_seconds);
+      const ocrTimeoutSeconds = Number.isFinite(parsedOcrTimeoutSeconds)
+        ? Math.min(300, Math.max(10, Math.floor(parsedOcrTimeoutSeconds)))
+        : 60;
+      const normalizedOcrEndpoint = String(formData.ocr_endpoint || '').trim();
+      if (normalizedOcrProvider === 'api' && !normalizedOcrEndpoint) {
+        throw new Error('OCR Provider 设为 api 时必须填写远程 OCR Endpoint');
+      }
       if (formData.proxy_enabled && !String(formData.proxy_url || '').trim()) {
         throw new Error('启用代理时必须填写代理地址，例如 http://127.0.0.1:7890');
       }
@@ -4220,6 +4243,12 @@ export function Settings({
         embedding_model: resolvedEmbeddingModel,
         embedding_endpoint: String(resolvedEmbeddingSource?.baseURL || formData.embedding_endpoint || resolvedApiEndpoint).trim(),
         embedding_key: String(resolvedEmbeddingSource?.apiKey || formData.embedding_key || '').trim(),
+        ocr_provider: normalizedOcrProvider,
+        ocr_endpoint: normalizedOcrEndpoint,
+        ocr_api_key: String(formData.ocr_api_key || '').trim(),
+        ocr_model: String(formData.ocr_model || '').trim(),
+        ocr_timeout_seconds: ocrTimeoutSeconds,
+        ocr_local_fallback: Boolean(formData.ocr_local_fallback),
         image_provider: formData.image_provider,
         image_provider_template: formData.image_provider_template,
         image_endpoint: String(resolvedImageSource?.baseURL || formData.image_endpoint || '').trim(),

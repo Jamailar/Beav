@@ -1,7 +1,7 @@
 ---
 doc_type: plan
-execution_status: not_started
-last_updated: 2026-04-22
+execution_status: in_progress
+last_updated: 2026-04-25
 execution_stage: architecture_proposed
 owner: ai-agent
 target_files:
@@ -174,18 +174,21 @@ Status: Current
 - 原始图像坐标与识别文本的映射
 - 低置信度区域标记
 
-建议用现成库：
+建议用现成库 / SDK：
 
-- OCR：`PaddleOCR` 或 `Tesseract` 作为基础兜底
+- 远程 OCR：供应商 API / 自建 OCR 服务作为默认推荐通道，降低弱性能客户端负载
+- 本地 OCR：`PaddleOCR`、`Tesseract` 或平台原生 Vision 作为离线兜底
 - 版面分析：优先利用 `Docling` 能力，必要时补 `layoutparser` 类方案
 
 推荐：
 
-- 默认 OCR 主通道优先 `PaddleOCR`
-- `Tesseract` 保留为离线低依赖 fallback
+- OCR provider 必须可插拔，支持 `auto | api | local | disabled`
+- 默认 `auto`：配置远程 endpoint 时优先网络 OCR；未配置或远程失败且允许 fallback 时使用本地 OCR
+- `PaddleOCR` / `Tesseract` / 系统 Vision 保留为离线 fallback，不应成为无法替换的硬依赖
 
 必须自研：
 
+- OCR provider 统一请求/响应适配层
 - OCR 结果规范化
 - OCR 置信度与引用锚点绑定
 - 低置信度内容在检索与回答阶段的降权规则
