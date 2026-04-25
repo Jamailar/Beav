@@ -3803,6 +3803,11 @@ fn execute_interactive_tool_call(
                             &normalized_arguments,
                         )
                     }
+                    "knowledge.attach" => crate::tools::knowledge_search::execute_attach(
+                        state,
+                        session_id,
+                        &normalized_arguments,
+                    ),
                     "workspace.search" | "search" => {
                         crate::tools::workspace_search::execute_search(
                             state,
@@ -4192,6 +4197,56 @@ fn interactive_transport_supports_direct_attachment(protocol: &str, attachment_k
     }
 }
 
+fn interactive_model_supports_direct_attachment(
+    protocol: &str,
+    model_name: &str,
+    attachment_kind: &str,
+    mime_type: &str,
+) -> bool {
+    if !interactive_transport_supports_direct_attachment(protocol, attachment_kind) {
+        return false;
+    }
+    let model = model_name.trim().to_ascii_lowercase();
+    let mime = mime_type.trim().to_ascii_lowercase();
+    if model.is_empty() {
+        return false;
+    }
+    match protocol {
+        "gemini" => matches!(
+            attachment_kind,
+            "image" | "audio" | "video" | "text" | "binary"
+        ),
+        "anthropic" => {
+            attachment_kind == "image"
+                && matches!(
+                    mime.as_str(),
+                    "image/jpeg" | "image/jpg" | "image/png" | "image/gif" | "image/webp"
+                )
+                && (model.contains("claude-3")
+                    || model.contains("claude-4")
+                    || model.contains("sonnet")
+                    || model.contains("opus")
+                    || model.contains("haiku"))
+        }
+        "openai" => {
+            attachment_kind == "image"
+                && matches!(
+                    mime.as_str(),
+                    "image/jpeg" | "image/jpg" | "image/png" | "image/gif" | "image/webp"
+                )
+                && (model.contains("gpt-4o")
+                    || model.contains("gpt-4.1")
+                    || model.contains("gpt-4.5")
+                    || model.contains("gpt-5")
+                    || model.contains("vision")
+                    || model.contains("-vl")
+                    || model.contains("qwen-vl")
+                    || model.contains("omni"))
+        }
+        _ => false,
+    }
+}
+
 fn interactive_direct_attachment_max_bytes(protocol: &str, attachment_kind: &str) -> u64 {
     match (protocol, attachment_kind) {
         ("openai", "image") | ("anthropic", "image") => INTERACTIVE_DIRECT_IMAGE_MAX_BYTES,
@@ -4204,12 +4259,20 @@ fn interactive_direct_attachment_max_bytes(protocol: &str, attachment_kind: &str
 fn interactive_attachment_direct_input_payload(
     attachment: &Value,
     protocol: &str,
+    model_name: &str,
 ) -> Result<Option<Value>, String> {
     if interactive_attachment_delivery_mode(attachment) != "direct-input" {
         return Ok(None);
     }
     let attachment_kind = interactive_attachment_kind(attachment);
-    if !interactive_transport_supports_direct_attachment(protocol, &attachment_kind) {
+    let mime_type = interactive_attachment_string_field(attachment, "mimeType")
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    if !interactive_model_supports_direct_attachment(
+        protocol,
+        model_name,
+        &attachment_kind,
+        &mime_type,
+    ) {
         return Ok(None);
     }
     let absolute_path = interactive_attachment_string_field(attachment, "absolutePath")
@@ -4217,8 +4280,6 @@ fn interactive_attachment_direct_input_payload(
     let Some(absolute_path) = absolute_path else {
         return Ok(None);
     };
-    let mime_type = interactive_attachment_string_field(attachment, "mimeType")
-        .unwrap_or_else(|| "application/octet-stream".to_string());
     let metadata = fs::metadata(&absolute_path).map_err(|error| error.to_string())?;
     let max_bytes = interactive_direct_attachment_max_bytes(protocol, &attachment_kind);
     if max_bytes == 0 || metadata.len() == 0 || metadata.len() > max_bytes {
@@ -4233,20 +4294,68 @@ fn interactive_attachment_direct_input_payload(
     })))
 }
 
-fn interactive_attachment_tool_read_note(attachment: &Value) -> Option<String> {
+fn interactive_attachment_fallback_note(
+    attachment: &Value,
+    protocol: &str,
+    model_name: &str,
+) -> Option<String> {
+    let explicit_reason =
+        interactive_attachment_string_field(attachment, "multimodalFallbackReason");
+    let kind = interactive_attachment_kind(attachment);
+    let is_multimodal = matches!(kind.as_str(), "image" | "audio" | "video")
+        || attachment
+            .get("requiresMultimodal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    if !is_multimodal {
+        return None;
+    }
+    let mime_type = interactive_attachment_string_field(attachment, "mimeType")
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let requested_direct = interactive_attachment_delivery_mode(attachment) == "direct-input";
+    let unsupported = requested_direct
+        && !interactive_model_supports_direct_attachment(protocol, model_name, &kind, &mime_type);
+    if !unsupported && explicit_reason.is_none() {
+        return None;
+    }
+    let model_label = if model_name.trim().is_empty() {
+        "当前模型".to_string()
+    } else {
+        format!("当前模型 `{}`", model_name.trim())
+    };
+    let media_label = match kind.as_str() {
+        "image" => "图片",
+        "audio" => "音频",
+        "video" => "视频",
+        _ => "媒体",
+    };
+    Some(format!(
+        "{model_label} 不支持直接接收{media_label}多模态输入，本轮已自动降级为普通文字消息。不要声称已经看过该{media_label}的真实视觉/音视频内容；如果任务必须基于原始{media_label}分析，请明确告诉用户切换到支持该媒体类型输入的多模态模型。"
+    ))
+}
+
+fn interactive_attachment_tool_read_note(
+    attachment: &Value,
+    fallback_note: Option<&str>,
+) -> Option<String> {
     let name = interactive_attachment_string_field(attachment, "name")
         .unwrap_or_else(|| "attachment".to_string());
     let kind = interactive_attachment_kind(attachment);
+    let prefix = fallback_note
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("{value}\n\n"))
+        .unwrap_or_default();
     if let Some(relative_path) =
         interactive_attachment_string_field(attachment, "workspaceRelativePath")
     {
         return Some(format!(
-            "本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`。如果任务依赖它的真实内容，先调用 `redbox_fs(action=\"workspace.read\", path=\"{relative_path}\")` 或相关 workspace 工具读取，再基于读取结果回答。不要假装已经看过文件内容。"
+            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`。如果任务依赖它的真实内容，先调用 `redbox_fs(action=\"workspace.read\", path=\"{relative_path}\")` 或相关 workspace 工具读取，再基于读取结果回答。不要假装已经看过文件内容。"
         ));
     }
     interactive_attachment_string_field(attachment, "absolutePath").map(|absolute_path| {
         format!(
-            "本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，本地路径 `{absolute_path}`。当前 runtime 若不能直接访问该路径，必须先明确说明需要把文件纳入工作区或改用支持直传的输入链路；不要假装已经读取内容。"
+            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，本地路径 `{absolute_path}`。当前 runtime 若不能直接访问该路径，必须先明确说明需要把文件纳入工作区或改用支持直传的输入链路；不要假装已经读取内容。"
         )
     })
 }
@@ -4279,6 +4388,7 @@ fn build_interactive_user_turn_messages(
     message: &str,
     attachment: Option<&Value>,
     protocol: &str,
+    model_name: &str,
 ) -> Result<(Value, Value), String> {
     let Some(attachment) = attachment else {
         let text = message.trim().to_string();
@@ -4286,7 +4396,9 @@ fn build_interactive_user_turn_messages(
         return Ok((user_message.clone(), user_message));
     };
 
-    if let Some(direct_input) = interactive_attachment_direct_input_payload(attachment, protocol)? {
+    if let Some(direct_input) =
+        interactive_attachment_direct_input_payload(attachment, protocol, model_name)?
+    {
         let prompt_message = json!({
             "role": "user",
             "content": message.trim(),
@@ -4299,7 +4411,9 @@ fn build_interactive_user_turn_messages(
         return Ok((prompt_message, canonical_text_message("user", history_text)));
     }
 
-    let tool_read_note = interactive_attachment_tool_read_note(attachment);
+    let fallback_note = interactive_attachment_fallback_note(attachment, protocol, model_name);
+    let tool_read_note =
+        interactive_attachment_tool_read_note(attachment, fallback_note.as_deref());
     let prompt_text = compose_user_message_text(message, tool_read_note.as_deref());
     let history_text = compose_user_message_text(
         message,
@@ -4317,11 +4431,12 @@ fn interactive_runtime_message_bundle(
     message: &str,
     attachment: Option<&Value>,
     protocol: &str,
+    model_name: &str,
 ) -> Result<(Vec<Value>, Vec<Value>), String> {
     let history_messages = load_runtime_history_messages(state, session_id)?;
     let mut prompt_messages = collect_recent_chat_messages(state, session_id, 10);
     let (prompt_user_message, history_user_message) =
-        build_interactive_user_turn_messages(message, attachment, protocol)?;
+        build_interactive_user_turn_messages(message, attachment, protocol, model_name)?;
     prompt_messages.push(prompt_user_message);
     let mut full_history_messages = history_messages;
     full_history_messages.push(history_user_message);
@@ -4770,6 +4885,70 @@ fn append_internal_runtime_user_message(
         canonical_messages,
         canonical_text_message("user", instruction),
     );
+}
+
+fn llm_input_attachments_from_tool_result(result: &Value) -> Vec<Value> {
+    let mut attachments = Vec::<Value>::new();
+    for candidate in [
+        result.get("llmInputAttachments"),
+        result
+            .get("data")
+            .and_then(|value| value.get("llmInputAttachments")),
+    ] {
+        if let Some(items) = candidate.and_then(Value::as_array) {
+            attachments.extend(items.iter().cloned());
+        }
+    }
+    attachments
+}
+
+fn append_runtime_tool_media_attachments(
+    prompt_messages: &mut Vec<Value>,
+    canonical_messages: &mut Vec<Value>,
+    result: &Value,
+    protocol: &str,
+    model_name: &str,
+) {
+    for attachment in llm_input_attachments_from_tool_result(result) {
+        let name = interactive_attachment_string_field(&attachment, "name")
+            .unwrap_or_else(|| "knowledge-attachment".to_string());
+        let kind = interactive_attachment_kind(&attachment);
+        let path = interactive_attachment_string_field(&attachment, "workspaceRelativePath")
+            .or_else(|| interactive_attachment_string_field(&attachment, "path"))
+            .or_else(|| interactive_attachment_string_field(&attachment, "absolutePath"))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        match interactive_attachment_direct_input_payload(&attachment, protocol, model_name) {
+            Ok(Some(direct_input)) => {
+                prompt_messages.push(json!({
+                    "role": "user",
+                    "content": format!(
+                        "上一个工具结果提供了知识库媒体附件 `{name}`（{kind}，路径 `{path}`）。请直接分析这个附件的真实内容，并结合已有上下文回答。"
+                    ),
+                    "input_attachment": direct_input,
+                }));
+                canonical_messages.push(canonical_text_message(
+                    "user",
+                    format!("知识库媒体附件：`{name}`（{kind}，已直接输入给模型，路径 `{path}`）"),
+                ));
+            }
+            Ok(None) | Err(_) => {
+                let media_label = match kind.as_str() {
+                    "image" => "图片",
+                    "audio" => "音频",
+                    "video" => "视频",
+                    _ => "媒体",
+                };
+                append_internal_runtime_user_message(
+                    prompt_messages,
+                    canonical_messages,
+                    format!(
+                        "工具结果包含知识库媒体附件 `{name}`（{kind}，路径 `{path}`），但当前模型 `{}` 不支持直接接收该{media_label}多模态输入，已降级为普通文字上下文。不要声称已经看过该{media_label}的真实内容；如果用户的问题必须基于原始{media_label}分析，请明确说明需要切换到支持该媒体类型输入的多模态模型。",
+                        model_name.trim()
+                    ),
+                );
+            }
+        }
+    }
 }
 
 fn build_interactive_tool_outcome_digest(
@@ -5948,8 +6127,14 @@ fn run_anthropic_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let (mut prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, message, attachment, "anthropic")?;
+    let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
+        state,
+        session_id,
+        message,
+        attachment,
+        "anthropic",
+        &config.model_name,
+    )?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -6469,6 +6654,13 @@ fn run_anthropic_interactive_chat_runtime(
                         &mut canonical_messages,
                         tool_message,
                     );
+                    append_runtime_tool_media_attachments(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        &result_value,
+                        "anthropic",
+                        &config.model_name,
+                    );
                     for activation in &activated_skills {
                         emit_runtime_task_checkpoint_saved(
                             app,
@@ -6556,8 +6748,14 @@ fn run_gemini_interactive_chat_runtime(
 ) -> Result<String, String> {
     use std::process::Stdio;
 
-    let (mut prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, message, attachment, "gemini")?;
+    let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
+        state,
+        session_id,
+        message,
+        attachment,
+        "gemini",
+        &config.model_name,
+    )?;
     let is_wander = runtime_mode == "wander";
     let trace_id = session_id.unwrap_or(runtime_mode);
     let mut generated_images = Vec::<GeneratedMediaPreview>::new();
@@ -7066,6 +7264,13 @@ fn run_gemini_interactive_chat_runtime(
                             true,
                         ),
                     );
+                    append_runtime_tool_media_attachments(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        &result_value,
+                        "gemini",
+                        &config.model_name,
+                    );
                     for activation in &activated_skills {
                         emit_runtime_task_checkpoint_saved(
                             app,
@@ -7151,8 +7356,14 @@ fn run_openai_interactive_chat_runtime(
     attachment: Option<&Value>,
     runtime_mode: &str,
 ) -> Result<String, String> {
-    let (mut prompt_messages, mut canonical_messages) =
-        interactive_runtime_message_bundle(state, session_id, message, attachment, "openai")?;
+    let (mut prompt_messages, mut canonical_messages) = interactive_runtime_message_bundle(
+        state,
+        session_id,
+        message,
+        attachment,
+        "openai",
+        &config.model_name,
+    )?;
     let is_wander = runtime_mode == "wander";
     let provider_profile = provider_profile_from_config(config);
     let trace_id = session_id.unwrap_or(runtime_mode);
@@ -7629,6 +7840,13 @@ fn run_openai_interactive_chat_runtime(
                             result_text.clone(),
                             true,
                         ),
+                    );
+                    append_runtime_tool_media_attachments(
+                        &mut prompt_messages,
+                        &mut canonical_messages,
+                        &result_value,
+                        "openai",
+                        &config.model_name,
                     );
                     interactive_execution_progress_observe_success(
                         &mut execution_progress,

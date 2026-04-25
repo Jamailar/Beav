@@ -21,6 +21,7 @@ const DEFAULT_READ_LIMIT: usize = 160;
 const MAX_READ_LIMIT: usize = 400;
 const DEFAULT_READ_MAX_CHARS: usize = 8000;
 const DEFAULT_SNIPPET_CHARS: usize = 220;
+const DEFAULT_ATTACH_MAX_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 enum KnowledgeScopeKind {
@@ -284,6 +285,80 @@ pub fn execute_read(
         "totalLines": lines.len(),
         "truncated": truncated,
         "content": truncate_chars(&sliced, max_chars)
+    }))
+}
+
+pub fn execute_attach(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    arguments: &Value,
+) -> Result<Value, String> {
+    let scope = resolve_scope(state, session_id, arguments)?;
+    let relative_path = payload_string(arguments, "path")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "redbox_fs(action=knowledge.attach) requires path".to_string())
+        .and_then(|value| normalize_scope_relative_path(&scope, &value))?;
+    let target_path = resolve_relative_path(&scope.root, &relative_path)?;
+    if !target_path.exists() {
+        return Err(format!("knowledge file does not exist: {relative_path}"));
+    }
+    if !target_path.is_file() {
+        return Err(format!("knowledge path is not a file: {relative_path}"));
+    }
+    let metadata = fs::metadata(&target_path).map_err(|error| error.to_string())?;
+    if metadata.len() == 0 {
+        return Err(format!("knowledge attachment is empty: {relative_path}"));
+    }
+    let max_bytes = payload_field(arguments, "maxBytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(DEFAULT_ATTACH_MAX_BYTES)
+        .min(DEFAULT_ATTACH_MAX_BYTES);
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "knowledge attachment is too large for direct model input: {} bytes > {} bytes",
+            metadata.len(),
+            max_bytes
+        ));
+    }
+    let (mime_type, kind, _) = crate::guess_mime_and_kind(&target_path);
+    if !matches!(kind.as_str(), "image" | "audio" | "video") {
+        return Err(format!(
+            "knowledge.attach only supports image/audio/video files, got {kind}: {relative_path}"
+        ));
+    }
+    let name = target_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("knowledge-attachment")
+        .to_string();
+    let absolute_path = target_path.display().to_string();
+    Ok(json!({
+        "scopeKind": scope_kind_label(&scope),
+        "advisorId": scope.advisor_id,
+        "advisorName": scope.advisor_name,
+        "sourceId": scope.source_id,
+        "sourceName": scope.source_name,
+        "rootPath": scope.root.display().to_string(),
+        "path": relative_path,
+        "absolutePath": absolute_path,
+        "name": name,
+        "kind": kind,
+        "mimeType": mime_type,
+        "sizeBytes": metadata.len(),
+        "llmInputAttachments": [{
+            "type": "uploaded-file",
+            "name": name,
+            "kind": kind,
+            "mimeType": mime_type,
+            "size": metadata.len(),
+            "absolutePath": absolute_path,
+            "originalAbsolutePath": absolute_path,
+            "workspaceRelativePath": format!("knowledge/{relative_path}"),
+            "path": relative_path,
+            "deliveryMode": "direct-input",
+            "requiresMultimodal": true,
+            "source": "knowledge"
+        }]
     }))
 }
 

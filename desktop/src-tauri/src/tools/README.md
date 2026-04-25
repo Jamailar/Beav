@@ -73,7 +73,9 @@
   - `workspace.search`
   - `knowledge.list`
   - `knowledge.read`
+  - `knowledge.attach`
   - `knowledge.search`
+- `knowledge.attach` 只负责把知识库里的图片 / 音频 / 视频文件登记为下一轮模型输入附件；是否真正直传由 runtime 按当前 provider / model 能力判断，不支持时必须降级为文字说明。
 - `knowledge.search` 在 indexed knowledge scope 下应返回结构化 `queryProfile` / `queryPlan` / `evidencePack`；这不仅包括 document source，也包括 advisor/member knowledge。
 - `redbox_editor` 的运行时 schema 走 `action + payload`；兼容层可以把旧的扁平字段整理成 canonical 形态，但新资产不要再依赖旧写法。
 
