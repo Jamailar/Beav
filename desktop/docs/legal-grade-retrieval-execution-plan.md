@@ -439,6 +439,7 @@ Status: Current
 - lexical lane 已升级为 `Tantivy + SQLite FTS5 BM25` 双倒排召回，`LIKE` 仅作为兼容兜底；query plan 通过 `lexicalEngine=tantivy+sqlite-fts5-bm25` 暴露当前主底座
 - block 索引已持久化本地 dense 向量缓存，检索时执行 `sparse expansion + semantic lane + weighted RRF`
 - rerank 已接入 `legal-aware + citation-aware + confidence-aware` 规则，结果返回 `retrievalLanes` 和完整 ranking breakdown
+- rerank 已支持可插拔 cross-encoder rerank sidecar/API：配置 `rerank_endpoint` 后对候选 block 执行外部相关性重排，不配置时保持本地 legal/citation/confidence 规则
 - indexed `knowledge.search` 已写入 retrieval run / hit 审计表，并在响应中返回 `auditRunId`，用于回放 query plan、ranking 和 evidence pack
 - 已新增离线对比报告：[hybrid-retrieval-evaluation-report.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/hybrid-retrieval-evaluation-report.md)
 

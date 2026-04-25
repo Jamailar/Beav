@@ -1,6 +1,7 @@
 use glob::Pattern;
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde::Serialize;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use tauri::State;
@@ -28,6 +29,7 @@ use crate::{
 
 const MAX_INDEXED_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_SEMANTIC_SCAN_BLOCKS: usize = 1200;
+const MAX_EXTERNAL_RERANK_CANDIDATES: usize = 80;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentBlockRecord {
@@ -612,6 +614,7 @@ pub(crate) fn search_blocks(
             retrieval_lanes,
         });
     }
+    apply_external_rerank(state, query, &mut scored_hits);
     scored_hits.sort_by(|left, right| {
         right
             .total_score
@@ -628,6 +631,139 @@ pub(crate) fn search_blocks(
     });
     scored_hits.truncate(limit);
     Ok(scored_hits)
+}
+
+#[derive(Debug, Clone)]
+struct ExternalRerankConfig {
+    endpoint: Option<String>,
+    api_key: Option<String>,
+    model: Option<String>,
+    timeout_seconds: u64,
+}
+
+fn apply_external_rerank(state: &State<'_, AppState>, query: &str, hits: &mut [DocumentBlockHit]) {
+    let Ok(config) = resolve_external_rerank_config(state) else {
+        return;
+    };
+    let Some(endpoint) = config
+        .endpoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let candidates = hits
+        .iter()
+        .take(MAX_EXTERNAL_RERANK_CANDIDATES)
+        .map(|hit| {
+            json!({
+                "blockId": hit.block_id,
+                "title": hit.title,
+                "path": hit.path,
+                "page": hit.page,
+                "text": hit.snippet,
+                "legalMetadata": {
+                    "jurisdiction": hit.jurisdiction,
+                    "authority": hit.authority,
+                    "authorityLevel": hit.authority_level,
+                    "effectiveDate": hit.effective_date,
+                    "expiryDate": hit.expiry_date,
+                    "documentType": hit.document_type,
+                    "isSuperseded": hit.is_superseded
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return;
+    }
+    let body = json!({
+        "model": config.model,
+        "query": query,
+        "candidates": candidates,
+    });
+    let Ok(response) = crate::run_curl_json_with_timeout(
+        "POST",
+        endpoint,
+        config.api_key.as_deref(),
+        &[],
+        Some(body),
+        Some(config.timeout_seconds),
+    ) else {
+        return;
+    };
+    let scores = parse_external_rerank_scores(&response);
+    if scores.is_empty() {
+        return;
+    }
+    for hit in hits {
+        let Some(score) = scores.get(&hit.block_id).copied() else {
+            continue;
+        };
+        let boost = score.clamp(0.0, 1.0) * 24.0;
+        hit.rerank_score += boost;
+        hit.total_score += boost;
+        if !hit
+            .retrieval_lanes
+            .iter()
+            .any(|lane| lane == "external-rerank")
+        {
+            hit.retrieval_lanes.push("external-rerank".to_string());
+        }
+    }
+}
+
+fn resolve_external_rerank_config(
+    state: &State<'_, AppState>,
+) -> Result<ExternalRerankConfig, String> {
+    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let timeout_seconds = payload_field(&settings, "rerank_timeout_seconds")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(30)
+        .clamp(5, 120);
+    Ok(ExternalRerankConfig {
+        endpoint: payload_string(&settings, "rerank_endpoint")
+            .or_else(|| payload_string(&settings, "cross_encoder_rerank_endpoint")),
+        api_key: payload_string(&settings, "rerank_api_key"),
+        model: payload_string(&settings, "rerank_model"),
+        timeout_seconds,
+    })
+}
+
+fn parse_external_rerank_scores(value: &Value) -> std::collections::HashMap<String, f64> {
+    let mut scores = std::collections::HashMap::new();
+    if let Some(items) = value
+        .get("scores")
+        .or_else(|| value.get("results"))
+        .or_else(|| value.get("data"))
+        .and_then(Value::as_array)
+    {
+        for item in items {
+            let Some(block_id) = item
+                .get("blockId")
+                .or_else(|| item.get("block_id"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let Some(score) = item
+                .get("score")
+                .or_else(|| item.get("relevance"))
+                .and_then(Value::as_f64)
+            else {
+                continue;
+            };
+            scores.insert(block_id.to_string(), score);
+        }
+    }
+    scores
 }
 
 pub(crate) fn read_block(
@@ -1577,5 +1713,18 @@ mod tests {
     fn low_confidence_ocr_is_penalized() {
         assert!(confidence_score("ocr", Some(0.52)) < confidence_score("ocr", Some(0.92)));
         assert_eq!(confidence_score("native", None), 0.0);
+    }
+
+    #[test]
+    fn parses_external_rerank_scores_by_block_id() {
+        let scores = parse_external_rerank_scores(&json!({
+            "results": [
+                { "blockId": "block-1", "score": 0.91 },
+                { "block_id": "block-2", "relevance": 0.42 }
+            ]
+        }));
+
+        assert_eq!(scores.get("block-1").copied(), Some(0.91));
+        assert_eq!(scores.get("block-2").copied(), Some(0.42));
     }
 }
