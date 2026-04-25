@@ -149,6 +149,32 @@ pub fn openai_schemas_for_session(
     json!(schemas)
 }
 
+pub fn tool_plan_snapshot_for_session(
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+) -> Value {
+    let plan = build_tool_registry_plan_for_session(store, runtime_mode, session_id);
+    json!({
+        "runtimeMode": plan.runtime_mode,
+        "sessionId": session_id,
+        "fingerprint": plan.fingerprint,
+        "internalTools": plan.internal_tool_names,
+        "visibleTools": plan
+            .visible_tools
+            .iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>(),
+        "directAppCliActions": plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>(),
+        "deferredActionNamespaces": plan.deferred_action_namespaces,
+        "deferredActionCount": plan.deferred_app_cli_actions.len(),
+    })
+}
+
 pub fn prompt_tool_lines_for_runtime_mode(runtime_mode: &str) -> String {
     descriptors_for_runtime_mode(runtime_mode)
         .iter()
@@ -321,5 +347,21 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(resources, vec!["image", "manuscript"]);
+        let snapshot = tool_plan_snapshot_for_session(&store, "redclaw", Some("session-1"));
+        assert_eq!(
+            snapshot
+                .get("fingerprint")
+                .and_then(Value::as_str)
+                .is_some(),
+            true
+        );
+        assert_eq!(
+            snapshot
+                .get("deferredActionCount")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                > 0,
+            true
+        );
     }
 }
