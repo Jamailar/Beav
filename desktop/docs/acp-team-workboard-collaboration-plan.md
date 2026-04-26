@@ -987,9 +987,9 @@ Self-implement:
 - Review policy: author cannot review own task.
 - Mailbox TTL cleanup.
 
-### 11.3 Should Not Be Built Now
+### 11.3 Excluded From The Completed Baseline
 
-Defer:
+These are not required for the completed local collaboration baseline:
 
 - Multi-user cloud sync.
 - Separate backend service.
@@ -1395,8 +1395,8 @@ The baseline is complete against the original success criteria:
 - Rust runtime and tool contracts compile through `cargo check`.
 - Rust formatting is enforced through `cargo fmt --check`.
 
-## 20. Final Recommendation
+## 20. Final Architecture State
 
-Build Option C, but deliver it as an internal-member MVP first.
+Option C is the implemented architecture. The completed baseline uses internal runtime members first while preserving the adapter boundary for ACP or remote members.
 
-The host-owned collaboration control plane is the important part. ACP support should plug into that plane, not define it. This keeps RedConvert aligned with its existing Rust runtime, Workboard, RedClaw, approval runtime, media generation pipeline, and future external agents.
+The host-owned collaboration control plane is the important part. ACP support plugs into that plane instead of defining it. This keeps RedConvert aligned with its existing Rust runtime, Workboard, RedClaw, approval runtime, media generation pipeline, and external agent adapters.
