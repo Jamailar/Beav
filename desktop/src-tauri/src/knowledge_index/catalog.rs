@@ -24,6 +24,9 @@ pub(crate) struct KnowledgeCatalogSummary {
     pub cover_url: Option<String>,
     pub thumbnail_url: Option<String>,
     pub preview_text: String,
+    pub scope: String,
+    pub owner_type: Option<String>,
+    pub owner_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub language: Option<String>,
@@ -69,6 +72,9 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<KnowledgeCatalogSummary, ru
         cover_url: row.get("cover_url")?,
         thumbnail_url: row.get("thumbnail_url")?,
         preview_text: row.get("preview_text")?,
+        scope: row.get("scope")?,
+        owner_type: row.get("owner_type")?,
+        owner_id: row.get("owner_id")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         language: row.get("language")?,
@@ -215,13 +221,13 @@ pub(crate) fn upsert_summaries(
             INSERT INTO knowledge_items (
                 item_id, workspace_id, kind, note_type, capture_kind, title, author, site_name,
                 source_url, folder_path, root_path, cover_url, thumbnail_url, preview_text,
-                created_at, updated_at, language, has_video, has_transcript, tags_json, status,
+                scope, owner_type, owner_id, created_at, updated_at, language, has_video, has_transcript, tags_json, status,
                 item_hash, indexed_at, sample_files_json, file_count
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                 ?9, ?10, ?11, ?12, ?13, ?14,
                 ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                ?22, ?23, ?24, ?25
+                ?22, ?23, ?24, ?25, ?26, ?27, ?28
             )
             ON CONFLICT(item_id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
@@ -237,6 +243,9 @@ pub(crate) fn upsert_summaries(
                 cover_url = excluded.cover_url,
                 thumbnail_url = excluded.thumbnail_url,
                 preview_text = excluded.preview_text,
+                scope = excluded.scope,
+                owner_type = excluded.owner_type,
+                owner_id = excluded.owner_id,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
                 language = excluded.language,
@@ -264,6 +273,9 @@ pub(crate) fn upsert_summaries(
                 item.cover_url,
                 item.thumbnail_url,
                 item.preview_text,
+                item.scope,
+                item.owner_type,
+                item.owner_id,
                 item.created_at,
                 item.updated_at,
                 item.language,

@@ -51,13 +51,15 @@ pub(crate) fn interactive_runtime_context_bundle(
         host_runtime_context_section,
         subagent_role_overlay_section,
     ) = with_store(state, |store| {
-        let metadata = session_id.and_then(|id| {
+        let raw_metadata = session_id.and_then(|id| {
             store
                 .chat_sessions
                 .iter()
                 .find(|item| item.id == id)
                 .and_then(|item| item.metadata.as_ref())
         });
+        let effective_metadata = effective_member_runtime_metadata(&store, raw_metadata);
+        let metadata = effective_metadata.as_ref().or(raw_metadata);
         let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
         let resolved_skills = resolve_skill_set(&store.skills, runtime_mode, metadata, &base_tools);
         let skill_prompt = build_skill_prompt_bundle(&resolved_skills);
@@ -387,6 +389,30 @@ Host runtime context: {}\n{}",
     )
 }
 
+fn effective_member_runtime_metadata(
+    store: &crate::AppStore,
+    metadata: Option<&Value>,
+) -> Option<Value> {
+    let metadata = metadata?;
+    let has_member_skill = metadata
+        .get("memberSkillRef")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !has_member_skill
+        || crate::member_skill::member_feature_flag_enabled_for_store(
+            store,
+            "memberRuntimeOverlay",
+            true,
+        )
+    {
+        return None;
+    }
+    let mut object = metadata.as_object()?.clone();
+    crate::member_skill::detach_member_skill_metadata(&mut object);
+    Some(Value::Object(object))
+}
+
 pub(crate) fn interactive_runtime_system_prompt(
     state: &State<'_, AppState>,
     runtime_mode: &str,
@@ -417,13 +443,21 @@ fn advisor_runtime_context_section(
         .find(|item| item.id == advisor_id)
         .map(|item| item.name.clone())
         .unwrap_or_else(|| "成员".to_string());
+    let member_skill_ref = crate::payload_string(metadata, "memberSkillRef")
+        .or_else(|| {
+            advisors
+                .iter()
+                .find(|item| item.id == advisor_id)
+                .and_then(|item| item.member_skill_ref.clone())
+        })
+        .unwrap_or_else(|| "(none)".to_string());
     let advisor_knowledge_path = format!(
         "advisors/{}/knowledge",
         slug_from_relative_path(&advisor_id)
     );
     format!(
-        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
-        advisor_name, advisor_id, advisor_knowledge_path, advisor_id
+        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Member skill ref: {}\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
+        advisor_name, advisor_id, member_skill_ref, advisor_knowledge_path, advisor_id
     )
 }
 
@@ -839,6 +873,17 @@ pub(crate) fn interactive_runtime_tools_for_mode(
                 "tool plan generated".to_string(),
                 Some(snapshot),
             );
+            if let Some(member_skill_activation) =
+                crate::member_skill::member_skill_activation_checkpoint_payload(store, session_id)
+            {
+                append_session_checkpoint(
+                    store,
+                    session_id,
+                    "memberSkillActivation",
+                    "member skill activation resolved".to_string(),
+                    Some(member_skill_activation),
+                );
+            }
         }
         Ok(openai_schemas_for_session(&store, runtime_mode, session_id))
     })

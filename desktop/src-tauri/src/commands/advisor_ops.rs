@@ -1,3 +1,9 @@
+use crate::member_skill::{
+    compile_member_skill_package, discard_member_skill_candidate, evaluate_member_skill,
+    inspect_member_skill_versions, mark_member_skill_failed, member_feature_flag_enabled_for_store,
+    member_skill_result_value, promote_member_skill_candidate, publish_member_skill_for_advisor,
+    remove_member_skill_package, rollback_member_skill_version,
+};
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::*;
 use serde::{Deserialize, Serialize};
@@ -60,6 +66,38 @@ fn normalize_advisor_template(
         personality: normalize_optional_string(Some(template.personality)).unwrap_or_default(),
         system_prompt: normalize_optional_string(Some(template.system_prompt)).unwrap_or_default(),
         knowledge_language: normalize_optional_string(template.knowledge_language),
+    }
+}
+
+fn member_skill_distillation_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
+    with_store(state, |store| {
+        Ok(member_feature_flag_enabled_for_store(
+            &store,
+            "memberSkillDistillation",
+            true,
+        ))
+    })
+}
+
+fn publish_member_skill_if_enabled(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    source_event: &str,
+) -> Option<Value> {
+    match member_skill_distillation_enabled(state) {
+        Ok(false) => Some(json!({
+            "status": "fallback",
+            "skipped": true,
+            "reason": "memberSkillDistillation disabled"
+        })),
+        Ok(true) => match publish_member_skill_for_advisor(state, advisor_id, source_event) {
+            Ok(result) => Some(member_skill_result_value(&result)),
+            Err(error) => {
+                let _ = mark_member_skill_failed(state, advisor_id, &error);
+                Some(json!({ "status": "failed", "error": error }))
+            }
+        },
+        Err(error) => Some(json!({ "status": "failed", "error": error })),
     }
 }
 
@@ -275,6 +313,19 @@ pub fn handle_advisor_channel(
             | "advisors:optimize-prompt"
             | "advisors:optimize-prompt-deep"
             | "advisors:generate-persona"
+            | "advisors:inspect-member-skill"
+            | "advisors:promote-member-skill-candidate"
+            | "advisors:discard-member-skill-candidate"
+            | "advisors:rollback-member-skill-version"
+            | "members:enqueue-distillation"
+            | "members:distill-skill"
+            | "members:list-distillation-candidates"
+            | "members:preview-distillation"
+            | "members:approve-distillation"
+            | "members:publish-skill-version"
+            | "members:rollback-skill-version"
+            | "members:compile-skill-package"
+            | "members:evaluate-skill"
             | "advisors:select-avatar"
             | "advisors:youtube-runner-status"
             | "advisors:fetch-youtube-info"
@@ -313,20 +364,68 @@ pub fn handle_advisor_channel(
                         )),
                         knowledge_files: Vec::new(),
                         youtube_channel: payload_field(payload, "youtubeChannel").cloned(),
+                        member_skill_ref: None,
+                        member_skill_status: Some("pending".to_string()),
+                        member_skill_version: None,
+                        member_skill_last_distilled_at: None,
+                        member_skill_last_error: None,
+                        member_skill_candidate_version: None,
+                        member_skill_candidate_path: None,
+                        member_skill_candidate_created_at: None,
+                        member_skill_candidate_source_event: None,
+                        detected_knowledge_language: None,
+                        language_detection_status: None,
+                        language_confidence: None,
                         created_at: timestamp.clone(),
                         updated_at: timestamp,
                     };
                     store.advisors.push(advisor.clone());
                     Ok(advisor)
                 })?;
+                let should_distill_member_skill = advisor.youtube_channel.is_some()
+                    || !advisor.personality.trim().is_empty()
+                    || !advisor.system_prompt.trim().is_empty();
+                let distillation_enabled = member_skill_distillation_enabled(state).unwrap_or(true);
+                let member_skill = if should_distill_member_skill {
+                    publish_member_skill_if_enabled(state, &advisor.id, "advisor-create")
+                } else {
+                    None
+                };
+                let member_skill_ref_missing = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor.id)
+                        .and_then(|item| item.member_skill_ref.as_deref())
+                        .map(str::trim)
+                        .unwrap_or_default()
+                        .is_empty())
+                })?;
+                if should_distill_member_skill && distillation_enabled && member_skill_ref_missing {
+                    append_debug_log_state(
+                        state,
+                        format!(
+                            "member_skill_missing_after_create advisorId={} memberSkill={}",
+                            advisor.id,
+                            member_skill
+                                .as_ref()
+                                .map(Value::to_string)
+                                .unwrap_or_else(|| "null".to_string())
+                        ),
+                    );
+                }
                 let _ = app.emit(
                     "advisors:changed",
                     json!({ "advisorId": advisor.id.clone() }),
                 );
-                Ok(json!({ "success": true, "id": advisor.id }))
+                Ok(json!({ "success": true, "id": advisor.id, "memberSkill": member_skill }))
             }
             "advisors:update" => {
                 let advisor_id = payload_string(payload, "id").unwrap_or_default();
+                let should_refresh_member_skill = payload_field(payload, "personality").is_some()
+                    || payload_field(payload, "systemPrompt").is_some()
+                    || payload_field(payload, "knowledgeLanguage").is_some()
+                    || payload_field(payload, "youtubeChannel").is_some();
                 let result = with_store_mut(state, |store| {
                     let Some(advisor) =
                         store.advisors.iter_mut().find(|item| item.id == advisor_id)
@@ -355,11 +454,21 @@ pub fn handle_advisor_channel(
                     advisor.updated_at = now_iso();
                     Ok(json!({ "success": true, "advisor": advisor.clone() }))
                 })?;
+                if should_refresh_member_skill {
+                    let _ = publish_member_skill_if_enabled(state, &advisor_id, "advisor-update");
+                }
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
             }
             "advisors:delete" => {
                 let advisor_id = payload_value_as_string(payload).unwrap_or_default();
+                let member_skill_ref = with_store(state, |store| {
+                    Ok(store
+                        .advisors
+                        .iter()
+                        .find(|item| item.id == advisor_id)
+                        .and_then(|item| item.member_skill_ref.clone()))
+                })?;
                 let result = with_store_mut(state, |store| {
                     store.advisors.retain(|item| item.id != advisor_id);
                     store
@@ -370,6 +479,7 @@ pub fn handle_advisor_channel(
                     }
                     Ok(json!({ "success": true }))
                 })?;
+                let _ = remove_member_skill_package(state, member_skill_ref);
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
             }
@@ -439,7 +549,16 @@ pub fn handle_advisor_channel(
                         imported_file_count, total_knowledge_file_count
                     )),
                 );
+                let member_skill =
+                    publish_member_skill_if_enabled(state, &advisor_id, "advisor-knowledge-import");
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                let mut imported = imported;
+                if let Some(object) = imported.as_object_mut() {
+                    object.insert(
+                        "memberSkill".to_string(),
+                        member_skill.unwrap_or_else(|| Value::Null),
+                    );
+                }
                 Ok(imported)
             }
             "advisors:delete-knowledge" => {
@@ -457,8 +576,103 @@ pub fn handle_advisor_channel(
                 })?;
                 let path = advisor_knowledge_dir(state, &advisor_id)?.join(&file_name);
                 let _ = fs::remove_file(path);
+                let _ =
+                    publish_member_skill_if_enabled(state, &advisor_id, "advisor-knowledge-delete");
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
+            }
+            "members:enqueue-distillation" | "members:distill-skill" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let result = if member_skill_distillation_enabled(state)? {
+                    publish_member_skill_for_advisor(state, &advisor_id, "members:enqueue-distillation")
+                        .map(|result| {
+                            json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
+                        })
+                        .unwrap_or_else(|error| {
+                            let _ = mark_member_skill_failed(state, &advisor_id, &error);
+                            json!({ "success": false, "error": error })
+                        })
+                } else {
+                    json!({
+                        "success": false,
+                        "error": "memberSkillDistillation disabled"
+                    })
+                };
+                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                Ok(result)
+            }
+            "advisors:promote-member-skill-candidate"
+            | "members:approve-distillation"
+            | "members:publish-skill-version" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let candidate_version = payload_string(payload, "candidateVersion")
+                    .or_else(|| payload_string(payload, "version"));
+                let result =
+                    promote_member_skill_candidate(state, &advisor_id, candidate_version.as_deref())
+                        .map(|result| {
+                            json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
+                        })
+                        .unwrap_or_else(|error| json!({ "success": false, "error": error }));
+                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                Ok(result)
+            }
+            "advisors:discard-member-skill-candidate" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let result = discard_member_skill_candidate(state, &advisor_id)
+                    .map(|_| json!({ "success": true }))
+                    .unwrap_or_else(|error| json!({ "success": false, "error": error }));
+                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                Ok(result)
+            }
+            "advisors:inspect-member-skill"
+            | "members:list-distillation-candidates"
+            | "members:preview-distillation" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                inspect_member_skill_versions(state, &advisor_id)
+                    .or_else(|error| Ok(json!({ "success": false, "error": error })))
+            }
+            "advisors:rollback-member-skill-version" | "members:rollback-skill-version" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let version = payload_string(payload, "version").unwrap_or_default();
+                let result = rollback_member_skill_version(state, &advisor_id, &version)
+                    .map(|result| {
+                        json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
+                    })
+                    .unwrap_or_else(|error| json!({ "success": false, "error": error }));
+                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                Ok(result)
+            }
+            "members:compile-skill-package" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let version = payload_string(payload, "version");
+                let candidate = payload
+                    .get("candidate")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    || payload_string(payload, "target")
+                        .map(|target| target == "candidate")
+                        .unwrap_or(false);
+                compile_member_skill_package(state, &advisor_id, version.as_deref(), candidate)
+                    .or_else(|error| Ok(json!({ "success": false, "error": error })))
+            }
+            "members:evaluate-skill" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                evaluate_member_skill(state, &advisor_id)
+                    .or_else(|error| Ok(json!({ "success": false, "error": error })))
             }
             "advisors:optimize-prompt" => {
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
@@ -1109,11 +1323,14 @@ pub fn handle_advisor_channel(
                     "advisors:download-progress",
                     json!({ "advisorId": advisor_id, "progress": format!("下载完成：成功 {} 个，失败 {} 个", success_count, fail_count) }),
                 );
+                let member_skill =
+                    publish_member_skill_if_enabled(state, &advisor_id, "advisor-youtube-import");
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(json!({
                     "success": fail_count == 0,
                     "successCount": success_count,
                     "failCount": fail_count,
+                    "memberSkill": member_skill,
                     "error": if fail_count > 0 { Some(format!("{} 个视频字幕下载失败", fail_count)) } else { None }
                 }))
             }
