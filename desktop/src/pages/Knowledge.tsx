@@ -10,6 +10,7 @@ import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
 import { appAlert, appConfirm } from '../utils/appDialogs';
+import { formatTimestampDateTime } from '../utils/time';
 
 interface Note { type?: string; sourceUrl?: string;
     id: string;
@@ -1880,7 +1881,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                 <span>重建原因 {indexStatus.pendingRebuildReason}</span>
                             )}
                             {indexStatus.failedCount > 0 && <span className="text-red-500">失败 {indexStatus.failedCount}</span>}
-                            {indexStatus.lastIndexedAt && <span>最近更新 {new Date(indexStatus.lastIndexedAt).toLocaleString()}</span>}
+                            {indexStatus.lastIndexedAt && <span>最近更新 {formatTimestampDateTime(indexStatus.lastIndexedAt)}</span>}
                             {indexStatus.lastError && <span className="truncate text-red-500 max-w-[360px]">{indexStatus.lastError}</span>}
                         </div>
                     )}

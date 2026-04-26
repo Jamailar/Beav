@@ -688,7 +688,15 @@ fn refresh_knowledge_projection_and_emit(
 ) -> Result<(), String> {
     refresh_knowledge_projection(state)?;
     if let Some(app) = app {
-        crate::knowledge_index::jobs::schedule_rebuild(app, "knowledge-mutation");
+        if let Err(error) = crate::knowledge_index::indexer::refresh_catalog_summaries(app, state) {
+            eprintln!(
+                "[RedBox knowledge index] knowledge mutation catalog refresh failed: {error}"
+            );
+            crate::knowledge_index::jobs::refresh_catalog_async(
+                app,
+                "knowledge-mutation-catalog-retry",
+            );
+        }
         let _ = app.emit("knowledge:changed", json!({ "at": now_iso() }));
         if let Some((name, payload)) = event {
             let _ = app.emit(name, payload);
@@ -2140,6 +2148,7 @@ pub(crate) fn add_document_source(
             json!({ "sourceId": source.get("id").cloned().unwrap_or(Value::Null) }),
         )),
     )?;
+    crate::knowledge_index::jobs::schedule_rebuild(app, "document-source-mutation");
     Ok(json!({ "success": true, "source": source }))
 }
 
@@ -2176,6 +2185,7 @@ pub(crate) fn delete_document_source(
         state,
         Some(("knowledge:docs-updated", json!({ "sourceId": source_id }))),
     )?;
+    crate::knowledge_index::jobs::schedule_rebuild(app, "document-source-mutation");
     Ok(json!({ "success": true }))
 }
 

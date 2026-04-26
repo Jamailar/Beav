@@ -6,7 +6,7 @@ use crate::{
         index_status,
         indexer::{
             rebuild_blocks_from_canonical, rebuild_catalog,
-            rebuild_catalog_reusing_unchanged_canonical,
+            rebuild_catalog_reusing_unchanged_canonical, refresh_catalog_summaries,
         },
         migration::{self, MigrationDecision},
         schema::ensure_catalog_ready,
@@ -94,6 +94,7 @@ fn finish_build(state: &State<'_, AppState>, result: Result<(), String>) -> Resu
     match result {
         Ok(_) => {
             runtime.last_error = None;
+            runtime.failed_count = 0;
             runtime.migration_status = None;
             runtime.pending_rebuild_reason = None;
             runtime.rebuild_progress = Some(1.0);
@@ -157,13 +158,34 @@ fn spawn_rebuild(app: AppHandle, kind: RebuildJobKind) {
     });
 }
 
-pub(crate) fn schedule_rebuild(app: &AppHandle, _reason: &str) {
+pub(crate) fn schedule_rebuild(app: &AppHandle, reason: &str) {
     let state = app.state::<AppState>();
-    match mark_pending(&state, "full_rebuild") {
+    let reason = if reason.trim().is_empty() {
+        "full_rebuild"
+    } else {
+        reason.trim()
+    };
+    match mark_pending(&state, reason) {
         Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::FullCatalog),
         Ok(false) => {}
         Err(error) => eprintln!("[RedBox knowledge index] mark pending failed: {error}"),
     }
+}
+
+pub(crate) fn refresh_catalog_async(app: &AppHandle, reason: &str) {
+    let app = app.clone();
+    let reason = reason.trim().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if let Err(error) = refresh_catalog_summaries(&app, &state) {
+            let label = if reason.is_empty() {
+                "catalog-refresh"
+            } else {
+                reason.as_str()
+            };
+            eprintln!("[RedBox knowledge index] {label} failed: {error}");
+        }
+    });
 }
 
 pub(crate) fn schedule_fts_rebuild(app: &AppHandle, source_id: Option<String>) {

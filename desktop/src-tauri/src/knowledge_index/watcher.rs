@@ -10,6 +10,12 @@ use crate::{knowledge_index::jobs, with_store, workspace_root, AppState};
 
 const WATCH_DEBOUNCE_MS: u64 = 1200;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchDirtyKind {
+    CatalogOnly,
+    FullRebuild,
+}
+
 fn desired_watch_roots(app: &AppHandle) -> Vec<PathBuf> {
     let state = app.state::<AppState>();
     let mut roots = Vec::<PathBuf>::new();
@@ -48,6 +54,27 @@ fn desired_watch_roots(app: &AppHandle) -> Vec<PathBuf> {
     roots
 }
 
+fn classify_event(app: &AppHandle, event: &Event) -> WatchDirtyKind {
+    let state = app.state::<AppState>();
+    let Ok(knowledge_root) = workspace_root(&state).map(|root| root.join("knowledge")) else {
+        return WatchDirtyKind::FullRebuild;
+    };
+    let redbook_root = knowledge_root.join("redbook");
+    let youtube_root = knowledge_root.join("youtube");
+    if event.paths.is_empty() {
+        return WatchDirtyKind::FullRebuild;
+    }
+    let all_catalog_paths = event
+        .paths
+        .iter()
+        .all(|path| path.starts_with(&redbook_root) || path.starts_with(&youtube_root));
+    if all_catalog_paths {
+        WatchDirtyKind::CatalogOnly
+    } else {
+        WatchDirtyKind::FullRebuild
+    }
+}
+
 pub(crate) fn start(app: AppHandle) {
     thread::spawn(move || {
         let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
@@ -60,6 +87,7 @@ pub(crate) fn start(app: AppHandle) {
         };
         let mut watched_roots: Vec<PathBuf> = Vec::new();
         let mut dirty_at: Option<Instant> = Some(Instant::now());
+        let mut dirty_kind = WatchDirtyKind::CatalogOnly;
 
         loop {
             let state = app.state::<AppState>();
@@ -79,11 +107,15 @@ pub(crate) fn start(app: AppHandle) {
                 }
                 watched_roots = current_roots;
                 dirty_at = Some(Instant::now());
+                dirty_kind = WatchDirtyKind::CatalogOnly;
             }
 
             match rx.recv_timeout(Duration::from_millis(300)) {
-                Ok(Ok(_event)) => {
+                Ok(Ok(event)) => {
                     dirty_at = Some(Instant::now());
+                    if classify_event(&app, &event) == WatchDirtyKind::FullRebuild {
+                        dirty_kind = WatchDirtyKind::FullRebuild;
+                    }
                 }
                 Ok(Err(error)) => {
                     eprintln!("[RedBox knowledge index] watch event error: {error}");
@@ -94,8 +126,14 @@ pub(crate) fn start(app: AppHandle) {
 
             if let Some(last_dirty_at) = dirty_at {
                 if last_dirty_at.elapsed() >= Duration::from_millis(WATCH_DEBOUNCE_MS) {
-                    jobs::schedule_rebuild(&app, "watcher");
+                    match dirty_kind {
+                        WatchDirtyKind::CatalogOnly => {
+                            jobs::refresh_catalog_async(&app, "watcher-catalog")
+                        }
+                        WatchDirtyKind::FullRebuild => jobs::schedule_rebuild(&app, "watcher"),
+                    }
                     dirty_at = None;
+                    dirty_kind = WatchDirtyKind::CatalogOnly;
                 }
             }
         }
