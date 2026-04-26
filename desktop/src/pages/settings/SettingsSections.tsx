@@ -369,6 +369,7 @@ function GeneralSettingsSectionInner({
     handleVersionTap,
 }: GeneralSettingsSectionProps) {
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
+    const [isDebugLogsExpanded, setIsDebugLogsExpanded] = useState(false);
 
     return (
         <section className="space-y-6">
@@ -680,258 +681,110 @@ function GeneralSettingsSectionInner({
                 </p>
             </div>
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div>
-                    <h3 className="text-sm font-medium text-text-primary">文件解析与重排 Sidecar</h3>
-                    <p className="text-xs text-text-tertiary mt-1">
-                        可选配置。解析按 Docling → Tika → Unstructured → 内置 parser 顺序 fallback；重排 endpoint 用于 cross-encoder / reranker 服务。
-                    </p>
-                </div>
-                <div className="grid gap-4 md:grid-cols-3">
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Docling Endpoint</label>
-                        <input
-                            type="text"
-                            value={formData.docling_endpoint}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, docling_endpoint: e.target.value }))}
-                            placeholder="https://parser.example.com/docling"
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Tika Endpoint</label>
-                        <input
-                            type="text"
-                            value={formData.tika_endpoint}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, tika_endpoint: e.target.value }))}
-                            placeholder="https://parser.example.com/tika"
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Unstructured Endpoint</label>
-                        <input
-                            type="text"
-                            value={formData.unstructured_endpoint}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, unstructured_endpoint: e.target.value }))}
-                            placeholder="https://parser.example.com/unstructured"
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                </div>
-                <div className="grid gap-4 md:grid-cols-3">
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser API Key</label>
-                        <PasswordInput
-                            value={formData.parser_api_key}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_api_key: e.target.value }))}
-                            placeholder="可留空"
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser 超时秒数</label>
-                        <input
-                            type="number"
-                            min={10}
-                            max={300}
-                            value={formData.parser_timeout_seconds}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_timeout_seconds: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Endpoint</label>
-                        <input
-                            type="text"
-                            value={formData.rerank_endpoint}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_endpoint: e.target.value }))}
-                            placeholder="https://rerank.example.com/v1/rerank"
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                </div>
-                <div className="grid gap-4 md:grid-cols-3">
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank API Key</label>
-                        <PasswordInput
-                            value={formData.rerank_api_key}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_api_key: e.target.value }))}
-                            placeholder="可留空"
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Model</label>
-                        <input
-                            type="text"
-                            value={formData.rerank_model}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_model: e.target.value }))}
-                            placeholder="例如 bge-reranker-v2.5"
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                    <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank 超时秒数</label>
-                        <input
-                            type="number"
-                            min={5}
-                            max={120}
-                            value={formData.rerank_timeout_seconds}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_timeout_seconds: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                        />
-                    </div>
-                </div>
-            </div>
-
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div className="flex items-start justify-between gap-4">
-                    <div>
-                        <h3 className="text-sm font-medium text-text-primary">调试日志</h3>
-                        <p className="text-xs text-text-tertiary mt-1">
-                            正式版本地日志默认常开。这里控制 verbose 调试 trace、诊断包高级上下文，以及待发送报告的导出和上传。
-                        </p>
-                    </div>
+            <div className={clsx(
+                'overflow-hidden rounded-lg border border-border bg-surface-secondary/30 transition-colors',
+                isDebugLogsExpanded && 'border-accent-primary/30',
+            )}>
+                <div className="flex items-center gap-3 px-4 py-3">
                     <button
                         type="button"
-                        onClick={() => setFormData((prev: any) => ({ ...prev, debug_log_enabled: !prev.debug_log_enabled }))}
-                        className="ui-switch-track"
-                        data-size="lg"
-                        data-state={formData.debug_log_enabled ? 'on' : 'off'}
+                        onClick={() => setIsDebugLogsExpanded((prev) => !prev)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                        aria-expanded={isDebugLogsExpanded}
+                        aria-controls="general-debug-logs-panel"
                     >
-                        <span className="ui-switch-thumb" />
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                            <ChevronDown className={clsx('h-4 w-4 transition-transform', isDebugLogsExpanded ? 'rotate-0' : '-rotate-90')} />
+                        </span>
+                        <h3 className="truncate text-sm font-medium text-text-primary">调试日志</h3>
                     </button>
-                </div>
-                <div className="grid gap-3 rounded-lg border border-border bg-surface-primary/40 p-3 text-xs text-text-secondary md:grid-cols-2">
-                    <div>
-                        <div className="text-[11px] text-text-tertiary">日志目录</div>
-                        <div className="mt-1 break-all text-text-primary">
-                            {logStatus?.logDirectory || '未初始化'}
-                        </div>
-                    </div>
-                    <div>
-                        <div className="text-[11px] text-text-tertiary">待发送报告</div>
-                        <div className="mt-1 text-text-primary">
-                            {logStatus?.pendingCount ?? pendingReports.length} 份
-                        </div>
-                    </div>
-                    <div>
-                        <div className="text-[11px] text-text-tertiary">保留天数 / 单文件上限</div>
-                        <div className="mt-1 text-text-primary">
-                            {logStatus?.retentionDays ?? '--'} 天 / {logStatus?.maxFileMb ?? '--'} MB
-                        </div>
-                    </div>
-                    <div>
-                        <div className="text-[11px] text-text-tertiary">上传端点</div>
-                        <div className="mt-1 break-all text-text-primary">
-                            {logStatus?.uploadEndpoint || '未配置'}
-                        </div>
-                    </div>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2">
-                    <label className="rounded-lg border border-border bg-surface-primary/40 p-3">
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium text-text-primary">附带高级诊断数据</span>
-                            <input
-                                type="checkbox"
-                                checked={formData.diagnostics_include_advanced_context}
-                                onChange={(e) => setFormData((prev: any) => ({ ...prev, diagnostics_include_advanced_context: e.target.checked }))}
-                            />
-                        </div>
-                        <p className="mt-2 text-[11px] text-text-tertiary">
-                            导出或上传诊断包时附带 session/task trace。
-                        </p>
-                    </label>
-                    <label className="rounded-lg border border-border bg-surface-primary/40 p-3">
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-medium text-text-primary">同类崩溃记住上传选择</span>
-                            <input
-                                type="checkbox"
-                                checked={formData.diagnostics_auto_send_same_crash}
-                                onChange={(e) => setFormData((prev: any) => ({ ...prev, diagnostics_auto_send_same_crash: e.target.checked }))}
-                            />
-                        </div>
-                        <p className="mt-2 text-[11px] text-text-tertiary">
-                            只记录用户是否允许再次发送，不会绕过手动同意。
-                        </p>
-                    </label>
-                </div>
-                <div className="grid gap-4 md:grid-cols-3">
-                    <label className="space-y-2">
-                        <span className="text-xs text-text-tertiary">上传同意策略</span>
-                        <select
-                            value={formData.diagnostics_upload_consent}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, diagnostics_upload_consent: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
+                    <div className="flex shrink-0 items-center gap-2">
+                        <span className="text-xs text-text-secondary">详细日志</span>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={formData.debug_log_enabled}
+                            aria-label="详细日志"
+                            onClick={() => setFormData((prev: any) => ({ ...prev, debug_log_enabled: !prev.debug_log_enabled }))}
+                            className="ui-switch-track"
+                            data-size="lg"
+                            data-state={formData.debug_log_enabled ? 'on' : 'off'}
                         >
-                            <option value="none">每次手动确认</option>
-                            <option value="prompt">异常时提示</option>
-                            <option value="approved">允许手动上传</option>
-                        </select>
-                    </label>
-                    <label className="space-y-2">
-                        <span className="text-xs text-text-tertiary">日志保留天数</span>
-                        <input
-                            value={formData.release_log_retention_days}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, release_log_retention_days: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
-                        />
-                    </label>
-                    <label className="space-y-2">
-                        <span className="text-xs text-text-tertiary">单文件上限 (MB)</span>
-                        <input
-                            value={formData.release_log_max_file_mb}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, release_log_max_file_mb: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary"
-                        />
-                    </label>
-                </div>
-                <div className="flex items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => void handleExportDiagnosticBundle()}
-                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                    >
-                        导出当前诊断包
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => void handleRefreshDebugLogs()}
-                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                    >
-                        {isDebugLogsLoading ? '刷新中...' : '刷新日志'}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => void handleOpenDebugLogDir()}
-                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                    >
-                        打开日志目录
-                    </button>
-                </div>
-                <div className="rounded-lg border border-border bg-surface-primary/50 p-3 space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="text-[11px] text-text-tertiary">待发送诊断报告</div>
-                        <div className="text-[11px] text-text-tertiary">
-                            {pendingReports.length ? `最近提示：${formData.diagnostics_last_prompted_at || '未记录'}` : '当前没有待处理报告'}
-                        </div>
+                            <span className="ui-switch-thumb" />
+                        </button>
                     </div>
-                    {pendingReports.length ? (
-                        <div className="space-y-2">
-                            {pendingReports.map((report) => (
-                                <div
-                                    key={report.id}
-                                    className="rounded border border-border bg-surface-primary px-3 py-2"
-                                >
-                                    <div className="flex items-start justify-between gap-3">
+                </div>
+
+                {isDebugLogsExpanded && (
+                    <div id="general-debug-logs-panel" className="space-y-4 border-t border-border/70 px-4 py-4">
+                        <div className="grid gap-3 rounded-lg border border-border bg-surface-primary/40 p-3 text-xs text-text-secondary md:grid-cols-3">
+                            <div>
+                                <div className="text-[11px] text-text-tertiary">日志目录</div>
+                                <div className="mt-1 break-all text-text-primary">
+                                    {logStatus?.logDirectory || '未初始化'}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-[11px] text-text-tertiary">待发送报告</div>
+                                <div className="mt-1 text-text-primary">
+                                    {logStatus?.pendingCount ?? pendingReports.length} 份
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-[11px] text-text-tertiary">保留设置</div>
+                                <div className="mt-1 text-text-primary">
+                                    {logStatus?.retentionDays ?? '--'} 天 / {logStatus?.maxFileMb ?? '--'} MB
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => void handleOpenDebugLogDir()}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                            >
+                                打开目录
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleRefreshDebugLogs()}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                            >
+                                {isDebugLogsLoading ? '刷新中...' : '刷新预览'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void handleExportDiagnosticBundle()}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                            >
+                                导出诊断包
+                            </button>
+                            <label className="ml-auto flex items-center gap-2 text-xs text-text-secondary">
+                                <input
+                                    type="checkbox"
+                                    checked={formData.diagnostics_include_advanced_context}
+                                    onChange={(e) => setFormData((prev: any) => ({ ...prev, diagnostics_include_advanced_context: e.target.checked }))}
+                                    className="rounded border-border"
+                                />
+                                高级诊断数据
+                            </label>
+                        </div>
+
+                        {pendingReports.length > 0 && (
+                            <div className="space-y-2 rounded-lg border border-border bg-surface-primary/50 p-3">
+                                {pendingReports.map((report) => (
+                                    <div key={report.id} className="flex items-center justify-between gap-3 text-xs">
                                         <div className="min-w-0">
-                                            <div className="text-sm text-text-primary">{report.summary}</div>
-                                            <div className="mt-1 text-[11px] text-text-tertiary">
+                                            <div className="truncate text-text-primary">{report.summary}</div>
+                                            <div className="mt-1 truncate text-[11px] text-text-tertiary">
                                                 {report.trigger} · {report.createdAt}
                                             </div>
+                                            {report.lastError ? (
+                                                <div className="mt-1 truncate text-[11px] text-red-500">{report.lastError}</div>
+                                            ) : null}
                                         </div>
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex shrink-0 items-center gap-2">
                                             <button
                                                 type="button"
                                                 onClick={() => void handleExportDiagnosticBundle(report.id)}
@@ -958,30 +811,168 @@ function GeneralSettingsSectionInner({
                                             </button>
                                         </div>
                                     </div>
-                                    {report.lastError ? (
-                                        <div className="mt-2 text-[11px] text-red-500">{report.lastError}</div>
-                                    ) : null}
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="text-[11px] text-text-tertiary">
-                            崩溃恢复或手动导出时生成的诊断报告会显示在这里。
-                        </div>
-                    )}
-                </div>
-                <div className="rounded-lg border border-border bg-surface-primary/60 p-3">
-                    <div className="text-[11px] text-text-tertiary mb-2">最近日志预览</div>
-                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-[11px] leading-5 text-text-secondary">
-                        {recentDebugLogs.length ? recentDebugLogs.join('\n') : '暂无日志。开启后保存设置并重试相关操作。'}
-                    </pre>
-                </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-border bg-surface-primary/60 p-3 text-[11px] leading-5 text-text-secondary">
+                            {recentDebugLogs.length ? recentDebugLogs.slice(0, 20).join('\n') : '暂无日志'}
+                        </pre>
+                    </div>
+                )}
             </div>
         </section>
     );
 }
 
 export const GeneralSettingsSection = memo(GeneralSettingsSectionInner);
+
+interface ExperimentalSettingsSectionProps {
+    formData: SettingsFormData;
+    setFormData: Dispatch<SetStateAction<any>>;
+}
+
+function ExperimentalSettingsSectionInner({
+    formData,
+    setFormData,
+}: ExperimentalSettingsSectionProps) {
+    const [isParserSidecarExpanded, setIsParserSidecarExpanded] = useState(false);
+    const inputClass = 'w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none';
+
+    return (
+        <section className="space-y-6">
+            <h2 className="text-lg font-medium text-text-primary mb-6">实验功能</h2>
+
+            <div className={clsx(
+                'overflow-hidden rounded-lg border border-border bg-surface-secondary/30 transition-colors',
+                isParserSidecarExpanded && 'border-accent-primary/30',
+            )}>
+                <button
+                    type="button"
+                    onClick={() => setIsParserSidecarExpanded((prev) => !prev)}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                    aria-expanded={isParserSidecarExpanded}
+                    aria-controls="experimental-parser-sidecar-panel"
+                >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                        <ChevronDown className={clsx('h-4 w-4 transition-transform', isParserSidecarExpanded ? 'rotate-0' : '-rotate-90')} />
+                    </span>
+                    <span className="min-w-0 truncate text-sm font-medium text-text-primary">文件解析与重排</span>
+                </button>
+
+                {isParserSidecarExpanded && (
+                    <div id="experimental-parser-sidecar-panel" className="space-y-5 border-t border-border/70 px-4 py-4">
+                        <div className="space-y-3">
+                            <div className="text-xs font-medium text-text-primary">解析服务</div>
+                            <div className="grid gap-3 md:grid-cols-3">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Docling Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.docling_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, docling_endpoint: e.target.value }))}
+                                        placeholder="https://parser.example.com/docling"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Tika Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.tika_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, tika_endpoint: e.target.value }))}
+                                        placeholder="https://parser.example.com/tika"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Unstructured Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.unstructured_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, unstructured_endpoint: e.target.value }))}
+                                        placeholder="https://parser.example.com/unstructured"
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser API Key</label>
+                                    <PasswordInput
+                                        value={formData.parser_api_key}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_api_key: e.target.value }))}
+                                        placeholder="可留空"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser 超时秒数</label>
+                                    <input
+                                        type="number"
+                                        min={10}
+                                        max={300}
+                                        value={formData.parser_timeout_seconds}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_timeout_seconds: e.target.value }))}
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3">
+                            <div className="text-xs font-medium text-text-primary">重排服务</div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.rerank_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_endpoint: e.target.value }))}
+                                        placeholder="https://rerank.example.com/v1/rerank"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Model</label>
+                                    <input
+                                        type="text"
+                                        value={formData.rerank_model}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_model: e.target.value }))}
+                                        placeholder="例如 bge-reranker-v2.5"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank API Key</label>
+                                    <PasswordInput
+                                        value={formData.rerank_api_key}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_api_key: e.target.value }))}
+                                        placeholder="可留空"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank 超时秒数</label>
+                                    <input
+                                        type="number"
+                                        min={5}
+                                        max={120}
+                                        value={formData.rerank_timeout_seconds}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_timeout_seconds: e.target.value }))}
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
+
+export const ExperimentalSettingsSection = memo(ExperimentalSettingsSectionInner);
 
 type RemoteConnectionSubTab = 'api' | 'channels';
 type RemoteChannelId = 'feishu' | 'weixin';
@@ -4660,12 +4651,12 @@ export function ToolsSettingsSection({
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'tools' | 'profile' | 'memory' | 'remote';
+    activeTab: 'general' | 'ai' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
-    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile') {
+    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile' && activeTab !== 'experimental') {
         return null;
     }
 
