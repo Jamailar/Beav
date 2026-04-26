@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Clock3, MessageSquare, Plus, RefreshCw, Send, Users } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Ban, Clock3, MessageSquare, Paperclip, Plus, RefreshCw, Send, Target, Users } from 'lucide-react';
 import type {
   CollabMemberRecord,
   CollabProgressReportRecord,
@@ -88,6 +88,43 @@ function requireCreatedSession(value: unknown): CollabSessionRecord {
   throw new Error(message);
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function agentCardFor(member: CollabMemberRecord): Record<string, unknown> {
+  return asRecord(asRecord(member.metadata).agentCard);
+}
+
+function memberTaskPlanFor(member: CollabMemberRecord): Record<string, unknown> {
+  return asRecord(asRecord(member.metadata).memberTaskPlan);
+}
+
+function activeExecutorCountFor(member: CollabMemberRecord): number {
+  const activeExecutors = asRecord(memberTaskPlanFor(member)).activeExecutors;
+  return Array.isArray(activeExecutors) ? activeExecutors.length : 0;
+}
+
+function maxExecutorCountFor(member: CollabMemberRecord): number {
+  const capacity = asRecord(agentCardFor(member).capacity);
+  const maxThreads = Number(capacity.maxExecutorThreads || 0);
+  return Number.isFinite(maxThreads) && maxThreads > 0 ? maxThreads : 5;
+}
+
+function artifactText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  const record = asRecord(value);
+  return String(record.path || record.id || record.ref || record.kind || JSON.stringify(value));
+}
+
+function completionClaimFor(report: CollabProgressReportRecord): Record<string, unknown> {
+  return asRecord(asRecord(report.payload).completionClaim);
+}
+
 export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: CollaborationBoardProps) {
   const [sessions, setSessions] = useState<CollabSessionRecord[]>([]);
   const [snapshot, setSnapshot] = useState<CollabSessionSnapshot | null>(null);
@@ -99,6 +136,9 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const [draftObjective, setDraftObjective] = useState('');
   const [draftMember, setDraftMember] = useState('');
   const [draftTask, setDraftTask] = useState('');
+  const [messageDraft, setMessageDraft] = useState('');
+  const [artifactDraft, setArtifactDraft] = useState('');
+  const [blockerDraft, setBlockerDraft] = useState('');
   const snapshotRef = useRef<CollabSessionSnapshot | null>(null);
   const sessionsRef = useRef<CollabSessionRecord[]>([]);
   const selectedSessionIdRef = useRef('');
@@ -185,11 +225,20 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const members = snapshot?.members || [];
   const tasks = snapshot?.tasks || [];
   const reports = snapshot?.reports || [];
+  const mailbox = snapshot?.mailbox || [];
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) || tasks[0] || null,
     [selectedTaskId, tasks],
   );
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
+  const selectedTaskReports = useMemo(
+    () => selectedTask ? reports.filter((report) => report.taskId === selectedTask.id) : [],
+    [reports, selectedTask],
+  );
+  const selectedTaskMailbox = useMemo(
+    () => selectedTask ? mailbox.filter((message) => message.taskId === selectedTask.id).slice(-6) : [],
+    [mailbox, selectedTask],
+  );
 
   useEffect(() => {
     if (!selectedTaskId || !tasks.some((task) => task.id === selectedTaskId)) {
@@ -334,6 +383,154 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
       setBusy('');
     }
   }, [loadSnapshot]);
+
+  const matchAndAssignTask = useCallback(async (task: CollabTaskRecord) => {
+    if (!task.sessionId) return;
+    setBusy(`match:${task.id}`);
+    try {
+      const result = await window.ipcRenderer.teamRuntime.matchMember({
+        sessionId: task.sessionId,
+        title: task.title,
+        objective: task.objective || task.description || task.title,
+        taskType: task.taskType,
+        limit: 1,
+      });
+      const candidate = result?.candidates?.[0];
+      if (!candidate?.memberId) {
+        throw new Error('没有匹配到可用成员');
+      }
+      await window.ipcRenderer.teamRuntime.updateTask({ taskId: task.id, memberId: candidate.memberId });
+      await loadSnapshot(task.sessionId);
+    } catch (matchError) {
+      setError(matchError instanceof Error ? matchError.message : String(matchError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot]);
+
+  const renameMember = useCallback(async (member: CollabMemberRecord) => {
+    const displayName = window.prompt('新的成员名称', member.displayName)?.trim();
+    if (!displayName || displayName === member.displayName) return;
+    setBusy(`rename:${member.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.renameMember({
+        sessionId: member.sessionId,
+        memberId: member.id,
+        displayName,
+      });
+      await loadSnapshot(member.sessionId);
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : String(renameError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot]);
+
+  const shutdownMember = useCallback(async (member: CollabMemberRecord) => {
+    setBusy(`shutdown:${member.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.shutdownMember({
+        sessionId: member.sessionId,
+        memberId: member.id,
+        status: 'offline',
+        reason: 'manual_shutdown',
+      });
+      await loadSnapshot(member.sessionId);
+    } catch (shutdownError) {
+      setError(shutdownError instanceof Error ? shutdownError.message : String(shutdownError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot]);
+
+  const attachArtifact = useCallback(async () => {
+    if (!selectedTask?.memberId) return;
+    const ref = artifactDraft.trim();
+    if (!ref) return;
+    setBusy(`artifact:${selectedTask.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.attachArtifact({
+        sessionId: selectedTask.sessionId,
+        memberId: selectedTask.memberId,
+        taskId: selectedTask.id,
+        artifact: { kind: 'manual-ref', ref },
+        summary: `已附加产物：${ref}`,
+      });
+      setArtifactDraft('');
+      await loadSnapshot(selectedTask.sessionId);
+    } catch (artifactError) {
+      setError(artifactError instanceof Error ? artifactError.message : String(artifactError));
+    } finally {
+      setBusy('');
+    }
+  }, [artifactDraft, loadSnapshot, selectedTask]);
+
+  const raiseBlocker = useCallback(async () => {
+    if (!selectedTask?.memberId) return;
+    const blocker = blockerDraft.trim();
+    if (!blocker) return;
+    setBusy(`blocker:${selectedTask.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.raiseBlocker({
+        sessionId: selectedTask.sessionId,
+        memberId: selectedTask.memberId,
+        taskId: selectedTask.id,
+        blocker,
+      });
+      setBlockerDraft('');
+      await loadSnapshot(selectedTask.sessionId);
+    } catch (blockerError) {
+      setError(blockerError instanceof Error ? blockerError.message : String(blockerError));
+    } finally {
+      setBusy('');
+    }
+  }, [blockerDraft, loadSnapshot, selectedTask]);
+
+  const sendTaskMessage = useCallback(async () => {
+    if (!selectedTask?.memberId) return;
+    const body = messageDraft.trim();
+    if (!body) return;
+    setBusy(`message:${selectedTask.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.sendMessage({
+        sessionId: selectedTask.sessionId,
+        toMemberId: selectedTask.memberId,
+        taskId: selectedTask.id,
+        fromKind: 'user',
+        messageType: 'comment',
+        body,
+      });
+      setMessageDraft('');
+      await loadSnapshot(selectedTask.sessionId);
+    } catch (messageError) {
+      setError(messageError instanceof Error ? messageError.message : String(messageError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot, messageDraft, selectedTask]);
+
+  const completeTask = useCallback(async () => {
+    if (!selectedTask?.memberId) return;
+    setBusy(`complete:${selectedTask.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.submitReport({
+        sessionId: selectedTask.sessionId,
+        memberId: selectedTask.memberId,
+        taskId: selectedTask.id,
+        status: 'completed',
+        summary: selectedTask.resultSummary || `完成：${selectedTask.title}`,
+        evidence: selectedTask.artifacts,
+        artifactIds: selectedTask.artifactIds,
+        handoff: 'ready_for_review',
+        risks: [],
+      });
+      await loadSnapshot(selectedTask.sessionId);
+    } catch (completeError) {
+      setError(completeError instanceof Error ? completeError.message : String(completeError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot, selectedTask]);
 
   return (
     <div className="h-full min-h-0 bg-[#f8faf8] text-[#18211b]">
@@ -544,6 +741,10 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
               {members.map((member) => {
                 const currentTask = member.currentTaskId ? tasks.find((task) => task.id === member.currentTaskId) : null;
                 const latest = latestReportForMember(reports, member.id);
+                const agentCard = agentCardFor(member);
+                const activeExecutors = activeExecutorCountFor(member);
+                const maxExecutors = maxExecutorCountFor(member);
+                const goodAt = stringArray(agentCard.goodAt).slice(0, 2);
                 return (
                   <div key={member.id} className="rounded-[18px] border border-[#e4ece1] bg-[#fbfdfb] px-3 py-2.5">
                     <div className="flex items-start justify-between gap-2">
@@ -551,14 +752,42 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                         <div className="text-[12px] font-semibold">{member.displayName}</div>
                         <div className="mt-0.5 text-[10px] text-[#748070]">{member.roleId} · {member.sourceKind}</div>
                       </div>
-                      <button onClick={() => void requestReport(member)} className="rounded-full border border-[#dce6da] bg-white px-2 py-1 text-[10px] text-[#607166]">
-                        <Send className="inline h-3 w-3" /> 汇报
-                      </button>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => void requestReport(member)}
+                          title="请求汇报"
+                          className="rounded-full border border-[#dce6da] bg-white px-2 py-1 text-[10px] text-[#607166]"
+                        >
+                          <Send className="inline h-3 w-3" />
+                        </button>
+                        <button
+                          onClick={() => void renameMember(member)}
+                          title="重命名成员"
+                          className="rounded-full border border-[#dce6da] bg-white px-2 py-1 text-[10px] text-[#607166]"
+                        >
+                          改名
+                        </button>
+                        <button
+                          onClick={() => void shutdownMember(member)}
+                          title="关闭成员"
+                          className="rounded-full border border-[#eed0d0] bg-[#fff8f8] px-2 py-1 text-[10px] text-[#9a5656]"
+                        >
+                          <Ban className="inline h-3 w-3" />
+                        </button>
+                      </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
                       <span className="rounded-full bg-[#edf6ee] px-2 py-0.5 text-[#4f7358]">{statusLabel(member.status)}</span>
                       <span className="rounded-full bg-[#f1f5f0] px-2 py-0.5 text-[#6f7d70]">{currentTask?.title || '无当前任务'}</span>
+                      <span className="rounded-full bg-[#f1f5f0] px-2 py-0.5 text-[#6f7d70]">{activeExecutors}/{maxExecutors} 执行</span>
                     </div>
+                    {goodAt.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-[#71806f]">
+                        {goodAt.map((item) => (
+                          <span key={item} className="rounded-full bg-white px-2 py-0.5">{item}</span>
+                        ))}
+                      </div>
+                    )}
                     {latest && (
                       <div className="mt-2 rounded-[14px] bg-white px-2.5 py-2 text-[11px] leading-5 text-[#526456]">
                         <div className="mb-1 flex items-center gap-1 text-[10px] text-[#879184]">
@@ -592,6 +821,13 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                   ))}
                 </select>
                 <div className="mt-3 flex flex-wrap gap-1.5">
+                  <button
+                    onClick={() => void matchAndAssignTask(selectedTask)}
+                    className="rounded-full border border-[#b8d2b8] bg-[#eef7ef] px-2 py-1 text-[10px] text-[#37563d]"
+                  >
+                    <Target className="mr-1 inline h-3 w-3" />
+                    智能分配
+                  </button>
                   {boardColumns.map((column) => (
                     <button
                       key={column.key}
@@ -609,18 +845,107 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                       请求负责人汇报
                     </button>
                   )}
+                  {selectedTask.memberId && (
+                    <button
+                      onClick={() => void completeTask()}
+                      className="rounded-full border border-[#b8d2b8] bg-[#f7fbf7] px-2 py-1 text-[10px] text-[#37563d]"
+                    >
+                      完成并声明
+                    </button>
+                  )}
                 </div>
+                {selectedTask.memberId && (
+                  <div className="mt-3 space-y-2">
+                    <div className="flex gap-1.5">
+                      <input
+                        value={messageDraft}
+                        onChange={(event) => setMessageDraft(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            void sendTaskMessage();
+                          }
+                        }}
+                        placeholder="给负责人留言"
+                        className="min-w-0 flex-1 rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[11px] outline-none"
+                      />
+                      <button
+                        onClick={() => void sendTaskMessage()}
+                        className="rounded-full border border-[#dce6da] bg-white px-2.5 py-1.5 text-[10px] text-[#607166]"
+                      >
+                        <Send className="inline h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        value={artifactDraft}
+                        onChange={(event) => setArtifactDraft(event.currentTarget.value)}
+                        placeholder="产物引用"
+                        className="min-w-0 flex-1 rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[11px] outline-none"
+                      />
+                      <button
+                        onClick={() => void attachArtifact()}
+                        className="rounded-full border border-[#dce6da] bg-white px-2.5 py-1.5 text-[10px] text-[#607166]"
+                      >
+                        <Paperclip className="inline h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input
+                        value={blockerDraft}
+                        onChange={(event) => setBlockerDraft(event.currentTarget.value)}
+                        placeholder="阻塞点"
+                        className="min-w-0 flex-1 rounded-full border border-[#eed0d0] bg-white px-3 py-1.5 text-[11px] outline-none"
+                      />
+                      <button
+                        onClick={() => void raiseBlocker()}
+                        className="rounded-full border border-[#eed0d0] bg-[#fff8f8] px-2.5 py-1.5 text-[10px] text-[#9a5656]"
+                      >
+                        <AlertTriangle className="inline h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {(selectedTask.artifactIds.length > 0 || selectedTask.artifacts.length > 0) && (
+                  <div className="mt-3 rounded-[14px] bg-white px-2.5 py-2">
+                    <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-[#879184]">Artifacts</div>
+                    <div className="space-y-1 text-[11px] text-[#526456]">
+                      {[...selectedTask.artifactIds, ...selectedTask.artifacts.map(artifactText)].slice(-6).map((item, index) => (
+                        <div key={`${item}:${index}`} className="truncate">{item}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="mt-3 space-y-2">
-                  {reports.filter((report) => report.taskId === selectedTask.id).slice(-4).map((report) => (
+                  {selectedTaskReports.slice(-4).map((report) => {
+                    const completionClaim = completionClaimFor(report);
+                    return (
                     <div key={report.id} className="rounded-[14px] bg-white px-2.5 py-2 text-[11px] leading-5">
                       <div className="mb-1 flex items-center gap-1 text-[10px] text-[#879184]">
                         <MessageSquare className="h-3 w-3" />
                         {statusLabel(report.status)} · {formatTs(report.createdAt)}
                       </div>
                       {report.summary}
+                      {completionClaim.status && (
+                        <div className="mt-1 rounded-[10px] bg-[#f1f6ef] px-2 py-1 text-[10px] text-[#5b6d5f]">
+                          completion claim · {String(completionClaim.handoff || 'handoff ready')}
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
+                {selectedTaskMailbox.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    <div className="text-[10px] uppercase tracking-[0.14em] text-[#879184]">Messages</div>
+                    {selectedTaskMailbox.map((message) => (
+                      <div key={message.id} className="rounded-[14px] bg-white px-2.5 py-2 text-[11px] leading-5 text-[#526456]">
+                        <div className="mb-1 text-[10px] text-[#879184]">{message.messageType} · {formatTs(message.createdAt)}</div>
+                        {message.body || message.subject}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
           </aside>

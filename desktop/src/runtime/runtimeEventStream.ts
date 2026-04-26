@@ -176,6 +176,11 @@ export interface RuntimeEventStreamHandlers {
     message: UnknownRecord;
     raw: UnknownRecord;
   }) => void;
+  onCollabReportTick?: (payload: RuntimeScopedPayload & {
+    collabSessionId: string;
+    outcome: UnknownRecord;
+    raw: UnknownRecord;
+  }) => void;
   onCreativeChatUserMessage?: (payload: { roomId: string; message: UnknownRecord }) => void;
   onCreativeChatAdvisorStart?: (payload: {
     roomId: string;
@@ -319,6 +324,7 @@ function normalizeRuntimeEventType(value: unknown): RuntimeUnifiedEvent['eventTy
     case 'runtime:collab-task-changed':
     case 'runtime:collab-report-submitted':
     case 'runtime:collab-message-delivered':
+    case 'runtime:collab-report-tick':
       return eventType;
     default:
       return null;
@@ -578,6 +584,17 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       ...runtimeMeta,
       collabSessionId: toText(payload.collabSessionId || payload.sessionId),
       message: toRecord(payload.message),
+      raw: payload,
+    });
+    return;
+  }
+
+  if (envelope.eventType === 'runtime:collab-report-tick') {
+    handlers.onCollabReportTick?.({
+      sessionId,
+      ...runtimeMeta,
+      collabSessionId: toText(payload.collabSessionId || payload.sessionId),
+      outcome: toRecord(payload.outcome),
       raw: payload,
     });
     return;

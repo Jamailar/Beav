@@ -171,6 +171,7 @@ export type RuntimeUnifiedEventType =
   | 'runtime:collab-task-changed'
   | 'runtime:collab-report-submitted'
   | 'runtime:collab-message-delivered'
+  | 'runtime:collab-report-tick'
   | 'stream_start'
   | 'text_delta'
   | 'tool_request'
@@ -251,6 +252,7 @@ export interface CollabTaskRecord {
   artifacts: unknown[];
   artifactIds: string[];
   dueAt?: number | null;
+  metadata?: Record<string, unknown> | null;
   createdAt: number;
   updatedAt: number;
   startedAt?: number | null;
@@ -270,6 +272,7 @@ export interface CollabMailboxMessageRecord {
   subject?: string | null;
   body: string;
   attachmentRefs: string[];
+  payload?: Record<string, unknown> | null;
   createdAt: number;
   readAt?: number | null;
 }
@@ -288,7 +291,26 @@ export interface CollabProgressReportRecord {
   blockers: string[];
   artifacts: unknown[];
   artifactIds: string[];
+  payload?: Record<string, unknown> | null;
   createdAt: number;
+}
+
+export interface CollabMemberMatchCandidate {
+  memberId: string;
+  displayName?: string;
+  roleId?: string;
+  status?: string;
+  score?: number;
+  reasons?: string[];
+  activeExecutorCount?: number;
+  maxExecutorThreads?: number;
+  agentCard?: Record<string, unknown>;
+}
+
+export interface CollabMemberMatchResult {
+  sessionId: string;
+  query?: Record<string, unknown>;
+  candidates: CollabMemberMatchCandidate[];
 }
 
 export interface CollabSessionSnapshot {
@@ -865,6 +887,9 @@ declare global {
         getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) => Promise<CollabSessionSnapshot>;
         listMembers: (payload: { sessionId: string }) => Promise<CollabMemberRecord[]>;
         addMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
+        matchMember: (payload: Record<string, unknown>) => Promise<CollabMemberMatchResult>;
+        renameMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
+        shutdownMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
         listTasks: (payload: { sessionId: string }) => Promise<CollabTaskRecord[]>;
         createTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
         updateTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
@@ -874,6 +899,8 @@ declare global {
         listReports: (payload: { sessionId: string; memberId?: string; taskId?: string; limit?: number }) => Promise<CollabProgressReportRecord[]>;
         requestReport: (payload: Record<string, unknown>) => Promise<CollabMailboxMessageRecord>;
         submitReport: (payload: Record<string, unknown>) => Promise<CollabProgressReportRecord>;
+        attachArtifact: (payload: Record<string, unknown>) => Promise<CollabProgressReportRecord>;
+        raiseBlocker: (payload: Record<string, unknown>) => Promise<CollabProgressReportRecord>;
         pauseSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
         resumeSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;
         archiveSession: (payload: { sessionId: string }) => Promise<CollabSessionRecord>;

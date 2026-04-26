@@ -806,6 +806,75 @@ fn team_member_spawn_input_schema() -> Value {
     )
 }
 
+fn team_member_match_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("title", string_schema("Short task title.")),
+            (
+                "objective",
+                string_schema("Concrete task objective used to rank members."),
+            ),
+            (
+                "description",
+                string_schema("Optional detailed task instructions."),
+            ),
+            (
+                "taskType",
+                string_schema("Optional task type such as research, image_generation, review, or planning."),
+            ),
+            (
+                "roleId",
+                string_schema("Optional desired role id when the caller already knows the best role."),
+            ),
+            (
+                "requiredCapabilities",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "requiredToolFamilies",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "preferredTasks",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            ("limit", integer_schema("Maximum candidates to return.", 1, 20)),
+        ],
+        &["sessionId"],
+        Some("Rank existing internal runtime team members by persisted agent card, capabilities, tool policy, and current load."),
+    )
+}
+
+fn team_member_rename_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("memberId", string_schema("Target member id.")),
+            ("displayName", string_schema("New visible member name.")),
+            ("roleId", string_schema("Optional new role id.")),
+        ],
+        &["sessionId", "memberId", "displayName"],
+        Some("Rename or retitle one internal runtime team member."),
+    )
+}
+
+fn team_member_shutdown_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("memberId", string_schema("Target member id.")),
+            (
+                "status",
+                string_schema("Final member status, usually offline or suspended."),
+            ),
+            ("reason", string_schema("Optional shutdown reason.")),
+        ],
+        &["sessionId", "memberId"],
+        Some("Mark one team member offline or suspended without deleting persisted history."),
+    )
+}
+
 fn team_task_create_input_schema() -> Value {
     object_schema(
         &[
@@ -852,6 +921,60 @@ fn team_task_update_input_schema() -> Value {
         ],
         &["taskId"],
         None,
+    )
+}
+
+fn team_artifact_attach_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("memberId", string_schema("Reporting member id.")),
+            ("taskId", string_schema("Target task id.")),
+            (
+                "artifact",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+            (
+                "artifacts",
+                json!({ "type": "array", "items": { "type": "object" } }),
+            ),
+            (
+                "artifactIds",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            ("summary", string_schema("Artifact report summary.")),
+            (
+                "payload",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+        ],
+        &["sessionId", "memberId", "taskId"],
+        Some("Attach artifact metadata to a task and submit an artifact report."),
+    )
+}
+
+fn team_blocker_raise_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("memberId", string_schema("Reporting member id.")),
+            ("taskId", string_schema("Blocked task id.")),
+            ("blocker", string_schema("Primary blocker summary.")),
+            (
+                "summary",
+                string_schema("Optional detailed blocker summary."),
+            ),
+            (
+                "blockers",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "nextSteps",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+        ],
+        &["sessionId", "memberId", "taskId"],
+        Some("Raise a structured blocker report for one team task."),
     )
 }
 
@@ -2357,6 +2480,39 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "team.member.match",
+        namespace: "team.member",
+        description: "Rank existing team members for a task using their persisted agent cards, capabilities, tool policy, and current load.",
+        input_schema: team_member_match_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.member.rename",
+        namespace: "team.member",
+        description: "Rename or retitle one internal team member while preserving its persisted identity and history.",
+        input_schema: team_member_rename_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.member.shutdown",
+        namespace: "team.member",
+        description: "Mark one internal team member offline or suspended without deleting its persisted history.",
+        input_schema: team_member_shutdown_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "team.members.list",
         namespace: "team.member",
         description: "List internal team members in a Workboard collaboration project.",
@@ -2427,6 +2583,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "team.report",
         description: "Submit a structured progress, blocker, completion, or artifact report for a team member.",
         input_schema: team_report_submit_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.artifact.attach",
+        namespace: "team.artifact",
+        description: "Attach artifact metadata to a team task and submit an artifact progress report.",
+        input_schema: team_artifact_attach_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.blocker.raise",
+        namespace: "team.blocker",
+        description: "Raise a structured blocker report for one team task.",
+        input_schema: team_blocker_raise_input_schema,
         output_schema: runtime_output_schema,
         mutating: true,
         concurrency_safe: false,
@@ -3699,10 +3877,15 @@ mod tests {
         for action in [
             "team.session.create",
             "team.member.spawn",
+            "team.member.match",
+            "team.member.rename",
+            "team.member.shutdown",
             "team.task.create",
             "team.message.send",
             "team.report.request",
             "team.report.submit",
+            "team.artifact.attach",
+            "team.blocker.raise",
         ] {
             assert!(actions.iter().any(|item| item == action), "{action}");
         }
