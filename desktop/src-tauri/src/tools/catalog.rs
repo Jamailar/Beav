@@ -674,6 +674,46 @@ fn team_member_spawn_input_schema() -> Value {
     )
 }
 
+fn team_member_match_input_schema() -> Value {
+    object_schema(
+        &[
+            ("sessionId", string_schema("Collaboration session id.")),
+            ("title", string_schema("Short task title.")),
+            (
+                "objective",
+                string_schema("Concrete task objective used to rank members."),
+            ),
+            (
+                "description",
+                string_schema("Optional detailed task instructions."),
+            ),
+            (
+                "taskType",
+                string_schema("Optional task type such as research, image_generation, review, or planning."),
+            ),
+            (
+                "roleId",
+                string_schema("Optional desired role id when the caller already knows the best role."),
+            ),
+            (
+                "requiredCapabilities",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "requiredToolFamilies",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            (
+                "preferredTasks",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            ("limit", integer_schema("Maximum candidates to return.", 1, 20)),
+        ],
+        &["sessionId"],
+        Some("Rank existing internal runtime team members by persisted agent card, capabilities, tool policy, and current load."),
+    )
+}
+
 fn team_task_create_input_schema() -> Value {
     object_schema(
         &[
@@ -2133,6 +2173,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "team.member.match",
+        namespace: "team.member",
+        description: "Rank existing team members for a task using their persisted agent cards, capabilities, tool policy, and current load.",
+        input_schema: team_member_match_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "team.members.list",
         namespace: "team.member",
         description: "List internal team members in a Workboard collaboration project.",
@@ -3475,6 +3526,7 @@ mod tests {
         for action in [
             "team.session.create",
             "team.member.spawn",
+            "team.member.match",
             "team.task.create",
             "team.message.send",
             "team.report.request",
