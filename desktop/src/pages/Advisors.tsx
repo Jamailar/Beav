@@ -28,6 +28,30 @@ interface Advisor {
     createdAt: string;
 }
 
+interface MemberSkillVersionSummary {
+    version?: string;
+    updatedAt?: string;
+    path?: string;
+    skillPreview?: string;
+    sourceEvent?: string;
+    diff?: {
+        added?: string[];
+        removed?: string[];
+        addedCount?: number;
+        removedCount?: number;
+    };
+}
+
+interface MemberSkillInspectResult {
+    success?: boolean;
+    skillName?: string;
+    packagePath?: string;
+    current?: MemberSkillVersionSummary;
+    candidate?: MemberSkillVersionSummary | null;
+    versions?: MemberSkillVersionSummary[];
+    error?: string;
+}
+
 export type AdvisorProfile = Advisor;
 export type AdvisorCreateMode = 'manual' | 'template' | 'youtube';
 
@@ -603,6 +627,23 @@ export function Advisors({
         }
     };
 
+    const handleRollbackMemberSkillVersion = async (advisor: Advisor, version: string) => {
+        if (!version) return;
+        if (!(await appConfirm(`确定要把 ${advisor.name} 回滚到成员技能版本 "${version}" 吗？`, {
+            title: '回滚成员技能',
+            confirmLabel: '回滚',
+            tone: 'danger',
+        }))) return;
+        try {
+            await window.ipcRenderer.advisors.rollbackMemberSkillVersion({ advisorId: advisor.id, version });
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to rollback member skill version:', e);
+        }
+    };
+
     return (
         <div className="flex h-full min-h-0">
             {!hideAdvisorList && (
@@ -814,6 +855,7 @@ export function Advisors({
                                 onDeleteKnowledge={(fileName) => void handleDeleteKnowledge(selectedAdvisor.id, fileName)}
                                 onPromoteMemberSkillCandidate={() => void handlePromoteMemberSkillCandidate(selectedAdvisor)}
                                 onDiscardMemberSkillCandidate={() => void handleDiscardMemberSkillCandidate(selectedAdvisor)}
+                                onRollbackMemberSkillVersion={(version) => void handleRollbackMemberSkillVersion(selectedAdvisor, version)}
                                 onEdit={() => handleEdit(selectedAdvisor)}
                                 onDelete={() => void handleDelete(selectedAdvisor.id)}
                                 onClose={() => setIsSettingsDrawerOpen(false)}
@@ -991,6 +1033,7 @@ function AdvisorSettingsPanel({
     onDeleteKnowledge,
     onPromoteMemberSkillCandidate,
     onDiscardMemberSkillCandidate,
+    onRollbackMemberSkillVersion,
     onEdit,
     onDelete,
     onClose,
@@ -1006,10 +1049,52 @@ function AdvisorSettingsPanel({
     onDeleteKnowledge: (fileName: string) => void;
     onPromoteMemberSkillCandidate: () => void;
     onDiscardMemberSkillCandidate: () => void;
+    onRollbackMemberSkillVersion: (version: string) => void;
     onEdit: () => void;
     onDelete: () => void;
     onClose: () => void;
 }) {
+    const [memberSkillDetails, setMemberSkillDetails] = useState<MemberSkillInspectResult | null>(null);
+    const [isMemberSkillDetailsOpen, setIsMemberSkillDetailsOpen] = useState(false);
+    const [isMemberSkillDetailsLoading, setIsMemberSkillDetailsLoading] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        if (!advisor.memberSkillRef && !advisor.memberSkillCandidateVersion) {
+            setMemberSkillDetails(null);
+            return () => {
+                cancelled = true;
+            };
+        }
+        setIsMemberSkillDetailsLoading(true);
+        void window.ipcRenderer.advisors.inspectMemberSkill({ advisorId: advisor.id })
+            .then((result) => {
+                if (!cancelled) {
+                    setMemberSkillDetails(result as MemberSkillInspectResult);
+                }
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    setMemberSkillDetails({ success: false, error: String(error) });
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setIsMemberSkillDetailsLoading(false);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [advisor.id, advisor.memberSkillRef, advisor.memberSkillVersion, advisor.memberSkillCandidateVersion]);
+
+    const candidateDiff = memberSkillDetails?.candidate?.diff;
+    const candidateAdded = candidateDiff?.added || [];
+    const candidateRemoved = candidateDiff?.removed || [];
+    const rollbackVersions = (memberSkillDetails?.versions || [])
+        .filter((item) => item.version && item.version !== advisor.memberSkillVersion)
+        .slice(0, 5);
+
     return (
         <div className="flex h-full flex-col">
             <div className="border-b border-black/[0.04] px-5 pt-5 pb-4">
@@ -1067,6 +1152,45 @@ function AdvisorSettingsPanel({
                             <div className="mt-1 text-[11px] text-text-tertiary">
                                 来源：{advisor.memberSkillCandidateSourceEvent || '知识更新'} · {advisor.memberSkillCandidateCreatedAt || '刚刚'}
                             </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsMemberSkillDetailsOpen(!isMemberSkillDetailsOpen)}
+                                className="mt-2 inline-flex h-6 items-center gap-1 rounded-lg border border-black/10 bg-white/80 px-2 text-[11px] font-medium text-text-secondary hover:bg-white"
+                            >
+                                {isMemberSkillDetailsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+                                {isMemberSkillDetailsOpen ? '收起差异' : '查看差异'}
+                            </button>
+                            {isMemberSkillDetailsOpen && (
+                                <div className="mt-2 grid gap-2">
+                                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                        <div className="rounded-lg border border-emerald-100 bg-emerald-50/70 p-2">
+                                            <div className="mb-1 font-medium text-emerald-700">
+                                                新增 {candidateDiff?.addedCount || 0}
+                                            </div>
+                                            <div className="max-h-24 space-y-1 overflow-auto text-emerald-700/80 custom-scrollbar">
+                                                {candidateAdded.length > 0 ? candidateAdded.map((line, index) => (
+                                                    <div key={`${line}-${index}`} className="truncate">+ {line}</div>
+                                                )) : <div>无明显新增</div>}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-lg border border-red-100 bg-red-50/60 p-2">
+                                            <div className="mb-1 font-medium text-red-600">
+                                                移除 {candidateDiff?.removedCount || 0}
+                                            </div>
+                                            <div className="max-h-24 space-y-1 overflow-auto text-red-500/80 custom-scrollbar">
+                                                {candidateRemoved.length > 0 ? candidateRemoved.map((line, index) => (
+                                                    <div key={`${line}-${index}`} className="truncate">- {line}</div>
+                                                )) : <div>无明显移除</div>}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {memberSkillDetails?.candidate?.skillPreview && (
+                                        <pre className="max-h-28 overflow-auto rounded-lg bg-black/[0.03] p-2 text-[10px] leading-relaxed text-text-secondary custom-scrollbar">
+                                            {memberSkillDetails.candidate.skillPreview}
+                                        </pre>
+                                    )}
+                                </div>
+                            )}
                             <div className="mt-3 flex items-center gap-2">
                                 <button
                                     type="button"
@@ -1088,6 +1212,31 @@ function AdvisorSettingsPanel({
                     {advisor.memberSkillLastError && (
                         <div className="mt-3 rounded-2xl border border-red-100 bg-red-50/70 p-3 text-xs text-red-500">
                             {advisor.memberSkillLastError}
+                        </div>
+                    )}
+                    {rollbackVersions.length > 0 && (
+                        <div className="mt-3 rounded-2xl border border-black/[0.04] bg-white/60 p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                                <div className="text-xs font-medium text-text-primary">历史版本</div>
+                                {isMemberSkillDetailsLoading && <Loader2 className="h-3 w-3 animate-spin text-text-tertiary" />}
+                            </div>
+                            <div className="space-y-1.5">
+                                {rollbackVersions.map((version) => (
+                                    <div key={version.version} className="flex items-center justify-between gap-2 rounded-lg bg-black/[0.025] px-2 py-1.5">
+                                        <div className="min-w-0">
+                                            <div className="truncate text-[11px] font-medium text-text-secondary">{version.version}</div>
+                                            <div className="truncate text-[10px] text-text-tertiary">{version.updatedAt || '未知更新时间'}</div>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => onRollbackMemberSkillVersion(version.version || '')}
+                                            className="h-6 shrink-0 rounded-lg border border-black/10 bg-white/70 px-2 text-[11px] font-medium text-text-secondary hover:bg-white hover:text-accent-primary"
+                                        >
+                                            回滚
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </section>
