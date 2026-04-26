@@ -1,10 +1,14 @@
+pub mod action_search;
 pub mod app_cli;
 pub mod bash;
 pub mod catalog;
 pub mod compat;
 pub mod executor;
+pub mod families;
 pub mod guards;
 pub mod knowledge_search;
 pub mod packs;
+pub mod plan;
 pub mod registry;
+pub mod router;
 pub mod workspace_search;

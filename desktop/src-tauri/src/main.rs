@@ -2997,10 +2997,25 @@ fn execute_interactive_tool_call(
         let name = prepared.name;
         let arguments = &prepared.arguments;
         let action = tool_action_name(arguments);
+        let tool_plan_fingerprint = prepared.plan_fingerprint.clone();
         if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
             return result
-                .map(|value| ensure_structured_tool_success(name, action.as_deref(), value))
-                .map_err(|error| ensure_structured_tool_error(name, action.as_deref(), &error));
+                .map(|value| {
+                    ensure_structured_tool_success(
+                        name,
+                        action.as_deref(),
+                        value,
+                        Some(&tool_plan_fingerprint),
+                    )
+                })
+                .map_err(|error| {
+                    ensure_structured_tool_error(
+                        name,
+                        action.as_deref(),
+                        &error,
+                        Some(&tool_plan_fingerprint),
+                    )
+                });
         }
         let call_manuscript_channel = |channel: &str, payload: Value| -> Result<Value, String> {
             commands::manuscripts::handle_manuscripts_channel(app, state, channel, &payload)
@@ -3884,8 +3899,22 @@ fn execute_interactive_tool_call(
         };
 
         raw_result
-            .map(|value| ensure_structured_tool_success(name, action.as_deref(), value))
-            .map_err(|error| ensure_structured_tool_error(name, action.as_deref(), &error))
+            .map(|value| {
+                ensure_structured_tool_success(
+                    name,
+                    action.as_deref(),
+                    value,
+                    Some(&tool_plan_fingerprint),
+                )
+            })
+            .map_err(|error| {
+                ensure_structured_tool_error(
+                    name,
+                    action.as_deref(),
+                    &error,
+                    Some(&tool_plan_fingerprint),
+                )
+            })
     }));
     match execution {
         Ok(result) => result,
@@ -4997,9 +5026,14 @@ fn tool_action_name(arguments: &Value) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-fn ensure_structured_tool_success(tool_name: &str, action: Option<&str>, result: Value) -> Value {
+fn ensure_structured_tool_success(
+    tool_name: &str,
+    action: Option<&str>,
+    result: Value,
+    tool_plan_fingerprint: Option<&str>,
+) -> Value {
     let Some(mut object) = result.as_object().cloned() else {
-        return structured_tool_success_payload(tool_name, action, result);
+        return structured_tool_success_payload(tool_name, action, result, tool_plan_fingerprint);
     };
     if object.get("ok").and_then(Value::as_bool) == Some(true) {
         object
@@ -5010,12 +5044,23 @@ fn ensure_structured_tool_success(tool_name: &str, action: Option<&str>, result:
                 .entry("action".to_string())
                 .or_insert_with(|| json!(action));
         }
+        insert_tool_plan_meta(&mut object, tool_plan_fingerprint);
         return Value::Object(object);
     }
-    structured_tool_success_payload(tool_name, action, Value::Object(object))
+    structured_tool_success_payload(
+        tool_name,
+        action,
+        Value::Object(object),
+        tool_plan_fingerprint,
+    )
 }
 
-fn structured_tool_success_payload(tool_name: &str, action: Option<&str>, data: Value) -> Value {
+fn structured_tool_success_payload(
+    tool_name: &str,
+    action: Option<&str>,
+    data: Value,
+    tool_plan_fingerprint: Option<&str>,
+) -> Value {
     let mut object = serde_json::Map::new();
     object.insert("ok".to_string(), json!(true));
     object.insert("tool".to_string(), json!(tool_name));
@@ -5023,10 +5068,16 @@ fn structured_tool_success_payload(tool_name: &str, action: Option<&str>, data: 
         object.insert("action".to_string(), json!(action));
     }
     object.insert("data".to_string(), data);
+    insert_tool_plan_meta(&mut object, tool_plan_fingerprint);
     Value::Object(object)
 }
 
-fn ensure_structured_tool_error(tool_name: &str, action: Option<&str>, error: &str) -> String {
+fn ensure_structured_tool_error(
+    tool_name: &str,
+    action: Option<&str>,
+    error: &str,
+    tool_plan_fingerprint: Option<&str>,
+) -> String {
     if let Some(Value::Object(mut object)) = structured_tool_payload_from_text(error) {
         object
             .entry("tool".to_string())
@@ -5036,6 +5087,7 @@ fn ensure_structured_tool_error(tool_name: &str, action: Option<&str>, error: &s
                 .entry("action".to_string())
                 .or_insert_with(|| json!(action));
         }
+        insert_tool_plan_meta(&mut object, tool_plan_fingerprint);
         return serde_json::to_string_pretty(&Value::Object(object))
             .unwrap_or_else(|_| error.to_string());
     }
@@ -5053,7 +5105,25 @@ fn ensure_structured_tool_error(tool_name: &str, action: Option<&str>, error: &s
             "retryable": false
         }),
     );
+    insert_tool_plan_meta(&mut object, tool_plan_fingerprint);
     serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_else(|_| error.to_string())
+}
+
+fn insert_tool_plan_meta(
+    object: &mut serde_json::Map<String, Value>,
+    tool_plan_fingerprint: Option<&str>,
+) {
+    let Some(fingerprint) = tool_plan_fingerprint.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    let meta = object
+        .entry("meta".to_string())
+        .or_insert_with(|| json!({}));
+    if let Some(meta_object) = meta.as_object_mut() {
+        meta_object
+            .entry("toolPlanFingerprint".to_string())
+            .or_insert_with(|| json!(fingerprint));
+    }
 }
 
 fn interactive_tool_call_description(tool_name: &str, arguments: &Value) -> String {

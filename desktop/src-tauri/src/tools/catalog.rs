@@ -85,7 +85,13 @@ const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
     "audio-editor",
     "diagnostics",
 ];
-const REDCLAW_RUNTIME_MODES: &[&str] = &["chatroom", "default", "knowledge", "redclaw"];
+const REDCLAW_RUNTIME_MODES: &[&str] = &[
+    "chatroom",
+    "default",
+    "image-generation",
+    "knowledge",
+    "redclaw",
+];
 const DIAGNOSTIC_RUNTIME_MODES: &[&str] = &["background-maintenance", "diagnostics"];
 
 fn string_schema(description: &str) -> Value {
@@ -686,6 +692,33 @@ fn runtime_output_schema() -> Value {
         "type": "object",
         "additionalProperties": true
     }))
+}
+
+fn tools_search_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "query",
+                string_schema("Free-text action, namespace, or capability query."),
+            ),
+            (
+                "namespace",
+                string_schema(
+                    "Optional action namespace filter, such as memory, mcp, or cli_runtime.",
+                ),
+            ),
+            ("limit", integer_schema("Maximum actions to return.", 1, 50)),
+            (
+                "includeDirect",
+                json!({
+                    "type": "boolean",
+                    "description": "Also include direct actions already exposed in this turn."
+                }),
+            ),
+        ],
+        &[],
+        None,
+    )
 }
 
 fn team_session_create_input_schema() -> Value {
@@ -1623,9 +1656,34 @@ fn virtual_path_schema(description: &str) -> Value {
 }
 
 fn redbox_resource_schema() -> Value {
+    redbox_resource_schema_for_actions(&[])
+}
+
+fn redbox_resource_schema_for_actions(descriptors: &[ActionDescriptor]) -> Value {
+    let resources = redbox_resource_enum_for_actions(descriptors);
     json!({
         "type": "string",
-        "enum": [
+        "enum": resources,
+        "description": "Product resource family. Prefer Read/List/Search/Write for simple resource access; use Redbox for product operations with side effects or workflow semantics."
+    })
+}
+
+fn redbox_operation_schema() -> Value {
+    redbox_operation_schema_for_actions(&[])
+}
+
+fn redbox_operation_schema_for_actions(descriptors: &[ActionDescriptor]) -> Value {
+    let operations = redbox_operation_enum_for_actions(descriptors);
+    json!({
+        "type": "string",
+        "enum": operations,
+        "description": "Generic operation for the selected resource. The host maps this stable verb to the existing RedBox action contract."
+    })
+}
+
+fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'static str> {
+    let mut resources = if descriptors.is_empty() {
+        [
             "manuscript",
             "profile",
             "memory",
@@ -1637,17 +1695,120 @@ fn redbox_resource_schema() -> Value {
             "skill",
             "mcp",
             "runtime",
-            "cli_runtime"
-        ],
-        "description": "Product resource family. Prefer Read/List/Search/Write for simple resource access; use Redbox for product operations with side effects or workflow semantics."
-    })
+            "cli_runtime",
+            "tools",
+        ]
+        .into_iter()
+        .collect::<Vec<_>>()
+    } else {
+        let mut seen = std::collections::BTreeSet::<&'static str>::new();
+        for descriptor in descriptors {
+            if let Some(resource) = redbox_resource_for_action(descriptor.action) {
+                seen.insert(resource);
+            }
+        }
+        seen.into_iter().collect::<Vec<_>>()
+    };
+    if resources.is_empty() {
+        resources.push("runtime");
+    }
+    resources
 }
 
-fn redbox_operation_schema() -> Value {
+fn redbox_operation_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'static str> {
+    let mut operations = if descriptors.is_empty() {
+        [
+            "list", "get", "search", "create", "update", "delete", "run", "generate", "export",
+            "confirm", "cancel", "resume", "install", "verify",
+        ]
+        .into_iter()
+        .collect::<Vec<_>>()
+    } else {
+        let mut seen = std::collections::BTreeSet::<&'static str>::new();
+        for descriptor in descriptors {
+            if let Some(operation) = redbox_operation_for_action(descriptor.action) {
+                seen.insert(operation);
+            }
+        }
+        seen.into_iter().collect::<Vec<_>>()
+    };
+    if operations.is_empty() {
+        operations.push("get");
+    }
+    operations
+}
+
+fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
+    let namespace = action.split('.').next().unwrap_or(action);
+    match namespace {
+        "manuscripts" => Some("manuscript"),
+        "memory" => Some("memory"),
+        "subjects" => Some("subject"),
+        "image" => Some("image"),
+        "video" => Some("video"),
+        "skills" => Some("skill"),
+        "mcp" => Some("mcp"),
+        "runtime" | "team" => Some("runtime"),
+        "cli_runtime" => Some("cli_runtime"),
+        "tools" => Some("tools"),
+        "redclaw" if action.starts_with("redclaw.profile.") => Some("profile"),
+        "redclaw" if action.starts_with("redclaw.task.") => Some("task"),
+        _ => None,
+    }
+}
+
+fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
+    let verb = action.rsplit('.').next().unwrap_or(action);
+    match verb {
+        "list" => Some("list"),
+        "search" => Some("search"),
+        "get" | "read" | "readCurrent" | "bundle" | "stats" | "query" | "getCheckpoints"
+        | "getToolResults" => Some("get"),
+        "create" | "createProject" | "preview" | "add" | "spawn" | "send" | "request" => {
+            Some("create")
+        }
+        "update" | "writeCurrent" | "submit" => Some("update"),
+        "delete" | "disconnect" | "deny" => Some("delete"),
+        "cancel" => Some("cancel"),
+        "resume" => Some("resume"),
+        "confirm" | "approve" => Some("confirm"),
+        "invoke" | "call" | "execute" => Some("run"),
+        "generate" => Some("generate"),
+        "install" => Some("install"),
+        "verify" | "diagnose" | "inspect" | "detect" | "discover" => Some("verify"),
+        _ => None,
+    }
+}
+
+fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
+    let descriptors = descriptors.unwrap_or(&[]);
+    let resource_schema = if descriptors.is_empty() {
+        redbox_resource_schema()
+    } else {
+        redbox_resource_schema_for_actions(descriptors)
+    };
+    let operation_schema = if descriptors.is_empty() {
+        redbox_operation_schema()
+    } else {
+        redbox_operation_schema_for_actions(descriptors)
+    };
     json!({
-        "type": "string",
-        "enum": ["list", "get", "create", "update", "delete", "run", "generate", "export", "confirm", "cancel", "resume", "install", "verify"],
-        "description": "Generic operation for the selected resource. The host maps this stable verb to the existing RedBox action contract."
+        "type": "function",
+        "function": {
+            "name": "Redbox",
+            "description": REDBOX_DESCRIPTION,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource": resource_schema,
+                    "operation": operation_schema,
+                    "id": { "type": "string", "description": "Optional target id, such as subject id, draft id, job id, MCP server id, or runtime task id." },
+                    "input": redbox_input_schema()
+                },
+                "required": ["resource", "operation"],
+                "additionalProperties": false
+            }
+        }
     })
 }
 
@@ -1697,6 +1858,17 @@ fn redbox_input_schema() -> Value {
 }
 
 const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
+    ActionDescriptor {
+        action: "tools.search",
+        namespace: "tools",
+        description: "Search deferred app_cli actions available to the current session.",
+        input_schema: tools_search_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
     ActionDescriptor {
         action: "memory.list",
         namespace: "memory",
@@ -3017,24 +3189,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "Redbox" => Some(json!({
-            "type": "function",
-            "function": {
-                "name": "Redbox",
-                "description": REDBOX_DESCRIPTION,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "resource": redbox_resource_schema(),
-                        "operation": redbox_operation_schema(),
-                        "id": { "type": "string", "description": "Optional target id, such as subject id, draft id, job id, MCP server id, or runtime task id." },
-                        "input": redbox_input_schema()
-                    },
-                    "required": ["resource", "operation"],
-                    "additionalProperties": false
-                }
-            }
-        })),
+        "Redbox" => Some(redbox_tool_schema(None)),
         "app_cli" => Some(build_action_tool_schema(
             "app_cli",
             APP_CLI_DESCRIPTION,
@@ -3305,6 +3460,7 @@ pub fn schema_for_tool_from_action_descriptors(
             REDBOX_EDITOR_DESCRIPTION,
             descriptors,
         )),
+        "Redbox" => Some(redbox_tool_schema(Some(descriptors))),
         _ => None,
     }
 }
@@ -3345,6 +3501,22 @@ mod tests {
         assert!(actions.contains(&"cli_runtime.execution.get"));
         assert!(actions.contains(&"mcp.list"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
+    }
+
+    #[test]
+    fn image_generation_schema_exposes_media_generation_actions() {
+        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("image-generation"))
+            .expect("image-generation schema should exist");
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(actions.contains(&"image.generate"));
+        assert!(actions.contains(&"video.generate"));
+        assert!(actions.contains(&"tools.search"));
     }
 
     #[test]

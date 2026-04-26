@@ -21,6 +21,8 @@ use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
+use crate::tools::action_search::{search_actions, ActionSearchParams};
+use crate::tools::plan::build_tool_registry_plan_for_session;
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{
     join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
@@ -392,6 +394,33 @@ impl<'a> AppCliExecutor<'a> {
 
     fn ensure_action_allowed(&self, action: &str) -> Result<(), String> {
         let Some(allowed_actions) = self.session_allowed_structured_actions() else {
+            let plan = with_store(self.state, |store| {
+                Ok(build_tool_registry_plan_for_session(
+                    &store,
+                    self.runtime_mode,
+                    self.session_id,
+                ))
+            })?;
+            if plan.has_direct_app_cli_action(action) {
+                return Ok(());
+            }
+            if let Some(deferred) = plan
+                .deferred_app_cli_actions
+                .iter()
+                .find(|entry| entry.action == action)
+            {
+                return Err(app_cli_error_json(
+                    Some(action),
+                    "ACTION_DEFERRED",
+                    "app_cli action is available but not directly exposed in this turn; search actions first.",
+                    true,
+                    Some(json!({
+                        "suggestedAction": "tools.search",
+                        "queryHint": format!("{} {}", deferred.namespace, deferred.description),
+                        "deferredNamespaces": plan.deferred_action_namespaces,
+                    })),
+                ));
+            }
             return Ok(());
         };
         if allowed_actions.iter().any(|item| item == action) {
@@ -532,6 +561,7 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list".to_string()];
                 self.handle_memory(&tokens, payload)
             }
+            "toolssearch" => self.handle_tools_search(payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
                 self.handle_memory(&tokens, payload)
@@ -817,6 +847,59 @@ impl<'a> AppCliExecutor<'a> {
         result.map_err(|message| {
             app_cli_error_json(Some(action), "ACTION_FAILED", &message, false, None)
         })
+    }
+
+    fn handle_tools_search(&self, payload: &Value) -> Result<Value, String> {
+        let query = payload_string(payload, "query")
+            .or_else(|| payload_string(payload, "q"))
+            .unwrap_or_default();
+        let namespace = payload_string(payload, "namespace")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let limit = payload_field(payload, "limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(12)
+            .clamp(1, 50) as usize;
+        let include_direct = payload_field(payload, "includeDirect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let plan = with_store(self.state, |store| {
+            Ok(build_tool_registry_plan_for_session(
+                &store,
+                self.runtime_mode,
+                self.session_id,
+            ))
+        })?;
+        let results = search_actions(
+            &plan.direct_app_cli_actions,
+            &plan.deferred_app_cli_actions,
+            ActionSearchParams {
+                query: &query,
+                namespace: namespace.as_deref(),
+                limit,
+                include_direct,
+            },
+        );
+        let (direct_actions, deferred_actions): (Vec<_>, Vec<_>) = results
+            .into_iter()
+            .map(|entry| serde_json::to_value(entry).unwrap_or_else(|_| json!({})))
+            .partition(|entry| {
+                entry
+                    .get("availableThisTurn")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            });
+        Ok(json!({
+            "success": true,
+            "runtimeMode": plan.runtime_mode,
+            "query": query,
+            "namespace": namespace,
+            "limit": limit,
+            "deferredNamespaces": plan.deferred_action_namespaces,
+            "deferredActions": deferred_actions,
+            "directActions": direct_actions,
+            "routerPlan": plan.fingerprint,
+        }))
     }
 
     fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {

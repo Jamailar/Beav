@@ -1,13 +1,13 @@
 use serde_json::{json, Value};
 
-use crate::skills::build_skill_runtime_state;
 use crate::tools::catalog::{
-    action_descriptors_for_tool, descriptor_by_name, schema_for_tool_for_runtime_mode,
-    schema_for_tool_from_action_descriptors, tool_action_family_summary,
-    tool_action_family_summary_for_descriptors, ActionVisibility, ToolDescriptor,
+    descriptor_by_name, schema_for_tool_for_runtime_mode, schema_for_tool_from_action_descriptors,
+    tool_action_family_summary, tool_action_family_summary_for_descriptors, ToolDescriptor,
 };
-use crate::tools::compat::canonical_tool_name;
 use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_runtime_mode};
+use crate::tools::plan::{
+    base_tool_names_for_metadata, build_tool_registry_plan_for_session, ToolRegistryPlan,
+};
 use crate::AppStore;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
@@ -22,10 +22,6 @@ fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
         crate::tools::catalog::ToolKind::RuntimeControl => "runtime_control",
         crate::tools::catalog::ToolKind::Editor => "editor",
     }
-}
-
-fn normalize_requested_tool_name(name: &str) -> &str {
-    canonical_tool_name(name)
 }
 
 fn string_list(metadata: Option<&Value>, field: &str) -> Vec<String> {
@@ -59,65 +55,11 @@ pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<Strin
     actions
 }
 
-fn session_filtered_action_descriptors(
-    tool_name: &str,
-    runtime_mode: &str,
-    metadata: Option<&Value>,
-) -> Option<Vec<crate::tools::catalog::ActionDescriptor>> {
-    if tool_name != "app_cli" {
-        return None;
-    }
-    let allowed_actions = normalized_allowed_app_cli_actions(metadata);
-    if allowed_actions.is_empty() {
-        return None;
-    }
-    let descriptors =
-        action_descriptors_for_tool("app_cli", Some(runtime_mode), ActionVisibility::Model)
-            .into_iter()
-            .filter(|descriptor| allowed_actions.iter().any(|item| item == descriptor.action))
-            .collect::<Vec<_>>();
-    Some(descriptors)
-}
-
 pub fn base_tool_names_for_session_metadata(
     runtime_mode: &str,
     metadata: Option<&Value>,
 ) -> Vec<String> {
-    let base = tool_names_for_runtime_mode(runtime_mode)
-        .iter()
-        .map(|item| item.to_string())
-        .collect::<Vec<_>>();
-    let requested = metadata
-        .and_then(|item| item.get("allowedTools"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            let mut normalized = Vec::new();
-            for item in items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(normalize_requested_tool_name)
-                .map(ToString::to_string)
-            {
-                if !normalized.iter().any(|existing| existing == &item) {
-                    normalized.push(item);
-                }
-            }
-            normalized
-        })
-        .unwrap_or_default();
-    if requested.is_empty() {
-        return base;
-    }
-    let filtered = requested
-        .into_iter()
-        .filter(|item| base.iter().any(|allowed| allowed == item))
-        .collect::<Vec<_>>();
-    if filtered.is_empty() {
-        return base;
-    }
-    filtered
+    base_tool_names_for_metadata(runtime_mode, metadata)
 }
 
 pub fn tool_names_for_session(
@@ -125,16 +67,7 @@ pub fn tool_names_for_session(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> Vec<String> {
-    let metadata = session_id.and_then(|id| {
-        store
-            .chat_sessions
-            .iter()
-            .find(|item| item.id == id)
-            .and_then(|item| item.metadata.as_ref())
-    });
-    let base = base_tool_names_for_session_metadata(runtime_mode, metadata);
-    let skill_state = build_skill_runtime_state(&store.skills, runtime_mode, metadata, &base);
-    skill_state.allowed_tools
+    build_tool_registry_plan_for_session(store, runtime_mode, session_id).internal_tool_names
 }
 
 pub fn descriptors_for_runtime_mode(runtime_mode: &str) -> Vec<ToolDescriptor> {
@@ -167,18 +100,22 @@ pub fn descriptor_by_name_for_runtime_mode(
     descriptor_by_name(tool_name)
 }
 
+#[allow(dead_code)]
 pub fn descriptor_by_name_for_session(
     store: &AppStore,
     runtime_mode: &str,
     session_id: Option<&str>,
     tool_name: &str,
 ) -> Option<ToolDescriptor> {
-    if !tool_names_for_session(store, runtime_mode, session_id)
+    let plan = build_tool_registry_plan_for_session(store, runtime_mode, session_id);
+    if !plan
+        .internal_tool_names
         .iter()
         .any(|name| name == tool_name)
-        && !visible_tool_names_for_session(store, runtime_mode, session_id)
+        && !plan
+            .visible_tools
             .iter()
-            .any(|name| name == tool_name)
+            .any(|descriptor| descriptor.name == tool_name)
     {
         return None;
     }
@@ -198,66 +135,45 @@ pub fn openai_schemas_for_session(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> Value {
-    let metadata = session_id.and_then(|id| {
-        store
-            .chat_sessions
-            .iter()
-            .find(|item| item.id == id)
-            .and_then(|item| item.metadata.as_ref())
-    });
-    let visible_tools = visible_tool_names_for_session(store, runtime_mode, session_id);
-    let schemas = visible_tools
+    let plan = build_tool_registry_plan_for_session(store, runtime_mode, session_id);
+    let schemas = plan
+        .visible_tools
         .iter()
-        .filter_map(|name| {
-            session_filtered_action_descriptors(name, runtime_mode, metadata)
-                .and_then(|descriptors| schema_for_tool_from_action_descriptors(name, &descriptors))
-                .or_else(|| schema_for_tool_for_runtime_mode(name, Some(runtime_mode)))
+        .filter_map(|tool| {
+            if tool.name == "Redbox" && !plan.direct_app_cli_actions.is_empty() {
+                schema_for_tool_from_action_descriptors("Redbox", &plan.direct_app_cli_actions)
+            } else {
+                schema_for_tool_for_runtime_mode(tool.name, Some(&plan.runtime_mode))
+            }
         })
         .collect::<Vec<_>>();
     json!(schemas)
 }
 
-fn visible_tool_names_for_session(
+pub fn tool_plan_snapshot_for_session(
     store: &AppStore,
     runtime_mode: &str,
     session_id: Option<&str>,
-) -> Vec<String> {
-    let internal_tools = tool_names_for_session(store, runtime_mode, session_id);
-    let visible_base = visible_tool_names_for_runtime_mode(runtime_mode);
-    let mut names = Vec::new();
-    for name in visible_base {
-        let required_internal = match *name {
-            "Read" | "List" | "Search" => "redbox_fs",
-            "Write" => {
-                if internal_tools
-                    .iter()
-                    .any(|item| item == "app_cli" || item == "redbox_editor")
-                {
-                    ""
-                } else {
-                    continue;
-                }
-            }
-            "Redbox" => {
-                if internal_tools
-                    .iter()
-                    .any(|item| item == "app_cli" || item == "redbox_editor")
-                {
-                    ""
-                } else {
-                    continue;
-                }
-            }
-            other => other,
-        };
-        if required_internal.is_empty()
-            || internal_tools.iter().any(|item| item == required_internal)
-            || internal_tools.iter().any(|item| item == *name)
-        {
-            names.push((*name).to_string());
-        }
-    }
-    names
+) -> Value {
+    let plan = build_tool_registry_plan_for_session(store, runtime_mode, session_id);
+    json!({
+        "runtimeMode": plan.runtime_mode,
+        "sessionId": session_id,
+        "fingerprint": plan.fingerprint,
+        "internalTools": plan.internal_tool_names,
+        "visibleTools": plan
+            .visible_tools
+            .iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>(),
+        "directAppCliActions": plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>(),
+        "deferredActionNamespaces": plan.deferred_action_namespaces,
+        "deferredActionCount": plan.deferred_app_cli_actions.len(),
+    })
 }
 
 pub fn prompt_tool_lines_for_runtime_mode(runtime_mode: &str) -> String {
@@ -311,26 +227,13 @@ pub fn prompt_tool_lines_for_session(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> String {
-    let metadata = session_id.and_then(|id| {
-        store
-            .chat_sessions
-            .iter()
-            .find(|item| item.id == id)
-            .and_then(|item| item.metadata.as_ref())
-    });
-    let visible_tools = visible_tool_names_for_session(store, runtime_mode, session_id);
-    descriptors_for_tool_names(&visible_tools)
+    let plan = build_tool_registry_plan_for_session(store, runtime_mode, session_id);
+    plan.visible_tools
         .iter()
         .map(|item| {
-            let capability_summary = session_filtered_action_descriptors(
-                item.name,
-                runtime_mode,
-                metadata,
-            )
-            .and_then(|descriptors| tool_action_family_summary_for_descriptors(&descriptors))
-            .or_else(|| tool_action_family_summary(item.name, Some(runtime_mode)))
-            .map(|summary| format!(" | capabilities={summary}"))
-            .unwrap_or_default();
+            let capability_summary = capability_summary_for_plan_tool(item.name, &plan)
+                .map(|summary| format!(" | capabilities={summary}"))
+                .unwrap_or_default();
             format!(
                 "- {} | kind={} | requiresApproval={} | concurrencySafe={} | outputBudget={} chars{}",
                 item.name,
@@ -343,6 +246,19 @@ pub fn prompt_tool_lines_for_session(
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn capability_summary_for_plan_tool(tool_name: &str, plan: &ToolRegistryPlan) -> Option<String> {
+    if tool_name == "Redbox" && !plan.direct_app_cli_actions.is_empty() {
+        let mut summary = tool_action_family_summary_for_descriptors(&plan.direct_app_cli_actions)?;
+        if !plan.deferred_action_namespaces.is_empty() {
+            summary.push_str(" | deferred=");
+            summary.push_str(&plan.deferred_action_namespaces.join(","));
+            summary.push_str(" | discover=Redbox(resource=tools, operation=search)");
+        }
+        return Some(summary);
+    }
+    tool_action_family_summary(tool_name, Some(&plan.runtime_mode))
 }
 
 pub fn diagnostics_tool_items() -> Vec<Value> {
@@ -419,5 +335,35 @@ mod tests {
         assert!(names.contains(&"Redbox".to_string()));
         assert!(!names.contains(&"app_cli".to_string()));
         assert!(!names.contains(&"redbox_fs".to_string()));
+        let redbox = schemas
+            .as_array()
+            .expect("schemas")
+            .iter()
+            .find(|item| item.pointer("/function/name").and_then(Value::as_str) == Some("Redbox"))
+            .expect("redbox schema");
+        let resources = redbox
+            .pointer("/function/parameters/properties/resource/enum")
+            .and_then(Value::as_array)
+            .expect("redbox resource enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(resources, vec!["image", "manuscript"]);
+        let snapshot = tool_plan_snapshot_for_session(&store, "redclaw", Some("session-1"));
+        assert_eq!(
+            snapshot
+                .get("fingerprint")
+                .and_then(Value::as_str)
+                .is_some(),
+            true
+        );
+        assert_eq!(
+            snapshot
+                .get("deferredActionCount")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                > 0,
+            true
+        );
     }
 }
