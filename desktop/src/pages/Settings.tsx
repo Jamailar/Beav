@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -82,6 +82,7 @@ import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProp
 import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
   GeneralSettingsSection,
+  ExperimentalSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
 } from './settings/SettingsSections';
@@ -120,7 +121,7 @@ const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
   },
 ];
 
-type SettingsTab = 'general' | 'ai' | 'tools' | 'profile' | 'remote';
+type SettingsTab = 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
 
 type RedclawProfileDraft = {
   user: string;
@@ -783,6 +784,7 @@ export function Settings({
     tools: false,
     profile: false,
     remote: false,
+    experimental: false,
   });
   const tabInFlightRef = useRef<Record<SettingsTab, boolean>>({
     general: false,
@@ -790,6 +792,7 @@ export function Settings({
     tools: false,
     profile: false,
     remote: false,
+    experimental: false,
   });
 
   const defaultAiSource = useMemo(() => {
@@ -3936,7 +3939,7 @@ export function Settings({
     const handleSettingsUpdated = () => {
       // Preserve local edits on form-driven tabs; otherwise external auth sync can
       // reload persisted settings and wipe unsaved AI source/model changes.
-      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai';
+      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai' || activeTab === 'experimental';
       if (!preserveLocalFormState) {
         void ensureBaseSettingsLoaded(true);
       }
@@ -4382,6 +4385,7 @@ export function Settings({
     { id: 'general', label: '常规设置', icon: LayoutGrid },
     { id: 'profile', label: '用户档案', icon: FileText },
     { id: 'tools', label: '工具管理', icon: Wrench },
+    { id: 'experimental', label: '实验功能', icon: FlaskConical },
   ] as const;
 
   return (
@@ -4434,6 +4438,14 @@ export function Settings({
                 handleUploadPendingReport={handleUploadPendingReport}
                 handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
+              />
+            )}
+
+            {/* Experimental Tab */}
+            {activeTab === 'experimental' && (
+              <ExperimentalSettingsSection
+                formData={formData}
+                setFormData={setFormData}
               />
             )}
 
