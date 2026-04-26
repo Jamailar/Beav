@@ -2953,12 +2953,53 @@ fn editor_tool_payload(file_path: String, arguments: &Value, keys: &[&str]) -> V
 }
 
 fn model_config_value_from_resolved(config: &ResolvedChatConfig) -> Value {
-    json!({
+    let mut value = json!({
         "baseURL": config.base_url,
         "apiKey": config.api_key,
         "modelName": config.model_name,
         "protocol": config.protocol
-    })
+    });
+    if let Some(reasoning_effort) = config.reasoning_effort.as_ref() {
+        value["reasoningEffort"] = json!(reasoning_effort);
+    }
+    value
+}
+
+fn openai_reasoning_effort_default(config: &ResolvedChatConfig) -> Option<&'static str> {
+    let protocol = config.protocol.trim().to_ascii_lowercase();
+    if protocol != "openai" {
+        return None;
+    }
+    let base_url = config.base_url.trim().to_ascii_lowercase();
+    if !base_url.contains("api.openai.com") {
+        return None;
+    }
+    let model = config.model_name.trim().to_ascii_lowercase();
+    if model.starts_with("gpt-5")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+    {
+        return Some("low");
+    }
+    None
+}
+
+fn apply_openai_reasoning_effort(config: &ResolvedChatConfig, body: &mut Value) {
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    if object.contains_key("reasoning_effort") {
+        return;
+    }
+    let effort = config
+        .reasoning_effort
+        .as_deref()
+        .or_else(|| openai_reasoning_effort_default(config));
+    let Some(effort) = effort else {
+        return;
+    };
+    object.insert("reasoning_effort".to_string(), json!(effort));
 }
 
 fn execute_interactive_tool_call(
@@ -7537,6 +7578,7 @@ fn run_openai_interactive_chat_runtime(
             "messages": messages,
             "stream": streaming_enabled
         });
+        apply_openai_reasoning_effort(config, &mut body);
         if let Some(api_tool_choice) = provider_profile.api_tool_choice_value(tool_choice) {
             body["tool_choice"] = json!(api_tool_choice);
         }
@@ -7577,6 +7619,7 @@ fn run_openai_interactive_chat_runtime(
         let used_non_streaming_delivery = !streaming_enabled
             || matches!(turn_result.delivery, ProviderTurnDelivery::JsonFallback);
         let assistant_content = turn_result.content;
+        let assistant_reasoning_content = turn_result.reasoning_content;
         let tool_calls = turn_result.tool_calls;
         if session_id
             .map(|value| is_chat_runtime_cancel_requested(state, value))
@@ -7601,6 +7644,24 @@ fn run_openai_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
+            if used_non_streaming_delivery && !assistant_reasoning_content.trim().is_empty() {
+                if let Some(current_session_id) = session_id {
+                    emit_runtime_text_delta(
+                        app,
+                        current_session_id,
+                        "thought",
+                        assistant_reasoning_content.trim(),
+                    );
+                    emit_runtime_task_checkpoint_saved(
+                        app,
+                        None,
+                        Some(current_session_id),
+                        "chat.thought_end",
+                        "thought stream completed",
+                        None,
+                    );
+                }
+            }
             final_content = if final_content.trim().is_empty() {
                 interactive_tool_round_fallback_response(&latest_successful_tool_round)
                     .unwrap_or(final_content)
@@ -7751,12 +7812,17 @@ fn run_openai_interactive_chat_runtime(
         }
 
         wander_saw_tool_call = true;
-        if used_non_streaming_delivery && !assistant_content.trim().is_empty() {
+        let non_streaming_thought = if assistant_reasoning_content.trim().is_empty() {
+            assistant_content.as_str()
+        } else {
+            assistant_reasoning_content.as_str()
+        };
+        if used_non_streaming_delivery && !non_streaming_thought.trim().is_empty() {
             emit_runtime_text_delta(
                 app,
                 session_id.unwrap_or_default(),
                 "thought",
-                &assistant_content,
+                non_streaming_thought,
             );
         }
         if used_non_streaming_delivery {

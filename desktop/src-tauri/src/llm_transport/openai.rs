@@ -933,6 +933,7 @@ mod tests {
             base_url: "https://api.minimaxi.com/v1".to_string(),
             api_key: None,
             model_name: "MiniMax-M2.7".to_string(),
+            reasoning_effort: None,
         };
         assert_eq!(preferred_transport_mode(&config), TransportMode::Http11);
         assert_eq!(
