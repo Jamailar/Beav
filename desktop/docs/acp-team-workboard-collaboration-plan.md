@@ -1054,7 +1054,7 @@ emit events after state commit
 Add maintenance policies:
 
 - Read mailbox messages: keep 7 days or latest 500 per collab session.
-- Progress reports: keep latest 200 per task, archive older to artifact file.
+- Progress reports: keep latest 200 per task and archive compact metadata for older reports into task artifacts.
 - Runtime traces: rely on existing session artifact compaction.
 - Stale active member: mark blocked/failed after inactivity threshold and notify coordinator.
 
@@ -1104,11 +1104,11 @@ Completed work:
 - Create/update/list tasks.
 - Write/read mailbox messages.
 - Submit/list progress reports.
-- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, reviewer policy, mailbox TTL cleanup, and bidirectional task dependency links.
+- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, reviewer policy, mailbox TTL cleanup, progress report retention, and bidirectional task dependency links.
 
 Verification:
 
-- Rust tests cover dependency validation, bidirectional dependency links, mailbox read-and-mark, mailbox TTL cleanup, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
+- Rust tests cover dependency validation, bidirectional dependency links, mailbox read-and-mark, mailbox TTL cleanup, progress report retention, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
 
 ### Completed 3: Team Tools And MCP Contract
 
@@ -1375,6 +1375,7 @@ The baseline is complete against the original success criteria:
 
 - mailbox read-and-mark is atomic: `mailbox_read_marks_messages_read_once`
 - mailbox cleanup keeps recent read messages, latest read messages, and unread messages: `mailbox_cleanup_keeps_recent_read_latest_read_and_unread_messages`
+- progress report cleanup keeps the latest 200 reports per task: `collab_report_cleanup_keeps_latest_reports_per_task`
 - task dependency update is bidirectional: `collab_task_dependency_updates_reverse_blocks`
 - completed upstream task promotes dependent work to ready: `collab_task_completion_promotes_dependents_to_ready`
 - settled-state coordinator wake fires once: `settled_rule_ignores_coordinator`

@@ -8,6 +8,7 @@ use crate::{make_id, now_i64, AppStore};
 
 const DEFAULT_PROGRESS_INTERVAL_MS: i64 = 15 * 60 * 1000;
 const COLLAB_MAILBOX_READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+const COLLAB_REPORTS_KEEP_LATEST_PER_TASK: usize = 200;
 
 fn value_string(payload: &Value, key: &str) -> Option<String> {
     payload
@@ -1677,6 +1678,57 @@ pub fn cleanup_collab_mailbox(store: &mut AppStore, session_id: &str, keep_lates
     before.saturating_sub(store.collab_mailbox_messages.len())
 }
 
+fn cleanup_collab_reports_for_task(store: &mut AppStore, session_id: &str, task_id: &str) -> usize {
+    let matching_ids = store
+        .collab_progress_reports
+        .iter()
+        .filter(|report| {
+            report.session_id == session_id && report.task_id.as_deref() == Some(task_id)
+        })
+        .map(|report| report.id.clone())
+        .collect::<Vec<_>>();
+    let overflow = matching_ids
+        .len()
+        .saturating_sub(COLLAB_REPORTS_KEEP_LATEST_PER_TASK);
+    if overflow == 0 {
+        return 0;
+    }
+    let remove_ids = matching_ids
+        .into_iter()
+        .take(overflow)
+        .collect::<std::collections::HashSet<_>>();
+    let removed_summaries = store
+        .collab_progress_reports
+        .iter()
+        .filter(|report| remove_ids.contains(&report.id))
+        .map(|report| {
+            json!({
+                "id": report.id,
+                "reportType": report.report_type,
+                "status": report.status,
+                "summary": report.summary,
+                "createdAt": report.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    store
+        .collab_progress_reports
+        .retain(|report| !remove_ids.contains(&report.id));
+    if let Some(task) = store
+        .collab_tasks
+        .iter_mut()
+        .find(|task| task.session_id == session_id && task.id == task_id)
+    {
+        task.artifacts.push(json!({
+            "kind": "collab-report-archive",
+            "removedCount": overflow,
+            "archivedAt": now_i64(),
+            "reports": removed_summaries,
+        }));
+    }
+    overflow
+}
+
 pub fn submit_collab_report(
     store: &mut AppStore,
     payload: &Value,
@@ -1725,6 +1777,9 @@ pub fn submit_collab_report(
         created_at: now,
     };
     store.collab_progress_reports.push(report.clone());
+    if let Some(task_id) = report.task_id.as_deref() {
+        cleanup_collab_reports_for_task(store, &session_id, task_id);
+    }
 
     if let Some(member) = store
         .collab_members
@@ -1955,6 +2010,81 @@ mod tests {
             Some("已完成任务 DAG 初版")
         );
         assert_eq!(snapshot.reports.len(), 1);
+    }
+
+    #[test]
+    fn collab_report_cleanup_keeps_latest_reports_per_task() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "report cleanup" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "Reporter" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "Long task",
+                "objective": "Generate many progress reports"
+            }),
+        )
+        .unwrap();
+        let other_task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "Other task",
+                "objective": "Keep separate report retention"
+            }),
+        )
+        .unwrap();
+
+        for index in 0..205 {
+            submit_collab_report(
+                &mut store,
+                &json!({
+                    "sessionId": session.id,
+                    "memberId": member.id,
+                    "taskId": task.id,
+                    "status": "running",
+                    "summary": format!("report-{index}")
+                }),
+            )
+            .unwrap();
+        }
+        submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": other_task.id,
+                "status": "running",
+                "summary": "other-report"
+            }),
+        )
+        .unwrap();
+
+        let task_reports = list_collab_reports(&store, &session.id, Some(&task.id), None, None);
+        let other_reports =
+            list_collab_reports(&store, &session.id, Some(&other_task.id), None, None);
+        let updated_task = store
+            .collab_tasks
+            .iter()
+            .find(|item| item.id == task.id)
+            .unwrap();
+
+        assert_eq!(task_reports.len(), 200);
+        assert_eq!(other_reports.len(), 1);
+        assert_eq!(task_reports.first().unwrap().summary, "report-5");
+        assert_eq!(task_reports.last().unwrap().summary, "report-204");
+        assert!(updated_task.artifacts.iter().any(|artifact| {
+            artifact.get("kind").and_then(Value::as_str) == Some("collab-report-archive")
+                && artifact.get("removedCount").and_then(Value::as_u64) == Some(1)
+        }));
     }
 
     #[test]
