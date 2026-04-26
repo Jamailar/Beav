@@ -195,16 +195,29 @@ pub(crate) fn publish_member_skill_for_advisor(
             false,
         ))
     })?;
-    let should_promote =
-        should_promote_member_skill_immediately(&advisor, &package_dir) || auto_refresh;
+    let mut should_promote = should_promote_member_skill_immediately(&advisor, &package_dir);
+    let candidate_dir = package_dir.join("distillation_candidates").join(&version);
     if should_promote {
         write_member_skill_package(&package_dir, &artifacts)?;
         write_member_skill_package(&package_dir.join("versions").join(&version), &artifacts)?;
     } else {
-        write_member_skill_package(
-            &package_dir.join("distillation_candidates").join(&version),
-            &artifacts,
-        )?;
+        write_member_skill_package(&candidate_dir, &artifacts)?;
+        if auto_refresh {
+            let validation = validate_member_skill_dir(&candidate_dir);
+            let valid = validation
+                .get("valid")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if valid {
+                copy_member_skill_dir(&candidate_dir, &package_dir)?;
+                copy_member_skill_dir(
+                    &candidate_dir,
+                    &package_dir.join("versions").join(&version),
+                )?;
+                let _ = fs::remove_dir_all(&candidate_dir);
+                should_promote = true;
+            }
+        }
     }
 
     let distilled_at = now_iso();
@@ -283,6 +296,14 @@ pub(crate) fn promote_member_skill_candidate(
     let candidate_dir = package_dir.join("distillation_candidates").join(&version);
     if !candidate_dir.join("SKILL.md").is_file() {
         return Err(format!("成员技能候选不存在：{}", candidate_dir.display()));
+    }
+    let validation = validate_member_skill_dir(&candidate_dir);
+    if !validation
+        .get("valid")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(format!("成员技能候选校验失败：{}", validation));
     }
     copy_member_skill_dir(&candidate_dir, &package_dir)?;
     copy_member_skill_dir(&candidate_dir, &package_dir.join("versions").join(&version))?;
