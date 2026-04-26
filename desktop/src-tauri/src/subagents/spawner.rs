@@ -281,6 +281,16 @@ fn ensure_collab_records_for_child_runtime(
     let Some(collab_session_id) = config.collab_session_id.as_deref() else {
         return Ok(());
     };
+    let member_metadata = merge_metadata(
+        config.fork_overrides.metadata.as_ref(),
+        Some(&json!({
+            "parentTaskId": config.parent_task_id,
+            "childTaskId": spawn.child_task_id,
+            "childSessionId": spawn.child_session_id,
+            "childRuntimeId": spawn.child_runtime_id
+        })),
+    )
+    .unwrap_or_else(|| json!({}));
     let member = add_collab_member(
         store,
         &json!({
@@ -297,12 +307,7 @@ fn ensure_collab_records_for_child_runtime(
             "allowedTools": config.fork_overrides.allowed_tools,
             "desiredModelConfig": config.model_config,
             "currentModelConfig": config.model_config,
-            "metadata": {
-                "parentTaskId": config.parent_task_id,
-                "childTaskId": spawn.child_task_id,
-                "childSessionId": spawn.child_session_id,
-                "childRuntimeId": spawn.child_runtime_id
-            }
+            "metadata": member_metadata
         }),
     )?;
     let task = create_collab_task(
@@ -334,6 +339,21 @@ fn ensure_collab_records_for_child_runtime(
         member_record.current_task_id = Some(task.id.clone());
         member_record.last_seen_at = Some(now_i64());
         member_record.last_activity_at = Some(now_i64());
+    }
+    if let Some(session) = store
+        .chat_sessions
+        .iter_mut()
+        .find(|item| item.id == spawn.child_session_id)
+    {
+        let mut metadata = session
+            .metadata
+            .as_ref()
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        metadata.insert("collabMemberId".to_string(), json!(member.id.clone()));
+        metadata.insert("memberId".to_string(), json!(member.id.clone()));
+        session.metadata = Some(Value::Object(metadata));
     }
     spawn.collab_member_id = Some(member.id);
     spawn.collab_task_id = Some(task.id);
@@ -961,6 +981,7 @@ pub fn run_real_subagent_orchestration_for_task(
 mod tests {
     use super::*;
     use crate::runtime::{create_collab_session, create_runtime_task, runtime_direct_route_record};
+    use crate::subagents::ForkOverrides;
 
     #[test]
     fn subagent_spawn_creates_child_task_and_session_links() {
@@ -1005,6 +1026,13 @@ mod tests {
             collab_session_id: Some(collab_session_id.clone()),
             parallel_group: 0,
             model_config: Some(json!({"modelName": "gpt"})),
+            fork_overrides: ForkOverrides {
+                metadata: Some(json!({
+                    "advisorId": "advisor-planner",
+                    "sourceId": "advisor:advisor-planner"
+                })),
+                ..ForkOverrides::default()
+            },
             ..SubAgentConfig::default()
         };
         let spawn = create_child_runtime_records_in_store(
@@ -1026,6 +1054,29 @@ mod tests {
         assert!(store.collab_members.iter().any(|item| {
             item.session_id == collab_session_id && item.current_task_id == spawn.collab_task_id
         }));
+        let member = store
+            .collab_members
+            .iter()
+            .find(|item| spawn.collab_member_id.as_deref() == Some(item.id.as_str()))
+            .expect("collab member");
+        let member_metadata = member.metadata.as_ref().expect("member metadata");
+        assert_eq!(
+            member_metadata.get("advisorId").and_then(Value::as_str),
+            Some("advisor-planner")
+        );
+        let child_session = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == spawn.child_session_id)
+            .expect("child session");
+        assert_eq!(
+            child_session
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("collabMemberId"))
+                .and_then(Value::as_str),
+            spawn.collab_member_id.as_deref()
+        );
         assert!(store.collab_tasks.iter().any(|item| {
             item.session_id == collab_session_id
                 && item.member_id == spawn.collab_member_id

@@ -1444,6 +1444,14 @@ fn fs_knowledge_list_input_schema() -> Value {
                 string_schema("Optional advisor id when not bound by session."),
             ),
             (
+                "memberId",
+                string_schema("Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source."),
+            ),
+            (
+                "collabMemberId",
+                string_schema("Alias for memberId."),
+            ),
+            (
                 "sourceId",
                 string_schema("Optional registered document source id to search instead of advisor/shared knowledge."),
             ),
@@ -1475,6 +1483,14 @@ fn fs_knowledge_search_input_schema() -> Value {
             (
                 "advisorId",
                 string_schema("Optional advisor id when not bound by session."),
+            ),
+            (
+                "memberId",
+                string_schema("Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source."),
+            ),
+            (
+                "collabMemberId",
+                string_schema("Alias for memberId."),
             ),
             (
                 "sourceId",
@@ -1517,6 +1533,14 @@ fn fs_knowledge_read_input_schema() -> Value {
             (
                 "advisorId",
                 string_schema("Optional advisor id when not bound by session."),
+            ),
+            (
+                "memberId",
+                string_schema("Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source."),
+            ),
+            (
+                "collabMemberId",
+                string_schema("Alias for memberId."),
             ),
             (
                 "sourceId",

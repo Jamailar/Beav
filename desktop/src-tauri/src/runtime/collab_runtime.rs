@@ -45,6 +45,31 @@ fn value_object(payload: &Value, key: &str) -> Option<Value> {
     payload.get(key).filter(|value| value.is_object()).cloned()
 }
 
+fn member_metadata_from_payload(payload: &Value) -> Option<Value> {
+    let mut object = value_object(payload, "metadata")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    for key in [
+        "advisorId",
+        "sourceId",
+        "knowledgeSourceId",
+        "rootPath",
+        "knowledgeRootPath",
+    ] {
+        if object.contains_key(key) {
+            continue;
+        }
+        if let Some(value) = payload.get(key).cloned() {
+            object.insert(key.to_string(), value);
+        }
+    }
+    if object.is_empty() {
+        None
+    } else {
+        Some(Value::Object(object))
+    }
+}
+
 fn next_collab_id(prefix: &str, exists: impl Fn(&str) -> bool) -> String {
     let base = make_id(prefix);
     if !exists(&base) {
@@ -372,7 +397,7 @@ pub fn add_collab_member(
         last_report_at: None,
         last_activity_at: None,
         last_error: None,
-        metadata: value_object(payload, "metadata"),
+        metadata: member_metadata_from_payload(payload),
         created_at: now,
         updated_at: now,
     };
@@ -787,7 +812,7 @@ pub fn request_collab_report(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::*;
 
@@ -852,6 +877,41 @@ mod tests {
             Some("已完成任务 DAG 初版")
         );
         assert_eq!(snapshot.reports.len(), 1);
+    }
+
+    #[test]
+    fn collab_member_promotes_knowledge_binding_metadata() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "member knowledge" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "法规研究员",
+                "advisorId": "advisor-law",
+                "sourceId": "advisor:advisor-law",
+                "metadata": {
+                    "specialty": "claims"
+                }
+            }),
+        )
+        .unwrap();
+
+        let metadata = member.metadata.unwrap();
+        assert_eq!(
+            metadata.get("advisorId").and_then(Value::as_str),
+            Some("advisor-law")
+        );
+        assert_eq!(
+            metadata.get("sourceId").and_then(Value::as_str),
+            Some("advisor:advisor-law")
+        );
+        assert_eq!(
+            metadata.get("specialty").and_then(Value::as_str),
+            Some("claims")
+        );
     }
 
     #[test]
