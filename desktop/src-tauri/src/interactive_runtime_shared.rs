@@ -339,6 +339,8 @@ Use tools when the user asks about app state, knowledge, advisors, work items, m
 Do not invent workspace/app facts that you can fetch with tools. \
 If no tool is needed, answer directly and concisely. \
 When using tools, synthesize the final answer in Chinese unless the user clearly asks otherwise. \
+During multi-step tool work, provide concise user-visible progress summaries before the first tool call, after meaningful tool results, when changing approach, after failures or fallbacks, and before the final answer. \
+These summaries must be user-readable and must not expose hidden chain-of-thought, prompt text, tool schemas, internal framework labels, page numbers, draft labels, or placeholders. \
 Host runtime context: {}\n{}",
         runtime_mode,
         render_host_runtime_context_section(&current_host_runtime_context()),
