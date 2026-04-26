@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 
 export type ProcessItemType =
@@ -59,6 +59,8 @@ type StatusLine = {
   text: string;
   detail?: string;
 };
+
+const COLLAPSED_STATUS_LINE_COUNT = 4;
 
 const toObjectIfJsonLike = (value: unknown): Record<string, unknown> | null => {
   if (!value) return null;
@@ -330,11 +332,22 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default' }: Pro
   );
   const runningLines = statusLines.filter((item) => item.status === 'running');
   const failedCount = statusLines.filter((item) => item.status === 'failed').length;
+  const [expanded, setExpanded] = useState(false);
+  const hiddenCount = Math.max(0, statusLines.length - COLLAPSED_STATUS_LINE_COUNT);
+  const visibleStatusLines = expanded || hiddenCount === 0
+    ? statusLines
+    : statusLines.slice(-COLLAPSED_STATUS_LINE_COUNT);
   const activeText = runningLines.length === 1
     ? runningLines[0].text
     : runningLines.length > 1
       ? `正在处理 ${runningLines.length} 个任务`
       : '';
+
+  useEffect(() => {
+    if (hiddenCount === 0 && expanded) {
+      setExpanded(false);
+    }
+  }, [expanded, hiddenCount]);
 
   if (statusLines.length === 0) return null;
 
@@ -357,7 +370,7 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default' }: Pro
       ) : null}
 
       <div className="space-y-0.5">
-        {statusLines.map((item) => (
+        {visibleStatusLines.map((item) => (
           <div
             key={item.id}
             className={clsx(
@@ -373,6 +386,16 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default' }: Pro
           </div>
         ))}
       </div>
+
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          className="text-[12px] leading-5 text-text-tertiary/70 underline-offset-2 hover:text-text-secondary hover:underline"
+          onClick={() => setExpanded((prev) => !prev)}
+        >
+          {expanded ? '收起' : `展开 ${hiddenCount} 条更早状态`}
+        </button>
+      ) : null}
     </div>
   );
 }
