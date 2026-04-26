@@ -38,6 +38,12 @@ last_updated: 2026-04-26
 - catalog index 已补齐 `scope / ownerType / ownerId`，成员/文档知识列表在已有 block/canonical 索引时优先走 `indexed-documents`，缺索引才回退文件系统。
 - 语言感知检索已把 query language 接入 ranking，命中结果输出 `languageMatchScore`，query plan 显示 `languageAwareRanking=true`。
 - runtime advisor 上下文会显式写出 `memberSkillRef`，便于检查当前成员发言是否绑定正确技能。
+- 成员技能运行时工具策略已收敛到 canonical `redbox_fs`，生成技能的 `allowedTools` 会参与 runtime tool plan 收窄。
+- runtime 工具规划会记录 `memberSkillActivation` checkpoint，包含 `advisorId / memberSkillRef / memberSkillVersion / activeSkillNames / fallbackReason`。
+- 已接入 `members:enqueue-distillation / members:list-distillation-candidates / members:approve-distillation / members:rollback-skill-version / members:compile-skill-package / members:evaluate-skill` 命令面。
+- 成员技能包已支持结构校验与轻量评测，覆盖必需文件、JSON 文件、`heuristics.jsonl`、知识证据和工具策略。
+- `advisors:create` 在需要蒸馏但创建后缺少 `memberSkillRef` 时会写入 `member_skill_missing_after_create` diagnostics 日志。
+- 团队页成员设置已补“重新蒸馏 / 刷新技能”入口，失败或缺失技能时可手动重试。
 
 本计划当前定义的成员技能升级、文件/YouTube 自动蒸馏、候选版本闭环、运行时激活、成员作用域检索与语言感知排序已完成。后续若继续扩大范围，应另起计划覆盖更重的评测面板、自动灰度开关和跨团队权限策略。
 
@@ -992,21 +998,22 @@ YouTube 导入路径必须支持“先可用、后增强”：
 
 ### 新增能力
 
-- `members:enqueue-distillation`
-- `members:list-distillation-candidates`
-- `members:approve-distillation`
-- `members:rollback-skill-version`
-- `members:evaluate-skill`
+- `members:enqueue-distillation`：手动触发成员蒸馏，复用 advisor 创建、文件导入和 YouTube 导入的同一发布逻辑。
+- `members:list-distillation-candidates`：复用成员技能 inspect 结果，返回当前版本、候选版本、差异和历史版本。
+- `members:approve-distillation`：发布候选版本为当前技能。
+- `members:rollback-skill-version`：把 `versions/<version>` 恢复为当前技能。
+- `members:compile-skill-package`：校验技能包必需结构、JSON、heuristics、知识证据和工具策略。
+- `members:evaluate-skill`：基于 compile 结果输出轻量评分、阈值和 `ready/review_required` 建议。
 
 ### 主要改动文件
 
-- 新增：
-  - `src-tauri/src/member_skill/versioning.rs`
-  - `src-tauri/src/member_skill/eval.rs`
-  - `src-tauri/src/member_skill/background.rs`
-- 修改：
-  - scheduler/background runtime
-  - diagnostics / settings / advisors UI
+- `src-tauri/src/member_skill.rs`
+- `src-tauri/src/commands/advisor_ops.rs`
+- `src-tauri/src/interactive_runtime_shared.rs`
+- `src-tauri/src/tools/compat.rs`
+- `src/bridge/ipcRenderer.ts`
+- `src/pages/Advisors.tsx`
+- `src/types.d.ts`
 
 ### 性能目标
 
@@ -1117,7 +1124,8 @@ YouTube 导入路径必须支持“先可用、后增强”：
 - 文件导入和 YouTube 导入都必须把 `memberSkillStatus` 作为成员创建结果的一部分返回
 - 成员卡片显示 `missing / distilling / ready / failed / fallback`，不能只显示“创建成功”
 - 端到端验收必须覆盖“创建成员 -> 自动蒸馏 -> 绑定 skill -> 首轮按设定发言”
-- `advisors:create` 成功但 `memberSkillRef` 缺失时，diagnostics 必须记录 `member_skill_missing_after_create`
+- `advisors:create` 需要蒸馏但创建后 `memberSkillRef` 缺失时，diagnostics 必须记录 `member_skill_missing_after_create`
+- UI 必须保留手动重试入口，避免蒸馏失败后只能重新创建成员
 
 ### 风险 6：群聊成员串用别人的 skill context
 
@@ -1125,6 +1133,7 @@ YouTube 导入路径必须支持“先可用、后增强”：
 
 - creative chat 每个 advisor turn 都重新解析 `advisorId -> memberSkillRef -> ResolvedSkillSet`
 - runtime checkpoint 必须记录本轮 `advisorId`、`memberSkillRef`、`activeSkillNames`
+- tool plan 生成时必须附带 `fallbackReason`，便于定位 skill ref 缺失或未激活
 - 测试必须覆盖两个风格相反的成员连续发言，确认不会复用上一轮 active skill
 - session 级 active skills 不能作为 advisor 多成员群聊的唯一技能来源
 
