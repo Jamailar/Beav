@@ -1272,8 +1272,10 @@ declare global {
         create: (payload: Record<string, unknown>) => Promise<unknown>;
         update: (payload: Record<string, unknown>) => Promise<unknown>;
         delete: (advisorId: string) => Promise<unknown>;
-        uploadKnowledge: (advisorId: string) => Promise<unknown>;
+        uploadKnowledge: (payload: string | { advisorId: string; filePaths?: string[] }) => Promise<unknown>;
         deleteKnowledge: (payload: { advisorId: string; fileName: string }) => Promise<unknown>;
+        promoteMemberSkillCandidate: (payload: { advisorId: string; candidateVersion?: string }) => Promise<unknown>;
+        discardMemberSkillCandidate: (payload: { advisorId: string }) => Promise<unknown>;
         optimizePrompt: (payload: Record<string, unknown>) => Promise<unknown>;
         optimizePromptDeep: (payload: Record<string, unknown>) => Promise<unknown>;
         generatePersona: (payload: Record<string, unknown>) => Promise<unknown>;
