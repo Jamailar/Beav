@@ -310,6 +310,13 @@ function findLastRunningThinkingIndex(messages: Message[]): number {
   return -1;
 }
 
+function findLastRunningTimelineThoughtIndex(timeline: ProcessItem[]): number {
+  return findLatestTimelineItemIndex(
+    timeline,
+    (item) => item.type === 'thought' && item.status === 'running',
+  );
+}
+
 function hasCommittedAssistantReply(messages: Message[]): boolean {
   const lastReplyIndex = findLastAssistantReplyIndex(messages);
   if (lastReplyIndex === -1) return false;
@@ -1381,29 +1388,27 @@ export function Chat({
     const handleThoughtStart = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
-        if (runningThinkingIndex !== -1) return prev;
-
         const lastReplyIndex = findLastAssistantReplyIndex(prev);
         if (lastReplyIndex === -1) return prev;
 
         const now = Date.now();
         const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        if (findLastRunningTimelineThoughtIndex(timeline) !== -1) return prev;
+        timeline.push({
+          id: `thought_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          type: 'thought',
+          content: '',
+          status: 'running',
+          timestamp: now,
+        });
         next[lastReplyIndex] = {
-          ...next[lastReplyIndex],
+          ...lastMsg,
           messageType: 'reply',
           suppressPendingIndicator: true,
+          timeline,
         };
-        next.splice(lastReplyIndex, 0, {
-          id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
-          role: 'ai',
-          messageType: 'thinking',
-          content: '',
-          tools: [],
-          timeline: [],
-          isStreaming: true,
-          processingStartedAt: now,
-        });
         return next;
       });
     };
@@ -1421,37 +1426,35 @@ export function Chat({
         return;
       }
       setMessages(prev => {
-        let runningThinkingIndex = findLastRunningThinkingIndex(prev);
-        let next = [...prev];
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
+        const next = [...prev];
+        const lastMsg = next[lastReplyIndex];
+        const now = Date.now();
+        const timeline = [...lastMsg.timeline];
+        const thoughtIndex = findLastRunningTimelineThoughtIndex(timeline);
 
-        if (runningThinkingIndex === -1) {
-          const lastReplyIndex = findLastAssistantReplyIndex(next);
-          if (lastReplyIndex === -1) return prev;
-          const now = Date.now();
-          next[lastReplyIndex] = {
-            ...next[lastReplyIndex],
-            messageType: 'reply',
-            suppressPendingIndicator: true,
-          };
-          next.splice(lastReplyIndex, 0, {
-            id: `thinking_${now}_${Math.random().toString(36).slice(2, 8)}`,
-            role: 'ai',
-            messageType: 'thinking',
+        if (thoughtIndex === -1) {
+          timeline.push({
+            id: `thought_${now}_${Math.random().toString(36).slice(2, 8)}`,
+            type: 'thought',
             content,
-            tools: [],
-            timeline: [],
-            isStreaming: true,
-            processingStartedAt: now,
+            status: 'running',
+            timestamp: now,
           });
-          return next;
+        } else {
+          const thoughtItem = timeline[thoughtIndex];
+          timeline[thoughtIndex] = {
+            ...thoughtItem,
+            content: mergeThoughtDelta(thoughtItem.content || '', content),
+          };
         }
 
-        const thinkingMessage = next[runningThinkingIndex];
-        next[runningThinkingIndex] = {
-          ...thinkingMessage,
-          messageType: 'thinking',
-          content: mergeThoughtDelta(thinkingMessage.content || '', content),
-          isStreaming: true,
+        next[lastReplyIndex] = {
+          ...lastMsg,
+          messageType: 'reply',
+          suppressPendingIndicator: true,
+          timeline,
         };
         return next;
       });
@@ -1461,16 +1464,24 @@ export function Chat({
     const handleThoughtEnd = (_: unknown) => {
       if (!isActiveRef.current) return;
       setMessages(prev => {
-        const runningThinkingIndex = findLastRunningThinkingIndex(prev);
-        if (runningThinkingIndex === -1) return prev;
+        const lastReplyIndex = findLastAssistantReplyIndex(prev);
+        if (lastReplyIndex === -1) return prev;
         const next = [...prev];
-        const thinkingMessage = next[runningThinkingIndex];
+        const lastMsg = next[lastReplyIndex];
+        const timeline = [...lastMsg.timeline];
+        const thoughtIndex = findLastRunningTimelineThoughtIndex(timeline);
+        if (thoughtIndex === -1) return prev;
         const finishedAt = Date.now();
-        next[runningThinkingIndex] = {
-          ...thinkingMessage,
-          messageType: 'thinking',
-          isStreaming: false,
-          processingFinishedAt: finishedAt,
+        const thoughtItem = timeline[thoughtIndex];
+        timeline[thoughtIndex] = {
+          ...thoughtItem,
+          status: 'done',
+          duration: finishedAt - thoughtItem.timestamp,
+        };
+        next[lastReplyIndex] = {
+          ...lastMsg,
+          messageType: 'reply',
+          timeline,
         };
         return next;
       });
@@ -1566,6 +1577,15 @@ export function Chat({
         const lastMsg = next[lastReplyIndex];
 
         const newTimeline = [...lastMsg.timeline];
+        const runningThoughtIndex = findLastRunningTimelineThoughtIndex(newTimeline);
+        if (runningThoughtIndex !== -1) {
+          const thoughtItem = newTimeline[runningThoughtIndex];
+          newTimeline[runningThoughtIndex] = {
+            ...thoughtItem,
+            status: 'done',
+            duration: Date.now() - thoughtItem.timestamp,
+          };
+        }
 
         // Add Tool Item to Timeline
         newTimeline.push({

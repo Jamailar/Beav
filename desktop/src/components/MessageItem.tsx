@@ -354,6 +354,10 @@ export const MessageItem = memo(({
       : (msg.timeline || []),
     [msg.timeline, workflowDisplayMode],
   );
+  const timelineHasThought = useMemo(
+    () => filteredTimeline.some((item) => item.type === 'thought' && String(item.content || '').trim()),
+    [filteredTimeline],
+  );
   const showWorkflowDetails = workflowDisplayMode !== 'thoughts-only';
   const hasAssistantResponseContent = !isUser && Boolean(sanitizedAssistantContent);
   const showPendingThinkingIndicator = !isUser
@@ -364,11 +368,6 @@ export const MessageItem = memo(({
   const hasRenderableMessageContent = isUser
     ? Boolean(msg.displayContent || msg.content || (msg.isStreaming && !msg.thinking))
     : hasAssistantResponseContent || showPendingThinkingIndicator;
-  const showTimeline = !isUser && !isThinkingMessage && filteredTimeline.length > 0;
-  const showLegacyWorkflow = !isUser
-    && !isThinkingMessage
-    && filteredTimeline.length === 0
-    && (msg.thinking || (showWorkflowDetails && (msg.tools.length > 0 || msg.activatedSkill)));
   const showWorkflowOnTop = workflowPlacement === 'top';
   const latestTimelineThought = !isUser
     ? [...(msg.timeline || [])]
@@ -378,10 +377,21 @@ export const MessageItem = memo(({
   const activeThoughtContent = !isUser
     ? stripInternalProtocolMarkup(String(latestTimelineThought?.content || msg.thinking || ''))
     : '';
-  const showInlineThought = !isUser
+  const displayTimeline = useMemo<ProcessItem[]>(() => {
+    if (!activeThoughtContent || timelineHasThought) return filteredTimeline;
+    return [{
+      id: `${msg.id}-fallback-thought`,
+      type: 'thought',
+      content: activeThoughtContent,
+      status: msg.isStreaming ? 'running' : 'done',
+      timestamp: msg.processingStartedAt || 0,
+    }, ...filteredTimeline];
+  }, [activeThoughtContent, filteredTimeline, msg.id, msg.isStreaming, msg.processingStartedAt, timelineHasThought]);
+  const showTimeline = !isUser && !isThinkingMessage && displayTimeline.length > 0;
+  const showLegacyWorkflow = !isUser
     && !isThinkingMessage
-    && Boolean(activeThoughtContent)
-    && (showTimeline || !showLegacyWorkflow);
+    && displayTimeline.length === 0
+    && (msg.thinking || (showWorkflowDetails && (msg.tools.length > 0 || msg.activatedSkill)));
 
   useEffect(() => {
     if (!imageMenu.visible) return;
@@ -633,6 +643,49 @@ export const MessageItem = memo(({
     );
   };
 
+  const renderTimelineWorkflow = (timeline: ProcessItem[]) => {
+    const nodes: React.ReactNode[] = [];
+    let statusGroup: ProcessItem[] = [];
+
+    const flushStatusGroup = () => {
+      if (statusGroup.length === 0) return;
+      const group = statusGroup;
+      statusGroup = [];
+      nodes.push(
+        <ProcessTimeline
+          key={`status-${nodes.length}-${group[0]?.id || 'group'}`}
+          items={group}
+          isStreaming={!!msg.isStreaming}
+          variant={workflowVariant}
+        />,
+      );
+    };
+
+    timeline.forEach((item) => {
+      if (item.type !== 'thought') {
+        statusGroup.push(item);
+        return;
+      }
+      flushStatusGroup();
+      const thoughtContent = stripInternalProtocolMarkup(String(item.content || ''));
+      if (!thoughtContent) return;
+      nodes.push(
+        <div key={item.id} className="w-full max-w-[740px]">
+          {renderThoughtText(thoughtContent)}
+        </div>,
+      );
+    });
+
+    flushStatusGroup();
+    if (nodes.length === 0) return null;
+
+    return (
+      <div className={clsx('w-full max-w-3xl space-y-3', showWorkflowOnTop ? 'mb-3' : 'mt-3')}>
+        {nodes}
+      </div>
+    );
+  };
+
   const renderThoughtText = (content: string) => (
     <div className="chat-ai-shell">
       <div className="chat-ai-content">
@@ -655,9 +708,7 @@ export const MessageItem = memo(({
         <TodoList steps={msg.plan} />
       )}
 
-      {showWorkflowOnTop && showTimeline && (
-        <ProcessTimeline items={filteredTimeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
-      )}
+      {showWorkflowOnTop && showTimeline && renderTimelineWorkflow(displayTimeline)}
 
       {/* AI 工作流可视化 (兼容旧版：思考、工具、技能) - 仅当 timeline 为空时显示 */}
       {showWorkflowOnTop && showLegacyWorkflow && (
@@ -681,12 +732,6 @@ export const MessageItem = memo(({
               查看工具调用 ({msg.tools.length})
             </div>
           )}
-        </div>
-      )}
-
-      {showInlineThought && (
-        <div className={clsx(showWorkflowOnTop ? 'mb-2' : 'mt-2', 'w-full max-w-[740px]')}>
-          {renderThoughtText(activeThoughtContent)}
         </div>
       )}
 
@@ -786,9 +831,7 @@ export const MessageItem = memo(({
       )}
 
       {/* AI 工作流可视化 (底部渲染) */}
-      {!showWorkflowOnTop && showTimeline && (
-        <ProcessTimeline items={filteredTimeline} isStreaming={!!msg.isStreaming} variant={workflowVariant} />
-      )}
+      {!showWorkflowOnTop && showTimeline && renderTimelineWorkflow(displayTimeline)}
 
       {!showWorkflowOnTop && showLegacyWorkflow && (
         <div className="mt-3 w-full max-w-3xl space-y-3">
