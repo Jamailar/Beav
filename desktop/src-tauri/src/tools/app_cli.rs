@@ -393,6 +393,9 @@ impl<'a> AppCliExecutor<'a> {
     }
 
     fn ensure_action_allowed(&self, action: &str) -> Result<(), String> {
+        if action == "web.fetch" {
+            return Ok(());
+        }
         let Some(allowed_actions) = self.session_allowed_structured_actions() else {
             let plan = with_store(self.state, |store| {
                 Ok(build_tool_registry_plan_for_session(
@@ -544,6 +547,7 @@ impl<'a> AppCliExecutor<'a> {
             "knowledge" => self.handle_knowledge(&tokens[1..], &payload),
             "work" => self.handle_work(&tokens[1..], &payload),
             "memory" => self.handle_memory(&tokens[1..], &payload),
+            "web" => self.handle_web(&tokens[1..], &payload),
             "redclaw" => self.handle_redclaw(&tokens[1..], &payload),
             "runtime" => self.handle_runtime(&tokens[1..], &payload),
             "cli-runtime" | "cli_runtime" => self.handle_cli_runtime(&tokens[1..], &payload),
@@ -562,6 +566,8 @@ impl<'a> AppCliExecutor<'a> {
                 self.handle_memory(&tokens, payload)
             }
             "toolssearch" => self.handle_tools_search(payload),
+            "webfetch" => self.handle_web(&["fetch".to_string()], payload),
+            "websearch" => self.handle_web(&["search".to_string()], payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
                 self.handle_memory(&tokens, payload)
@@ -1629,6 +1635,18 @@ impl<'a> AppCliExecutor<'a> {
         let args = parse_cli_args(&tokens[1..])?;
         let (channel, request_payload) = memory_action_request(action, &args, payload)?;
         self.call_channel(channel, request_payload)
+    }
+
+    fn handle_web(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let action = tokens.first().map(String::as_str).unwrap_or("fetch");
+        match action {
+            "fetch" | "get" | "read" => crate::tools::web_access::fetch(payload),
+            "search" => Err(
+                "web search is not available; provide a URL and use Read(path=\"https://...\")"
+                    .to_string(),
+            ),
+            other => Err(format!("unsupported web action: {other}")),
+        }
     }
 
     fn handle_redclaw(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {

@@ -11,4 +11,5 @@ pub mod packs;
 pub mod plan;
 pub mod registry;
 pub mod router;
+pub mod web_access;
 pub mod workspace_search;
