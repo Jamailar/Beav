@@ -264,11 +264,12 @@ const buildStatusLine = (item: ProcessItem): StatusLine | null => {
   }
 
   if (item.type === 'skill') {
+    const skillName = truncateInline(item.skillData?.name || item.title || '技能');
     return {
       id: item.id,
       status: item.status,
       text: statusVerb(item.status, '正在使用技能', '已使用技能', '技能执行失败'),
-      detail: truncateInline(item.skillData?.description || item.content || item.skillData?.name || ''),
+      detail: skillName,
     };
   }
 
