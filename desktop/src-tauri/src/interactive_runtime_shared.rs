@@ -49,6 +49,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         prompt_suffix,
         advisor_context_section,
         host_runtime_context_section,
+        subagent_role_overlay_section,
     ) = with_store(state, |store| {
         let metadata = session_id.and_then(|id| {
             store
@@ -79,6 +80,19 @@ pub(crate) fn interactive_runtime_context_bundle(
             project_context.push_str("; skill_context=");
             project_context.push_str(skill_prompt.context_note.trim());
         }
+        if metadata
+            .and_then(|item| item.get("isSubagentSession"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            let role_id = metadata
+                .and_then(|item| payload_string(item, "roleId"))
+                .unwrap_or_default();
+            if !role_id.trim().is_empty() {
+                project_context.push_str("; subagent_role=");
+                project_context.push_str(role_id.trim());
+            }
+        }
         Ok((
             prompt_tool_lines_for_session(&store, runtime_mode, session_id),
             resolved_skills.active_skills.len(),
@@ -88,6 +102,7 @@ pub(crate) fn interactive_runtime_context_bundle(
             skill_prompt.prompt_suffix,
             advisor_runtime_context_section(metadata, &store.advisors),
             render_host_runtime_context_section(&host_context),
+            subagent_role_overlay_section(metadata),
         ))
     })
     .unwrap_or_else(|_| {
@@ -104,6 +119,7 @@ pub(crate) fn interactive_runtime_context_bundle(
             String::new(),
             String::new(),
             render_host_runtime_context_section(&host_context),
+            String::new(),
         )
     });
     let workspace_root_value = workspace_root(state)
@@ -144,6 +160,9 @@ pub(crate) fn interactive_runtime_context_bundle(
             "Host runtime context:\n{}",
             host_runtime_context_section.trim()
         ));
+        if !subagent_role_overlay_section.trim().is_empty() {
+            sections.push(subagent_role_overlay_section.trim().to_string());
+        }
         if !available_tools.trim().is_empty() {
             sections.push(format!("Available tools:\n{available_tools}"));
         }
@@ -232,6 +251,10 @@ pub(crate) fn interactive_runtime_context_bundle(
         if !runtime_agent_overlay.trim().is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(runtime_agent_overlay.trim());
+        }
+        if !subagent_role_overlay_section.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(subagent_role_overlay_section.trim());
         }
         if !advisor_context_section.trim().is_empty() {
             rendered.push_str("\n\n");
@@ -402,6 +425,56 @@ fn advisor_runtime_context_section(
         "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
         advisor_name, advisor_id, advisor_knowledge_path, advisor_id
     )
+}
+
+fn subagent_role_overlay_section(metadata: Option<&Value>) -> String {
+    let Some(metadata) = metadata else {
+        return String::new();
+    };
+    if !metadata
+        .get("isSubagentSession")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return String::new();
+    }
+
+    let role_id = payload_string(metadata, "roleId").unwrap_or_else(|| "subagent".to_string());
+    let purpose = payload_string(metadata, "subagentRolePurpose").unwrap_or_default();
+    let handoff_contract =
+        payload_string(metadata, "subagentRoleHandoffContract").unwrap_or_default();
+    let output_schema = payload_string(metadata, "subagentRoleOutputSchema").unwrap_or_default();
+    let directive = payload_string(metadata, "subagentRoleDirective").unwrap_or_default();
+    let system_prompt_patch =
+        payload_string(metadata, "subagentSystemPromptPatch").unwrap_or_default();
+    let allowed_tools = metadata
+        .get("allowedTools")
+        .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "[]".to_string()))
+        .unwrap_or_else(|| "[]".to_string());
+
+    let mut lines = vec![
+        "## Subagent Role Overlay".to_string(),
+        "You are a child runtime inside RedBox. Stay strictly inside this role and only produce the work this role owns.".to_string(),
+        format!("- roleId: {}", role_id.trim()),
+        format!("- purpose: {}", purpose.trim()),
+        format!("- handoffContract: {}", handoff_contract.trim()),
+        format!("- outputSchema: {}", output_schema.trim()),
+        format!("- allowedTools: {}", allowed_tools),
+    ];
+    if !directive.trim().is_empty() {
+        lines.push("Role directive:".to_string());
+        lines.push(directive.trim().to_string());
+    }
+    if !system_prompt_patch.trim().is_empty() {
+        lines.push("Additional child-runtime constraints:".to_string());
+        lines.push(system_prompt_patch.trim().to_string());
+    }
+    lines.push(
+        "Return strict JSON only with fields summary, artifact, handoff, risks, issues, approved."
+            .to_string(),
+    );
+    lines.push("Do not claim files, images, videos, or records were created unless a tool result or prior output confirms it.".to_string());
+    lines.join("\n")
 }
 
 fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &str) -> String {

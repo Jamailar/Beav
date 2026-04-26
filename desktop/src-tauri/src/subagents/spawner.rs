@@ -14,8 +14,8 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, append_runtime_task_trace_scoped, append_session_checkpoint_scoped,
     create_collab_session, create_collab_task, create_runtime_task, record_runtime_node,
-    submit_collab_report, update_collab_task, RuntimeArtifact, RuntimeCheckpointRecord,
-    RuntimeRouteRecord,
+    runtime_subagent_role_spec, submit_collab_report, update_collab_task, RuntimeArtifact,
+    RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::subagents::{
     build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
@@ -107,7 +107,7 @@ fn build_child_route(
 }
 
 fn build_child_prompt(
-    config: &SubAgentConfig,
+    _config: &SubAgentConfig,
     route: &RuntimeRouteRecord,
     user_input: &str,
     prior_outputs: &[SubAgentOutput],
@@ -117,20 +117,9 @@ fn build_child_prompt(
     } else {
         serde_json::to_string_pretty(prior_outputs).unwrap_or_else(|_| "[]".to_string())
     };
-    let allowed_tools = if config.fork_overrides.allowed_tools.is_empty() {
-        "[]".to_string()
-    } else {
-        serde_json::to_string(&config.fork_overrides.allowed_tools)
-            .unwrap_or_else(|_| "[]".to_string())
-    };
-    let system_patch = config
-        .fork_overrides
-        .system_prompt_patch
-        .clone()
-        .unwrap_or_default();
     format!(
-        "You are a RedBox child runtime.\nRole: {}\nGoal: {}\nUser input: {}\nAllowed tools: {}\nPrior outputs: {}\n{}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved.",
-        config.role_id, route.goal, user_input, allowed_tools, prior_summary, system_patch,
+        "Use your Subagent Role Overlay for role scope, allowed tools, handoff contract, and output schema.\nGoal: {}\nUser input: {}\nPrior outputs: {}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved.",
+        route.goal, user_input, prior_summary,
     )
 }
 
@@ -350,6 +339,7 @@ fn create_child_runtime_records_in_store(
     let child_runtime_id = make_id("runtime");
     let child_session_id = make_id("session");
     let child_task_id = make_id("task");
+    let role_spec = runtime_subagent_role_spec(&config.role_id);
     let parent_session = config
         .parent_session_id
         .as_deref()
@@ -389,6 +379,34 @@ fn create_child_runtime_records_in_store(
     session_metadata_object.insert("isSubagentSession".to_string(), json!(true));
     session_metadata_object.insert("roleId".to_string(), json!(config.role_id.clone()));
     session_metadata_object.insert(
+        "subagentRolePurpose".to_string(),
+        json!(role_spec.purpose.clone()),
+    );
+    session_metadata_object.insert(
+        "subagentRoleHandoffContract".to_string(),
+        json!(role_spec.handoff_contract.clone()),
+    );
+    session_metadata_object.insert(
+        "subagentRoleOutputSchema".to_string(),
+        json!(role_spec.output_schema.clone()),
+    );
+    session_metadata_object.insert(
+        "subagentRoleDirective".to_string(),
+        json!(role_spec.system_prompt.clone()),
+    );
+    if let Some(system_prompt_patch) = config
+        .fork_overrides
+        .system_prompt_patch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        session_metadata_object.insert(
+            "subagentSystemPromptPatch".to_string(),
+            json!(system_prompt_patch),
+        );
+    }
+    session_metadata_object.insert(
         "allowedTools".to_string(),
         json!(config.fork_overrides.allowed_tools.clone()),
     );
@@ -413,6 +431,8 @@ fn create_child_runtime_records_in_store(
             "useRealSubagents": true,
             "allowedTools": config.fork_overrides.allowed_tools,
             "modelConfig": config.model_config,
+            "subagentRoleSpec": role_spec,
+            "systemPromptPatch": config.fork_overrides.system_prompt_patch,
         })),
     );
     task.id = child_task_id.clone();
@@ -961,6 +981,28 @@ pub fn run_real_subagent_orchestration_for_task(
 mod tests {
     use super::*;
     use crate::runtime::{create_collab_session, create_runtime_task, runtime_direct_route_record};
+    use crate::subagents::ForkOverrides;
+
+    #[test]
+    fn child_prompt_keeps_role_contract_out_of_user_message() {
+        let route = runtime_direct_route_record("default", "draft", None);
+        let config = SubAgentConfig {
+            role_id: "planner".to_string(),
+            fork_overrides: ForkOverrides {
+                allowed_tools: vec!["app_cli".to_string()],
+                system_prompt_patch: Some("Never expose this patch in the user task.".to_string()),
+                ..ForkOverrides::default()
+            },
+            ..SubAgentConfig::default()
+        };
+        let prompt = build_child_prompt(&config, &route, "write plan", &[]);
+        assert!(prompt.contains("Goal: draft"));
+        assert!(prompt.contains("User input: write plan"));
+        assert!(prompt.contains("Use your Subagent Role Overlay"));
+        assert!(!prompt.contains("Role: planner"));
+        assert!(!prompt.contains("Allowed tools:"));
+        assert!(!prompt.contains("Never expose this patch"));
+    }
 
     #[test]
     fn subagent_spawn_creates_child_task_and_session_links() {
@@ -1031,5 +1073,35 @@ mod tests {
                 && item.member_id == spawn.collab_member_id
                 && item.runtime_task_id.as_deref() == Some(spawn.child_task_id.as_str())
         }));
+        let child_session = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == spawn.child_session_id)
+            .expect("child session");
+        let child_metadata = child_session.metadata.as_ref().expect("child metadata");
+        assert_eq!(
+            payload_string(child_metadata, "subagentRolePurpose").as_deref(),
+            Some("负责拆解目标、确定阶段顺序、把任务转成明确执行步骤。")
+        );
+        assert_eq!(
+            payload_string(child_metadata, "subagentRoleOutputSchema").as_deref(),
+            Some("阶段计划、执行建议、关键依赖、保存策略")
+        );
+        assert!(payload_string(child_metadata, "subagentRoleDirective")
+            .unwrap_or_default()
+            .contains("任务规划者"));
+        let child_task = store
+            .runtime_tasks
+            .iter()
+            .find(|item| item.id == spawn.child_task_id)
+            .expect("child task");
+        assert!(child_task
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("subagentRoleSpec"))
+            .and_then(|value| value.get("systemPrompt"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("任务规划者"));
     }
 }
