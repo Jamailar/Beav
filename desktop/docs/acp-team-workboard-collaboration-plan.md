@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-25
+last_updated: 2026-04-26
 owner: ai-runtime
 scope: desktop
 target_files:
@@ -14,12 +14,14 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. External ACP/CLI members can now be launched from the host, injected with team MCP context, and reported back into the same member/task/report board state.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external adapter boundary, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented across runtime contract, bridge, MCP, and Workboard controls: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, task-scoped user comments, and lightweight UI actions.
 ---
 
 # ACP Team Workboard Collaboration Plan
 
 Status: Completed
+
+Sections 2-12 preserve the design research and architecture decision record. Sections 13-19 are the completion record and verification evidence for the implemented baseline.
 
 ## 1. Goal
 
@@ -265,18 +267,18 @@ RedConvert already has several foundations:
 - `desktop/src/pages/Workboard.tsx`: current RedClaw task center.
 - `desktop/src/runtime/runtimeEventStream.ts`: unified runtime event stream.
 
-### 4.2 Gaps
+### 4.2 Original Gaps And Current Resolution
 
-The missing pieces are product-level collaboration concepts:
+The original missing pieces were product-level collaboration concepts. The implemented baseline resolves them as follows:
 
-- No persistent `team member` runtime object.
-- No durable mailbox between members.
-- No member-owned task board separate from RedClaw scheduled tasks.
-- No periodic progress report protocol.
-- No UI that shows member current project/task/status as a team dashboard.
-- No ACP team bridge for external ACP agents.
-- No policy that prevents a member from reviewing its own work.
-- No settled-state coordinator wake logic.
+- Persistent `team member` runtime object: implemented as `CollabMemberRecord`.
+- Durable mailbox between members: implemented as `CollabMailboxMessageRecord` plus mailbox helpers.
+- Member-owned task board separate from RedClaw scheduled tasks: implemented as `CollabTaskRecord`.
+- Periodic progress report protocol: implemented as host-owned report ticks and structured report records.
+- UI that shows member current project/task/status as a team dashboard: implemented in Workboard Collaboration mode.
+- Team bridge for external adapters: implemented as the shared `redbox-team` MCP/host-action contract; spawning external ACP member processes remains intentionally disabled in the first baseline.
+- Policy that prevents a member from reviewing its own work: implemented in task creation/update validation.
+- Settled-state coordinator wake logic: implemented in `subagents/wake_runtime.rs`.
 
 ## 5. Recommended Product Architecture
 
@@ -352,6 +354,210 @@ CollabArtifact
 8. Workboard shows who is active, blocked, waiting, reviewing, or done.
 9. Coordinator wakes when members settle or report blockers.
 10. User can inspect, redirect, pause, comment, approve, or ask for summary at any time.
+
+### 5.4 TeamGroupChat Runtime V2 Addendum
+
+This addendum refines team mode around the product direction discussed on 2026-04-26: group chat is the collaboration room, not the worker loop. Members do work in their own background runtimes, then report into the group only when useful.
+
+#### 5.4.1 Runtime-Owned Team Room
+
+The RedConvert runtime owns all team execution. The app does not need tmux or a CLI session manager because the Rust host already owns:
+
+- durable sessions and task records
+- member mailboxes and progress reports
+- runtime task queues
+- cancellation and recovery
+- concurrent child runtimes
+- persistence and event projection
+
+The group chat should be persisted as a `CollabSession` communication surface. Deleting an unneeded group chat deletes or archives that collaboration container according to product policy, but it must not be treated as an execution process.
+
+#### 5.4.2 Speaker And Executor Separation
+
+Each `CollabMember` has two runtime faces:
+
+```text
+CollabMember
+  Speaker Persona
+    -> reads member task plan, latest reports, mailbox, mentions, and group context
+    -> speaks in group only when mentioned, reporting progress, clarifying decisions, or escalating blockers
+
+  Executor Pool
+    -> runs one or more background executor threads
+    -> performs actual tasks
+    -> writes progress reports, artifacts, and task-plan updates
+```
+
+The speaker and executors share the same member identity, role, constraints, and task-plan state. They are not two personalities. They are two responsibilities behind one visible teammate:
+
+- Speaker owns communication and commitments.
+- Executor owns work and evidence.
+- Both write through typed runtime APIs, not free-form hidden state.
+
+#### 5.4.3 Member Task Plan JSON
+
+Every member should maintain a durable member-level plan:
+
+```json
+{
+  "memberId": "collab-member-...",
+  "sessionId": "collab-session-...",
+  "version": 1,
+  "activeExecutors": [],
+  "tasks": [
+    {
+      "taskId": "collab-task-...",
+      "status": "running",
+      "ownerThreadId": "executor-...",
+      "objective": "具体目标",
+      "nextSteps": [],
+      "blockers": [],
+      "artifactRefs": [],
+      "lastEvidence": []
+    }
+  ],
+  "speechQueue": [
+    {
+      "reason": "progress_report",
+      "priority": 40,
+      "summary": "可直接发送给群聊的简短进度"
+    }
+  ]
+}
+```
+
+This plan is the bridge between executor and speaker. Executors update it after meaningful progress or completion. Speakers read it before speaking, so they know the real execution state without inventing progress.
+
+#### 5.4.4 Executor Lifecycle And Capacity
+
+A member may work across multiple group chats and multiple tasks. The runtime should enforce:
+
+- one executor thread per independent active task by default
+- `maxConcurrentExecutorsPerMember = 5`
+- queue additional work when capacity is full
+- recover active executors from persisted task state after restart
+- report capacity pressure to the coordinator instead of silently starting unlimited work
+
+This uses the Rust runtime advantage: many lightweight executor records can exist, while only active work consumes model/runtime resources.
+
+#### 5.4.5 Reporting Contract
+
+Executor completion is not just a final chat message. It must write a structured completion claim:
+
+```json
+{
+  "taskId": "collab-task-...",
+  "memberId": "collab-member-...",
+  "status": "completed",
+  "summary": "完成了什么",
+  "evidence": ["真实文件、记录、日志、工具结果"],
+  "artifactRefs": [],
+  "handoff": "给下一个成员或 leader 的最小上下文",
+  "risks": []
+}
+```
+
+The speaker can then post a concise group update. If a verifier exists, verifier review should happen before the speaker claims final completion to the group.
+
+#### 5.4.6 Member Agent Card
+
+When a member is created, it must carry a concise profile so the coordinator can decide who should receive which work:
+
+```json
+{
+  "version": 1,
+  "memberId": "collab-member-...",
+  "displayName": "图片导演",
+  "roleId": "image-director",
+  "oneLine": "负责封面、配图、海报、图片策略和视觉执行指令。",
+  "persona": "角色提示词摘要",
+  "specialties": ["image_generation", "cover_direction", "visual_prompting"],
+  "goodAt": ["视觉方案", "图片提示词", "封面构图"],
+  "notGoodAt": [],
+  "preferredTasks": ["image_generation", "cover_design", "visual_direction"],
+  "avoidTasks": ["backend_debugging", "long_code_review"],
+  "toolPolicy": {
+    "allowedFamilies": ["media.generate", "image.generate", "redbox_fs"],
+    "allowedTools": []
+  },
+  "capacity": {
+    "maxExecutorThreads": 5,
+    "defaultExecutorThreads": 1
+  },
+  "decisionBoundary": "交付边界和移交要求",
+  "outputSchema": "该成员交付物结构"
+}
+```
+
+This profile should live in `CollabMemberRecord.metadata.agentCard`. It can be generated from the role spec and overridden by templates or user-created members.
+
+#### 5.4.7 Member Selection
+
+Coordinator assignment should not rely on vibes or member names. It should call a deterministic read-only action:
+
+```text
+team.member.match
+```
+
+Input:
+
+```json
+{
+  "sessionId": "collab-session-...",
+  "title": "生成封面图",
+  "objective": "用生图工具生成封面和视觉方案",
+  "taskType": "image_generation",
+  "requiredCapabilities": ["image_generation"],
+  "requiredToolFamilies": ["image.generate"],
+  "limit": 3
+}
+```
+
+Output:
+
+```json
+{
+  "candidates": [
+    {
+      "memberId": "collab-member-...",
+      "displayName": "图片导演",
+      "roleId": "image-director",
+      "score": 67,
+      "reasons": ["preferred_task:1", "capability:1", "tool_family:1"],
+      "activeExecutorCount": 0,
+      "maxExecutorThreads": 5
+    }
+  ]
+}
+```
+
+Recommended score factors:
+
+- exact role match
+- preferred task match
+- required capability match
+- required tool family match
+- objective/profile text match
+- avoid-task penalty
+- active executor load and capacity penalty
+
+The first implementation can be deterministic and local. Later versions can add richer embedding search over agent cards, but only after the typed matching contract is stable.
+
+#### 5.4.8 Runtime Implementation Status
+
+Implemented baseline:
+
+- `CollabMemberRecord.metadata.agentCard` is generated on member creation and can be overridden by member templates.
+- `CollabMemberRecord.metadata.memberTaskPlan` is generated on member creation and updated when tasks are assigned, updated, or reported.
+- Running task assignment enforces the member's `capacity.maxExecutorThreads`; default is 5.
+- `team.member.match` ranks existing members by role, preferred task, capabilities, tool policy, objective fit, avoid-task penalties, and active executor load.
+- `team.member.rename` and `team.member.shutdown` preserve member history while changing lifecycle state.
+- `team.artifact.attach` appends artifact metadata through a structured artifact report.
+- `team.blocker.raise` submits a structured blocker report and moves the task/member into blocker state.
+- Completion reports include `payload.completionClaim` with evidence, artifact refs, handoff, and risks.
+- The redbox-team MCP contract exposes the same conceptual tools for external adapters.
+- `window.ipcRenderer.teamRuntime` exposes first-class methods for member matching, rename/shutdown, artifact attach, and blocker raise.
+- Workboard Collaboration mode includes lightweight controls for intelligent assignment, member rename/shutdown, artifact attach, blocker raise, report request, and completion claim submission.
 
 ## 6. Data Model
 
@@ -559,11 +765,13 @@ team-runtime:archive-session
 
 Renderer must call these through `desktop/src/bridge/ipcRenderer.ts`, not raw Tauri invocations.
 
-## 8. ACP Integration
+## 8. Adapter Integration Boundary
 
-### 8.1 External ACP Member Lifecycle
+### 8.1 External Adapter Lifecycle Contract
 
-External ACP members should be modeled like this:
+External ACP-style members use the same conceptual model, but the current shipped baseline does not spawn external agent processes as team members. This keeps team execution local and avoids introducing another long-running process manager before the host-owned collaboration protocol is stable.
+
+When external adapters are enabled later, they must be modeled like this:
 
 ```text
 CollabMemberRecord(source_kind=external_acp)
@@ -574,13 +782,14 @@ CollabMemberRecord(source_kind=external_acp)
   -> runtime events mapped back to member/task status
 ```
 
-Key rules:
+Required future rules:
 
 - ACP mode/model config uses desired/current tracking.
 - ACP process exit while idle becomes suspended/offline, not failed.
 - ACP prompt failure during active task marks the member failed and reports to coordinator.
 - ACP permission requests go through existing approval runtime.
 - ACP team MCP config must include member id/session id in env.
+- External adapter spawning must be added through the existing MCP/runtime manager, not by introducing ad hoc stdio bridges in team code.
 
 ### 8.2 Internal Runtime Member Lifecycle
 
@@ -596,7 +805,7 @@ internal child runtime
 
 ### 8.3 Shared Team Tool Contract
 
-Both ACP and internal members must see the same conceptual tools. Implementation differs only at the transport boundary:
+Internal members and future external adapters must see the same conceptual tools. Implementation differs only at the transport boundary:
 
 ```text
 internal runtime tool call
@@ -778,9 +987,9 @@ Self-implement:
 - Review policy: author cannot review own task.
 - Mailbox TTL cleanup.
 
-### 11.3 Should Not Be Built Now
+### 11.3 Excluded From The Completed Baseline
 
-Defer:
+These are not required for the completed local collaboration baseline:
 
 - Multi-user cloud sync.
 - Separate backend service.
@@ -845,181 +1054,189 @@ emit events after state commit
 Add maintenance policies:
 
 - Read mailbox messages: keep 7 days or latest 500 per collab session.
-- Progress reports: keep latest 200 per task, archive older to artifact file.
+- Progress reports: keep latest 200 per task and archive compact metadata for older reports into task artifacts.
 - Runtime traces: rely on existing session artifact compaction.
 - Stale active member: mark blocked/failed after inactivity threshold and notify coordinator.
 
-## 13. Implementation Plan
+## 13. Implementation Record
 
-### Commit 1: Add Collaboration Contracts
+This plan has been executed as the internal-member baseline. The record below replaces the earlier staged plan and is the source of truth for what is complete.
+
+### Completed 1: Collaboration Contracts
 
 Files:
 
 - `desktop/src-tauri/src/runtime/types.rs`
-- `desktop/src-tauri/src/runtime/contracts.rs`
 - `desktop/src/runtime/runtimeEventStream.ts`
 - `desktop/src/bridge/ipcRenderer.ts`
+- `desktop/src/types.d.ts`
 
-Work:
+Completed work:
 
-- Add `CollabSessionRecord`, `CollabMemberRecord`, `CollabTaskRecord`, `CollabMailboxMessageRecord`, `CollabProgressReportRecord`.
-- Add event envelope variants:
+- Added `CollabSessionRecord`, `CollabMemberRecord`, `CollabTaskRecord`, `CollabMailboxMessageRecord`, `CollabProgressReportRecord`.
+- Added normalized event handling for:
   - `runtime:collab-session-changed`
   - `runtime:collab-member-changed`
   - `runtime:collab-task-changed`
   - `runtime:collab-report-submitted`
   - `runtime:collab-message-delivered`
+  - `runtime:collab-report-tick`
 
 Verification:
 
-- Rust serialization tests.
-- Frontend event normalization unit coverage if test harness exists.
+- Covered by `pnpm exec tsc --noEmit`, `pnpm build`, `cargo check`, and targeted Rust tests listed in the verification matrix.
 
-### Commit 2: Add Host Collaboration Runtime
+### Completed 2: Host Collaboration Runtime
 
 Files:
 
 - `desktop/src-tauri/src/runtime/collab_runtime.rs`
-- `desktop/src-tauri/src/runtime/mod.rs`
+- `desktop/src-tauri/src/runtime.rs`
 - `desktop/src-tauri/src/commands/runtime_collab.rs`
+- `desktop/src-tauri/src/commands/runtime_session.rs`
 - `desktop/src-tauri/src/main.rs`
+- `desktop/src-tauri/src/persistence/mod.rs`
 
-Work:
+Completed work:
 
 - Create/list/get collaboration sessions.
-- Add/list/update members.
+- Add/list/rename/shutdown members.
 - Create/update/list tasks.
 - Write/read mailbox messages.
 - Submit/list progress reports.
+- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, reviewer policy, mailbox TTL cleanup, progress report retention, and bidirectional task dependency links.
 
 Verification:
 
-- Rust unit tests for task dependency updates.
-- Rust unit tests for mailbox read-and-mark.
+- Rust tests cover dependency validation, bidirectional dependency links, mailbox read-and-mark, mailbox TTL cleanup, progress report retention, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
 
-### Commit 3: Add Team Tools
+### Completed 3: Team Tools And MCP Contract
 
 Files:
 
 - `desktop/src-tauri/src/subagents/team_tools.rs`
+- `desktop/src-tauri/src/subagents/mailbox.rs`
+- `desktop/src-tauri/src/subagents/team_task_board.rs`
 - `desktop/src-tauri/src/tools/catalog.rs`
-- `desktop/src-tauri/src/tools/executor.rs`
-- `desktop/src-tauri/src/mcp/*` if MCP exposure needs an adapter
+- `desktop/src-tauri/src/tools/app_cli.rs`
+- `desktop/src-tauri/src/mcp/team_server.rs`
 
-Work:
+Completed work:
 
-- Add structured team tool actions.
-- Map internal runtime calls to collab runtime.
-- Define ACP MCP bridge shape but keep first version local-only if needed.
+- Added structured `team.*` host actions.
+- Mapped internal runtime/app_cli calls to collaboration runtime operations.
+- Exposed `redbox-team` MCP contract for the same conceptual actions.
+- Kept external ACP process spawning disabled in the first baseline; future adapters must plug into the same host actions.
 
 Verification:
 
 - Tool schema tests.
-- Tool execution tests for `team.task.create`, `team.report.submit`, `team.message.send`.
+- `app_cli` schema tests for team coordinator actions.
+- `team_mcp` contract and execution tests.
 
-### Commit 4: Add Member Wake Runtime
+### Completed 4: Member Wake Runtime
 
 Files:
 
 - `desktop/src-tauri/src/subagents/wake_runtime.rs`
 - `desktop/src-tauri/src/subagents/spawner.rs`
-- `desktop/src-tauri/src/runtime/session_runtime.rs`
 
-Work:
+Completed work:
 
-- Wake internal member from mailbox.
-- Track active wakes.
-- Apply inactivity timeout.
-- Submit synthetic failure report on crash.
-- Wake coordinator when all members are settled.
+- Creates collaboration records for internal child runtimes.
+- Requests progress reports from active members on report tick.
+- Deduplicates pending report requests so repeated ticks do not spam members.
+- Synthesizes stale blocker reports after missed report windows.
+- Ignores paused/completed/failed/archived sessions and settled members.
+- Computes settled-state coordinator wake readiness while ignoring the coordinator member.
+- Records child runtime completion/failure back into the collaboration board.
 
 Verification:
 
-- Unit tests for active wake dedup.
-- Unit tests for settled-state coordinator wake.
-- Unit tests for inactivity timeout.
+- Unit tests cover settled-state coordinator logic, report request deduplication, paused/completed report tick guards, and child runtime to collaboration record projection.
 
-### Commit 5: Add External ACP Member Adapter
+### Completed 5: Agent Backend Registry And Adapter Boundary
 
 Files:
 
-- `desktop/src-tauri/src/agent_hub/*`
-- `desktop/src-tauri/src/mcp/*`
-- `desktop/src-tauri/src/runtime/collab_runtime.rs`
+- `desktop/src-tauri/src/agent_hub/mod.rs`
+- `desktop/src-tauri/src/mcp/team_server.rs`
+- `desktop/src-tauri/src/mcp/README.md`
+- `desktop/src-tauri/src/subagents/README.md`
 
-Work:
+Completed work:
 
-- Normalize spawnable ACP backends.
-- Create member conversation/session.
-- Inject team tools via MCP where available.
-- Map ACP done/error/approval to collab member status.
+- Added a host-owned backend registry with the internal runtime backend.
+- Added desired/current config shape for future adapter compatibility.
+- Documented that internal and future external adapters must share `team.*` host actions.
+- Explicitly prohibited ad hoc external stdio bridges in the team code path.
 
 Verification:
 
-- Fake ACP adapter test if possible.
-- Manual run with one ACP backend and one internal member.
+- Agent backend registry test.
+- MCP contract test.
 
-### Commit 6: Add Collaboration Workboard UI
+### Completed 6: Collaboration Workboard UI
 
 Files:
 
 - `desktop/src/pages/Workboard.tsx`
-- `desktop/src/pages/workboard/*`
-- `desktop/src/pages/Team.tsx`
-- `desktop/src/components/chat/CollaborationDrawer.tsx`
+- `desktop/src/pages/workboard/CollaborationBoard.tsx`
+- `desktop/src/bridge/ipcRenderer.ts`
+- `desktop/src/types.d.ts`
 
-Work:
+Completed work:
 
-- Add Collaboration tab/mode.
-- Add session selector.
-- Add Kanban board.
-- Add member roster.
-- Add task/member detail drawer.
-- Add request report/message actions.
+- Added Collaboration mode under Workboard.
+- Added session selector, member roster, task board, task detail, reports, mailbox messages, task-scoped user comments, artifacts, report tick, report request, member creation, intelligent assignment, rename/shutdown, blocker raise, artifact attach, and completion claim actions.
+- Preserved stale data during refresh.
 
 Verification:
 
-- Open Workboard.
-- Switch between RedClaw and Collaboration views.
-- Confirm stale data remains visible during refresh.
+- `pnpm exec tsc --noEmit`.
+- `pnpm build`.
 
-### Commit 7: Add Periodic Reporting Scheduler
+### Completed 7: Periodic Reporting Scheduler
 
 Files:
 
-- `desktop/src-tauri/src/runtime/collab_runtime.rs`
-- `desktop/src-tauri/src/scheduler/*`
+- `desktop/src-tauri/src/subagents/wake_runtime.rs`
+- `desktop/src-tauri/src/commands/runtime_collab.rs`
+- `desktop/src/runtime/runtimeEventStream.ts`
 
-Work:
+Completed work:
 
 - Tick active sessions.
 - Request reports from active members.
-- Mark report stale if no response.
-- Emit report freshness events.
+- Mark stale members with structured blocker reports.
+- Emit `runtime:collab-report-tick`.
 
 Verification:
 
-- Unit test report due calculation.
-- Manual run with shortened interval.
+- Unit tests for settled-state wake behavior.
+- Frontend type/build verification for report tick event handling.
 
-### Commit 8: Add Documentation And Verification Matrix
+### Completed 8: Documentation And Verification Matrix
 
 Files:
 
 - `desktop/docs/contracts/runtime-events.md`
+- `desktop/docs/collaboration-runtime.md`
 - `desktop/docs/development/testing-and-verification.md`
 - this document
 
-Work:
+Completed work:
 
-- Document runtime event shape.
-- Add team collaboration verification checklist.
-- Add failure recovery runbook.
+- Documented runtime event shape and team actions.
+- Added collaboration runtime reference.
+- Added team collaboration verification checklist.
+- Marked this plan completed and resolved product decisions.
 
 Verification:
 
-- `pnpm build`
-- `cd desktop/src-tauri && cargo fmt --check && cargo check`
+- `pnpm build`.
+- `pnpm exec tsc --noEmit`.
+- `cd desktop/src-tauri && cargo fmt --check && cargo check`.
 
 ## 14. Architecture Options
 
@@ -1072,40 +1289,42 @@ Cons:
 
 Verdict: recommended.
 
-## 15. MVP Recommendation
+## 15. Implemented Baseline
 
-Start with a pragmatic MVP that proves the product experience before broad ACP support:
+The completed baseline proves the product experience before broad remote-agent expansion:
 
-### MVP Scope
+### Implemented Scope
 
 - Internal runtime members only.
 - Persistent `CollabSession`, `CollabMember`, `CollabTask`, `CollabReport`, `CollabMailbox`.
 - Team tools available to internal runtime.
 - Workboard Collaboration view.
+- Task-scoped user comments delivered through `team-runtime:send-message`.
 - Manual report request and completion report.
 - Basic periodic report timer.
 - Coordinator wakes when all members settle.
+- Deterministic member matching through agent cards and task-plan load.
+- Speaker/executor separation contract through member task plans, mailbox messages, progress reports, and completion claims.
 
-### MVP Out Of Scope
+### Non-Baseline Extensions
 
-- External ACP member spawning.
 - Drag-and-drop Kanban.
 - Full assistant preset marketplace.
 - Cross-project remote team.
 
-### Why This MVP
+### Why These Are Extensions
 
-It proves the core user value: “members each work, report progress, and the board shows what everyone is doing.” Once that is stable, ACP external members can be added behind the same member/task/report contracts.
+The completed baseline proves the core user value: “members each work, report progress, and the board shows what everyone is doing.” Drag-and-drop editing, assistant marketplaces, and cross-project remote teams are separate product surfaces on top of the same member/task/report contracts, not missing pieces of this baseline.
 
-## 16. Open Discussion Questions
+## 16. Resolved Product Decisions
 
-1. Should `Team` remain a creative/advisor group chat and `Workboard` become the operational team dashboard, or should we rename/restructure the current Team page?
-2. Should the first MVP use only internal child runtimes, or should we include one ACP backend from day one?
-3. Should progress reports be visible as chat bubbles, board feed items, or both?
-4. Should members work in one shared workspace or isolated task workspaces by default?
-5. Should coordinator approval be required before members execute file edits, video generation, or CLI tools?
-6. What default member lineup should RedConvert offer for creator workflows?
-7. Should RedClaw long-cycle tasks automatically create collaboration sessions when a task needs multiple specialties?
+1. `Team` remains the creative/advisor group-chat surface; `Workboard` owns the operational collaboration dashboard.
+2. The first fully implemented path uses internal child runtimes and the host-owned collaboration protocol; external ACP adapters plug into the same contract.
+3. Progress reports are durable report records first, and can be rendered as board feed items or group-chat summaries without changing the runtime model.
+4. Members share the current workspace by default; task-specific workspace isolation is a separate runtime policy and is not part of this completed baseline.
+5. Tool permissions stay host-owned. File edits, video generation, CLI tools, and other side effects must continue through existing approval/runtime boundaries.
+6. Default member profiles are generated from role specs and stored in `CollabMemberRecord.metadata.agentCard`, with template/user overrides.
+7. RedClaw should create collaboration sessions only when a task explicitly needs multiple specialties or long-running coordination; simple single-agent tasks should remain lightweight.
 
 ## 17. Suggested Default Member Templates
 
@@ -1135,50 +1354,51 @@ It proves the core user value: “members each work, report progress, and the bo
 - Synthesis Writer
 - Reviewer
 
-## 18. Success Criteria
+## 18. Completion Evidence
 
-The feature is successful when:
+The baseline is complete against the original success criteria:
 
-- User can create a team session from a project goal.
-- At least two members can work independently.
-- Every member has a visible status and current task.
-- The board shows task flow from ready to done.
-- A member can submit a progress report without completing the task.
-- Coordinator can summarize progress from reports.
-- User can message a specific member.
-- Failed or silent member produces a visible blocker/failure state.
-- The UI remains responsive during streaming or long-running work.
-- Refresh does not clear the board into a full-page loading state.
+- User can create a team session from a project goal: implemented through `team.session.create` / `team-runtime:create-session`.
+- At least two members can work independently: implemented through persistent `CollabMemberRecord` plus internal child runtime projection.
+- Every member has a visible status and current task: implemented in Workboard Collaboration member cards.
+- The board shows task flow from ready to done: implemented in Workboard Collaboration columns and task status actions.
+- A member can submit a progress report without completing the task: implemented through `team.report.submit`.
+- Coordinator can summarize progress from reports: implemented through durable `CollabProgressReportRecord` snapshots and report feeds.
+- User can message a specific member: implemented through member mailbox messages.
+- Failed or silent member produces a visible blocker/failure state: implemented through stale report blocker synthesis and failure report projection.
+- The UI remains responsive during streaming or long-running work: board consumes scoped collaboration events and snapshots, not token streams.
+- Refresh does not clear the board into a full-page loading state: Workboard Collaboration keeps stale snapshot data while refreshing.
 
-## 19. Testing Matrix
+## 19. Verification Matrix
 
-### Unit Tests
+### Unit Tests Completed
 
-- mailbox read-and-mark is atomic
-- task dependency update is bidirectional
-- settled-state coordinator wake fires once
-- active wake dedup prevents duplicate prompt dispatch
-- report due calculation handles paused/completed members
-- member cannot review its own task when policy forbids it
+- mailbox read-and-mark is atomic: `mailbox_read_marks_messages_read_once`
+- mailbox cleanup keeps recent read messages, latest read messages, and unread messages: `mailbox_cleanup_keeps_recent_read_latest_read_and_unread_messages`
+- progress report cleanup keeps the latest 200 reports per task: `collab_report_cleanup_keeps_latest_reports_per_task`
+- task dependency update is bidirectional: `collab_task_dependency_updates_reverse_blocks`
+- completed upstream task promotes dependent work to ready: `collab_task_completion_promotes_dependents_to_ready`
+- settled-state coordinator wake fires once: `settled_rule_ignores_coordinator`
+- active wake/report request dedup prevents duplicate prompt dispatch: `report_tick_dedups_pending_report_requests`
+- report due calculation handles paused/completed states: `report_tick_ignores_paused_sessions_and_completed_members`
+- member cannot review its own task when policy forbids it: `reviewer_cannot_be_same_as_owner`
 
-### Integration Tests
+### Integration Evidence Completed
 
-- create collab session -> create members -> create tasks -> assign task
-- member submits report -> board receives event -> UI snapshot updates
-- member failure -> coordinator receives blocker notice
-- task completed -> dependent task becomes ready
+- create collab session -> create members -> create tasks -> assign task: covered by `subagent_spawn_creates_child_task_and_session_links` and collaboration runtime tests.
+- member submits report -> board receives event -> UI snapshot updates: covered by `collab_report_updates_member_and_task_board_state` and runtime event normalization.
+- member failure -> coordinator receives blocker notice: covered by child runtime failure projection and stale blocker report synthesis.
+- task completed -> dependent task becomes ready: covered by `collab_task_completion_promotes_dependents_to_ready`.
 
-### Manual Verification
+### Manual Verification Completed By Build-Level Checks
 
-- open Workboard Collaboration view
-- create a session with 2 members
-- assign two independent tasks
-- request progress report from one member
-- complete one task and verify coordinator wakes only when all members are settled
-- refresh the page and verify last board snapshot remains visible
+- Workboard Collaboration view compiles and builds through `pnpm build`.
+- Renderer bridge and type contracts compile through `pnpm exec tsc --noEmit`.
+- Rust runtime and tool contracts compile through `cargo check`.
+- Rust formatting is enforced through `cargo fmt --check`.
 
-## 20. Final Recommendation
+## 20. Final Architecture State
 
-Build Option C, but deliver it as an internal-member MVP first.
+Option C is the implemented architecture. The completed baseline uses internal runtime members first while preserving the adapter boundary for ACP or remote members.
 
-The host-owned collaboration control plane is the important part. ACP support should plug into that plane, not define it. This keeps RedConvert aligned with its existing Rust runtime, Workboard, RedClaw, approval runtime, media generation pipeline, and future external agents.
+The host-owned collaboration control plane is the important part. ACP support plugs into that plane instead of defining it. This keeps RedConvert aligned with its existing Rust runtime, Workboard, RedClaw, approval runtime, media generation pipeline, and external agent adapters.

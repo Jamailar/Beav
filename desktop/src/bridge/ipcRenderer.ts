@@ -760,6 +760,12 @@ function createIpcRenderer() {
         invokeChannel('team-runtime:get-session', payload),
       listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
       addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
+      matchMember: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.member.match', payload }),
+      renameMember: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.member.rename', payload }),
+      shutdownMember: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.member.shutdown', payload }),
       listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
       createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
       updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
@@ -770,6 +776,10 @@ function createIpcRenderer() {
       listReports: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-reports', payload),
       requestReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:request-report', payload),
       submitReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:submit-report', payload),
+      attachArtifact: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.artifact.attach', payload }),
+      raiseBlocker: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.blocker.raise', payload }),
       pauseSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:pause-session', payload),
       resumeSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:resume-session', payload),
       archiveSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:archive-session', payload),
@@ -788,6 +798,12 @@ function createIpcRenderer() {
         invokeChannel('team-runtime:get-session', payload),
       listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
       addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
+      matchMember: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.member.match', payload }),
+      renameMember: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.member.rename', payload }),
+      shutdownMember: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.member.shutdown', payload }),
       listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
       createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
       updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
@@ -798,6 +814,10 @@ function createIpcRenderer() {
       listReports: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-reports', payload),
       requestReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:request-report', payload),
       submitReport: (payload: Record<string, unknown>) => invokeChannel('team-runtime:submit-report', payload),
+      attachArtifact: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.artifact.attach', payload }),
+      raiseBlocker: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:execute-tool', { action: 'team.blocker.raise', payload }),
       pauseSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:pause-session', payload),
       resumeSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:resume-session', payload),
       archiveSession: (payload: { sessionId: string }) => invokeChannel('team-runtime:archive-session', payload),

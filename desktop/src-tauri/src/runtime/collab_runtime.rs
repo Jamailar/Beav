@@ -1,12 +1,14 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::runtime::{
-    CollabMailboxMessageRecord, CollabMemberRecord, CollabProgressReportRecord,
-    CollabSessionRecord, CollabSessionSnapshot, CollabTaskRecord,
+    runtime_subagent_role_spec, CollabMailboxMessageRecord, CollabMemberRecord,
+    CollabProgressReportRecord, CollabSessionRecord, CollabSessionSnapshot, CollabTaskRecord,
 };
 use crate::{make_id, now_i64, AppStore};
 
 const DEFAULT_PROGRESS_INTERVAL_MS: i64 = 15 * 60 * 1000;
+const COLLAB_MAILBOX_READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+const COLLAB_REPORTS_KEEP_LATEST_PER_TASK: usize = 200;
 
 fn value_string(payload: &Value, key: &str) -> Option<String> {
     payload
@@ -45,8 +47,272 @@ fn value_object(payload: &Value, key: &str) -> Option<Value> {
     payload.get(key).filter(|value| value.is_object()).cloned()
 }
 
-fn member_metadata_from_payload(payload: &Value) -> Option<Value> {
-    let mut object = value_object(payload, "metadata")
+fn sync_task_dependency_links(store: &mut AppStore, session_id: &str) {
+    let session_task_ids = store
+        .collab_tasks
+        .iter()
+        .filter(|task| task.session_id == session_id)
+        .map(|task| task.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let edges = store
+        .collab_tasks
+        .iter()
+        .filter(|task| task.session_id == session_id)
+        .flat_map(|task| {
+            task.depends_on_task_ids
+                .iter()
+                .filter(|dependency_id| session_task_ids.contains(*dependency_id))
+                .map(|dependency_id| (dependency_id.clone(), task.id.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    for task in store
+        .collab_tasks
+        .iter_mut()
+        .filter(|task| task.session_id == session_id)
+    {
+        task.blocks_task_ids
+            .retain(|blocked_id| !session_task_ids.contains(blocked_id));
+    }
+    for (dependency_id, blocked_task_id) in edges {
+        if let Some(task) = store
+            .collab_tasks
+            .iter_mut()
+            .find(|task| task.session_id == session_id && task.id == dependency_id)
+        {
+            if !task.blocks_task_ids.contains(&blocked_task_id) {
+                task.blocks_task_ids.push(blocked_task_id);
+            }
+        }
+    }
+}
+
+fn promote_ready_dependents(store: &mut AppStore, session_id: &str, now: i64) {
+    let completed_task_ids = store
+        .collab_tasks
+        .iter()
+        .filter(|task| task.session_id == session_id && task.status == "completed")
+        .map(|task| task.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    for task in store
+        .collab_tasks
+        .iter_mut()
+        .filter(|task| task.session_id == session_id)
+    {
+        if task.depends_on_task_ids.is_empty()
+            || !matches!(task.status.as_str(), "todo" | "backlog" | "blocked")
+        {
+            continue;
+        }
+        if task
+            .depends_on_task_ids
+            .iter()
+            .all(|dependency_id| completed_task_ids.contains(dependency_id))
+        {
+            task.status = "ready".to_string();
+            task.blocked_by_task_ids
+                .retain(|task_id| !completed_task_ids.contains(task_id));
+            task.updated_at = now;
+        }
+    }
+}
+
+fn completion_claim_payload(
+    payload: &Value,
+    session_id: &str,
+    member_id: &str,
+    status: &str,
+    summary: &str,
+) -> Option<Value> {
+    if status != "completed" {
+        return value_object(payload, "payload");
+    }
+    let mut object = value_object(payload, "payload")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    object.insert(
+        "completionClaim".to_string(),
+        json!({
+            "sessionId": session_id,
+            "taskId": value_string(payload, "taskId"),
+            "memberId": member_id,
+            "status": "completed",
+            "summary": summary,
+            "evidence": value_vec(payload, "evidence").unwrap_or_default(),
+            "artifactRefs": value_vec(payload, "artifacts")
+                .unwrap_or_default()
+                .into_iter()
+                .chain(value_string_array(payload, "artifactIds").into_iter().map(|id| json!({ "id": id })))
+                .collect::<Vec<_>>(),
+            "handoff": value_string(payload, "handoff"),
+            "risks": value_string_array(payload, "risks")
+        }),
+    );
+    Some(Value::Object(object))
+}
+
+fn value_string_array_or_default(payload: &Value, key: &str, fallback: &[&str]) -> Vec<Value> {
+    let values = value_string_array(payload, key);
+    if values.is_empty() {
+        fallback.iter().map(|value| json!(value)).collect()
+    } else {
+        values.into_iter().map(Value::String).collect()
+    }
+}
+
+fn merge_object_defaults(defaults: Value, overlay: Option<Value>) -> Value {
+    let mut object = defaults.as_object().cloned().unwrap_or_default();
+    if let Some(Value::Object(overlay)) = overlay {
+        for (key, value) in overlay {
+            object.insert(key, value);
+        }
+    }
+    Value::Object(object)
+}
+
+fn role_profile_defaults(role_id: &str) -> Value {
+    let role_spec = runtime_subagent_role_spec(role_id);
+    let normalized_role = role_id.trim().to_ascii_lowercase();
+    let (specialties, good_at, preferred_tasks, avoid_tasks, allowed_families) =
+        match normalized_role.as_str() {
+            "planner" => (
+                vec!["task_planning", "dependency_mapping", "execution_design"],
+                vec!["拆解目标", "定义阶段", "发现依赖", "生成可派发任务"],
+                vec!["planning", "coordination", "task_decomposition"],
+                vec!["final_review", "long_form_copy"],
+                vec!["team.task", "team.member", "knowledge.search"],
+            ),
+            "researcher" => (
+                vec!["research", "source_synthesis", "knowledge_retrieval"],
+                vec!["检索证据", "整理来源", "标注不确定项", "形成研究摘要"],
+                vec!["research", "evidence_collection", "knowledge_lookup"],
+                vec!["visual_generation", "final_delivery_claim"],
+                vec!["redbox_fs", "knowledge.search", "web.search"],
+            ),
+            "copywriter" => (
+                vec!["writing", "editing", "publishing_copy"],
+                vec!["正文成稿", "标题包装", "发布话术", "内容润色"],
+                vec!["copywriting", "manuscript_creation", "content_polish"],
+                vec!["source_verification", "media_rendering"],
+                vec!["manuscripts", "redbox_fs", "redbox_editor"],
+            ),
+            "image-director" => (
+                vec!["image_generation", "cover_direction", "visual_prompting"],
+                vec!["视觉方案", "图片提示词", "封面构图", "出图验收"],
+                vec!["image_generation", "cover_design", "visual_direction"],
+                vec!["backend_debugging", "long_code_review"],
+                vec!["media.generate", "image.generate", "redbox_fs"],
+            ),
+            "animation-director" => (
+                vec!["video_animation", "remotion", "shot_design"],
+                vec!["镜头规划", "动画结构", "时间线表达", "可执行视觉规范"],
+                vec!["animation_design", "video_generation", "timeline_planning"],
+                vec!["legal_review", "billing_debugging"],
+                vec!["redbox_editor", "media.generate", "redbox_fs"],
+            ),
+            "reviewer" => (
+                vec!["quality_review", "verification", "risk_detection"],
+                vec!["验收结果", "发现缺口", "阻止伪成功", "生成修复建议"],
+                vec!["review", "verification", "acceptance_check"],
+                vec!["primary_authoring", "self_review"],
+                vec!["redbox_fs", "team.task", "knowledge.search"],
+            ),
+            _ => (
+                vec!["operations", "maintenance", "runtime_coordination"],
+                vec!["后台推进", "状态检查", "恢复任务", "维护运行链路"],
+                vec!["ops", "maintenance", "runtime_recovery"],
+                vec!["brand_copy", "visual_concept"],
+                vec!["app_cli", "redbox_fs", "runtime"],
+            ),
+        };
+
+    json!({
+        "version": 1,
+        "memberId": "",
+        "displayName": "",
+        "roleId": normalized_role,
+        "oneLine": role_spec.purpose,
+        "persona": role_spec.system_prompt,
+        "specialties": specialties,
+        "goodAt": good_at,
+        "notGoodAt": [],
+        "preferredTasks": preferred_tasks,
+        "avoidTasks": avoid_tasks,
+        "toolPolicy": {
+            "allowedFamilies": allowed_families,
+            "allowedTools": [],
+            "requiresConfirmation": []
+        },
+        "capacity": {
+            "maxExecutorThreads": 5,
+            "defaultExecutorThreads": 1
+        },
+        "decisionBoundary": role_spec.handoff_contract,
+        "outputSchema": role_spec.output_schema
+    })
+}
+
+fn build_member_agent_card(
+    member_id: &str,
+    display_name: &str,
+    role_id: &str,
+    capabilities: &[String],
+    allowed_tools: &[String],
+    payload: &Value,
+    metadata: Option<&Value>,
+) -> Value {
+    let overlay = metadata.and_then(|value| value.get("agentCard").cloned());
+    let mut card = merge_object_defaults(role_profile_defaults(role_id), overlay);
+    let Some(object) = card.as_object_mut() else {
+        return card;
+    };
+
+    object.insert("memberId".to_string(), json!(member_id));
+    object.insert("displayName".to_string(), json!(display_name));
+    object.insert("roleId".to_string(), json!(role_id));
+    if !capabilities.is_empty() {
+        object.insert("capabilities".to_string(), json!(capabilities));
+    }
+    if !allowed_tools.is_empty() {
+        let policy = object
+            .entry("toolPolicy".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(policy_object) = policy.as_object_mut() {
+            policy_object.insert("allowedTools".to_string(), json!(allowed_tools));
+        }
+    }
+
+    for key in ["oneLine", "persona", "decisionBoundary", "outputSchema"] {
+        if let Some(value) = payload.get(key).filter(|value| !value.is_null()) {
+            object.insert(key.to_string(), value.clone());
+        }
+    }
+    for (key, fallback) in [
+        ("specialties", &[] as &[&str]),
+        ("goodAt", &[] as &[&str]),
+        ("notGoodAt", &[] as &[&str]),
+        ("preferredTasks", &[] as &[&str]),
+        ("avoidTasks", &[] as &[&str]),
+    ] {
+        let values = value_string_array_or_default(payload, key, fallback);
+        if !values.is_empty() {
+            object.insert(key.to_string(), Value::Array(values));
+        }
+    }
+    card
+}
+
+fn member_metadata_from_payload(
+    member_id: &str,
+    session_id: &str,
+    display_name: &str,
+    role_id: &str,
+    capabilities: &[String],
+    allowed_tools: &[String],
+    payload: &Value,
+) -> Option<Value> {
+    let mut metadata = value_object(payload, "metadata")
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
     for key in [
@@ -56,17 +322,30 @@ fn member_metadata_from_payload(payload: &Value) -> Option<Value> {
         "rootPath",
         "knowledgeRootPath",
     ] {
-        if object.contains_key(key) {
-            continue;
-        }
-        if let Some(value) = payload.get(key).cloned() {
-            object.insert(key.to_string(), value);
+        if let Some(value) = payload.get(key).filter(|value| !value.is_null()) {
+            metadata.insert(key.to_string(), value.clone());
         }
     }
-    if object.is_empty() {
+    let metadata_value = Value::Object(metadata.clone());
+    let agent_card = build_member_agent_card(
+        member_id,
+        display_name,
+        role_id,
+        capabilities,
+        allowed_tools,
+        payload,
+        Some(&metadata_value),
+    );
+    metadata.insert("agentCard".to_string(), agent_card);
+    let plan_overlay = metadata.get("memberTaskPlan");
+    metadata.insert(
+        "memberTaskPlan".to_string(),
+        initial_member_task_plan(member_id, session_id, plan_overlay),
+    );
+    if metadata.is_empty() {
         None
     } else {
-        Some(Value::Object(object))
+        Some(Value::Object(metadata))
     }
 }
 
@@ -221,6 +500,553 @@ pub fn list_collab_members(store: &AppStore, session_id: &str) -> Vec<CollabMemb
     members
 }
 
+fn normalized_match_terms(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut terms = Vec::new();
+    for value in values {
+        for part in value
+            .split(|ch: char| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        ',' | '，'
+                            | '.'
+                            | '。'
+                            | ';'
+                            | '；'
+                            | ':'
+                            | '：'
+                            | '/'
+                            | '|'
+                            | '-'
+                            | '_'
+                            | '('
+                            | ')'
+                            | '（'
+                            | '）'
+                    )
+            })
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            let normalized = part.to_ascii_lowercase();
+            if normalized.chars().count() >= 2 && !terms.contains(&normalized) {
+                terms.push(normalized);
+            }
+        }
+    }
+    terms
+}
+
+fn text_term_matches(text: &str, terms: &[String]) -> usize {
+    let text = text.to_ascii_lowercase();
+    terms
+        .iter()
+        .filter(|term| text.contains(term.as_str()))
+        .count()
+}
+
+fn string_array_from_value(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn match_array_terms(value: Option<&Value>, requested: &[String]) -> usize {
+    let candidates = string_array_from_value(value);
+    requested
+        .iter()
+        .filter(|requested| {
+            candidates.iter().any(|candidate| {
+                let candidate = candidate.to_ascii_lowercase();
+                candidate == **requested || candidate.contains(requested.as_str())
+            })
+        })
+        .count()
+}
+
+fn agent_card_for_member(member: &CollabMemberRecord) -> Value {
+    member
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("agentCard"))
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| {
+            build_member_agent_card(
+                &member.id,
+                &member.display_name,
+                &member.role_id,
+                &member.capabilities,
+                &member.allowed_tools,
+                &json!({}),
+                None,
+            )
+        })
+}
+
+fn agent_card_capacity(agent_card: &Value) -> i64 {
+    agent_card
+        .pointer("/capacity/maxExecutorThreads")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(5)
+}
+
+fn initial_member_task_plan(member_id: &str, session_id: &str, overlay: Option<&Value>) -> Value {
+    let mut plan = json!({
+        "version": 1,
+        "memberId": member_id,
+        "sessionId": session_id,
+        "activeExecutors": [],
+        "tasks": [],
+        "speechQueue": []
+    });
+    if let Some(Value::Object(overlay)) = overlay {
+        if let Some(object) = plan.as_object_mut() {
+            for (key, value) in overlay {
+                object.insert(key.clone(), value.clone());
+            }
+            object.insert("memberId".to_string(), json!(member_id));
+            object.insert("sessionId".to_string(), json!(session_id));
+            object
+                .entry("version".to_string())
+                .or_insert_with(|| json!(1));
+            object
+                .entry("activeExecutors".to_string())
+                .or_insert_with(|| json!([]));
+            object
+                .entry("tasks".to_string())
+                .or_insert_with(|| json!([]));
+            object
+                .entry("speechQueue".to_string())
+                .or_insert_with(|| json!([]));
+        }
+    }
+    plan
+}
+
+fn is_active_task_status(status: &str) -> bool {
+    matches!(status, "running" | "in_progress" | "working" | "blocked")
+}
+
+fn member_active_executor_count(
+    store: &AppStore,
+    session_id: &str,
+    member_id: &str,
+    excluding_task_id: Option<&str>,
+) -> i64 {
+    store
+        .collab_tasks
+        .iter()
+        .filter(|task| task.session_id == session_id)
+        .filter(|task| task.member_id.as_deref() == Some(member_id))
+        .filter(|task| excluding_task_id.map_or(true, |task_id| task.id != task_id))
+        .filter(|task| is_active_task_status(task.status.as_str()))
+        .count() as i64
+}
+
+fn member_max_executor_threads(member: &CollabMemberRecord) -> i64 {
+    agent_card_capacity(&agent_card_for_member(member))
+}
+
+fn validate_member_executor_capacity(
+    store: &AppStore,
+    session_id: &str,
+    member_id: &str,
+    status: &str,
+    excluding_task_id: Option<&str>,
+) -> Result<(), String> {
+    if !is_active_task_status(status) {
+        return Ok(());
+    }
+    let member = store
+        .collab_members
+        .iter()
+        .find(|member| member.session_id == session_id && member.id == member_id)
+        .ok_or_else(|| "协作成员不存在或不属于该会话".to_string())?;
+    let active_count =
+        member_active_executor_count(store, session_id, member_id, excluding_task_id);
+    let max_threads = member_max_executor_threads(member);
+    if active_count >= max_threads {
+        Err(format!(
+            "成员 {} 的后台执行线程已满：{active_count}/{max_threads}",
+            member.display_name
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn task_artifact_refs(task: &CollabTaskRecord) -> Vec<Value> {
+    task.artifact_ids
+        .iter()
+        .map(|artifact_id| json!({ "id": artifact_id }))
+        .chain(task.artifacts.iter().cloned())
+        .collect()
+}
+
+fn speech_item(reason: &str, priority: i64, summary: String, task_id: Option<&str>) -> Value {
+    json!({
+        "reason": reason,
+        "priority": priority,
+        "summary": summary,
+        "taskId": task_id,
+        "createdAt": now_i64()
+    })
+}
+
+fn upsert_member_task_plan(
+    member: &mut CollabMemberRecord,
+    task: &CollabTaskRecord,
+    report: Option<&CollabProgressReportRecord>,
+) {
+    let mut metadata = member
+        .metadata
+        .take()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let existing_plan = metadata.get("memberTaskPlan");
+    let mut plan = initial_member_task_plan(&member.id, &member.session_id, existing_plan);
+
+    if let Some(object) = plan.as_object_mut() {
+        let tasks = object
+            .entry("tasks".to_string())
+            .or_insert_with(|| json!([]));
+        if !tasks.is_array() {
+            *tasks = json!([]);
+        }
+        if let Some(items) = tasks.as_array_mut() {
+            let position = items.iter().position(|item| {
+                item.get("taskId").and_then(Value::as_str) == Some(task.id.as_str())
+            });
+            let mut task_plan = position
+                .and_then(|index| items.get(index).cloned())
+                .unwrap_or_else(|| json!({}));
+            if let Some(task_object) = task_plan.as_object_mut() {
+                task_object.insert("taskId".to_string(), json!(task.id));
+                task_object.insert("status".to_string(), json!(task.status));
+                task_object.insert("objective".to_string(), json!(task.objective));
+                task_object.insert(
+                    "ownerThreadId".to_string(),
+                    json!(task
+                        .runtime_task_id
+                        .clone()
+                        .unwrap_or_else(|| format!("executor:{}", task.id))),
+                );
+                task_object.insert(
+                    "artifactRefs".to_string(),
+                    Value::Array(task_artifact_refs(task)),
+                );
+                if let Some(report) = report {
+                    task_object.insert("lastReportId".to_string(), json!(report.id));
+                    task_object.insert(
+                        "lastEvidence".to_string(),
+                        report.payload.clone().unwrap_or_else(|| json!({})),
+                    );
+                    task_object.insert("nextSteps".to_string(), json!(report.next_steps));
+                    task_object.insert("blockers".to_string(), json!(report.blockers));
+                } else {
+                    task_object
+                        .entry("nextSteps".to_string())
+                        .or_insert_with(|| json!([]));
+                    task_object
+                        .entry("blockers".to_string())
+                        .or_insert_with(|| json!([]));
+                    task_object
+                        .entry("lastEvidence".to_string())
+                        .or_insert_with(|| json!([]));
+                }
+            }
+            if let Some(index) = position {
+                items[index] = task_plan;
+            } else {
+                items.push(task_plan);
+            }
+        }
+
+        let active_executors = object
+            .entry("activeExecutors".to_string())
+            .or_insert_with(|| json!([]));
+        if !active_executors.is_array() {
+            *active_executors = json!([]);
+        }
+        if let Some(items) = active_executors.as_array_mut() {
+            items.retain(|item| {
+                item.get("taskId").and_then(Value::as_str) != Some(task.id.as_str())
+            });
+            if is_active_task_status(task.status.as_str()) {
+                items.push(json!({
+                    "taskId": task.id,
+                    "threadId": task.runtime_task_id.clone().unwrap_or_else(|| format!("executor:{}", task.id)),
+                    "status": task.status,
+                    "updatedAt": task.updated_at
+                }));
+            }
+        }
+
+        if let Some(report) = report {
+            let priority = match report.report_type.as_str() {
+                "completion" => 90,
+                "failure" | "blocker" => 80,
+                "milestone" => 60,
+                _ => 40,
+            };
+            let speech_queue = object
+                .entry("speechQueue".to_string())
+                .or_insert_with(|| json!([]));
+            if !speech_queue.is_array() {
+                *speech_queue = json!([]);
+            }
+            if let Some(items) = speech_queue.as_array_mut() {
+                items.push(speech_item(
+                    report.report_type.as_str(),
+                    priority,
+                    report.summary.clone(),
+                    report.task_id.as_deref(),
+                ));
+                items.sort_by(|left, right| {
+                    let left_priority = left.get("priority").and_then(Value::as_i64).unwrap_or(0);
+                    let right_priority = right.get("priority").and_then(Value::as_i64).unwrap_or(0);
+                    right_priority.cmp(&left_priority)
+                });
+                if items.len() > 20 {
+                    items.truncate(20);
+                }
+            }
+        }
+    }
+
+    metadata.insert("memberTaskPlan".to_string(), plan);
+    member.metadata = Some(Value::Object(metadata));
+}
+
+fn remove_member_task_from_plan(
+    store: &mut AppStore,
+    session_id: &str,
+    member_id: &str,
+    task_id: &str,
+) {
+    let Some(member) = store
+        .collab_members
+        .iter_mut()
+        .find(|member| member.session_id == session_id && member.id == member_id)
+    else {
+        return;
+    };
+    let mut metadata = member
+        .metadata
+        .take()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let Some(plan) = metadata
+        .get_mut("memberTaskPlan")
+        .and_then(Value::as_object_mut)
+    else {
+        member.metadata = Some(Value::Object(metadata));
+        return;
+    };
+    if let Some(tasks) = plan.get_mut("tasks").and_then(Value::as_array_mut) {
+        tasks.retain(|item| item.get("taskId").and_then(Value::as_str) != Some(task_id));
+    }
+    if let Some(active_executors) = plan
+        .get_mut("activeExecutors")
+        .and_then(Value::as_array_mut)
+    {
+        active_executors.retain(|item| item.get("taskId").and_then(Value::as_str) != Some(task_id));
+    }
+    member.metadata = Some(Value::Object(metadata));
+}
+
+pub fn match_collab_members_for_task(store: &AppStore, payload: &Value) -> Result<Value, String> {
+    let session_id =
+        value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    validate_session(store, &session_id)?;
+
+    let limit = value_i64(payload, "limit")
+        .filter(|value| *value > 0)
+        .map(|value| value as usize)
+        .unwrap_or(5);
+    let desired_role = value_string(payload, "roleId").map(|value| value.to_ascii_lowercase());
+    let task_type = value_string(payload, "taskType").map(|value| value.to_ascii_lowercase());
+    let objective = [
+        value_string(payload, "title"),
+        value_string(payload, "objective"),
+        value_string(payload, "description"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let objective_terms = normalized_match_terms(objective);
+    let required_capabilities =
+        normalized_match_terms(value_string_array(payload, "requiredCapabilities"));
+    let required_tool_families =
+        normalized_match_terms(value_string_array(payload, "requiredToolFamilies"));
+    let preferred_tasks = normalized_match_terms(
+        value_string_array(payload, "preferredTasks")
+            .into_iter()
+            .chain(task_type.clone()),
+    );
+
+    let mut candidates = Vec::new();
+    for member in list_collab_members(store, &session_id) {
+        let agent_card = agent_card_for_member(&member);
+        let max_executor_threads = agent_card_capacity(&agent_card);
+        let active_executor_count = store
+            .collab_tasks
+            .iter()
+            .filter(|task| task.session_id == session_id)
+            .filter(|task| task.member_id.as_deref() == Some(member.id.as_str()))
+            .filter(|task| matches!(task.status.as_str(), "running" | "in_progress" | "blocked"))
+            .count() as i64;
+        let mut score = 0_i64;
+        let mut reasons = Vec::<String>::new();
+
+        if let Some(desired_role) = desired_role.as_deref() {
+            if desired_role == member.role_id.to_ascii_lowercase() {
+                score += 35;
+                reasons.push("role_exact".to_string());
+            }
+        }
+
+        let preferred_task_hits =
+            match_array_terms(agent_card.get("preferredTasks"), &preferred_tasks);
+        if preferred_task_hits > 0 {
+            score += preferred_task_hits as i64 * 20;
+            reasons.push(format!("preferred_task:{preferred_task_hits}"));
+        }
+
+        let capability_hits = required_capabilities
+            .iter()
+            .filter(|term| {
+                member.capabilities.iter().any(|capability| {
+                    let capability = capability.to_ascii_lowercase();
+                    capability == **term || capability.contains(term.as_str())
+                }) || match_array_terms(agent_card.get("capabilities"), std::slice::from_ref(*term))
+                    > 0
+                    || match_array_terms(agent_card.get("specialties"), std::slice::from_ref(*term))
+                        > 0
+            })
+            .count();
+        if capability_hits > 0 {
+            score += capability_hits as i64 * 15;
+            reasons.push(format!("capability:{capability_hits}"));
+        }
+
+        let tool_family_hits = required_tool_families
+            .iter()
+            .filter(|term| {
+                member.allowed_tools.iter().any(|tool| {
+                    let tool = tool.to_ascii_lowercase();
+                    tool == **term || tool.contains(term.as_str())
+                }) || match_array_terms(
+                    agent_card.pointer("/toolPolicy/allowedFamilies"),
+                    std::slice::from_ref(*term),
+                ) > 0
+                    || match_array_terms(
+                        agent_card.pointer("/toolPolicy/allowedTools"),
+                        std::slice::from_ref(*term),
+                    ) > 0
+            })
+            .count();
+        if tool_family_hits > 0 {
+            score += tool_family_hits as i64 * 12;
+            reasons.push(format!("tool_family:{tool_family_hits}"));
+        }
+
+        let specialty_hits = match_array_terms(agent_card.get("specialties"), &objective_terms)
+            + match_array_terms(agent_card.get("goodAt"), &objective_terms);
+        if specialty_hits > 0 {
+            score += specialty_hits as i64 * 8;
+            reasons.push(format!("objective_fit:{specialty_hits}"));
+        }
+
+        let persona_text = [
+            agent_card.get("oneLine").and_then(Value::as_str),
+            agent_card.get("persona").and_then(Value::as_str),
+            agent_card.get("decisionBoundary").and_then(Value::as_str),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+        let text_hits = text_term_matches(&persona_text, &objective_terms);
+        if text_hits > 0 {
+            score += text_hits as i64 * 2;
+            reasons.push(format!("profile_text:{text_hits}"));
+        }
+
+        let avoid_hits = match_array_terms(agent_card.get("avoidTasks"), &preferred_tasks)
+            + match_array_terms(agent_card.get("avoidTasks"), &objective_terms);
+        if avoid_hits > 0 {
+            score -= avoid_hits as i64 * 25;
+            reasons.push(format!("avoid_task:{avoid_hits}"));
+        }
+
+        if active_executor_count >= max_executor_threads {
+            score -= 100;
+            reasons.push("capacity_full".to_string());
+        } else if active_executor_count > 0 {
+            score -= active_executor_count * 5;
+            reasons.push(format!("active_load:{active_executor_count}"));
+        }
+
+        if reasons.is_empty() {
+            reasons.push("fallback_available".to_string());
+        }
+
+        candidates.push(json!({
+            "memberId": member.id,
+            "displayName": member.display_name,
+            "roleId": member.role_id,
+            "status": member.status,
+            "score": score,
+            "reasons": reasons,
+            "activeExecutorCount": active_executor_count,
+            "maxExecutorThreads": max_executor_threads,
+            "agentCard": agent_card
+        }));
+    }
+
+    candidates.sort_by(|left, right| {
+        let left_score = left.get("score").and_then(Value::as_i64).unwrap_or(0);
+        let right_score = right.get("score").and_then(Value::as_i64).unwrap_or(0);
+        right_score.cmp(&left_score).then_with(|| {
+            left.get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .cmp(
+                    right
+                        .get("displayName")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+        })
+    });
+    candidates.truncate(limit);
+
+    Ok(json!({
+        "sessionId": session_id,
+        "query": {
+            "roleId": desired_role,
+            "taskType": task_type,
+            "objectiveTerms": objective_terms,
+            "requiredCapabilities": required_capabilities,
+            "requiredToolFamilies": required_tool_families,
+            "preferredTasks": preferred_tasks
+        },
+        "candidates": candidates
+    }))
+}
+
 pub fn list_collab_tasks(store: &AppStore, session_id: &str) -> Vec<CollabTaskRecord> {
     let mut tasks: Vec<CollabTaskRecord> = store
         .collab_tasks
@@ -361,18 +1187,23 @@ pub fn add_collab_member(
         value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
     validate_session(store, &session_id)?;
     let now = now_i64();
+    let member_id = next_collab_id("collab-member", |candidate| {
+        store
+            .collab_members
+            .iter()
+            .any(|member| member.id == candidate)
+    });
+    let display_name = value_string(payload, "displayName")
+        .or_else(|| value_string(payload, "name"))
+        .unwrap_or_else(|| "协作成员".to_string());
+    let role_id = value_string(payload, "roleId").unwrap_or_else(|| "executor".to_string());
+    let capabilities = value_string_array(payload, "capabilities");
+    let allowed_tools = value_string_array(payload, "allowedTools");
     let member = CollabMemberRecord {
-        id: next_collab_id("collab-member", |candidate| {
-            store
-                .collab_members
-                .iter()
-                .any(|member| member.id == candidate)
-        }),
+        id: member_id.clone(),
         session_id: session_id.clone(),
-        display_name: value_string(payload, "displayName")
-            .or_else(|| value_string(payload, "name"))
-            .unwrap_or_else(|| "协作成员".to_string()),
-        role_id: value_string(payload, "roleId").unwrap_or_else(|| "executor".to_string()),
+        display_name: display_name.clone(),
+        role_id: role_id.clone(),
         source_kind: value_string(payload, "sourceKind")
             .or_else(|| value_string(payload, "adapterKind"))
             .unwrap_or_else(|| "internal_runtime".to_string()),
@@ -383,8 +1214,8 @@ pub fn add_collab_member(
         current_task_id: value_string(payload, "currentTaskId"),
         conversation_id: value_string(payload, "conversationId"),
         runtime_id: value_string(payload, "runtimeId"),
-        capabilities: value_string_array(payload, "capabilities"),
-        allowed_tools: value_string_array(payload, "allowedTools"),
+        capabilities: capabilities.clone(),
+        allowed_tools: allowed_tools.clone(),
         desired_model_config: value_object(payload, "desiredModelConfig"),
         current_model_config: value_object(payload, "currentModelConfig"),
         progress_interval_ms: value_i64(payload, "progressIntervalMs")
@@ -397,13 +1228,104 @@ pub fn add_collab_member(
         last_report_at: None,
         last_activity_at: None,
         last_error: None,
-        metadata: member_metadata_from_payload(payload),
+        metadata: member_metadata_from_payload(
+            &member_id,
+            &session_id,
+            &display_name,
+            &role_id,
+            &capabilities,
+            &allowed_tools,
+            payload,
+        ),
         created_at: now,
         updated_at: now,
     };
     store.collab_members.push(member.clone());
     touch_session(store, &session_id, now);
     Ok(member)
+}
+
+pub fn rename_collab_member(
+    store: &mut AppStore,
+    payload: &Value,
+) -> Result<CollabMemberRecord, String> {
+    let session_id =
+        value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    let member_id = value_string(payload, "memberId").ok_or_else(|| "缺少 memberId".to_string())?;
+    validate_session(store, &session_id)?;
+    let now = now_i64();
+    let member = store
+        .collab_members
+        .iter_mut()
+        .find(|member| member.session_id == session_id && member.id == member_id)
+        .ok_or_else(|| "协作成员不存在或不属于该会话".to_string())?;
+    if let Some(display_name) =
+        value_string(payload, "displayName").or_else(|| value_string(payload, "name"))
+    {
+        member.display_name = display_name.clone();
+        if let Some(agent_card) = member
+            .metadata
+            .as_mut()
+            .and_then(Value::as_object_mut)
+            .and_then(|metadata| metadata.get_mut("agentCard"))
+            .and_then(Value::as_object_mut)
+        {
+            agent_card.insert("displayName".to_string(), json!(display_name));
+        }
+    }
+    if let Some(role_id) = value_string(payload, "roleId") {
+        member.role_id = role_id.clone();
+        if let Some(agent_card) = member
+            .metadata
+            .as_mut()
+            .and_then(Value::as_object_mut)
+            .and_then(|metadata| metadata.get_mut("agentCard"))
+            .and_then(Value::as_object_mut)
+        {
+            agent_card.insert("roleId".to_string(), json!(role_id));
+        }
+    }
+    member.updated_at = now;
+    let updated = member.clone();
+    touch_session(store, &session_id, now);
+    Ok(updated)
+}
+
+pub fn shutdown_collab_member(
+    store: &mut AppStore,
+    payload: &Value,
+) -> Result<CollabMemberRecord, String> {
+    let session_id =
+        value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    let member_id = value_string(payload, "memberId").ok_or_else(|| "缺少 memberId".to_string())?;
+    validate_session(store, &session_id)?;
+    let now = now_i64();
+    let member = store
+        .collab_members
+        .iter_mut()
+        .find(|member| member.session_id == session_id && member.id == member_id)
+        .ok_or_else(|| "协作成员不存在或不属于该会话".to_string())?;
+    member.status = value_string(payload, "status").unwrap_or_else(|| "offline".to_string());
+    member.current_task_id = None;
+    member.last_error = value_string(payload, "reason");
+    member.updated_at = now;
+    member.last_activity_at = Some(now);
+    let mut metadata = member
+        .metadata
+        .take()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    metadata.insert(
+        "shutdown".to_string(),
+        json!({
+            "at": now,
+            "reason": value_string(payload, "reason")
+        }),
+    );
+    member.metadata = Some(Value::Object(metadata));
+    let updated = member.clone();
+    touch_session(store, &session_id, now);
+    Ok(updated)
 }
 
 pub fn create_collab_task(
@@ -413,12 +1335,13 @@ pub fn create_collab_task(
     let session_id =
         value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
     validate_session(store, &session_id)?;
-    if let Some(member_id) = value_string(payload, "memberId") {
+    let assigned_member_id = value_string(payload, "memberId");
+    if let Some(member_id) = assigned_member_id.as_deref() {
         validate_member(store, &session_id, &member_id)?;
     }
     if let Some(reviewer_member_id) = value_string(payload, "reviewerMemberId") {
         validate_member(store, &session_id, &reviewer_member_id)?;
-        if value_string(payload, "memberId").as_deref() == Some(reviewer_member_id.as_str()) {
+        if assigned_member_id.as_deref() == Some(reviewer_member_id.as_str()) {
             return Err("任务负责人不能同时作为 reviewer".to_string());
         }
     }
@@ -429,6 +1352,10 @@ pub fn create_collab_task(
     let objective = value_string(payload, "objective")
         .or_else(|| value_string(payload, "goal"))
         .unwrap_or_else(|| "执行协作任务".to_string());
+    let status = value_string(payload, "status").unwrap_or_else(|| "todo".to_string());
+    if let Some(member_id) = assigned_member_id.as_deref() {
+        validate_member_executor_capacity(store, &session_id, member_id, &status, None)?;
+    }
     let now = now_i64();
     let task = CollabTaskRecord {
         id: next_collab_id("collab-task", |candidate| {
@@ -436,7 +1363,7 @@ pub fn create_collab_task(
         }),
         session_id: session_id.clone(),
         parent_task_id: value_string(payload, "parentTaskId"),
-        member_id: value_string(payload, "memberId"),
+        member_id: assigned_member_id,
         reviewer_member_id: value_string(payload, "reviewerMemberId"),
         title: value_string(payload, "title").unwrap_or_else(|| {
             objective
@@ -448,7 +1375,7 @@ pub fn create_collab_task(
         }),
         description: value_string(payload, "description").unwrap_or_else(|| objective.clone()),
         objective,
-        status: value_string(payload, "status").unwrap_or_else(|| "todo".to_string()),
+        status,
         priority: value_i64(payload, "priority").unwrap_or(0),
         task_type: value_string(payload, "taskType").unwrap_or_else(|| "work".to_string()),
         depends_on_task_ids: value_string_array(payload, "dependsOnTaskIds"),
@@ -468,6 +1395,23 @@ pub fn create_collab_task(
         completed_at: None,
     };
     store.collab_tasks.push(task.clone());
+    sync_task_dependency_links(store, &session_id);
+    promote_ready_dependents(store, &session_id, now);
+    let task = store
+        .collab_tasks
+        .iter()
+        .find(|item| item.id == task.id)
+        .cloned()
+        .unwrap_or(task);
+    if let Some(member_id) = task.member_id.as_deref() {
+        if let Some(member) = store
+            .collab_members
+            .iter_mut()
+            .find(|member| member.id == member_id && member.session_id == session_id)
+        {
+            upsert_member_task_plan(member, &task, None);
+        }
+    }
     touch_session(store, &session_id, now);
     Ok(task)
 }
@@ -497,8 +1441,25 @@ pub fn update_collab_task(
     for task_id in value_string_array(payload, "dependsOnTaskIds") {
         validate_task(store, &session_id, &task_id)?;
     }
+    let next_member_id = if payload.get("memberId").is_some() {
+        value_string(payload, "memberId")
+    } else {
+        store.collab_tasks[task_index].member_id.clone()
+    };
+    let next_status = value_string(payload, "status")
+        .unwrap_or_else(|| store.collab_tasks[task_index].status.clone());
+    if let Some(member_id) = next_member_id.as_deref() {
+        validate_member_executor_capacity(
+            store,
+            &session_id,
+            member_id,
+            &next_status,
+            Some(&task_id),
+        )?;
+    }
 
     let now = now_i64();
+    let previous_member_id = store.collab_tasks[task_index].member_id.clone();
     let task = &mut store.collab_tasks[task_index];
     if let Some(value) = value_string(payload, "title") {
         task.title = value;
@@ -569,7 +1530,29 @@ pub fn update_collab_task(
     } else {
         task.updated_at = now;
     }
-    let updated = task.clone();
+    let updated_id = task.id.clone();
+    sync_task_dependency_links(store, &session_id);
+    promote_ready_dependents(store, &session_id, now);
+    let updated = store
+        .collab_tasks
+        .iter()
+        .find(|task| task.id == updated_id)
+        .cloned()
+        .ok_or_else(|| "协作任务不存在".to_string())?;
+    if let Some(member_id) = updated.member_id.as_deref() {
+        if let Some(member) = store
+            .collab_members
+            .iter_mut()
+            .find(|member| member.id == member_id && member.session_id == session_id)
+        {
+            upsert_member_task_plan(member, &updated, None);
+        }
+    }
+    if previous_member_id.as_deref() != updated.member_id.as_deref() {
+        if let Some(previous_member_id) = previous_member_id.as_deref() {
+            remove_member_task_from_plan(store, &session_id, previous_member_id, &updated.id);
+        }
+    }
     touch_session(store, &session_id, now);
     Ok(updated)
 }
@@ -665,13 +1648,18 @@ pub fn read_collab_mailbox(
 
 pub fn cleanup_collab_mailbox(store: &mut AppStore, session_id: &str, keep_latest: usize) -> usize {
     let keep_latest = keep_latest.max(1);
+    let cutoff = now_i64().saturating_sub(COLLAB_MAILBOX_READ_TTL_MS);
     let mut read_messages: Vec<CollabMailboxMessageRecord> = store
         .collab_mailbox_messages
         .iter()
         .filter(|message| message.session_id == session_id && message.read_at.is_some())
         .cloned()
         .collect();
-    if read_messages.len() <= keep_latest {
+    let expired_count = read_messages
+        .iter()
+        .filter(|message| message.read_at.unwrap_or(message.created_at) < cutoff)
+        .count();
+    if read_messages.len() <= keep_latest || expired_count == 0 {
         return 0;
     }
     read_messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -684,9 +1672,61 @@ pub fn cleanup_collab_mailbox(store: &mut AppStore, session_id: &str, keep_lates
     store.collab_mailbox_messages.retain(|message| {
         message.session_id != session_id
             || message.read_at.is_none()
+            || message.read_at.unwrap_or(message.created_at) >= cutoff
             || keep_ids.contains(&message.id)
     });
     before.saturating_sub(store.collab_mailbox_messages.len())
+}
+
+fn cleanup_collab_reports_for_task(store: &mut AppStore, session_id: &str, task_id: &str) -> usize {
+    let matching_ids = store
+        .collab_progress_reports
+        .iter()
+        .filter(|report| {
+            report.session_id == session_id && report.task_id.as_deref() == Some(task_id)
+        })
+        .map(|report| report.id.clone())
+        .collect::<Vec<_>>();
+    let overflow = matching_ids
+        .len()
+        .saturating_sub(COLLAB_REPORTS_KEEP_LATEST_PER_TASK);
+    if overflow == 0 {
+        return 0;
+    }
+    let remove_ids = matching_ids
+        .into_iter()
+        .take(overflow)
+        .collect::<std::collections::HashSet<_>>();
+    let removed_summaries = store
+        .collab_progress_reports
+        .iter()
+        .filter(|report| remove_ids.contains(&report.id))
+        .map(|report| {
+            json!({
+                "id": report.id,
+                "reportType": report.report_type,
+                "status": report.status,
+                "summary": report.summary,
+                "createdAt": report.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    store
+        .collab_progress_reports
+        .retain(|report| !remove_ids.contains(&report.id));
+    if let Some(task) = store
+        .collab_tasks
+        .iter_mut()
+        .find(|task| task.session_id == session_id && task.id == task_id)
+    {
+        task.artifacts.push(json!({
+            "kind": "collab-report-archive",
+            "removedCount": overflow,
+            "archivedAt": now_i64(),
+            "reports": removed_summaries,
+        }));
+    }
+    overflow
 }
 
 pub fn submit_collab_report(
@@ -704,6 +1744,8 @@ pub fn submit_collab_report(
 
     let now = now_i64();
     let status = value_string(payload, "status").unwrap_or_else(|| "reported".to_string());
+    let status_is_completed = status == "completed";
+    let summary = value_string(payload, "summary").unwrap_or_default();
     let report = CollabProgressReportRecord {
         id: next_collab_id("collab-report", |candidate| {
             store
@@ -724,17 +1766,20 @@ pub fn submit_collab_report(
             .to_string()
         }),
         status: status.clone(),
-        summary: value_string(payload, "summary").unwrap_or_default(),
+        summary: summary.clone(),
         next_action: value_string(payload, "nextAction"),
         next_steps: value_string_array(payload, "nextSteps"),
         progress_percent: value_i64(payload, "progressPercent").map(|value| value.clamp(0, 100)),
         blockers: value_string_array(payload, "blockers"),
         artifacts: value_vec(payload, "artifacts").unwrap_or_default(),
         artifact_ids: value_string_array(payload, "artifactIds"),
-        payload: value_object(payload, "payload"),
+        payload: completion_claim_payload(payload, &session_id, &member_id, &status, &summary),
         created_at: now,
     };
     store.collab_progress_reports.push(report.clone());
+    if let Some(task_id) = report.task_id.as_deref() {
+        cleanup_collab_reports_for_task(store, &session_id, task_id);
+    }
 
     if let Some(member) = store
         .collab_members
@@ -742,11 +1787,14 @@ pub fn submit_collab_report(
         .find(|member| member.id == member_id && member.session_id == session_id)
     {
         member.status = value_string(payload, "memberStatus").unwrap_or_else(|| {
-            if status == "blocked" {
-                "blocked".to_string()
-            } else {
-                "working".to_string()
+            match status.as_str() {
+                "blocked" => "blocked",
+                "completed" => "completed",
+                "failed" => "failed",
+                "cancelled" => "idle",
+                _ => "working",
             }
+            .to_string()
         });
         member.current_task_id = report.task_id.clone().or(member.current_task_id.clone());
         member.last_seen_at = Some(now);
@@ -754,6 +1802,7 @@ pub fn submit_collab_report(
         member.updated_at = now;
     }
 
+    let mut updated_task = None;
     if let Some(task_id) = report.task_id.clone() {
         if let Some(task) = store
             .collab_tasks
@@ -772,19 +1821,103 @@ pub fn submit_collab_report(
                 task.result_summary = Some(report.summary.clone());
             }
             if !report.artifacts.is_empty() {
-                task.artifacts = report.artifacts.clone();
+                if report.report_type == "artifact" {
+                    task.artifacts.extend(report.artifacts.clone());
+                } else {
+                    task.artifacts = report.artifacts.clone();
+                }
             }
             if !report.artifact_ids.is_empty() {
-                task.artifact_ids = report.artifact_ids.clone();
+                if report.report_type == "artifact" {
+                    for artifact_id in report.artifact_ids.iter() {
+                        if !task.artifact_ids.contains(artifact_id) {
+                            task.artifact_ids.push(artifact_id.clone());
+                        }
+                    }
+                } else {
+                    task.artifact_ids = report.artifact_ids.clone();
+                }
             }
             if report.progress_percent.is_some() {
                 task.progress_percent = report.progress_percent;
             }
+            updated_task = Some(task.clone());
         }
+    }
+    if let Some(task) = updated_task.as_ref() {
+        if let Some(member) = store
+            .collab_members
+            .iter_mut()
+            .find(|member| member.id == member_id && member.session_id == session_id)
+        {
+            upsert_member_task_plan(member, task, Some(&report));
+        }
+    }
+    if status_is_completed {
+        promote_ready_dependents(store, &session_id, now);
     }
 
     touch_session(store, &session_id, now);
     Ok(report)
+}
+
+pub fn attach_collab_artifact(
+    store: &mut AppStore,
+    payload: &Value,
+) -> Result<CollabProgressReportRecord, String> {
+    let session_id =
+        value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    let task_id = value_string(payload, "taskId").ok_or_else(|| "缺少 taskId".to_string())?;
+    validate_session(store, &session_id)?;
+    validate_task(store, &session_id, &task_id)?;
+
+    let mut artifacts = value_vec(payload, "artifacts").unwrap_or_default();
+    if let Some(artifact) = payload.get("artifact").filter(|value| value.is_object()) {
+        artifacts.push(artifact.clone());
+    }
+    let artifact_ids = value_string_array(payload, "artifactIds");
+    if artifacts.is_empty() && artifact_ids.is_empty() {
+        return Err("缺少 artifact 或 artifactIds".to_string());
+    }
+
+    let report_payload = json!({
+        "sessionId": session_id,
+        "memberId": value_string(payload, "memberId").ok_or_else(|| "缺少 memberId".to_string())?,
+        "taskId": task_id,
+        "status": value_string(payload, "status").unwrap_or_else(|| "running".to_string()),
+        "reportType": "artifact",
+        "summary": value_string(payload, "summary").unwrap_or_else(|| "已附加任务产物。".to_string()),
+        "artifacts": artifacts,
+        "artifactIds": artifact_ids,
+        "payload": value_object(payload, "payload").unwrap_or_else(|| json!({}))
+    });
+    submit_collab_report(store, &report_payload)
+}
+
+pub fn raise_collab_blocker(
+    store: &mut AppStore,
+    payload: &Value,
+) -> Result<CollabProgressReportRecord, String> {
+    let blocker = value_string(payload, "blocker")
+        .or_else(|| value_string(payload, "summary"))
+        .unwrap_or_else(|| "任务被阻塞".to_string());
+    let mut report_payload = payload.clone();
+    let object = report_payload
+        .as_object_mut()
+        .ok_or_else(|| "blocker payload must be an object".to_string())?;
+    object
+        .entry("status".to_string())
+        .or_insert_with(|| json!("blocked"));
+    object
+        .entry("reportType".to_string())
+        .or_insert_with(|| json!("blocker"));
+    object
+        .entry("summary".to_string())
+        .or_insert_with(|| json!(blocker.clone()));
+    object
+        .entry("blockers".to_string())
+        .or_insert_with(|| json!([blocker]));
+    submit_collab_report(store, &report_payload)
 }
 
 pub fn request_collab_report(
@@ -812,7 +1945,7 @@ pub fn request_collab_report(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     use super::*;
 
@@ -880,6 +2013,81 @@ mod tests {
     }
 
     #[test]
+    fn collab_report_cleanup_keeps_latest_reports_per_task() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "report cleanup" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "Reporter" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "Long task",
+                "objective": "Generate many progress reports"
+            }),
+        )
+        .unwrap();
+        let other_task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "Other task",
+                "objective": "Keep separate report retention"
+            }),
+        )
+        .unwrap();
+
+        for index in 0..205 {
+            submit_collab_report(
+                &mut store,
+                &json!({
+                    "sessionId": session.id,
+                    "memberId": member.id,
+                    "taskId": task.id,
+                    "status": "running",
+                    "summary": format!("report-{index}")
+                }),
+            )
+            .unwrap();
+        }
+        submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": other_task.id,
+                "status": "running",
+                "summary": "other-report"
+            }),
+        )
+        .unwrap();
+
+        let task_reports = list_collab_reports(&store, &session.id, Some(&task.id), None, None);
+        let other_reports =
+            list_collab_reports(&store, &session.id, Some(&other_task.id), None, None);
+        let updated_task = store
+            .collab_tasks
+            .iter()
+            .find(|item| item.id == task.id)
+            .unwrap();
+
+        assert_eq!(task_reports.len(), 200);
+        assert_eq!(other_reports.len(), 1);
+        assert_eq!(task_reports.first().unwrap().summary, "report-5");
+        assert_eq!(task_reports.last().unwrap().summary, "report-204");
+        assert!(updated_task.artifacts.iter().any(|artifact| {
+            artifact.get("kind").and_then(Value::as_str) == Some("collab-report-archive")
+                && artifact.get("removedCount").and_then(Value::as_u64) == Some(1)
+        }));
+    }
+
+    #[test]
     fn collab_member_promotes_knowledge_binding_metadata() {
         let mut store = AppStore::default();
         let session =
@@ -938,5 +2146,415 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn collab_task_dependency_updates_reverse_blocks() {
+        let mut store = AppStore::default();
+        let session = create_collab_session(&mut store, &json!({ "objective": "deps" })).unwrap();
+        let first = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "先做"
+            }),
+        )
+        .unwrap();
+        let second = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "后做"
+            }),
+        )
+        .unwrap();
+        let dependent = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "依赖任务",
+                "dependsOnTaskIds": [first.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        let first_after_create = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == first.id)
+            .unwrap();
+        assert!(first_after_create.blocks_task_ids.contains(&dependent.id));
+
+        update_collab_task(
+            &mut store,
+            &json!({
+                "taskId": dependent.id.clone(),
+                "dependsOnTaskIds": [second.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        let first_after_update = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == first.id)
+            .unwrap();
+        let second_after_update = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == second.id)
+            .unwrap();
+        assert!(!first_after_update.blocks_task_ids.contains(&dependent.id));
+        assert!(second_after_update.blocks_task_ids.contains(&dependent.id));
+    }
+
+    #[test]
+    fn collab_task_completion_promotes_dependents_to_ready() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "promote" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "成员" }),
+        )
+        .unwrap();
+        let upstream = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "上游"
+            }),
+        )
+        .unwrap();
+        let downstream = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "下游",
+                "status": "blocked",
+                "dependsOnTaskIds": [upstream.id.clone()],
+                "blockedByTaskIds": [upstream.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": upstream.id,
+                "status": "completed",
+                "summary": "上游完成"
+            }),
+        )
+        .unwrap();
+
+        let downstream = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == downstream.id)
+            .unwrap();
+        assert_eq!(downstream.status, "ready");
+        assert!(downstream.blocked_by_task_ids.is_empty());
+    }
+
+    #[test]
+    fn collab_member_spawn_persists_agent_card_profile() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "profile" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "研究员",
+                "roleId": "researcher",
+                "capabilities": ["knowledge_retrieval"]
+            }),
+        )
+        .unwrap();
+
+        let agent_card = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agentCard"))
+            .expect("agent card should be persisted");
+        assert_eq!(
+            agent_card.get("memberId").and_then(Value::as_str),
+            Some(member.id.as_str())
+        );
+        assert_eq!(
+            agent_card.get("displayName").and_then(Value::as_str),
+            Some("研究员")
+        );
+        assert_eq!(
+            agent_card.get("roleId").and_then(Value::as_str),
+            Some("researcher")
+        );
+        assert_eq!(
+            agent_card
+                .pointer("/capacity/maxExecutorThreads")
+                .and_then(Value::as_i64),
+            Some(5)
+        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "research"));
+    }
+
+    #[test]
+    fn collab_member_match_prefers_task_specific_agent_card() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "visual production" }))
+                .unwrap();
+        add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "研究员",
+                "roleId": "researcher",
+                "capabilities": ["knowledge_retrieval"]
+            }),
+        )
+        .unwrap();
+        add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "图片导演",
+                "roleId": "image-director",
+                "capabilities": ["image_generation"],
+                "allowedTools": ["image.generate"]
+            }),
+        )
+        .unwrap();
+
+        let result = match_collab_members_for_task(
+            &store,
+            &json!({
+                "sessionId": session.id,
+                "title": "生成封面图",
+                "objective": "用生图工具生成封面和视觉方案",
+                "taskType": "image_generation",
+                "requiredCapabilities": ["image_generation"],
+                "requiredToolFamilies": ["image.generate"],
+                "limit": 2
+            }),
+        )
+        .unwrap();
+
+        let first = result
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .expect("candidate should exist");
+        assert_eq!(
+            first.get("roleId").and_then(Value::as_str),
+            Some("image-director")
+        );
+        assert!(first
+            .get("reasons")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("preferred_task")));
+    }
+
+    #[test]
+    fn collab_member_agent_card_allows_custom_profile_overlay() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "custom profile" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "审稿人",
+                "roleId": "reviewer",
+                "metadata": {
+                    "agentCard": {
+                        "oneLine": "专门检查交付风险",
+                        "preferredTasks": ["acceptance_check"]
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+        let agent_card = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agentCard"))
+            .unwrap();
+        assert_eq!(
+            agent_card.get("oneLine").and_then(Value::as_str),
+            Some("专门检查交付风险")
+        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "acceptance_check"));
+    }
+
+    #[test]
+    fn collab_member_task_plan_tracks_assignment_and_completion_claim() {
+        let mut store = AppStore::default();
+        let session = create_collab_session(&mut store, &json!({ "objective": "plan" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "执行者" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "执行任务",
+                "status": "running"
+            }),
+        )
+        .unwrap();
+
+        let report = submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": task.id,
+                "status": "completed",
+                "summary": "完成任务",
+                "evidence": [{ "kind": "file", "path": "workspace://done.md" }],
+                "handoff": "交给 reviewer",
+                "risks": []
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(report.report_type, "completion");
+        assert!(report
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("completionClaim"))
+            .is_some());
+        let member = store
+            .collab_members
+            .iter()
+            .find(|item| item.id == member.id)
+            .unwrap();
+        let plan = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("memberTaskPlan"))
+            .unwrap();
+        assert_eq!(
+            plan.pointer("/tasks/0/status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            plan.pointer("/speechQueue/0/reason")
+                .and_then(Value::as_str),
+            Some("completion")
+        );
+    }
+
+    #[test]
+    fn collab_member_executor_capacity_blocks_extra_running_tasks() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "capacity" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "有限执行者",
+                "metadata": {
+                    "agentCard": {
+                        "capacity": { "maxExecutorThreads": 1, "defaultExecutorThreads": 1 }
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "第一个任务",
+                "status": "running"
+            }),
+        )
+        .unwrap();
+
+        let result = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "第二个任务",
+                "status": "running"
+            }),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn collab_artifact_and_blocker_helpers_submit_structured_reports() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "helpers" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "成员" }),
+        )
+        .unwrap();
+        let task = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "产物任务"
+            }),
+        )
+        .unwrap();
+
+        let artifact_report = attach_collab_artifact(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": task.id,
+                "artifact": { "kind": "note", "path": "workspace://a.md" }
+            }),
+        )
+        .unwrap();
+        assert_eq!(artifact_report.report_type, "artifact");
+        let blocker_report = raise_collab_blocker(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": task.id,
+                "blocker": "等待输入"
+            }),
+        )
+        .unwrap();
+        assert_eq!(blocker_report.report_type, "blocker");
+        assert_eq!(blocker_report.status, "blocked");
     }
 }

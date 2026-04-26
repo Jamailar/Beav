@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::runtime::{
-    add_collab_member, collab_session_snapshot, create_collab_session, list_collab_members,
-    list_collab_reports, list_collab_sessions,
+    add_collab_member, attach_collab_artifact, collab_session_snapshot, create_collab_session,
+    list_collab_members, list_collab_reports, list_collab_sessions, match_collab_members_for_task,
+    raise_collab_blocker, rename_collab_member, shutdown_collab_member,
 };
 use crate::subagents::{
     team_mailbox_cleanup, team_mailbox_history, team_mailbox_read, team_mailbox_request_report,
@@ -47,6 +48,21 @@ pub fn team_tool_descriptors() -> Vec<TeamToolDescriptor> {
             mutating: true,
         },
         TeamToolDescriptor {
+            name: "team.member.match",
+            description: "Rank internal runtime collaboration members for a task.",
+            mutating: false,
+        },
+        TeamToolDescriptor {
+            name: "team.member.rename",
+            description: "Rename or retitle one internal runtime collaboration member.",
+            mutating: true,
+        },
+        TeamToolDescriptor {
+            name: "team.member.shutdown",
+            description: "Mark one internal runtime collaboration member offline or suspended.",
+            mutating: true,
+        },
+        TeamToolDescriptor {
             name: "team.message.send",
             description: "Send a durable mailbox message.",
             mutating: true,
@@ -76,6 +92,16 @@ pub fn team_tool_descriptors() -> Vec<TeamToolDescriptor> {
             description: "Request a progress report through mailbox.",
             mutating: true,
         },
+        TeamToolDescriptor {
+            name: "team.artifact.attach",
+            description: "Attach artifact metadata to a team task.",
+            mutating: true,
+        },
+        TeamToolDescriptor {
+            name: "team.blocker.raise",
+            description: "Raise a blocker report for a team task.",
+            mutating: true,
+        },
     ]
 }
 
@@ -103,6 +129,9 @@ pub fn execute_team_tool(
             Ok(json!(list_collab_members(store, &session_id)))
         }
         "team.member.spawn" => Ok(json!(add_collab_member(store, payload)?)),
+        "team.member.match" => Ok(match_collab_members_for_task(store, payload)?),
+        "team.member.rename" => Ok(json!(rename_collab_member(store, payload)?)),
+        "team.member.shutdown" => Ok(json!(shutdown_collab_member(store, payload)?)),
         "team.message.send" => Ok(json!(team_mailbox_send(store, payload)?)),
         "team.message.read" => Ok(json!(team_mailbox_read(store, payload)?)),
         "team.message.history" => {
@@ -150,6 +179,8 @@ pub fn execute_team_tool(
         }
         "team.report.submit" => Ok(json!(crate::runtime::submit_collab_report(store, payload)?)),
         "team.report.request" => Ok(json!(team_mailbox_request_report(store, payload)?)),
+        "team.artifact.attach" => Ok(json!(attach_collab_artifact(store, payload)?)),
+        "team.blocker.raise" => Ok(json!(raise_collab_blocker(store, payload)?)),
         "team.report.list" => {
             let session_id =
                 payload_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
