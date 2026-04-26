@@ -39,6 +39,28 @@ const ANNOUNCEMENT_STORAGE_PREFIX = 'redbox:startup-announcement:v1:';
 // 只要 `id` 或 `version` 变化，弹窗就会对该版本重新展示一次。
 export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
   {
+    id: 'release-1.10.3-runtime-collaboration',
+    version: '1.10.3',
+    badge: 'v1.10.3 更新',
+    title: '工具运行时和协作工作台更稳了',
+    summary: '这次主要增强 MCP / 工具路由、协作工作台和成员技能，把长任务执行、团队分工和过程回放整理得更清楚。',
+    highlights: [
+      'MCP 工具目录、执行计划和权限边界更清晰。',
+      '协作工作台支持任务评论、执行报告保留和成员能力匹配。',
+      '聊天过程展示更紧凑，自动更新、知识库和插件采集也做了稳定性修复。',
+    ],
+    hero: [
+      { id: 'knowledge', label: '工具运行时', icon: 'knowledge' },
+      { id: 'automation', label: '协作工作台', icon: 'automation' },
+      { id: 'draft', label: '过程回放', icon: 'draft' },
+    ],
+    shortcuts: [
+      { id: 'workboard', label: '去工作台', view: 'workboard' },
+      { id: 'team', label: '去团队', view: 'team' },
+      { id: 'skills', label: '去技能', view: 'skills' },
+    ],
+  },
+  {
     id: 'release-1.9.4-product-workflow',
     version: '1.9.4',
     badge: 'v1.9.4 新功能',
