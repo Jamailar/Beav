@@ -1,7 +1,10 @@
 use arboard::Clipboard;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::logging::event::LogLevel;
@@ -15,6 +18,227 @@ use crate::{
     now_iso, payload_field, payload_string, payload_value_as_string, pick_files_native,
     refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
 };
+
+const APP_UPDATE_RELEASES_PAGE_URL: &str = "https://github.com/Jamailar/RedBox/releases";
+const APP_UPDATE_LATEST_RELEASE_API_URL: &str =
+    "https://api.github.com/repos/Jamailar/RedBox/releases/latest";
+const APP_UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+const APP_UPDATE_CHECK_MIN_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+#[derive(Default)]
+struct AppUpdateCheckState {
+    in_flight: bool,
+    last_checked_at: Option<Instant>,
+    last_notified_version: String,
+}
+
+static APP_UPDATE_CHECK_STATE: OnceLock<Mutex<AppUpdateCheckState>> = OnceLock::new();
+
+#[derive(Deserialize)]
+struct GithubReleaseResponse {
+    tag_name: Option<String>,
+    html_url: Option<String>,
+    name: Option<String>,
+    draft: Option<bool>,
+    prerelease: Option<bool>,
+    published_at: Option<String>,
+    body: Option<String>,
+}
+
+struct LatestGithubRelease {
+    version: String,
+    html_url: String,
+    name: String,
+    published_at: String,
+    body: String,
+}
+
+fn app_update_state() -> &'static Mutex<AppUpdateCheckState> {
+    APP_UPDATE_CHECK_STATE.get_or_init(|| Mutex::new(AppUpdateCheckState::default()))
+}
+
+fn normalize_version_tag(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches(|value| value == 'v' || value == 'V')
+        .to_string()
+}
+
+fn parse_semver_like(input: &str) -> [u64; 4] {
+    let normalized = normalize_version_tag(input);
+    let base = normalized.split('-').next().unwrap_or_default();
+    let mut parts = [0_u64; 4];
+    for (index, item) in base.split('.').take(4).enumerate() {
+        parts[index] = item.parse::<u64>().unwrap_or(0);
+    }
+    parts
+}
+
+fn compare_semver_like(current: &str, latest: &str) -> std::cmp::Ordering {
+    parse_semver_like(current).cmp(&parse_semver_like(latest))
+}
+
+fn is_http_url(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.starts_with("https://") || normalized.starts_with("http://")
+}
+
+fn fetch_latest_github_release() -> Result<LatestGithubRelease, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(APP_UPDATE_CHECK_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(APP_UPDATE_LATEST_RELEASE_API_URL)
+        .header("Accept", "application/vnd.github+json")
+        .header(
+            "User-Agent",
+            format!("RedBox/{}", env!("CARGO_PKG_VERSION")),
+        )
+        .send()
+        .map_err(|error| error.to_string())?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("GitHub latest release not found".to_string());
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "GitHub latest release request failed: HTTP {}",
+            response.status()
+        ));
+    }
+
+    let data = response
+        .json::<GithubReleaseResponse>()
+        .map_err(|error| error.to_string())?;
+    if data.draft.unwrap_or(false) {
+        return Err("Latest release is draft".to_string());
+    }
+    if data.prerelease.unwrap_or(false) {
+        return Err("Latest release is prerelease".to_string());
+    }
+
+    let version = normalize_version_tag(data.tag_name.as_deref().unwrap_or_default());
+    if version.is_empty() {
+        return Err("Latest release tag is empty".to_string());
+    }
+
+    Ok(LatestGithubRelease {
+        version,
+        html_url: data
+            .html_url
+            .unwrap_or_else(|| APP_UPDATE_RELEASES_PAGE_URL.to_string()),
+        name: data.name.unwrap_or_default(),
+        published_at: data.published_at.unwrap_or_default(),
+        body: data.body.unwrap_or_default(),
+    })
+}
+
+fn maybe_emit_app_update_available(
+    app: &AppHandle,
+    payload: &Value,
+    latest_version: &str,
+    force_notify: bool,
+) {
+    let should_emit = {
+        let Ok(mut state) = app_update_state().lock() else {
+            return;
+        };
+        if !force_notify && state.last_notified_version == latest_version {
+            false
+        } else {
+            state.last_notified_version = latest_version.to_string();
+            true
+        }
+    };
+
+    if should_emit {
+        let _ = app.emit("app:update-available", payload.clone());
+    }
+}
+
+fn check_app_update(app: &AppHandle, force: bool, force_notify: bool) -> Result<Value, String> {
+    let now = Instant::now();
+    {
+        let mut state = app_update_state()
+            .lock()
+            .map_err(|_| "App update state lock is poisoned".to_string())?;
+        if state.in_flight {
+            return Ok(json!({
+                "success": false,
+                "hasUpdate": false,
+                "inFlight": true,
+                "message": "Update check already in flight",
+            }));
+        }
+        if !force
+            && state
+                .last_checked_at
+                .map(|last_checked_at| {
+                    now.duration_since(last_checked_at) < APP_UPDATE_CHECK_MIN_INTERVAL
+                })
+                .unwrap_or(false)
+        {
+            return Ok(json!({
+                "success": true,
+                "hasUpdate": false,
+                "throttled": true,
+                "message": "Update check skipped due to interval throttling",
+            }));
+        }
+        state.in_flight = true;
+        state.last_checked_at = Some(now);
+    }
+
+    let result: Result<Value, String> = (|| {
+        let latest = fetch_latest_github_release()?;
+        let current_version = normalize_version_tag(env!("CARGO_PKG_VERSION"));
+        let has_update =
+            compare_semver_like(&current_version, &latest.version) == std::cmp::Ordering::Less;
+        let notice = json!({
+            "currentVersion": current_version,
+            "latestVersion": latest.version,
+            "htmlUrl": if latest.html_url.is_empty() {
+                APP_UPDATE_RELEASES_PAGE_URL.to_string()
+            } else {
+                latest.html_url.clone()
+            },
+            "name": latest.name,
+            "publishedAt": latest.published_at,
+            "body": latest.body,
+        });
+
+        if has_update {
+            maybe_emit_app_update_available(app, &notice, &latest.version, force_notify);
+        }
+
+        Ok(json!({
+            "success": true,
+            "hasUpdate": has_update,
+            "notice": notice,
+        }))
+    })();
+
+    if let Ok(mut state) = app_update_state().lock() {
+        state.in_flight = false;
+    }
+
+    match result {
+        Ok(value) => Ok(value),
+        Err(message) if message == "GitHub latest release not found" => Ok(json!({
+            "success": true,
+            "hasUpdate": false,
+            "message": "No published release found",
+        })),
+        Err(message) => {
+            eprintln!("[AppUpdate] check failed: {message}");
+            Ok(json!({
+                "success": false,
+                "hasUpdate": false,
+                "message": message,
+            }))
+        }
+    }
+}
 
 fn normalize_default_ai_route_settings(settings: &mut Value) {
     let default_source_id = payload_string(settings, "default_ai_source_id").unwrap_or_default();
@@ -152,17 +376,19 @@ pub fn handle_system_channel(
         | "clipboard:write-html" => (|| -> Result<Value, String> {
             match channel {
                 "app:get-version" => Ok(json!(env!("CARGO_PKG_VERSION"))),
-                "app:check-update" => Ok(json!({
-                    "success": true,
-                    "hasUpdate": false,
-                    "currentVersion": env!("CARGO_PKG_VERSION"),
-                })),
+                "app:check-update" => {
+                    let force = payload_field(payload, "force")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    check_app_update(app, force, force)
+                }
                 "app:open-release-page" => {
                     let url = payload_string(payload, "url")
                         .or_else(|| payload_value_as_string(payload))
-                        .unwrap_or_else(|| {
-                            "https://github.com/Jamailar/RedBox/releases".to_string()
-                        });
+                        .unwrap_or_else(|| APP_UPDATE_RELEASES_PAGE_URL.to_string());
+                    if !is_http_url(&url) {
+                        return Err("Invalid release URL".to_string());
+                    }
                     open::that(&url).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "url": url }))
                 }

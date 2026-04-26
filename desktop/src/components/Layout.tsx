@@ -184,8 +184,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       if (!payload || !payload.latestVersion) return;
       setUpdateNotice(payload);
     };
+    const updateCheckTimer = window.setTimeout(() => {
+      void window.ipcRenderer.checkAppUpdate(false).then((result) => {
+        if (result?.hasUpdate && result.notice) {
+          setUpdateNotice(result.notice);
+        }
+      }).catch((error) => {
+        console.warn('[AppUpdate] check failed:', error);
+      });
+    }, 1800);
     window.ipcRenderer.on('app:update-available', handleUpdateNotice);
     return () => {
+      window.clearTimeout(updateCheckTimer);
       window.ipcRenderer.off('app:update-available', handleUpdateNotice);
     };
   }, []);
