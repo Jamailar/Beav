@@ -312,11 +312,7 @@ interface GeneralSettingsSectionProps {
     setFormData: Dispatch<SetStateAction<any>>;
     notificationSettings: NotificationSettingsPayload;
     setNotificationSettings: Dispatch<SetStateAction<NotificationSettingsPayload>>;
-    notificationPermissionState: NotificationPermissionState['state'];
-    notificationStatusMessage: string;
     handleTestNotificationSound: () => Promise<void>;
-    handleRequestNotificationPermission: () => Promise<void>;
-    handleSendTestSystemNotification: () => Promise<void>;
     handlePickWorkspaceDir: () => Promise<void>;
     handleResetWorkspaceDir: () => void;
     handleOpenKnowledgeApiGuide: () => Promise<void>;
@@ -356,11 +352,7 @@ function GeneralSettingsSectionInner({
     setFormData,
     notificationSettings,
     setNotificationSettings,
-    notificationPermissionState,
-    notificationStatusMessage,
     handleTestNotificationSound,
-    handleRequestNotificationPermission,
-    handleSendTestSystemNotification,
     handlePickWorkspaceDir,
     handleResetWorkspaceDir,
     handleOpenKnowledgeApiGuide,
@@ -461,9 +453,6 @@ function GeneralSettingsSectionInner({
                             <Bell className="w-4 h-4" />
                             通知中心
                         </h3>
-                        <p className="text-xs text-text-tertiary mt-1">
-                            统一控制后台 AI、媒体生成和 RedClaw 任务的声音、弹窗和系统通知。
-                        </p>
                     </div>
                     <button
                         type="button"
@@ -479,68 +468,38 @@ function GeneralSettingsSectionInner({
                     </button>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
-                        <div>
-                            <div className="text-xs font-medium text-text-primary">应用内弹窗</div>
-                            <div className="text-[11px] text-text-tertiary mt-1">用统一 toast 提醒关键任务状态。</div>
-                        </div>
-                        <input
-                            type="checkbox"
-                            checked={notificationSettings.inApp.enabled}
-                            onChange={(event) => setNotificationSettings((current) => ({
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]">
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div className="text-xs font-medium text-text-primary">声音提醒</div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={notificationSettings.sound.enabled}
+                            aria-label="声音提醒"
+                            onClick={() => setNotificationSettings((current) => ({
                                 ...current,
-                                inApp: { ...current.inApp, enabled: event.target.checked },
+                                sound: { ...current.sound, enabled: !current.sound.enabled },
                             }))}
-                        />
-                    </label>
-                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
-                        <div>
-                            <div className="text-xs font-medium text-text-primary">声音提醒</div>
-                            <div className="text-[11px] text-text-tertiary mt-1">成功、失败、待确认使用不同提示音。</div>
+                            className={clsx(
+                                'relative inline-flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-primary/30',
+                                notificationSettings.sound.enabled ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
+                            )}
+                        >
+                            <span
+                                className={clsx(
+                                    'block h-6 w-6 rounded-full bg-white shadow-sm transition-transform',
+                                    notificationSettings.sound.enabled ? 'translate-x-5' : 'translate-x-0'
+                                )}
+                            />
+                        </button>
+                    </div>
+                    <div className="rounded-lg border border-border bg-surface-primary px-3 py-2">
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                            <label className="text-xs font-medium text-text-primary">音量</label>
+                            <span className="text-[11px] text-text-tertiary">
+                                {Math.round(notificationSettings.sound.volume * 100)}%
+                            </span>
                         </div>
-                        <input
-                            type="checkbox"
-                            checked={notificationSettings.sound.enabled}
-                            onChange={(event) => setNotificationSettings((current) => ({
-                                ...current,
-                                sound: { ...current.sound, enabled: event.target.checked },
-                            }))}
-                        />
-                    </label>
-                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
-                        <div>
-                            <div className="text-xs font-medium text-text-primary">系统通知</div>
-                            <div className="text-[11px] text-text-tertiary mt-1">窗口不在前台时可补充 OS 级通知。</div>
-                        </div>
-                        <input
-                            type="checkbox"
-                            checked={notificationSettings.system.enabled}
-                            onChange={(event) => setNotificationSettings((current) => ({
-                                ...current,
-                                system: { ...current.system, enabled: event.target.checked },
-                            }))}
-                        />
-                    </label>
-                    <label className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
-                        <div>
-                            <div className="text-xs font-medium text-text-primary">静默时段</div>
-                            <div className="text-[11px] text-text-tertiary mt-1">默认在该时段不播放成功提示音。</div>
-                        </div>
-                        <input
-                            type="checkbox"
-                            checked={notificationSettings.quietHours.enabled}
-                            onChange={(event) => setNotificationSettings((current) => ({
-                                ...current,
-                                quietHours: { ...current.quietHours, enabled: event.target.checked },
-                            }))}
-                        />
-                    </label>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                        <label className="block text-[11px] font-medium text-text-secondary mb-2">提示音音量</label>
                         <input
                             type="range"
                             min="0"
@@ -553,63 +512,7 @@ function GeneralSettingsSectionInner({
                             }))}
                             className="w-full"
                         />
-                        <div className="mt-1 text-[11px] text-text-tertiary">
-                            {Math.round(notificationSettings.sound.volume * 100)}%
-                        </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="block text-[11px] font-medium text-text-secondary mb-2">静默开始</label>
-                            <input
-                                type="time"
-                                value={notificationSettings.quietHours.start}
-                                onChange={(event) => setNotificationSettings((current) => ({
-                                    ...current,
-                                    quietHours: { ...current.quietHours, start: event.target.value },
-                                }))}
-                                className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-[11px] font-medium text-text-secondary mb-2">静默结束</label>
-                            <input
-                                type="time"
-                                value={notificationSettings.quietHours.end}
-                                onChange={(event) => setNotificationSettings((current) => ({
-                                    ...current,
-                                    quietHours: { ...current.quietHours, end: event.target.value },
-                                }))}
-                                className="w-full rounded border border-border bg-surface-primary px-3 py-2 text-sm"
-                            />
-                        </div>
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                    {([
-                        ['runtimeBackgroundDone', 'AI 后台完成'],
-                        ['runtimeFailed', 'AI 失败'],
-                        ['runtimeNeedsApproval', 'AI 待确认'],
-                        ['generationCompleted', '媒体生成完成'],
-                        ['generationFailed', '媒体生成失败'],
-                        ['redclawCompleted', 'RedClaw 完成'],
-                        ['redclawFailed', 'RedClaw 失败'],
-                    ] as const).map(([ruleKey, label]) => (
-                        <label key={ruleKey} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
-                            <div className="text-xs text-text-primary">{label}</div>
-                            <input
-                                type="checkbox"
-                                checked={notificationSettings.rules[ruleKey]}
-                                onChange={(event) => setNotificationSettings((current) => ({
-                                    ...current,
-                                    rules: {
-                                        ...current.rules,
-                                        [ruleKey]: event.target.checked,
-                                    },
-                                }))}
-                            />
-                        </label>
-                    ))}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -620,28 +523,7 @@ function GeneralSettingsSectionInner({
                     >
                         测试提醒音
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => void handleRequestNotificationPermission()}
-                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                    >
-                        请求系统通知权限
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => void handleSendTestSystemNotification()}
-                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                    >
-                        测试系统通知
-                    </button>
-                    <div className="text-[11px] text-text-tertiary">
-                        权限状态：{notificationPermissionState}
-                    </div>
                 </div>
-
-                {notificationStatusMessage ? (
-                    <div className="text-[11px] text-text-tertiary">{notificationStatusMessage}</div>
-                ) : null}
             </div>
 
             <div className={clsx(
