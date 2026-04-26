@@ -22,6 +22,7 @@ pub fn mcp_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     Ok(json!({
         "success": true,
         "servers": servers,
+        "effectiveServers": crate::mcp::config::effective_servers_value(&servers),
         "items": items,
         "sessions": sessions,
     }))
@@ -52,6 +53,14 @@ pub fn mcp_call_value(
 ) -> Result<Value, String> {
     if method.trim().is_empty() {
         return Ok(json!({ "success": false, "error": "缺少 method" }));
+    }
+    if !is_allowed_diagnostics_mcp_method(method) {
+        return Ok(json!({
+            "success": false,
+            "error": format!("unsupported MCP diagnostics method: {method}"),
+            "code": "MCP_METHOD_NOT_ALLOWED",
+            "allowedMethods": allowed_diagnostics_mcp_methods(),
+        }));
     }
     mcp_call_result_value(
         state,
@@ -242,21 +251,11 @@ pub fn handle_mcp_tools_channel(
             "mcp:list" => mcp_list_value(state),
             "mcp:save" => mcp_save_value(state, payload),
             "mcp:test" => {
-                let server: McpServerRecord = payload_field(payload, "server")
-                    .cloned()
-                    .ok_or_else(|| "缺少 server".to_string())
-                    .and_then(|value| {
-                        serde_json::from_value(value).map_err(|error| error.to_string())
-                    })?;
+                let server = resolve_mcp_server_from_payload(state, payload)?;
                 mcp_probe_value(state, &server)
             }
             "mcp:call" => {
-                let server: McpServerRecord = payload_field(payload, "server")
-                    .cloned()
-                    .ok_or_else(|| "缺少 server".to_string())
-                    .and_then(|value| {
-                        serde_json::from_value(value).map_err(|error| error.to_string())
-                    })?;
+                let server = resolve_mcp_server_from_payload(state, payload)?;
                 let method = payload_string(payload, "method").unwrap_or_default();
                 let params = payload_field(payload, "params")
                     .cloned()
@@ -271,12 +270,7 @@ pub fn handle_mcp_tools_channel(
                 mcp_typed_list_value(state, payload, McpListKind::ResourceTemplates)
             }
             "mcp:disconnect" => {
-                let server: McpServerRecord = payload_field(payload, "server")
-                    .cloned()
-                    .ok_or_else(|| "缺少 server".to_string())
-                    .and_then(|value| {
-                        serde_json::from_value(value).map_err(|error| error.to_string())
-                    })?;
+                let server = resolve_mcp_server_from_payload(state, payload)?;
                 mcp_disconnect_value(state, &server)
             }
             "mcp:disconnect-all" => mcp_disconnect_all_value(state),
@@ -499,10 +493,7 @@ fn mcp_typed_list_value(
     payload: &Value,
     kind: McpListKind,
 ) -> Result<Value, String> {
-    let server: McpServerRecord = payload_field(payload, "server")
-        .cloned()
-        .ok_or_else(|| "缺少 server".to_string())
-        .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))?;
+    let server = resolve_mcp_server_from_payload(state, payload)?;
     let session_id = payload_string(payload, "sessionId");
     match kind {
         McpListKind::Tools => mcp_list_tools_value(state, &server, session_id),
@@ -511,4 +502,44 @@ fn mcp_typed_list_value(
             mcp_list_resource_templates_value(state, &server, session_id)
         }
     }
+}
+
+fn resolve_mcp_server_from_payload(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<McpServerRecord, String> {
+    if let Some(server_value) = payload_field(payload, "server").cloned() {
+        return serde_json::from_value(server_value).map_err(|error| error.to_string());
+    }
+    let server_id = payload_string(payload, "serverId")
+        .or_else(|| payload_string(payload, "id"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "缺少 server 或 serverId".to_string())?;
+    with_store(state, |store| {
+        store
+            .mcp_servers
+            .iter()
+            .find(|server| server.id == server_id || server.name == server_id)
+            .cloned()
+            .ok_or_else(|| format!("MCP server `{server_id}` not found"))
+    })
+}
+
+fn allowed_diagnostics_mcp_methods() -> &'static [&'static str] {
+    &[
+        "initialize",
+        "tools/list",
+        "tools/call",
+        "resources/list",
+        "resources/read",
+        "resources/templates/list",
+        "ping",
+    ]
+}
+
+fn is_allowed_diagnostics_mcp_method(method: &str) -> bool {
+    allowed_diagnostics_mcp_methods()
+        .iter()
+        .any(|allowed| *allowed == method.trim())
 }

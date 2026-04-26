@@ -2,6 +2,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use crate::mcp::tool_exposure::build_mcp_tool_exposure;
+use crate::mcp::{McpToolInfo, McpToolInventorySnapshot};
 use crate::runtime::RedboxTurnContext;
 use crate::skills::build_skill_runtime_state;
 use crate::tools::catalog::{
@@ -25,6 +27,7 @@ pub struct ToolRegistryPlanParams<'a> {
     pub allowed_tool_names: Option<&'a [String]>,
     pub task_intent: Option<&'a str>,
     pub max_direct_app_cli_actions: Option<usize>,
+    pub mcp_inventory: Option<&'a McpToolInventorySnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +48,11 @@ pub struct ToolRegistryPlan {
     pub direct_app_cli_actions: Vec<ActionDescriptor>,
     pub deferred_app_cli_actions: Vec<DeferredActionEntry>,
     pub deferred_action_namespaces: Vec<String>,
+    pub direct_mcp_tools: Vec<McpToolInfo>,
+    pub deferred_mcp_tools: Vec<McpToolInfo>,
+    pub mcp_tool_namespaces: Vec<String>,
+    pub mcp_inventory_fingerprint: Option<String>,
+    pub mcp_exposure_mode: String,
     pub fingerprint: String,
 }
 
@@ -60,6 +68,18 @@ impl ToolRegistryPlan {
         self.deferred_app_cli_actions
             .iter()
             .any(|descriptor| descriptor.action == action)
+    }
+
+    pub fn direct_mcp_tool(&self, name: &str) -> Option<&McpToolInfo> {
+        self.direct_mcp_tools
+            .iter()
+            .find(|tool| tool.callable_name == name)
+    }
+
+    pub fn deferred_mcp_tool(&self, name: &str) -> Option<&McpToolInfo> {
+        self.deferred_mcp_tools
+            .iter()
+            .find(|tool| tool.callable_name == name)
     }
 }
 
@@ -95,6 +115,44 @@ pub fn build_tool_registry_plan_for_session(
             .and_then(|item| item.get("taskIntent"))
             .and_then(Value::as_str),
         max_direct_app_cli_actions: None,
+        mcp_inventory: None,
+    })
+}
+
+pub fn build_tool_registry_plan_for_session_with_mcp(
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    mcp_inventory: Option<&McpToolInventorySnapshot>,
+) -> ToolRegistryPlan {
+    let raw_metadata = session_metadata(store, session_id);
+    let effective_metadata = effective_member_runtime_metadata(store, raw_metadata);
+    let metadata = effective_metadata.as_ref().or(raw_metadata);
+    let internal_tool_names = base_tool_names_for_metadata(runtime_mode, metadata);
+    let skill_state =
+        build_skill_runtime_state(&store.skills, runtime_mode, metadata, &internal_tool_names);
+    let active_skills = skill_state
+        .active_skills
+        .iter()
+        .map(|skill| skill.name.clone())
+        .collect::<Vec<_>>();
+    let apply_member_tool_policy = should_apply_member_tool_policy(store, metadata);
+    let allowed_tool_names = if apply_member_tool_policy {
+        &skill_state.allowed_tools
+    } else {
+        &internal_tool_names
+    };
+    build_tool_registry_plan(ToolRegistryPlanParams {
+        runtime_mode,
+        session_id,
+        session_metadata: metadata,
+        active_skills: &active_skills,
+        allowed_tool_names: Some(allowed_tool_names),
+        task_intent: metadata
+            .and_then(|item| item.get("taskIntent"))
+            .and_then(Value::as_str),
+        max_direct_app_cli_actions: None,
+        mcp_inventory,
     })
 }
 
@@ -144,6 +202,7 @@ pub fn build_tool_registry_plan_for_turn_context(context: &RedboxTurnContext) ->
         allowed_tool_names: Some(&context.allowed_tool_names),
         task_intent: context.task_intent.as_deref(),
         max_direct_app_cli_actions: None,
+        mcp_inventory: None,
     })
 }
 
@@ -189,6 +248,7 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
+    let mcp_exposure = build_mcp_tool_exposure(params.mcp_inventory, params.session_metadata);
     let fingerprint = plan_fingerprint(
         &runtime_mode,
         params.session_id,
@@ -198,6 +258,19 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         &internal_tool_names,
         &direct_app_cli_actions,
         &deferred_action_namespaces,
+        params
+            .mcp_inventory
+            .map(|snapshot| snapshot.fingerprint.as_str()),
+        &mcp_exposure
+            .direct_tools
+            .iter()
+            .map(|tool| tool.callable_name.clone())
+            .collect::<Vec<_>>(),
+        &mcp_exposure
+            .deferred_tools
+            .iter()
+            .map(|tool| tool.callable_name.clone())
+            .collect::<Vec<_>>(),
     );
     ToolRegistryPlan {
         runtime_mode,
@@ -206,6 +279,13 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         direct_app_cli_actions,
         deferred_app_cli_actions,
         deferred_action_namespaces,
+        direct_mcp_tools: mcp_exposure.direct_tools,
+        deferred_mcp_tools: mcp_exposure.deferred_tools,
+        mcp_tool_namespaces: mcp_exposure.namespaces,
+        mcp_inventory_fingerprint: params
+            .mcp_inventory
+            .map(|snapshot| snapshot.fingerprint.clone()),
+        mcp_exposure_mode: mcp_exposure.mode,
         fingerprint,
     }
 }
@@ -344,7 +424,10 @@ fn pinned_direct_app_cli_actions(
             | "terminal"
             | "shell"
     );
-    if wants_host_cli || matches!(runtime_mode, "chatroom" | "redclaw" | "knowledge") {
+    let media_intent = matches!(task_intent, "image" | "video");
+    if wants_host_cli
+        || (!media_intent && matches!(runtime_mode, "chatroom" | "redclaw" | "knowledge"))
+    {
         &[
             "cli_runtime.inspect",
             "cli_runtime.diagnose",
@@ -441,6 +524,9 @@ fn plan_fingerprint(
     internal_tool_names: &[String],
     direct_app_cli_actions: &[ActionDescriptor],
     deferred_action_namespaces: &[String],
+    mcp_inventory_fingerprint: Option<&str>,
+    direct_mcp_tool_names: &[String],
+    deferred_mcp_tool_names: &[String],
 ) -> String {
     let mut hasher = DefaultHasher::new();
     runtime_mode.hash(&mut hasher);
@@ -453,6 +539,11 @@ fn plan_fingerprint(
         descriptor.action.hash(&mut hasher);
     }
     deferred_action_namespaces.hash(&mut hasher);
+    mcp_inventory_fingerprint
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    direct_mcp_tool_names.hash(&mut hasher);
+    deferred_mcp_tool_names.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
