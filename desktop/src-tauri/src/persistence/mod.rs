@@ -602,6 +602,12 @@ pub fn load_store(path: &PathBuf) -> AppStore {
     };
     let mut store = serde_json::from_str(&content).unwrap_or_else(|_| default_store());
     store.debug_logs.clear();
+    store.assistant_state.listening = false;
+    if store.assistant_state.last_error.as_deref()
+        == Some("RedClaw assistant daemon local listener is running.")
+    {
+        store.assistant_state.last_error = Some("RedClaw assistant daemon is idle.".to_string());
+    }
     let embedded_session_artifacts = take_session_artifacts_from_store(&mut store);
     let disk_session_ids =
         restore_session_artifacts_from_disk(path, &mut store).unwrap_or_default();
