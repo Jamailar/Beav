@@ -61,7 +61,7 @@ fn provider_error_from_transport(error: &LlmTransportError) -> ProviderError {
 
 fn extract_openai_json_assistant_response(
     response: &Value,
-) -> Result<(String, Vec<InteractiveToolCall>), ProviderError> {
+) -> Result<(String, String, Vec<InteractiveToolCall>), ProviderError> {
     let choice = response
         .get("choices")
         .and_then(|value| value.as_array())
@@ -86,6 +86,7 @@ fn extract_openai_json_assistant_response(
         .and_then(|value| value.as_str())
         .unwrap_or("")
         .to_string();
+    let reasoning_content = openai_json_reasoning_fragments(&assistant_message).join("");
     let tool_calls = assistant_message
         .get("tool_calls")
         .and_then(|value| value.as_array())
@@ -108,7 +109,7 @@ fn extract_openai_json_assistant_response(
             })
         })
         .collect::<Vec<_>>();
-    Ok((assistant_content, tool_calls))
+    Ok((assistant_content, reasoning_content, tool_calls))
 }
 
 fn openai_tool_arguments_value(value: Option<&Value>) -> Option<Value> {
@@ -119,6 +120,34 @@ fn openai_tool_arguments_value(value: Option<&Value>) -> Option<Value> {
             Some(raw.clone())
         }
     }
+}
+
+fn openai_json_reasoning_fragments(message: &Value) -> Vec<String> {
+    let mut fragments = Vec::new();
+    for key in ["reasoning_content", "reasoning"] {
+        if let Some(text) = message
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            fragments.push(text.to_string());
+        }
+    }
+    if let Some(items) = message.get("reasoning_details").and_then(Value::as_array) {
+        for item in items {
+            if let Some(text) = item
+                .get("text")
+                .or_else(|| item.get("content"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                fragments.push(text.to_string());
+            }
+        }
+    }
+    fragments
 }
 
 fn should_attempt_json_fallback(error: &LlmTransportError, allow_text_fallback: bool) -> bool {
@@ -150,9 +179,11 @@ pub(crate) fn run_openai_provider_turn(
             allow_official_reauth_retry,
         )
         .map_err(|error| provider_error_from_transport(&error))?;
-        let (content, tool_calls) = extract_openai_json_assistant_response(&response)?;
+        let (content, reasoning_content, tool_calls) =
+            extract_openai_json_assistant_response(&response)?;
         return Ok(ProviderTurnResult {
             content,
+            reasoning_content,
             tool_calls,
             delivery: ProviderTurnDelivery::Streaming,
         });
@@ -170,6 +201,7 @@ pub(crate) fn run_openai_provider_turn(
     ) {
         Ok(streamed) => Ok(ProviderTurnResult {
             content: streamed.content,
+            reasoning_content: String::new(),
             tool_calls: streamed.tool_calls,
             delivery: ProviderTurnDelivery::Streaming,
         }),
@@ -220,7 +252,8 @@ pub(crate) fn run_openai_provider_turn(
                     ),
                 )
             })?;
-            let (content, tool_calls) = extract_openai_json_assistant_response(&response)?;
+            let (content, reasoning_content, tool_calls) =
+                extract_openai_json_assistant_response(&response)?;
             if !tool_calls.is_empty() {
                 return Err(ProviderError::new(
                     ProviderErrorKind::Recovery,
@@ -237,6 +270,7 @@ pub(crate) fn run_openai_provider_turn(
             }
             Ok(ProviderTurnResult {
                 content,
+                reasoning_content,
                 tool_calls,
                 delivery: ProviderTurnDelivery::JsonFallback,
             })
@@ -247,8 +281,8 @@ pub(crate) fn run_openai_provider_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        openai_tool_arguments_value, should_attempt_json_fallback,
-        should_prefer_non_streaming_openai_turn,
+        extract_openai_json_assistant_response, openai_tool_arguments_value,
+        should_attempt_json_fallback, should_prefer_non_streaming_openai_turn,
     };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::runtime::ResolvedChatConfig;
@@ -280,12 +314,32 @@ mod tests {
     }
 
     #[test]
+    fn json_assistant_response_preserves_reasoning_content() {
+        let (content, reasoning_content, tool_calls) =
+            extract_openai_json_assistant_response(&json!({
+                "choices": [{
+                    "message": {
+                        "content": "final",
+                        "reasoning_content": "visible progress",
+                        "tool_calls": []
+                    }
+                }]
+            }))
+            .unwrap();
+
+        assert_eq!(content, "final");
+        assert_eq!(reasoning_content, "visible progress");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
     fn redclaw_qwen_turns_prefer_non_streaming() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
             base_url: "https://api.ziz.hk/redbox/v1".to_string(),
             api_key: Some("rbx-live-1".to_string()),
             model_name: "qwen3.5-plus".to_string(),
+            reasoning_effort: None,
         };
 
         assert!(should_prefer_non_streaming_openai_turn("redclaw", &config));
@@ -301,6 +355,7 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: Some("sk-test".to_string()),
             model_name: "gpt-5.4".to_string(),
+            reasoning_effort: None,
         };
 
         assert!(!should_prefer_non_streaming_openai_turn("redclaw", &config));

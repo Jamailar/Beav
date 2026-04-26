@@ -5,6 +5,14 @@ use serde_json::{json, Value};
 use crate::payload_string;
 use crate::runtime::ResolvedChatConfig;
 
+fn normalize_reasoning_effort(value: Option<&str>) -> Option<String> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "minimal" | "low" | "medium" | "high" => Some(normalized),
+        _ => None,
+    }
+}
+
 pub fn runtime_warm_settings_fingerprint(settings: &Value, workspace_root: &Path) -> String {
     let mut parts = Vec::new();
     parts.push(workspace_root.display().to_string());
@@ -16,6 +24,8 @@ pub fn runtime_warm_settings_fingerprint(settings: &Value, workspace_root: &Path
         "default_ai_source_id",
         "ai_sources_json",
         "redbox_auth_session_json",
+        "reasoning_effort",
+        "reasoningEffort",
     ] {
         parts.push(payload_string(settings, key).unwrap_or_default());
     }
@@ -115,11 +125,20 @@ pub fn resolve_chat_config(
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| infer_protocol(&base_url, None, None));
+    let reasoning_effort_value = model_config
+        .get("reasoningEffort")
+        .or_else(|| model_config.get("reasoning_effort"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| payload_string(settings, "reasoning_effort"))
+        .or_else(|| payload_string(settings, "reasoningEffort"));
+    let reasoning_effort = normalize_reasoning_effort(reasoning_effort_value.as_deref());
     Some(ResolvedChatConfig {
         protocol,
         base_url,
         api_key,
         model_name,
+        reasoning_effort,
     })
 }
 
