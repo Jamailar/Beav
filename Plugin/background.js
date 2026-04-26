@@ -19,6 +19,7 @@ const KNOWLEDGE_API_CANDIDATES = [
 const pageStateCache = new Map();
 const PAGE_STATE_NEGATIVE_TTL_MS = 350;
 const KNOWLEDGE_API_CACHE_TTL_MS = 30_000;
+const INLINE_ASSET_MAX_BYTES = 6 * 1024 * 1024;
 const UPDATE_STATE_KEY = 'pluginUpdateState';
 const UPDATE_ALARM_NAME = 'redbox-plugin-auto-update-check';
 const UPDATE_CHECK_INTERVAL_MINUTES = 360;
@@ -33,6 +34,11 @@ const MENU_VIDEO_ID = 'redbox-save-video';
 
 let cachedKnowledgeApi = null;
 let cachedKnowledgeApiAt = 0;
+
+function clearCachedKnowledgeApi() {
+  cachedKnowledgeApi = null;
+  cachedKnowledgeApiAt = 0;
+}
 
 function describeError(error) {
   if (error instanceof Error) {
@@ -685,6 +691,36 @@ async function fetchKnowledgeJson(endpoint, path, init = {}) {
   return data || { success: true };
 }
 
+function isRecoverableKnowledgeNetworkError(error) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /Failed to fetch|NetworkError|Load failed|ERR_|请求失败/i.test(message);
+}
+
+async function postKnowledgeJson(path, payload, logScope) {
+  let endpoint = await resolveKnowledgeApiEndpoint();
+  try {
+    return await fetchKnowledgeJson(endpoint, path, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    if (!isRecoverableKnowledgeNetworkError(error)) {
+      throw error;
+    }
+    clearCachedKnowledgeApi();
+    pluginWarn(`${logScope || 'knowledge-post'}-retry`, {
+      path,
+      firstEndpoint: `${endpoint.baseUrl}${endpoint.endpointPath}`,
+      error: describeError(error),
+    });
+    endpoint = await resolveKnowledgeApiEndpoint(true);
+    return await fetchKnowledgeJson(endpoint, path, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+}
+
 async function postKnowledgeEntry(payload) {
   const endpoint = await resolveKnowledgeApiEndpoint();
   pluginLog('entry-submit', {
@@ -695,10 +731,7 @@ async function postKnowledgeEntry(payload) {
     sourceUrl: String(payload?.source?.sourceUrl || ''),
     externalId: String(payload?.source?.externalId || ''),
   });
-  const response = await fetchKnowledgeJson(endpoint, '/entries', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  const response = await postKnowledgeJson('/entries', payload, 'entry-submit');
   pluginLog('entry-submit-success', {
     kind: String(payload?.kind || ''),
     entryId: response?.entryId || '',
@@ -716,10 +749,7 @@ async function postKnowledgeMediaAssets(payload) {
     sourceLink: String(payload?.source?.sourceLink || ''),
     itemCount: Array.isArray(payload?.items) ? payload.items.length : 0,
   });
-  const response = await fetchKnowledgeJson(endpoint, '/media-assets', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  const response = await postKnowledgeJson('/media-assets', payload, 'media-submit');
   pluginLog('media-submit-success', {
     imported: Number(response?.imported || 0),
   });
@@ -744,6 +774,19 @@ function hashString(value) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+function dataUrlByteSize(value) {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith('data:')) return 0;
+  const encoded = raw.split(',', 2)[1] || '';
+  return Math.floor(encoded.length * 3 / 4);
+}
+
+function keepInlineAssetWithinLimit(value) {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith('data:')) return raw;
+  return dataUrlByteSize(raw) <= INLINE_ASSET_MAX_BYTES ? raw : '';
 }
 
 function replaceRichHtmlTokens(html, replacements) {
@@ -1062,9 +1105,11 @@ function buildXhsEntry(payload) {
   const stableNoteId = normalizeText(payload?.noteId)
     || `xhs-${hashString(sourceUrl)}`;
   const noteType = normalizeText(payload?.noteType);
-  const videoAssetUrl = normalizeText(payload?.videoDataUrl)
+  const videoAssetUrl = keepInlineAssetWithinLimit(payload?.videoDataUrl)
     || normalizeText(payload?.videoUrl);
-  const imageUrls = Array.isArray(payload?.images) ? payload.images.filter(Boolean) : [];
+  const imageUrls = Array.isArray(payload?.images)
+    ? payload.images.map(keepInlineAssetWithinLimit).filter(Boolean)
+    : [];
   const kind = noteType === 'video'
     ? 'xhs-video'
     : noteType === 'image'
@@ -1096,7 +1141,7 @@ function buildXhsEntry(payload) {
       },
     },
     assets: {
-      coverUrl: normalizeText(payload?.coverUrl) || imageUrls[0] || undefined,
+      coverUrl: keepInlineAssetWithinLimit(payload?.coverUrl) || imageUrls[0] || undefined,
       imageUrls,
       videoUrl: videoAssetUrl || undefined,
     },
@@ -2158,6 +2203,8 @@ function extractYouTubePayload() {
 }
 
 async function extractXhsNotePayload() {
+  const inlineAssetMaxBytes = 6 * 1024 * 1024;
+
   function parseCountText(value) {
     if (!value) return 0;
     const text = String(value).trim();
@@ -2882,11 +2929,12 @@ async function extractXhsNotePayload() {
     });
   }
 
-  async function fetchBinaryAsDataUrl(url) {
+  async function fetchBinaryAsDataUrl(url, options = {}) {
     const target = String(url || '').trim();
     if (!target) return '';
     if (/^data:/i.test(target)) return target;
     if (!/^https?:\/\//i.test(target) && !/^blob:/i.test(target)) return '';
+    if (/^https?:\/\//i.test(target) && options.http !== true) return '';
     try {
       const response = await fetch(target, {
         credentials: /^https?:\/\//i.test(target) ? 'omit' : 'same-origin',
@@ -2895,6 +2943,7 @@ async function extractXhsNotePayload() {
       if (!response.ok) return '';
       const blob = await response.blob();
       if (!blob || !blob.size) return '';
+      if (blob.size > (options.maxBytes || inlineAssetMaxBytes)) return '';
       return await blobToDataUrl(blob);
     } catch {
       return '';
@@ -2912,17 +2961,13 @@ async function extractXhsNotePayload() {
   const coverUrl = getCoverUrl(root, images, noteType, stateNote);
   const capturedVideoCover = (!coverUrl && videoUrl) ? captureVideoCoverDataUrl(root) : '';
 
-  const localizedImages = [];
-  for (const imageUrl of images) {
-    const dataUrl = await fetchBinaryAsDataUrl(imageUrl);
-    localizedImages.push(dataUrl || imageUrl);
-  }
+  const localizedImages = images.map((imageUrl) => String(imageUrl || '').trim()).filter(Boolean);
 
   const localizedCoverUrl = coverUrl
     ? (await fetchBinaryAsDataUrl(coverUrl)) || coverUrl
     : (capturedVideoCover || '');
   const localizedVideoDataUrl = videoUrl && String(videoUrl).startsWith('blob:')
-    ? (await fetchBinaryAsDataUrl(videoUrl))
+    ? (await fetchBinaryAsDataUrl(videoUrl, { maxBytes: inlineAssetMaxBytes }))
     : '';
   const stableStateNoteId = String(
     stateNote?.noteId
