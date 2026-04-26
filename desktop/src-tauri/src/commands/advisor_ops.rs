@@ -1,6 +1,7 @@
 use crate::member_skill::{
     discard_member_skill_candidate, mark_member_skill_failed, member_skill_result_value,
     promote_member_skill_candidate, publish_member_skill_for_advisor, remove_member_skill_package,
+    rollback_member_skill_version,
 };
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::*;
@@ -281,6 +282,7 @@ pub fn handle_advisor_channel(
             | "advisors:generate-persona"
             | "advisors:promote-member-skill-candidate"
             | "advisors:discard-member-skill-candidate"
+            | "advisors:rollback-member-skill-version"
             | "advisors:select-avatar"
             | "advisors:youtube-runner-status"
             | "advisors:fetch-youtube-info"
@@ -556,6 +558,19 @@ pub fn handle_advisor_channel(
                     .unwrap_or_default();
                 let result = discard_member_skill_candidate(state, &advisor_id)
                     .map(|_| json!({ "success": true }))
+                    .unwrap_or_else(|error| json!({ "success": false, "error": error }));
+                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                Ok(result)
+            }
+            "advisors:rollback-member-skill-version" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let version = payload_string(payload, "version").unwrap_or_default();
+                let result = rollback_member_skill_version(state, &advisor_id, &version)
+                    .map(|result| {
+                        json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
+                    })
                     .unwrap_or_else(|error| json!({ "success": false, "error": error }));
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)

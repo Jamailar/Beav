@@ -394,13 +394,21 @@ fn advisor_runtime_context_section(
         .find(|item| item.id == advisor_id)
         .map(|item| item.name.clone())
         .unwrap_or_else(|| "成员".to_string());
+    let member_skill_ref = crate::payload_string(metadata, "memberSkillRef")
+        .or_else(|| {
+            advisors
+                .iter()
+                .find(|item| item.id == advisor_id)
+                .and_then(|item| item.member_skill_ref.clone())
+        })
+        .unwrap_or_else(|| "(none)".to_string());
     let advisor_knowledge_path = format!(
         "advisors/{}/knowledge",
         slug_from_relative_path(&advisor_id)
     );
     format!(
-        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
-        advisor_name, advisor_id, advisor_knowledge_path, advisor_id
+        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Member skill ref: {}\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
+        advisor_name, advisor_id, member_skill_ref, advisor_knowledge_path, advisor_id
     )
 }
 
