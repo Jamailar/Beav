@@ -299,6 +299,86 @@ pub(crate) fn rollback_member_skill_version(
     })
 }
 
+pub(crate) fn inspect_member_skill_versions(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+) -> Result<Value, String> {
+    let advisor = with_store(state, |store| {
+        store
+            .advisors
+            .iter()
+            .find(|item| item.id == advisor_id)
+            .cloned()
+            .ok_or_else(|| "成员不存在".to_string())
+    })?;
+    let skill_name = advisor
+        .member_skill_ref
+        .clone()
+        .filter(|item| !item.trim().is_empty())
+        .unwrap_or_else(|| member_skill_name(&advisor));
+    let package_dir = workspace_root(state)?
+        .join("skills")
+        .join(slug_from_relative_path(&skill_name));
+    let current_skill = read_member_skill_version_summary(
+        &package_dir,
+        advisor.member_skill_version.as_deref(),
+        advisor.member_skill_last_distilled_at.as_deref(),
+    );
+    let candidate_dir = advisor
+        .member_skill_candidate_version
+        .as_ref()
+        .map(|version| package_dir.join("distillation_candidates").join(version));
+    let candidate_skill = match (
+        advisor.member_skill_candidate_version.as_deref(),
+        candidate_dir.as_deref(),
+    ) {
+        (Some(version), Some(path)) if path.join("SKILL.md").is_file() => {
+            let mut value = read_member_skill_version_summary(
+                path,
+                Some(version),
+                advisor.member_skill_candidate_created_at.as_deref(),
+            );
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "sourceEvent".to_string(),
+                    Value::String(
+                        advisor
+                            .member_skill_candidate_source_event
+                            .clone()
+                            .unwrap_or_else(|| "knowledge-update".to_string()),
+                    ),
+                );
+                object.insert(
+                    "diff".to_string(),
+                    diff_member_skill_dirs(&package_dir, path),
+                );
+            }
+            Some(value)
+        }
+        _ => None,
+    };
+    let mut versions = list_member_skill_versions(&package_dir.join("versions"))?;
+    versions.sort_by(|left, right| {
+        let left_version = left
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let right_version = right
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        right_version.cmp(left_version)
+    });
+    Ok(json!({
+        "success": true,
+        "skillName": skill_name,
+        "packagePath": package_dir.display().to_string(),
+        "current": current_skill,
+        "candidate": candidate_skill,
+        "versions": versions
+    }))
+}
+
 pub(crate) fn mark_member_skill_failed(
     state: &State<'_, AppState>,
     advisor_id: &str,
@@ -344,6 +424,96 @@ pub(crate) fn member_skill_result_value(result: &MemberSkillPublishResult) -> Va
         "refreshedCatalog": result.refreshed_catalog,
         "candidate": result.candidate
     })
+}
+
+fn read_member_skill_version_summary(
+    path: &Path,
+    fallback_version: Option<&str>,
+    fallback_updated_at: Option<&str>,
+) -> Value {
+    let manifest = read_member_skill_manifest(path);
+    let skill_body = fs::read_to_string(path.join("SKILL.md")).unwrap_or_default();
+    json!({
+        "version": manifest
+            .get("version")
+            .and_then(Value::as_str)
+            .or(fallback_version),
+        "updatedAt": manifest
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .or(fallback_updated_at),
+        "path": path.display().to_string(),
+        "skillPreview": truncate_member_skill_preview(&skill_body, 1800)
+    })
+}
+
+fn read_member_skill_manifest(path: &Path) -> Value {
+    fs::read_to_string(path.join("member.json"))
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        .unwrap_or_else(|| json!({}))
+}
+
+fn list_member_skill_versions(path: &Path) -> Result<Vec<Value>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut versions = Vec::new();
+    for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let version_path = entry.path();
+        if !version_path.is_dir() || !version_path.join("SKILL.md").is_file() {
+            continue;
+        }
+        let version = entry
+            .file_name()
+            .to_str()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        versions.push(read_member_skill_version_summary(
+            &version_path,
+            Some(&version),
+            None,
+        ));
+    }
+    Ok(versions)
+}
+
+fn diff_member_skill_dirs(current_dir: &Path, candidate_dir: &Path) -> Value {
+    let current = fs::read_to_string(current_dir.join("SKILL.md")).unwrap_or_default();
+    let candidate = fs::read_to_string(candidate_dir.join("SKILL.md")).unwrap_or_default();
+    let current_lines = diff_candidate_lines(&current);
+    let candidate_lines = diff_candidate_lines(&candidate);
+    let added = candidate_lines
+        .iter()
+        .filter(|line| !current_lines.contains(line))
+        .take(12)
+        .cloned()
+        .collect::<Vec<_>>();
+    let removed = current_lines
+        .iter()
+        .filter(|line| !candidate_lines.contains(line))
+        .take(12)
+        .cloned()
+        .collect::<Vec<_>>();
+    json!({
+        "added": added,
+        "removed": removed,
+        "addedCount": candidate_lines.iter().filter(|line| !current_lines.contains(line)).count(),
+        "removedCount": current_lines.iter().filter(|line| !candidate_lines.contains(line)).count()
+    })
+}
+
+fn diff_candidate_lines(value: &str) -> Vec<String> {
+    value
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+}
+
+fn truncate_member_skill_preview(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect::<String>()
 }
 
 fn should_promote_member_skill_immediately(advisor: &AdvisorRecord, package_dir: &Path) -> bool {

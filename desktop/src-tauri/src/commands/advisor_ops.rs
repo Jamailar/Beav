@@ -1,7 +1,7 @@
 use crate::member_skill::{
-    discard_member_skill_candidate, mark_member_skill_failed, member_skill_result_value,
-    promote_member_skill_candidate, publish_member_skill_for_advisor, remove_member_skill_package,
-    rollback_member_skill_version,
+    discard_member_skill_candidate, inspect_member_skill_versions, mark_member_skill_failed,
+    member_skill_result_value, promote_member_skill_candidate, publish_member_skill_for_advisor,
+    remove_member_skill_package, rollback_member_skill_version,
 };
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::*;
@@ -280,6 +280,7 @@ pub fn handle_advisor_channel(
             | "advisors:optimize-prompt"
             | "advisors:optimize-prompt-deep"
             | "advisors:generate-persona"
+            | "advisors:inspect-member-skill"
             | "advisors:promote-member-skill-candidate"
             | "advisors:discard-member-skill-candidate"
             | "advisors:rollback-member-skill-version"
@@ -561,6 +562,13 @@ pub fn handle_advisor_channel(
                     .unwrap_or_else(|error| json!({ "success": false, "error": error }));
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
+            }
+            "advisors:inspect-member-skill" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                inspect_member_skill_versions(state, &advisor_id)
+                    .or_else(|error| Ok(json!({ "success": false, "error": error })))
             }
             "advisors:rollback-member-skill-version" => {
                 let advisor_id = payload_string(payload, "advisorId")
