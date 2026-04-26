@@ -1744,6 +1744,31 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_redbox_cli_runtime_get_execution_id_to_execution_get() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "cli_runtime",
+                "operation": "get",
+                "id": "cli-exec-123"
+            }),
+        );
+
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("cli_runtime.execution.get"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("id")),
+            Some(&json!("cli-exec-123"))
+        );
+    }
+
+    #[test]
     fn normalizes_redbox_web_get_to_web_fetch() {
         let normalized = normalize_tool_call(
             "Redbox",
