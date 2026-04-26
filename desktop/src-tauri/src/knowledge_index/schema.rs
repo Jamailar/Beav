@@ -59,6 +59,9 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             cover_url TEXT,
             thumbnail_url TEXT,
             preview_text TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT 'workspace-shared',
+            owner_type TEXT,
+            owner_id TEXT,
             created_at TEXT NOT NULL DEFAULT '',
             updated_at TEXT NOT NULL DEFAULT '',
             language TEXT,
@@ -250,6 +253,19 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
     ensure_column(&conn, "knowledge_document_blocks", "ocr_confidence", "REAL")?;
     ensure_column(&conn, "knowledge_document_blocks", "jurisdiction", "TEXT")?;
     ensure_column(&conn, "knowledge_document_blocks", "authority", "TEXT")?;
+    ensure_column(
+        &conn,
+        "knowledge_items",
+        "scope",
+        "TEXT NOT NULL DEFAULT 'workspace-shared'",
+    )?;
+    ensure_column(&conn, "knowledge_items", "owner_type", "TEXT")?;
+    ensure_column(&conn, "knowledge_items", "owner_id", "TEXT")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_items_owner_scope ON knowledge_items(workspace_id, scope, owner_type, owner_id, updated_at DESC)",
+        [],
+    )
+    .map_err(|error| error.to_string())?;
     ensure_column(
         &conn,
         "knowledge_document_blocks",
