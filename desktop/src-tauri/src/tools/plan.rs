@@ -291,6 +291,24 @@ fn select_direct_app_cli_actions(
         .filter(|items| !items.is_empty())
         .unwrap_or(preferred_namespaces);
     let mut selected = Vec::<ActionDescriptor>::new();
+    for action in pinned_direct_app_cli_actions(runtime_mode, task_intent) {
+        if selected.len() >= max_direct_actions {
+            return selected;
+        }
+        if selected
+            .iter()
+            .any(|descriptor| descriptor.action == *action)
+        {
+            continue;
+        }
+        if let Some(descriptor) = descriptors
+            .iter()
+            .copied()
+            .find(|descriptor| descriptor.action == *action)
+        {
+            selected.push(descriptor);
+        }
+    }
     for namespace in preferred_namespaces {
         for descriptor in descriptors
             .iter()
@@ -304,6 +322,36 @@ fn select_direct_app_cli_actions(
         }
     }
     selected
+}
+
+fn pinned_direct_app_cli_actions(
+    runtime_mode: &str,
+    task_intent: Option<&str>,
+) -> &'static [&'static str] {
+    let runtime_mode = runtime_mode.trim();
+    let task_intent = task_intent.unwrap_or("").trim();
+    let wants_host_cli = matches!(
+        task_intent,
+        "cli"
+            | "cli-runtime"
+            | "cli_runtime"
+            | "host-cli"
+            | "host_cli"
+            | "computer-cli"
+            | "computer_cli"
+            | "terminal"
+            | "shell"
+    );
+    if wants_host_cli || matches!(runtime_mode, "chatroom" | "redclaw" | "knowledge") {
+        &[
+            "cli_runtime.inspect",
+            "cli_runtime.diagnose",
+            "cli_runtime.execute",
+            "cli_runtime.execution.get",
+        ]
+    } else {
+        &[]
+    }
 }
 
 fn preferred_app_cli_namespaces(runtime_mode: &str, task_intent: Option<&str>) -> Vec<String> {
@@ -533,6 +581,20 @@ mod tests {
             .direct_app_cli_actions
             .iter()
             .all(|descriptor| descriptor.namespace == "mcp"));
+    }
+
+    #[test]
+    fn redclaw_runtime_pins_core_cli_runtime_actions() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("image.generate"));
     }
 
     #[test]
