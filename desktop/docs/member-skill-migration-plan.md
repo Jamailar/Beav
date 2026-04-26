@@ -1,6 +1,10 @@
-# 成员技能化与知识检索迁移计划
+---
+doc_type: plan
+execution_status: in_progress
+last_updated: 2026-04-26
+---
 
-更新时间：2026-04-18
+# 成员技能化与知识检索迁移计划
 
 ## 1. 文档目标
 
@@ -15,6 +19,23 @@
 - 每一阶段上线后都具备明确的性能收益、验收标准、风险边界和回滚路径
 
 本文是执行计划，不是概念说明。默认按“逐步迁移、逐步调试、逐步扩大灰度”执行。
+
+### 1.1 2026-04-26 执行进展
+
+本次已经完成“成员技能化主链路”的第一版落地：
+
+- 新增 host 侧 `member_skill` 发布模块，能从 advisor profile、成员知识文件、YouTube 字幕导入结果生成 workspace skill package。
+- 新增内置 `member-skill-distiller` 技能，作为成员蒸馏的模型契约与 package 生成规范。
+- `advisors:create`、`advisors:upload-knowledge`、`advisors:download-youtube-subtitles`、`advisors:update`、`advisors:delete-knowledge` 已接入同一套成员技能发布/刷新逻辑。
+- 成员记录已经扩展 `memberSkillRef / memberSkillStatus / memberSkillVersion / memberSkillLastDistilledAt / memberSkillLastError / detectedKnowledgeLanguage / languageDetectionStatus / languageConfidence`。
+- advisor 单聊创建、creative chat 成员发言会话已自动注入 `memberSkillRef` 并写入 `activeSkills/sessionSkillState`，让 runtime 使用对应成员技能。
+- 团队页已展示成员技能状态，并在创建新 advisor 单聊时显式携带成员技能 metadata。
+
+仍未完成的部分：
+
+- `distillation_candidate`、人工审核、diff、回滚尚未实现；当前第一版为“自动刷新当前技能包”。
+- `heuristics.jsonl / workflow.json / examples / scripts` 还没有自动生成结构化内容，当前先生成 `SKILL.md / member.json / persona.json / retrieval_scope.json / tool_policy.json / references/knowledge-evidence.md`。
+- 文件 catalog 索引、语言感知搜索工具与 `tool_policy.json` 对 runtime tool set 的强约束仍属于后续阶段。
 
 ## 2. 当前系统基础
 
@@ -72,6 +93,31 @@ Member Skill Package
 - `tool_policy.json`
   - 允许工具、禁用工具、审批等级、工具优先顺序
 
+### 3.1 成员技能包必须覆盖的创建来源
+
+成员技能化不能只服务“已有 advisor 手动点蒸馏”的窄路径。迁移完成后，以下入口必须进入同一个 `Member Skill Package` 生成链路：
+
+1. **文件导入创建成员**
+   - 用户在团队页添加成员，上传本地知识文件。
+   - 宿主先创建 advisor/member 草稿，再导入知识文件。
+   - 文件 ingest 完成后自动触发语言识别、知识 catalog 更新和成员技能蒸馏。
+   - 如果蒸馏成功，成员记录写入 `memberSkillRef`，后续发言默认使用该技能。
+   - 如果蒸馏失败，成员仍可用旧 `system_prompt` fallback 发言，但 UI 必须显示蒸馏失败原因和重试入口。
+
+2. **YouTube 导入创建成员**
+   - 用户输入频道 URL 或从 YouTube 模式创建成员。
+   - 宿主先创建 advisor/member 草稿，并保存 `youtubeChannel` 元数据。
+   - 频道信息、频道描述、头像、近期视频标题、字幕下载结果全部进入成员知识来源。
+   - 字幕下载可以异步完成，但每次新增字幕或频道摘要后都必须触发成员技能蒸馏候选刷新。
+   - 首次可用的技能包至少基于频道描述和近期视频标题生成；字幕到齐后生成下一版技能候选。
+
+3. **已有成员补充知识**
+   - 用户给已有成员上传新文件、删除文件、刷新 YouTube 字幕或手动修改 persona。
+   - 宿主不得直接覆盖线上技能包。
+   - 新素材先进入 `distillation_candidate`，通过自动评测和人工确认后再升级 `memberSkillRef` 指向的版本。
+
+这些入口必须共用同一个后台 job 和同一个 package schema，不能为文件导入、YouTube 导入、手动蒸馏各写一套互不兼容的 prompt 生成逻辑。
+
 ## 4. 总体迁移原则
 
 ### 4.1 基本原则
@@ -83,6 +129,8 @@ Member Skill Package
 - 检索底座优先走“agent 自主调用搜索工具”的模式，不先做系统主导的重型检索编排器
 - 系统负责知识范围、权限、索引、性能和安全边界；agent 负责决定先搜什么、再读什么、最后引用什么
 - 运行时优先暴露小而清晰的原子工具，而不是把检索决策硬编码进宿主
+- 成员技能包是成员运行时的主身份源；旧 `personality / system_prompt` 只能作为 fallback，不允许长期双主源并存
+- 文件导入与 YouTube 导入必须共享蒸馏管线，差异只体现在 source adapter，不体现在最终 package schema
 
 ### 4.1.1 向量嵌入弃用策略
 
@@ -300,7 +348,130 @@ Member Skill Package
 - 宿主责任更清晰，只做底座和边界
 - 阶段 1 的工程复杂度明显更低
 
-### 5.5 Tool Policy
+### 5.5 成员创建与蒸馏业务流
+
+所有成员创建入口都必须落到同一条业务状态机：
+
+```text
+create_member_draft
+-> attach_sources
+-> ingest_sources
+-> build_catalog
+-> detect_language
+-> create_distillation_job
+-> generate_member_skill_draft
+-> validate_member_skill_package
+-> publish_member_skill_version
+-> bind_member_skill_ref
+-> runtime_uses_member_skill
+```
+
+### 5.5.1 文件导入路径
+
+文件导入路径必须按以下顺序执行：
+
+1. `advisors:create` 只创建成员草稿，状态为 `skillStatus=missing`。
+2. `advisors:upload-knowledge` 把文件复制到成员知识目录，并写入 `knowledgeSourceManifest`。
+3. `knowledge_index` 对该成员知识目录增量 rebuild。
+4. `member_skill::language` 对成员知识语料做语言识别，写入 `detectedKnowledgeLanguage` 和 confidence。
+5. `member_skill::distill` 读取 catalog summary、top evidence、用户手动填写的名称/描述，生成技能包草稿。
+6. `member_skill::package` 校验技能包结构完整性和 prompt 大小。
+7. 校验通过后发布 `skills/members/<advisor-slug>/v<version>/...`，并把成员记录绑定到稳定别名 `skills/members/<advisor-slug>/current`。
+
+### 5.5.2 YouTube 导入路径
+
+YouTube 导入路径必须支持“先可用、后增强”：
+
+1. `advisors:create` 保存频道 URL、channelId、频道名、频道描述和头像。
+2. 如果频道描述或近期视频标题已可用，立即生成 `v1` 技能包，让成员可以按频道定位发言。
+3. 字幕下载、摘要、视频列表刷新作为后台 source ingest job 继续运行。
+4. 每次新增字幕批次后生成 `distillation_candidate`，不得自动覆盖线上技能，除非用户开启 `memberSkillAutoRefresh` 且候选通过评测阈值。
+5. YouTube 成员技能包的 `member.json` 必须记录 `sourceKind=youtube_channel`、`channelId`、`sourceUrl`、`lastVideoSyncAt`。
+6. `retrieval_scope.json` 必须把频道字幕、频道摘要、手动上传补充文件全部纳入同一成员私有 scope。
+
+### 5.5.3 蒸馏 job 输出契约
+
+蒸馏 job 必须输出结构化结果，而不是只输出一段 Markdown：
+
+```json
+{
+  "member": {
+    "name": "string",
+    "sourceKind": "files | youtube_channel | manual",
+    "primaryLanguage": "zh | en | mixed | unknown"
+  },
+  "skillPackage": {
+    "skillMarkdown": "string",
+    "persona": {},
+    "heuristics": [],
+    "workflow": {},
+    "retrievalScope": {},
+    "toolPolicy": {}
+  },
+  "evidence": [
+    {
+      "sourceId": "string",
+      "path": "string",
+      "quoteOrSummary": "string",
+      "weight": 0.0
+    }
+  ],
+  "quality": {
+    "personaCompleteness": 0.0,
+    "sourceCoverage": 0.0,
+    "promptBudgetOk": true
+  }
+}
+```
+
+宿主只接受结构化结果落盘。Markdown 只能作为 `SKILL.md` 的一个字段来源，不能作为蒸馏协议本身。
+
+### 5.6 Member Skill Package 编译模型
+
+技能包落盘前必须经过 compile/validate：
+
+- `SKILL.md`
+  - 只包含运行时需要的身份、风格、边界和检索提示。
+  - 不直接塞入大段原文、字幕全文或完整频道描述。
+- `member.json`
+  - 包含 `advisorId`、`memberSkillId`、`version`、`sourceKind`、`sourceIds`、`createdAt`、`updatedAt`、`status`。
+- `persona.json`
+  - 包含语气、密度、立场、解释偏好、风险偏好、禁用风格。
+- `heuristics.jsonl`
+  - 每行必须有 `rule`、`evidenceRef`、`confidence`、`lastValidatedAt`。
+- `workflow.json`
+  - 只保留可复用 SOP，不保留一次性事实。
+- `retrieval_scope.json`
+  - 明确 `advisorId`、私有知识目录、YouTube 字幕 source、共享知识继承规则、语言优先级。
+- `tool_policy.json`
+  - 只做工具收窄，不能授予 runtimeMode 原本没有的高风险能力。
+
+编译失败必须返回可显示错误，例如：
+
+- `missing_required_file`
+- `prompt_budget_exceeded`
+- `invalid_retrieval_scope`
+- `unsafe_tool_policy`
+- `evidence_coverage_too_low`
+
+### 5.7 Runtime 使用契约
+
+成员技能包接入运行时后必须满足以下优先级：
+
+1. 如果会话 metadata 有 `memberSkillRef` 且 feature flag `memberRuntimeOverlay=true`，runtime 必须激活该成员技能。
+2. 如果只有 `advisorId`，runtime 先通过 advisor 记录解析 `memberSkillRef`。
+3. 如果找不到技能包或技能包校验失败，runtime 回退到旧 `personality / system_prompt`。
+4. 如果成员技能被用户禁用，runtime 必须显式记录 fallback reason，不得静默表现成已使用成员技能。
+5. creative chat 中每个 advisor 发言都必须使用自己的 `memberSkillRef`，不能复用上一位成员的 skill context。
+6. Workboard/collab member 如果绑定了 `metadata.advisorId` 或 `metadata.memberSkillRef`，也必须使用对应技能。
+
+运行时 prompt 组装必须坚持“短入口 + 按需读取”：
+
+- 常驻注入：`SKILL.md` 摘要、核心 persona、retrieval scope 摘要、tool policy 摘要。
+- 按需读取：heuristics、examples、references、YouTube 字幕片段、长文档证据。
+- 禁止：每轮直接把所有知识文件或完整字幕塞进 system prompt。
+
+### 5.8 Tool Policy
 
 每个成员技能包必须自带工具边界：
 
@@ -598,19 +769,35 @@ Member Skill Package
   - `members:distill-skill`
   - `members:preview-distillation`
   - `members:detect-knowledge-language`
+  - `members:compile-skill-package`
+  - `members:publish-skill-version`
+  - `members:bind-skill-ref`
 - 新落盘结构：
   - `skills/members/<advisor-slug>/...`
+- 新后台 job：
+  - `member_skill_distillation`
+  - `member_skill_compile`
+  - `member_skill_publish`
 - advisor 新增自动语言字段：
   - `detectedKnowledgeLanguage`
   - `languageDetectionStatus`
   - `languageConfidence`
+  - `memberSkillRef`
+  - `memberSkillStatus`
+  - `memberSkillVersion`
+  - `memberSkillLastDistilledAt`
+  - `memberSkillLastError`
 
 ### 功能内容
 
 1. 上传知识文件后自动启动后台语言识别
-2. 允许手动触发“蒸馏技能”
-3. 蒸馏结果预览后再落盘
-4. `knowledgeLanguage` 从“用户输入”升级成“自动结果 + 人工覆盖”
+2. 文件导入创建成员时，知识 ingest 完成后自动创建首版成员技能包
+3. YouTube 导入创建成员时，频道信息可用后自动创建首版成员技能包
+4. 字幕或新文件异步到达后生成下一版蒸馏候选，不直接覆盖线上版本
+5. 允许手动触发“重新蒸馏技能”
+6. 蒸馏结果预览后再落盘，自动路径也必须经过 compile/validate
+7. `knowledgeLanguage` 从“用户输入”升级成“自动结果 + 人工覆盖”
+8. 成员记录写入 `memberSkillRef` 后，UI 显示技能状态：missing / distilling / ready / failed / fallback
 
 ### 主要改动文件
 
@@ -618,11 +805,16 @@ Member Skill Package
   - `src-tauri/src/member_skill/distill.rs`
   - `src-tauri/src/member_skill/language.rs`
   - `src-tauri/src/member_skill/package.rs`
+  - `src-tauri/src/member_skill/jobs.rs`
+  - `src-tauri/src/member_skill/validator.rs`
   - `builtin-skills/member-skill-distiller/SKILL.md`
 - 修改：
   - `src-tauri/src/commands/advisor_ops.rs`
+  - `src-tauri/src/commands/chatrooms.rs`
   - `src-tauri/src/workspace_loaders.rs`
   - `src/pages/Advisors.tsx`
+  - `src/pages/Team.tsx`
+  - `src-tauri/src/runtime/types.rs`
 
 ### 性能目标
 
@@ -638,18 +830,25 @@ Member Skill Package
 - 减少手动设错知识语言导致的 persona 偏差
 - 成员 persona 不再只是单段 prompt，而开始成为可版本化技能包
 - 为运行时接入做准备，但不提前耦合
+- 文件导入和 YouTube 导入不再产生“只有 advisor prompt、没有成员技能”的半成品成员
 
 ### 验收标准
 
 - 上传知识库后，UI 30 秒内能显示自动识别语言
+- 通过文件导入创建新成员后，系统能自动生成 `skills/members/<advisor-slug>/current/SKILL.md`
+- 通过 YouTube 导入创建新成员后，即使字幕仍在后台下载，也能基于频道资料生成可用首版技能
+- YouTube 字幕下载完成后，会生成新蒸馏候选，并能展示候选与当前版本差异
 - 支持“自动值 / 手动覆盖值 / 覆盖原因”三态
 - 触发蒸馏后，`skills:list` 能发现新成员技能
 - 生成的技能包目录完整，包含结构化文件，不只有 `SKILL.md`
+- 蒸馏失败不会阻塞成员创建，但成员卡片必须显示 fallback 状态和重试入口
+- 所有自动生成技能包都能通过 `members:compile-skill-package` 校验
 
 ### 回滚策略
 
 - 若蒸馏链路不稳定，保留旧 advisor prompt 生成功能
 - 若自动语言识别异常，退回手动覆盖模式
+- 关闭 `memberSkillDistillation` 后，新成员只创建 advisor fallback，不自动发布成员技能包
 
 ## 阶段 4：成员技能包接入运行时
 
@@ -662,16 +861,21 @@ Member Skill Package
 - runtime 可基于 `advisorId` 自动激活对应成员技能
 - 成员技能参与 `ContextBundle`
 - 旧 `personality / system_prompt` 退为 fallback
+- creative chat 每位成员发言使用自己的 `memberSkillRef`
+- advisor 单聊、群聊、Workboard/collab member 共用同一套成员技能解析逻辑
 
 ### 功能内容
 
 - 为 advisor 会话新增 `memberSkillName` 或 `memberSkillRef`
+- advisor 创建/更新后将 `memberSkillRef` 写入 session metadata
 - `runtime:query` 组包时注入：
   - 成员身份摘要
   - 核心风格
   - 核心规则
   - 工具摘要
 - 只在命中需要时补充 heuristics 与 references
+- creative chat 为每个 advisor 生成独立 runtime context，禁止共享上一位成员的 active skill state
+- runtime 记录 `memberSkillActivation` checkpoint，包含 skill ref、version、fallback reason
 
 ### 主要改动文件
 
@@ -679,6 +883,9 @@ Member Skill Package
 - `src-tauri/src/commands/runtime_query.rs`
 - `src-tauri/src/chat_helpers.rs`
 - `src-tauri/src/interactive_runtime_shared.rs`
+- `src-tauri/src/commands/chatrooms.rs`
+- `src-tauri/src/runtime/turn_context.rs`
+- `src-tauri/src/runtime/context_bundle.rs`
 - `prompts/library/runtime/advisors/*`
 
 ### 性能目标
@@ -698,6 +905,10 @@ Member Skill Package
 - diagnostics 中可看到当前激活的成员技能
 - 同一成员连续 10 轮对话的人格一致性明显提升
 - 禁用成员技能后系统能无错误回退到旧 advisor prompt
+- 文件导入创建的成员在首次单聊中按生成技能设定发言，而不是只复述上传文件
+- YouTube 导入创建的成员在首次群聊中按频道定位、语气和内容边界发言
+- 两个不同成员连续发言时，runtime checkpoints 显示各自不同的 `memberSkillRef`
+- 删除或禁用某个成员技能后，只影响该成员，不污染其他成员会话
 
 ### 回滚策略
 
@@ -895,6 +1106,24 @@ Member Skill Package
 - 继续复用 capability guardrails
 - 成员工具策略只负责“收窄”，不负责绕过审批
 
+### 风险 5：创建了成员但没有创建可用技能
+
+控制：
+
+- 文件导入和 YouTube 导入都必须把 `memberSkillStatus` 作为成员创建结果的一部分返回
+- 成员卡片显示 `missing / distilling / ready / failed / fallback`，不能只显示“创建成功”
+- 端到端验收必须覆盖“创建成员 -> 自动蒸馏 -> 绑定 skill -> 首轮按设定发言”
+- `advisors:create` 成功但 `memberSkillRef` 缺失时，diagnostics 必须记录 `member_skill_missing_after_create`
+
+### 风险 6：群聊成员串用别人的 skill context
+
+控制：
+
+- creative chat 每个 advisor turn 都重新解析 `advisorId -> memberSkillRef -> ResolvedSkillSet`
+- runtime checkpoint 必须记录本轮 `advisorId`、`memberSkillRef`、`activeSkillNames`
+- 测试必须覆盖两个风格相反的成员连续发言，确认不会复用上一轮 active skill
+- session 级 active skills 不能作为 advisor 多成员群聊的唯一技能来源
+
 ## 10. 推荐执行顺序
 
 推荐的落地顺序：
@@ -911,7 +1140,8 @@ Member Skill Package
 
 - 阶段 1 全量完成
 - 阶段 2 至少完成 advisor 单聊接入
-- 阶段 3 先完成语言过滤 + 成员作用域路由
+- 阶段 3 先完成“文件导入成员”和“YouTube 导入成员”两条自动蒸馏链路
+- 阶段 4 至少完成 advisor 单聊和 creative chat 的 `memberSkillRef` 自动激活
 
 这三步完成后，系统就已经具备可用的“成员技能化”主链路。
 
@@ -934,16 +1164,29 @@ Member Skill Package
 ### 里程碑 C
 
 - 完成 `member-skill-distiller` 的最小落盘链路
+- 文件导入创建成员后自动生成首版成员技能包
+- YouTube 导入创建成员后自动生成首版成员技能包，字幕到齐后生成升级候选
 - 成员技能包接入 advisor runtime
+- creative chat 中每个成员按自己的 `memberSkillRef` 发言
 - 建立最小评测集
+
+### 里程碑 D
+
+- 完成成员技能版本候选、diff、审核、回滚
+- 完成 `tool_policy.json` 对 runtime tool set 的收窄
+- 完成 Workboard/collab member 对 `advisorId/memberSkillRef` 的复用
+- 完成文件导入、YouTube 导入、已有成员补充知识三条路径的端到端回归
 
 ## 12. 完成定义
 
 当以下条件全部满足时，可认为该迁移完成：
 
 - 每个成员都能从知识库蒸馏出可版本化技能包
+- 文件导入创建成员后自动生成并绑定首版成员技能包
+- YouTube 导入创建成员后自动生成并绑定首版成员技能包，字幕更新能产生下一版候选
 - 知识库语言可自动识别并进入检索/蒸馏/运行时链路
 - runtime 能按成员激活技能，而不是只读一段 advisor prompt
+- advisor 单聊、creative chat、Workboard/collab member 都能按各自成员技能发言和检索
 - 检索支持语言感知与成员作用域
 - 成员具备受控工具能力
 - 技能升级具备审计、评测、回滚
