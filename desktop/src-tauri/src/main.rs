@@ -3048,15 +3048,15 @@ fn execute_interactive_tool_call(
             tool_call_id,
         );
         let prepared = tool_executor.prepare_tool_call(name, arguments)?;
-        let name = prepared.name;
+        let name = prepared.name.clone();
         let arguments = &prepared.arguments;
         let action = tool_action_name(arguments);
         let tool_plan_fingerprint = prepared.plan_fingerprint.clone();
-        if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
+        if let Some(result) = tool_executor.dispatch_mcp_tool(&prepared) {
             return result
                 .map(|value| {
                     ensure_structured_tool_success(
-                        name,
+                        &name,
                         action.as_deref(),
                         value,
                         Some(&tool_plan_fingerprint),
@@ -3064,7 +3064,45 @@ fn execute_interactive_tool_call(
                 })
                 .map_err(|error| {
                     ensure_structured_tool_error(
-                        name,
+                        &name,
+                        action.as_deref(),
+                        &error,
+                        Some(&tool_plan_fingerprint),
+                    )
+                });
+        }
+        if let Some(result) = tool_executor.dispatch_mcp_resource_tool(&prepared) {
+            return result
+                .map(|value| {
+                    ensure_structured_tool_success(
+                        &name,
+                        action.as_deref(),
+                        value,
+                        Some(&tool_plan_fingerprint),
+                    )
+                })
+                .map_err(|error| {
+                    ensure_structured_tool_error(
+                        &name,
+                        action.as_deref(),
+                        &error,
+                        Some(&tool_plan_fingerprint),
+                    )
+                });
+        }
+        if let Some(result) = tool_executor.dispatch_action_tool(&prepared) {
+            return result
+                .map(|value| {
+                    ensure_structured_tool_success(
+                        &name,
+                        action.as_deref(),
+                        value,
+                        Some(&tool_plan_fingerprint),
+                    )
+                })
+                .map_err(|error| {
+                    ensure_structured_tool_error(
+                        &name,
                         action.as_deref(),
                         &error,
                         Some(&tool_plan_fingerprint),
@@ -3076,7 +3114,7 @@ fn execute_interactive_tool_call(
                 .unwrap_or_else(|| Err(format!("Manuscript channel not handled: {channel}")))
         };
 
-        let raw_result = match name {
+        let raw_result = match name.as_str() {
             "redbox_editor" => {
                 let action = payload_string(arguments, "action").unwrap_or_default();
                 let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
@@ -3955,7 +3993,7 @@ fn execute_interactive_tool_call(
         raw_result
             .map(|value| {
                 ensure_structured_tool_success(
-                    name,
+                    &name,
                     action.as_deref(),
                     value,
                     Some(&tool_plan_fingerprint),
@@ -3963,7 +4001,7 @@ fn execute_interactive_tool_call(
             })
             .map_err(|error| {
                 ensure_structured_tool_error(
-                    name,
+                    &name,
                     action.as_deref(),
                     &error,
                     Some(&tool_plan_fingerprint),

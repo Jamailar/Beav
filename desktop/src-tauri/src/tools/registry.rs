@@ -1,12 +1,14 @@
 use serde_json::{json, Value};
 
+use crate::mcp::{McpToolInfo, McpToolInventorySnapshot};
 use crate::tools::catalog::{
     descriptor_by_name, schema_for_tool_for_runtime_mode, schema_for_tool_from_action_descriptors,
     tool_action_family_summary, tool_action_family_summary_for_descriptors, ToolDescriptor,
 };
 use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_runtime_mode};
 use crate::tools::plan::{
-    base_tool_names_for_metadata, build_tool_registry_plan_for_session, ToolRegistryPlan,
+    base_tool_names_for_metadata, build_tool_registry_plan_for_session,
+    build_tool_registry_plan_for_session_with_mcp, ToolRegistryPlan,
 };
 use crate::AppStore;
 
@@ -131,6 +133,7 @@ pub fn openai_schemas_for_runtime_mode(runtime_mode: &str) -> Value {
     json!(schemas)
 }
 
+#[allow(dead_code)]
 pub fn openai_schemas_for_session(
     store: &AppStore,
     runtime_mode: &str,
@@ -148,6 +151,36 @@ pub fn openai_schemas_for_session(
             }
         })
         .collect::<Vec<_>>();
+    json!(schemas)
+}
+
+pub fn openai_schemas_for_session_with_mcp(
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    mcp_inventory: Option<&McpToolInventorySnapshot>,
+) -> Value {
+    let plan = build_tool_registry_plan_for_session_with_mcp(
+        store,
+        runtime_mode,
+        session_id,
+        mcp_inventory,
+    );
+    let mut schemas = plan
+        .visible_tools
+        .iter()
+        .filter_map(|tool| {
+            if tool.name == "Redbox" && !plan.direct_app_cli_actions.is_empty() {
+                schema_for_tool_from_action_descriptors("Redbox", &plan.direct_app_cli_actions)
+            } else {
+                schema_for_tool_for_runtime_mode(tool.name, Some(&plan.runtime_mode))
+            }
+        })
+        .collect::<Vec<_>>();
+    if !plan.mcp_tool_namespaces.is_empty() {
+        schemas.extend(mcp_resource_openai_schemas());
+    }
+    schemas.extend(plan.direct_mcp_tools.iter().map(mcp_openai_schema));
     json!(schemas)
 }
 
@@ -174,6 +207,62 @@ pub fn tool_plan_snapshot_for_session(
             .collect::<Vec<_>>(),
         "deferredActionNamespaces": plan.deferred_action_namespaces,
         "deferredActionCount": plan.deferred_app_cli_actions.len(),
+            "mcp": {
+                "inventoryFingerprint": plan.mcp_inventory_fingerprint,
+                "exposureMode": plan.mcp_exposure_mode,
+                "namespaces": plan.mcp_tool_namespaces,
+                "resourceTools": !plan.mcp_tool_namespaces.is_empty(),
+                "directTools": plan
+                .direct_mcp_tools
+                .iter()
+                .map(|tool| tool.callable_name.clone())
+                .collect::<Vec<_>>(),
+            "deferredToolCount": plan.deferred_mcp_tools.len(),
+        }
+    })
+}
+
+pub fn tool_plan_snapshot_for_session_with_mcp(
+    store: &AppStore,
+    runtime_mode: &str,
+    session_id: Option<&str>,
+    mcp_inventory: Option<&McpToolInventorySnapshot>,
+) -> Value {
+    let plan = build_tool_registry_plan_for_session_with_mcp(
+        store,
+        runtime_mode,
+        session_id,
+        mcp_inventory,
+    );
+    json!({
+        "runtimeMode": plan.runtime_mode,
+        "sessionId": session_id,
+        "fingerprint": plan.fingerprint,
+        "internalTools": plan.internal_tool_names,
+        "visibleTools": plan
+            .visible_tools
+            .iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>(),
+        "directAppCliActions": plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>(),
+        "deferredActionNamespaces": plan.deferred_action_namespaces,
+        "deferredActionCount": plan.deferred_app_cli_actions.len(),
+        "mcp": {
+            "inventoryFingerprint": plan.mcp_inventory_fingerprint,
+            "exposureMode": plan.mcp_exposure_mode,
+            "namespaces": plan.mcp_tool_namespaces,
+            "resourceTools": !plan.mcp_tool_namespaces.is_empty(),
+            "directTools": plan
+                .direct_mcp_tools
+                .iter()
+                .map(|tool| tool.callable_name.clone())
+                .collect::<Vec<_>>(),
+            "deferredToolCount": plan.deferred_mcp_tools.len(),
+        }
     })
 }
 
@@ -262,6 +351,85 @@ fn capability_summary_for_plan_tool(tool_name: &str, plan: &ToolRegistryPlan) ->
     tool_action_family_summary(tool_name, Some(&plan.runtime_mode))
 }
 
+fn mcp_openai_schema(tool: &McpToolInfo) -> Value {
+    let description = tool
+        .description
+        .as_deref()
+        .or(tool.title.as_deref())
+        .unwrap_or("MCP tool provided by an enabled external server.");
+    json!({
+        "type": "function",
+        "function": {
+            "name": tool.callable_name,
+            "description": format!("{} (MCP server: {})", description, tool.server_name),
+            "parameters": normalize_mcp_input_schema(&tool.input_schema),
+        }
+    })
+}
+
+fn mcp_resource_openai_schemas() -> Vec<Value> {
+    vec![
+        json!({
+            "type": "function",
+            "function": {
+                "name": "list_mcp_resources",
+                "description": "List MCP resources exposed by enabled external MCP servers. Optionally pass serverId to narrow the listing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serverId": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "list_mcp_resource_templates",
+                "description": "List MCP resource templates exposed by enabled external MCP servers. Optionally pass serverId to narrow the listing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serverId": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        }),
+        json!({
+            "type": "function",
+            "function": {
+                "name": "read_mcp_resource",
+                "description": "Read a concrete MCP resource by serverId and uri.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "serverId": { "type": "string" },
+                        "uri": { "type": "string" }
+                    },
+                    "required": ["serverId", "uri"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+    ]
+}
+
+fn normalize_mcp_input_schema(schema: &Value) -> Value {
+    let mut schema = schema.clone();
+    if !schema.is_object() {
+        return json!({ "type": "object", "additionalProperties": true });
+    }
+    if schema.get("type").is_none() {
+        schema["type"] = json!("object");
+    }
+    if schema.get("properties").is_none() {
+        schema["properties"] = json!({});
+    }
+    schema
+}
+
 pub fn diagnostics_tool_items() -> Vec<Value> {
     ["bash", "redbox_fs", "app_cli", "redbox_editor"]
         .iter()
@@ -287,6 +455,7 @@ pub fn diagnostics_tool_items() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tool_inventory::{McpToolInfo, McpToolInventorySnapshot};
     use serde_json::json;
 
     #[test]
@@ -366,5 +535,40 @@ mod tests {
                 > 0,
             true
         );
+    }
+
+    #[test]
+    fn openai_schemas_for_session_with_mcp_exposes_direct_mcp_tools() {
+        let store = crate::AppStore::default();
+        let inventory = McpToolInventorySnapshot {
+            tools: vec![McpToolInfo {
+                server_id: "demo".to_string(),
+                server_name: "Demo".to_string(),
+                raw_tool_name: "read".to_string(),
+                callable_name: "mcp__demo__read".to_string(),
+                description: Some("Read demo resource".to_string()),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": { "uri": { "type": "string" } },
+                    "required": ["uri"]
+                }),
+                ..McpToolInfo::default()
+            }],
+            fingerprint: "mcp-a".to_string(),
+        };
+
+        let schemas =
+            openai_schemas_for_session_with_mcp(&store, "chatroom", None, Some(&inventory));
+        let names = schemas
+            .as_array()
+            .expect("schemas")
+            .iter()
+            .filter_map(|item| item.pointer("/function/name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"mcp__demo__read"));
+        assert!(names.contains(&"list_mcp_resources"));
+        assert!(names.contains(&"list_mcp_resource_templates"));
+        assert!(names.contains(&"read_mcp_resource"));
     }
 }

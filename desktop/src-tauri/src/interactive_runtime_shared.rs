@@ -13,8 +13,9 @@ use crate::runtime::{
 use crate::skills::{build_skill_prompt_bundle, normalize_skill_logical_path, resolve_skill_set};
 use crate::tools::registry::{
     base_tool_names_for_session_metadata, openai_schemas_for_runtime_mode,
-    openai_schemas_for_session, prompt_tool_lines_for_runtime_mode, prompt_tool_lines_for_session,
-    tool_plan_snapshot_for_session,
+    openai_schemas_for_session_with_mcp, prompt_tool_lines_for_runtime_mode,
+    prompt_tool_lines_for_session, tool_plan_snapshot_for_session,
+    tool_plan_snapshot_for_session_with_mcp,
 };
 use crate::{
     compact_host_runtime_context, current_host_runtime_context, load_redbox_prompt,
@@ -862,8 +863,19 @@ pub(crate) fn interactive_runtime_tools_for_mode(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> Value {
+    let mcp_servers = with_store(state, |store| Ok(store.mcp_servers.clone())).unwrap_or_default();
+    let mcp_inventory = state.mcp_manager.list_all_tools(&mcp_servers).ok();
     with_store_mut(state, |store| {
-        let snapshot = tool_plan_snapshot_for_session(&store, runtime_mode, session_id);
+        let snapshot = if mcp_inventory.is_some() {
+            tool_plan_snapshot_for_session_with_mcp(
+                &store,
+                runtime_mode,
+                session_id,
+                mcp_inventory.as_ref(),
+            )
+        } else {
+            tool_plan_snapshot_for_session(&store, runtime_mode, session_id)
+        };
         eprintln!("[tools][plan] {snapshot}");
         if let Some(session_id) = session_id {
             append_session_checkpoint(
@@ -885,7 +897,12 @@ pub(crate) fn interactive_runtime_tools_for_mode(
                 );
             }
         }
-        Ok(openai_schemas_for_session(&store, runtime_mode, session_id))
+        Ok(openai_schemas_for_session_with_mcp(
+            &store,
+            runtime_mode,
+            session_id,
+            mcp_inventory.as_ref(),
+        ))
     })
     .unwrap_or_else(|_| openai_schemas_for_runtime_mode(runtime_mode))
 }

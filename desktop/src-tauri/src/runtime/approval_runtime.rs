@@ -234,6 +234,21 @@ pub fn runtime_approval_snapshot(
     Ok(approvals.snapshot())
 }
 
+pub fn runtime_approval_confirmed_by_call_id(
+    state: &State<'_, AppState>,
+    call_id: &str,
+) -> Result<bool, String> {
+    let approvals = state
+        .approval_runtime
+        .lock()
+        .map_err(|_| "approval runtime lock 已损坏".to_string())?;
+    Ok(approvals
+        .snapshot()
+        .recent
+        .iter()
+        .any(|item| item.call_id.as_deref() == Some(call_id) && item.confirmed == Some(true)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

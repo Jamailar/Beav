@@ -1069,6 +1069,21 @@ export interface McpServerConfig {
   oauth?: {
     enabled?: boolean;
     tokenPath?: string;
+    redbox?: {
+      required?: boolean;
+      approvalMode?: 'never' | 'destructive' | 'always';
+      startupTimeoutMs?: number;
+      toolTimeoutMs?: number;
+      supportsParallelToolCalls?: boolean;
+      elicitationPausesTimeout?: boolean;
+      enabledTools?: string[];
+      disabledTools?: string[];
+      perTool?: Record<string, {
+        approvalMode?: 'never' | 'destructive' | 'always';
+        enabled?: boolean;
+        toolTimeoutMs?: number;
+      }>;
+    };
   };
 }
 
@@ -1238,6 +1253,17 @@ export const createDefaultMcpServer = (): McpServerConfig => ({
   url: '',
   oauth: {
     enabled: false,
+    redbox: {
+      required: false,
+      approvalMode: 'destructive',
+      startupTimeoutMs: 15000,
+      toolTimeoutMs: 60000,
+      supportsParallelToolCalls: true,
+      elicitationPausesTimeout: true,
+      enabledTools: [],
+      disabledTools: [],
+      perTool: {},
+    },
   },
 });
 
@@ -1269,6 +1295,42 @@ export const parseMcpServers = (raw: string | undefined): McpServerConfig[] => {
                 ? undefined
                 : Boolean((item.oauth as Record<string, unknown>).enabled),
               tokenPath: String((item.oauth as Record<string, unknown>).tokenPath || ''),
+              redbox: (() => {
+                const oauth = item.oauth as Record<string, unknown>;
+                const redbox = (oauth.redbox && typeof oauth.redbox === 'object'
+                  ? oauth.redbox
+                  : oauth.policy && typeof oauth.policy === 'object'
+                    ? oauth.policy
+                    : oauth.mcp && typeof oauth.mcp === 'object'
+                      ? oauth.mcp
+                      : {}) as Record<string, unknown>;
+                const approvalMode = String(redbox.approvalMode || redbox.defaultToolsApprovalMode || 'destructive');
+                return {
+                  required: Boolean(redbox.required),
+                  approvalMode: (approvalMode === 'never' || approvalMode === 'always' ? approvalMode : 'destructive') as 'never' | 'destructive' | 'always',
+                  startupTimeoutMs: Number(redbox.startupTimeoutMs || 15000),
+                  toolTimeoutMs: Number(redbox.toolTimeoutMs || 60000),
+                  supportsParallelToolCalls: redbox.supportsParallelToolCalls === undefined ? true : Boolean(redbox.supportsParallelToolCalls),
+                  elicitationPausesTimeout: redbox.elicitationPausesTimeout === undefined ? true : Boolean(redbox.elicitationPausesTimeout),
+                  enabledTools: Array.isArray(redbox.enabledTools) ? redbox.enabledTools.map((tool) => String(tool || '').trim()).filter(Boolean) : [],
+                  disabledTools: Array.isArray(redbox.disabledTools) ? redbox.disabledTools.map((tool) => String(tool || '').trim()).filter(Boolean) : [],
+                  perTool: redbox.perTool && typeof redbox.perTool === 'object' && !Array.isArray(redbox.perTool)
+                    ? Object.fromEntries(
+                        Object.entries(redbox.perTool as Record<string, unknown>)
+                          .filter(([key, value]) => Boolean(key.trim()) && Boolean(value && typeof value === 'object' && !Array.isArray(value)))
+                          .map(([key, value]) => {
+                            const policy = value as Record<string, unknown>;
+                            const mode = String(policy.approvalMode || 'destructive');
+                            return [key.trim(), {
+                              approvalMode: (mode === 'never' || mode === 'always' ? mode : 'destructive') as 'never' | 'destructive' | 'always',
+                              enabled: policy.enabled === undefined ? undefined : Boolean(policy.enabled),
+                              toolTimeoutMs: policy.toolTimeoutMs === undefined ? undefined : Number(policy.toolTimeoutMs),
+                            }];
+                          })
+                      )
+                    : {},
+                };
+              })(),
             }
           : undefined,
       }));

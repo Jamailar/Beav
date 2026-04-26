@@ -15,6 +15,7 @@ use crate::helpers::{
     AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
+use crate::mcp::tool_inventory::search_mcp_tools;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{resolve_session_file_reference_inputs, McpServerRecord, SkillRecord};
 use crate::skills::{
@@ -22,7 +23,9 @@ use crate::skills::{
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
 use crate::tools::action_search::{search_actions, ActionSearchParams};
-use crate::tools::plan::build_tool_registry_plan_for_session;
+use crate::tools::plan::{
+    build_tool_registry_plan_for_session, build_tool_registry_plan_for_session_with_mcp,
+};
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{
     join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
@@ -398,7 +401,7 @@ impl<'a> AppCliExecutor<'a> {
         }
         let Some(allowed_actions) = self.session_allowed_structured_actions() else {
             let plan = with_store(self.state, |store| {
-                Ok(build_tool_registry_plan_for_session(
+                Ok::<_, String>(build_tool_registry_plan_for_session(
                     &store,
                     self.runtime_mode,
                     self.session_id,
@@ -869,11 +872,14 @@ impl<'a> AppCliExecutor<'a> {
         let include_direct = payload_field(payload, "includeDirect")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
+        let mcp_inventory = self.state.mcp_manager.list_all_tools(&mcp_servers).ok();
         let plan = with_store(self.state, |store| {
-            Ok(build_tool_registry_plan_for_session(
+            Ok(build_tool_registry_plan_for_session_with_mcp(
                 &store,
                 self.runtime_mode,
                 self.session_id,
+                mcp_inventory.as_ref(),
             ))
         })?;
         let results = search_actions(
@@ -886,6 +892,16 @@ impl<'a> AppCliExecutor<'a> {
                 include_direct,
             },
         );
+        let mcp_results = search_mcp_tools(
+            &plan.direct_mcp_tools,
+            &plan.deferred_mcp_tools,
+            &query,
+            limit,
+            include_direct,
+        )
+        .into_iter()
+        .map(|entry| serde_json::to_value(entry).unwrap_or_else(|_| json!({})))
+        .collect::<Vec<_>>();
         let (direct_actions, deferred_actions): (Vec<_>, Vec<_>) = results
             .into_iter()
             .map(|entry| serde_json::to_value(entry).unwrap_or_else(|_| json!({})))
@@ -904,6 +920,8 @@ impl<'a> AppCliExecutor<'a> {
             "deferredNamespaces": plan.deferred_action_namespaces,
             "deferredActions": deferred_actions,
             "directActions": direct_actions,
+            "mcpTools": mcp_results,
+            "deferredMcpNamespaces": plan.mcp_tool_namespaces,
             "routerPlan": plan.fingerprint,
         }))
     }
@@ -2402,6 +2420,20 @@ impl<'a> AppCliExecutor<'a> {
             .cloned()
             .unwrap_or_else(|| json!({}));
         let parse_server = || -> Result<McpServerRecord, String> {
+            if let Some(server_id) = payload_string(payload, "serverId")
+                .or_else(|| payload_string(payload, "id"))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            {
+                return with_store(self.state, |store| {
+                    store
+                        .mcp_servers
+                        .iter()
+                        .find(|server| server.id == server_id || server.name == server_id)
+                        .cloned()
+                        .ok_or_else(|| format!("MCP server `{server_id}` not found"))
+                });
+            }
             serde_json::from_value(server_value.clone()).map_err(|error| error.to_string())
         };
         match action {

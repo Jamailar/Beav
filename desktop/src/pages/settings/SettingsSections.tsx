@@ -3230,6 +3230,194 @@ export function ToolsSettingsSection({
                                     </div>
                                 )}
 
+                                <div className="rounded-md border border-border bg-surface-secondary/20 p-3 space-y-3">
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                        <label className="inline-flex items-center gap-2 text-xs text-text-secondary">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(server.oauth?.redbox?.required)}
+                                                onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                    ...item,
+                                                    oauth: {
+                                                        ...(item.oauth || {}),
+                                                        redbox: {
+                                                            ...(item.oauth?.redbox || {}),
+                                                            required: e.target.checked,
+                                                        },
+                                                    },
+                                                }))}
+                                            />
+                                            必需 Server
+                                        </label>
+                                        <label className="inline-flex items-center gap-2 text-xs text-text-secondary">
+                                            <input
+                                                type="checkbox"
+                                                checked={server.oauth?.redbox?.supportsParallelToolCalls !== false}
+                                                onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                    ...item,
+                                                    oauth: {
+                                                        ...(item.oauth || {}),
+                                                        redbox: {
+                                                            ...(item.oauth?.redbox || {}),
+                                                            supportsParallelToolCalls: e.target.checked,
+                                                        },
+                                                    },
+                                                }))}
+                                            />
+                                            允许并行工具
+                                        </label>
+                                        <label className="inline-flex items-center gap-2 text-xs text-text-secondary">
+                                            <input
+                                                type="checkbox"
+                                                checked={server.oauth?.redbox?.elicitationPausesTimeout !== false}
+                                                onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                    ...item,
+                                                    oauth: {
+                                                        ...(item.oauth || {}),
+                                                        redbox: {
+                                                            ...(item.oauth?.redbox || {}),
+                                                            elicitationPausesTimeout: e.target.checked,
+                                                        },
+                                                    },
+                                                }))}
+                                            />
+                                            等待确认不计时
+                                        </label>
+                                        <div>
+                                            <label className="block text-[11px] text-text-tertiary mb-1">审批策略</label>
+                                            <select
+                                                value={server.oauth?.redbox?.approvalMode || 'destructive'}
+                                                onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                    ...item,
+                                                    oauth: {
+                                                        ...(item.oauth || {}),
+                                                        redbox: {
+                                                            ...(item.oauth?.redbox || {}),
+                                                            approvalMode: e.target.value as 'never' | 'destructive' | 'always',
+                                                        },
+                                                    },
+                                                }))}
+                                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                                            >
+                                                <option value="never">Never</option>
+                                                <option value="destructive">Destructive</option>
+                                                <option value="always">Always</option>
+                                            </select>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="block text-[11px] text-text-tertiary mb-1">启动 ms</label>
+                                                <input
+                                                    type="number"
+                                                    min={1000}
+                                                    max={300000}
+                                                    value={server.oauth?.redbox?.startupTimeoutMs ?? 15000}
+                                                    onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                        ...item,
+                                                        oauth: {
+                                                            ...(item.oauth || {}),
+                                                            redbox: {
+                                                                ...(item.oauth?.redbox || {}),
+                                                                startupTimeoutMs: Number(e.target.value || 15000),
+                                                            },
+                                                        },
+                                                    }))}
+                                                    className="w-full bg-surface-secondary/30 rounded border border-border px-2 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[11px] text-text-tertiary mb-1">工具 ms</label>
+                                                <input
+                                                    type="number"
+                                                    min={1000}
+                                                    max={600000}
+                                                    value={server.oauth?.redbox?.toolTimeoutMs ?? 60000}
+                                                    onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                        ...item,
+                                                        oauth: {
+                                                            ...(item.oauth || {}),
+                                                            redbox: {
+                                                                ...(item.oauth?.redbox || {}),
+                                                                toolTimeoutMs: Number(e.target.value || 60000),
+                                                            },
+                                                        },
+                                                    }))}
+                                                    className="w-full bg-surface-secondary/30 rounded border border-border px-2 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-[11px] text-text-tertiary mb-1">Enabled tools（每行一个；空=全部）</label>
+                                            <textarea
+                                                value={(server.oauth?.redbox?.enabledTools || []).join('\n')}
+                                                onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                    ...item,
+                                                    oauth: {
+                                                        ...(item.oauth || {}),
+                                                        redbox: {
+                                                            ...(item.oauth?.redbox || {}),
+                                                            enabledTools: e.target.value.split('\n').map((tool) => tool.trim()).filter(Boolean),
+                                                        },
+                                                    },
+                                                }))}
+                                                rows={2}
+                                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-xs focus:outline-none focus:border-accent-primary transition-colors"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] text-text-tertiary mb-1">Disabled tools（每行一个）</label>
+                                            <textarea
+                                                value={(server.oauth?.redbox?.disabledTools || []).join('\n')}
+                                                onChange={(e) => handleUpdateMcpServer(server.id, (item) => ({
+                                                    ...item,
+                                                    oauth: {
+                                                        ...(item.oauth || {}),
+                                                        redbox: {
+                                                            ...(item.oauth?.redbox || {}),
+                                                            disabledTools: e.target.value.split('\n').map((tool) => tool.trim()).filter(Boolean),
+                                                        },
+                                                    },
+                                                }))}
+                                                rows={2}
+                                                className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-xs focus:outline-none focus:border-accent-primary transition-colors"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[11px] text-text-tertiary mb-1">Per-tool policy JSON</label>
+                                        <textarea
+                                            key={`${server.id}:perTool`}
+                                            defaultValue={JSON.stringify(server.oauth?.redbox?.perTool || {}, null, 2)}
+                                            onBlur={(e) => handleUpdateMcpServer(server.id, (item) => {
+                                                let perTool = item.oauth?.redbox?.perTool || {};
+                                                try {
+                                                    const parsed = JSON.parse(e.target.value) as unknown;
+                                                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                                                        perTool = parsed as typeof perTool;
+                                                    }
+                                                } catch {
+                                                    perTool = item.oauth?.redbox?.perTool || {};
+                                                }
+                                                return {
+                                                    ...item,
+                                                    oauth: {
+                                                        ...(item.oauth || {}),
+                                                        redbox: {
+                                                            ...(item.oauth?.redbox || {}),
+                                                            perTool,
+                                                        },
+                                                    },
+                                                };
+                                            })}
+                                            rows={4}
+                                            spellCheck={false}
+                                            className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 font-mono text-xs focus:outline-none focus:border-accent-primary transition-colors"
+                                        />
+                                    </div>
+                                </div>
+
                                 <div className="flex items-center justify-between gap-3">
                                     <div className="text-[11px] text-text-tertiary">
                                         OAuth: {mcpOauthState[server.id]?.connected ? '已连接' : '未连接'}

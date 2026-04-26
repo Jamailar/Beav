@@ -1,3 +1,4 @@
+use crate::mcp::McpToolInfo;
 use serde_json::{json, Value};
 
 use crate::payload_string;
@@ -7,9 +8,18 @@ use crate::tools::plan::ToolRegistryPlan;
 
 #[derive(Debug, Clone)]
 pub struct PreparedToolCall {
-    pub name: &'static str,
+    pub name: String,
     pub arguments: Value,
     pub plan_fingerprint: String,
+    pub mcp_tool: Option<McpToolInfo>,
+    pub mcp_resource: Option<McpResourcePreparedCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpResourcePreparedCall {
+    ListResources,
+    ListResourceTemplates,
+    ReadResource,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +85,46 @@ impl ToolRouter {
 
     pub fn prepare(&self, name: &str, arguments: &Value) -> Result<PreparedToolCall, String> {
         let raw_allowed = self.is_allowed_tool_name(name);
+        if let Some(tool) = self.plan.direct_mcp_tool(name).cloned() {
+            return Ok(PreparedToolCall {
+                name: name.to_string(),
+                arguments: if arguments.is_object() {
+                    arguments.clone()
+                } else {
+                    json!({})
+                },
+                plan_fingerprint: self.plan.fingerprint.clone(),
+                mcp_tool: Some(tool),
+                mcp_resource: None,
+            });
+        }
+        if let Some(resource_call) = self.prepare_mcp_resource_tool(name) {
+            return Ok(PreparedToolCall {
+                name: name.to_string(),
+                arguments: if arguments.is_object() {
+                    arguments.clone()
+                } else {
+                    json!({})
+                },
+                plan_fingerprint: self.plan.fingerprint.clone(),
+                mcp_tool: None,
+                mcp_resource: Some(resource_call),
+            });
+        }
+        if let Some(tool) = self.plan.deferred_mcp_tool(name) {
+            return Err(self
+                .error(
+                    "TOOL_DEFERRED",
+                    format!("MCP tool `{name}` is available but not directly exposed in this turn"),
+                    true,
+                    Some(json!({
+                        "suggestedAction": "tools.search",
+                        "queryHint": format!("{} {}", tool.server_name, tool.description.clone().unwrap_or_default()),
+                        "deferredMcpNamespaces": self.plan.mcp_tool_namespaces,
+                    })),
+                )
+                .to_json_string(Some(name), None));
+        }
         let normalized_call = normalize_tool_call(name, arguments);
         let normalized_name = normalized_call.name;
         if normalized_name.is_empty() {
@@ -102,18 +152,60 @@ impl ToolRouter {
                 )
                 .to_json_string(Some(normalized_name), None));
         }
+        if let Some(tool) = self.plan.direct_mcp_tool(normalized_name).cloned() {
+            return Ok(PreparedToolCall {
+                name: normalized_name.to_string(),
+                arguments: normalized_call.arguments,
+                plan_fingerprint: self.plan.fingerprint.clone(),
+                mcp_tool: Some(tool),
+                mcp_resource: None,
+            });
+        }
+        if let Some(resource_call) = self.prepare_mcp_resource_tool(normalized_name) {
+            return Ok(PreparedToolCall {
+                name: normalized_name.to_string(),
+                arguments: normalized_call.arguments,
+                plan_fingerprint: self.plan.fingerprint.clone(),
+                mcp_tool: None,
+                mcp_resource: Some(resource_call),
+            });
+        }
+        if let Some(tool) = self.plan.deferred_mcp_tool(normalized_name) {
+            return Err(self
+                .error(
+                    "TOOL_DEFERRED",
+                    format!(
+                        "MCP tool `{normalized_name}` is available but not directly exposed in this turn"
+                    ),
+                    true,
+                    Some(json!({
+                        "suggestedAction": "tools.search",
+                        "queryHint": format!("{} {}", tool.server_name, tool.description.clone().unwrap_or_default()),
+                        "deferredMcpNamespaces": self.plan.mcp_tool_namespaces,
+                    })),
+                )
+                .to_json_string(Some(normalized_name), None));
+        }
         if normalized_name == "app_cli" {
             self.ensure_app_cli_action_allowed(&normalized_call.arguments)?;
         }
         Ok(PreparedToolCall {
-            name: normalized_name,
+            name: normalized_name.to_string(),
             arguments: normalized_call.arguments,
             plan_fingerprint: self.plan.fingerprint.clone(),
+            mcp_tool: None,
+            mcp_resource: None,
         })
     }
 
     pub fn supports_parallel(&self, prepared: &PreparedToolCall) -> bool {
-        let descriptor_allows = descriptor_by_name(prepared.name)
+        if let Some(tool) = &prepared.mcp_tool {
+            return tool.supports_parallel_tool_calls && !tool.destructive;
+        }
+        if prepared.mcp_resource.is_some() {
+            return true;
+        }
+        let descriptor_allows = descriptor_by_name(&prepared.name)
             .map(|descriptor| descriptor.concurrency_safe)
             .unwrap_or(false);
         if !descriptor_allows {
@@ -213,6 +305,21 @@ impl ToolRouter {
                 .internal_tool_names
                 .iter()
                 .any(|item| item == canonical || item == name)
+            || self.plan.direct_mcp_tool(name).is_some()
+            || self.plan.deferred_mcp_tool(name).is_some()
+            || self.prepare_mcp_resource_tool(name).is_some()
+    }
+
+    fn prepare_mcp_resource_tool(&self, name: &str) -> Option<McpResourcePreparedCall> {
+        if self.plan.mcp_tool_namespaces.is_empty() {
+            return None;
+        }
+        match name {
+            "list_mcp_resources" => Some(McpResourcePreparedCall::ListResources),
+            "list_mcp_resource_templates" => Some(McpResourcePreparedCall::ListResourceTemplates),
+            "read_mcp_resource" => Some(McpResourcePreparedCall::ReadResource),
+            _ => None,
+        }
     }
 
     fn visible_tool_names(&self) -> Vec<&'static str> {
@@ -250,6 +357,7 @@ impl ToolRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::tool_inventory::{McpToolInfo, McpToolInventorySnapshot};
     use crate::tools::plan::{build_tool_registry_plan, ToolRegistryPlanParams};
 
     #[test]
@@ -293,5 +401,98 @@ mod tests {
 
         assert!(error.contains("ACTION_DEFERRED"));
         assert!(error.contains("tools.search"));
+    }
+
+    #[test]
+    fn router_prepares_direct_mcp_tool_without_compat_normalization() {
+        let inventory = McpToolInventorySnapshot {
+            tools: vec![McpToolInfo {
+                server_id: "demo".to_string(),
+                server_name: "Demo".to_string(),
+                raw_tool_name: "read".to_string(),
+                callable_name: "mcp__demo__read".to_string(),
+                ..McpToolInfo::default()
+            }],
+            fingerprint: "mcp-a".to_string(),
+        };
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "chatroom",
+            mcp_inventory: Some(&inventory),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare("mcp__demo__read", &json!({ "uri": "memo://1" }))
+            .expect("prepare mcp");
+
+        assert_eq!(prepared.name, "mcp__demo__read");
+        assert_eq!(
+            prepared
+                .mcp_tool
+                .as_ref()
+                .map(|tool| tool.raw_tool_name.as_str()),
+            Some("read")
+        );
+    }
+
+    #[test]
+    fn router_rejects_deferred_mcp_tools_with_search_hint() {
+        let inventory = McpToolInventorySnapshot {
+            tools: (0..30)
+                .map(|index| McpToolInfo {
+                    server_id: "demo".to_string(),
+                    server_name: "Demo".to_string(),
+                    raw_tool_name: format!("t{index}"),
+                    callable_name: format!("mcp__demo__t{index}"),
+                    ..McpToolInfo::default()
+                })
+                .collect(),
+            fingerprint: "mcp-a".to_string(),
+        };
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "chatroom",
+            mcp_inventory: Some(&inventory),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare("mcp__demo__t1", &json!({}))
+            .expect_err("deferred mcp tool should fail");
+
+        assert!(error.contains("TOOL_DEFERRED"));
+        assert!(error.contains("tools.search"));
+    }
+
+    #[test]
+    fn router_prepares_mcp_resource_tools_when_mcp_is_enabled() {
+        let inventory = McpToolInventorySnapshot {
+            tools: vec![McpToolInfo {
+                server_id: "demo".to_string(),
+                server_name: "Demo".to_string(),
+                raw_tool_name: "read".to_string(),
+                callable_name: "mcp__demo__read".to_string(),
+                ..McpToolInfo::default()
+            }],
+            fingerprint: "mcp-a".to_string(),
+        };
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "chatroom",
+            mcp_inventory: Some(&inventory),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "read_mcp_resource",
+                &json!({ "serverId": "demo", "uri": "memo://1" }),
+            )
+            .expect("prepare resource tool");
+
+        assert_eq!(prepared.name, "read_mcp_resource");
+        assert_eq!(
+            prepared.mcp_resource,
+            Some(McpResourcePreparedCall::ReadResource)
+        );
+        assert!(router.supports_parallel(&prepared));
     }
 }

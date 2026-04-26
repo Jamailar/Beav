@@ -3,9 +3,16 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use super::config::{
+    effective_server_config, effective_server_records, mcp_tool_allowed, mcp_tool_timeout_ms,
+};
 use super::resources::McpCapabilitySnapshot;
 use super::session::{McpSession, McpSessionSnapshot};
+use super::tool_inventory::{
+    inventory_from_tools_response, mcp_tools_fingerprint, McpToolInfo, McpToolInventorySnapshot,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +41,76 @@ impl McpManager {
         self.invoke(server, "tools/list", Value::Object(Default::default()))
     }
 
+    pub fn list_all_tools(
+        &self,
+        servers: &[McpServerRecord],
+    ) -> Result<McpToolInventorySnapshot, String> {
+        let mut responses = Vec::<(McpServerRecord, Value)>::new();
+        let mut errors = Vec::<String>::new();
+        for server in effective_server_records(servers) {
+            match self.list_tools(&server) {
+                Ok(result) => responses.push((server.clone(), result.response)),
+                Err(error) => errors.push(format!("{}: {}", server.name, error)),
+            }
+        }
+        let mut snapshot = inventory_from_tools_response(&responses);
+        snapshot.tools.retain(|tool| {
+            responses
+                .iter()
+                .find(|(server, _)| server.id == tool.server_id)
+                .map(|(server, _)| mcp_tool_allowed(server, &tool.raw_tool_name))
+                .unwrap_or(false)
+        });
+        snapshot.fingerprint = mcp_tools_fingerprint(&snapshot.tools);
+        if snapshot.tools.is_empty() && !errors.is_empty() {
+            return Err(errors.join("; "));
+        }
+        Ok(snapshot)
+    }
+
+    #[allow(dead_code)]
+    pub fn resolve_tool_info(
+        &self,
+        servers: &[McpServerRecord],
+        callable_name: &str,
+    ) -> Result<Option<McpToolInfo>, String> {
+        Ok(self
+            .list_all_tools(servers)?
+            .tools
+            .into_iter()
+            .find(|tool| tool.callable_name == callable_name))
+    }
+
+    pub fn call_tool(
+        &self,
+        servers: &[McpServerRecord],
+        tool: &McpToolInfo,
+        arguments: Value,
+    ) -> Result<McpInvocationResult, String> {
+        let server = servers
+            .iter()
+            .find(|server| server.id == tool.server_id)
+            .ok_or_else(|| format!("MCP server `{}` is not configured", tool.server_id))?;
+        if !server.enabled {
+            return Err(format!("MCP server `{}` is disabled", server.name));
+        }
+        if !mcp_tool_allowed(server, &tool.raw_tool_name) {
+            return Err(format!(
+                "MCP tool `{}` is disabled by server policy",
+                tool.raw_tool_name
+            ));
+        }
+        self.invoke_with_timeout(
+            server,
+            "tools/call",
+            serde_json::json!({
+                "name": tool.raw_tool_name,
+                "arguments": arguments,
+            }),
+            mcp_tool_timeout_ms(server, &tool.raw_tool_name),
+        )
+    }
+
     pub fn list_resources(&self, server: &McpServerRecord) -> Result<McpInvocationResult, String> {
         self.invoke(server, "resources/list", Value::Object(Default::default()))
     }
@@ -46,6 +123,21 @@ impl McpManager {
             server,
             "resources/templates/list",
             Value::Object(Default::default()),
+        )
+    }
+
+    pub fn read_resource(
+        &self,
+        server: &McpServerRecord,
+        uri: &str,
+    ) -> Result<McpInvocationResult, String> {
+        self.invoke_with_timeout(
+            server,
+            "resources/read",
+            serde_json::json!({
+                "uri": uri,
+            }),
+            effective_server_config(server).tool_timeout_ms,
         )
     }
 
@@ -63,6 +155,41 @@ impl McpManager {
             session: session.snapshot(),
             capabilities: session.capabilities(),
         })
+    }
+
+    fn invoke_with_timeout(
+        &self,
+        server: &McpServerRecord,
+        method: &str,
+        params: Value,
+        timeout_ms: u64,
+    ) -> Result<McpInvocationResult, String> {
+        let handle = self.session_handle(server)?;
+        let method = method.to_string();
+        let method_for_worker = method.clone();
+        let timeout = Duration::from_millis(timeout_ms.clamp(1_000, 600_000));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let mut session = handle.lock().map_err(|error| error.to_string())?;
+                let response = session.invoke(&method_for_worker, params)?;
+                Ok(McpInvocationResult {
+                    response,
+                    session: session.snapshot(),
+                    capabilities: session.capabilities(),
+                })
+            })();
+            let _ = sender.send(result);
+        });
+        match receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+                "MCP call `{method}` timed out after {timeout_ms}ms"
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                Err(format!("MCP call `{method}` worker disconnected"))
+            }
+        }
     }
 
     pub fn probe(&self, server: &McpServerRecord) -> Result<McpProbeResult, String> {
@@ -311,6 +438,49 @@ mod tests {
         assert_eq!(manager.sessions().unwrap().len(), 1);
         assert!(manager.disconnect_server(&server).unwrap());
         assert!(manager.sessions().unwrap().is_empty());
+
+        let _ = fs::remove_file(script_path);
+    }
+
+    #[test]
+    fn manager_resolves_and_calls_qualified_mcp_tool() {
+        let script_path = write_test_server_script();
+        let server = McpServerRecord {
+            id: "server-1".to_string(),
+            name: "Test Server".to_string(),
+            enabled: true,
+            transport: "stdio".to_string(),
+            command: Some("python3".to_string()),
+            args: Some(vec![script_path.display().to_string()]),
+            env: None,
+            url: None,
+            oauth: None,
+        };
+        let manager = McpManager::default();
+        let servers = vec![server];
+        let inventory = manager.list_all_tools(&servers).unwrap();
+        let tool = inventory
+            .tools
+            .iter()
+            .find(|tool| tool.raw_tool_name == "echo")
+            .cloned()
+            .expect("echo tool");
+        let resolved = manager
+            .resolve_tool_info(&servers, &tool.callable_name)
+            .unwrap()
+            .expect("resolved tool");
+        assert_eq!(resolved.raw_tool_name, "echo");
+
+        let result = manager
+            .call_tool(&servers, &tool, serde_json::json!({ "text": "hello" }))
+            .unwrap();
+        assert_eq!(
+            result
+                .response
+                .pointer("/result/method")
+                .and_then(Value::as_str),
+            Some("tools/call")
+        );
 
         let _ = fs::remove_file(script_path);
     }
