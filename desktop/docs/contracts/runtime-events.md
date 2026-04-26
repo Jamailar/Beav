@@ -75,6 +75,9 @@ Status: Current
 `redbox-team` MCP 合同由宿主内的 `src-tauri/src/mcp/team_server.rs` 定义。外部 ACP agent 应通过 bridge config 注入这些工具，内部 child runtime 直接调用同一组 host action。
 
 - `team_list_members`
+- `team_match_member`
+- `team_rename_agent`
+- `team_shutdown_agent`
 - `team_list_work_items`
 - `team_send_message`
 - `team_claim_work_item`
@@ -82,15 +85,21 @@ Status: Current
 - `team_request_report`
 - `team_submit_report`
 - `team_save_artifact`
+- `team_raise_blocker`
 
 对应宿主动作仍保持 schema-first、single-action：
 
 - `team.members.list`
+- `team.member.match`
+- `team.member.rename`
+- `team.member.shutdown`
 - `team.task.list`
 - `team.message.send`
 - `team.task.update`
 - `team.report.request`
 - `team.report.submit`
+- `team.artifact.attach`
+- `team.blocker.raise`
 
 ## Verification
 

@@ -14,7 +14,7 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented at the runtime contract layer: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, and artifact/blocker helpers.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented across runtime contract, bridge, MCP, and Workboard controls: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, and lightweight UI actions.
 ---
 
 # ACP Team Workboard Collaboration Plan
@@ -554,6 +554,8 @@ Implemented baseline:
 - `team.blocker.raise` submits a structured blocker report and moves the task/member into blocker state.
 - Completion reports include `payload.completionClaim` with evidence, artifact refs, handoff, and risks.
 - The redbox-team MCP contract exposes the same conceptual tools for external adapters.
+- `window.ipcRenderer.teamRuntime` exposes first-class methods for member matching, rename/shutdown, artifact attach, and blocker raise.
+- Workboard Collaboration mode includes lightweight controls for intelligent assignment, member rename/shutdown, artifact attach, blocker raise, report request, and completion claim submission.
 
 ## 6. Data Model
 
@@ -1274,11 +1276,11 @@ Cons:
 
 Verdict: recommended.
 
-## 15. MVP Recommendation
+## 15. Implemented Baseline
 
-Start with a pragmatic MVP that proves the product experience before broad ACP support:
+The completed baseline proves the product experience before broad remote-agent expansion:
 
-### MVP Scope
+### Implemented Scope
 
 - Internal runtime members only.
 - Persistent `CollabSession`, `CollabMember`, `CollabTask`, `CollabReport`, `CollabMailbox`.
@@ -1287,27 +1289,28 @@ Start with a pragmatic MVP that proves the product experience before broad ACP s
 - Manual report request and completion report.
 - Basic periodic report timer.
 - Coordinator wakes when all members settle.
+- Deterministic member matching through agent cards and task-plan load.
+- Speaker/executor separation contract through member task plans, mailbox messages, progress reports, and completion claims.
 
-### MVP Out Of Scope
+### Explicitly Deferred
 
-- External ACP member spawning.
 - Drag-and-drop Kanban.
 - Full assistant preset marketplace.
 - Cross-project remote team.
 
-### Why This MVP
+### Why This Baseline
 
 It proves the core user value: “members each work, report progress, and the board shows what everyone is doing.” Once that is stable, ACP external members can be added behind the same member/task/report contracts.
 
-## 16. Open Discussion Questions
+## 16. Resolved Product Decisions
 
-1. Should `Team` remain a creative/advisor group chat and `Workboard` become the operational team dashboard, or should we rename/restructure the current Team page?
-2. Should the first MVP use only internal child runtimes, or should we include one ACP backend from day one?
-3. Should progress reports be visible as chat bubbles, board feed items, or both?
-4. Should members work in one shared workspace or isolated task workspaces by default?
-5. Should coordinator approval be required before members execute file edits, video generation, or CLI tools?
-6. What default member lineup should RedConvert offer for creator workflows?
-7. Should RedClaw long-cycle tasks automatically create collaboration sessions when a task needs multiple specialties?
+1. `Team` remains the creative/advisor group-chat surface; `Workboard` owns the operational collaboration dashboard.
+2. The first fully implemented path uses internal child runtimes and the host-owned collaboration protocol; external ACP adapters plug into the same contract.
+3. Progress reports are durable report records first, and can be rendered as board feed items or group-chat summaries without changing the runtime model.
+4. Members share the current workspace by default; task-specific workspace isolation can be added later as a runtime policy.
+5. Tool permissions stay host-owned. File edits, video generation, CLI tools, and other side effects must continue through existing approval/runtime boundaries.
+6. Default member profiles are generated from role specs and stored in `CollabMemberRecord.metadata.agentCard`, with template/user overrides.
+7. RedClaw should create collaboration sessions only when a task explicitly needs multiple specialties or long-running coordination; simple single-agent tasks should remain lightweight.
 
 ## 17. Suggested Default Member Templates
 
