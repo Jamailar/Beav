@@ -74,6 +74,11 @@ fn requested_skill_names_from_legacy_metadata(metadata: &Value) -> Vec<String> {
             }
         }
     }
+    if let Some(member_skill_ref) = metadata.get("memberSkillRef").and_then(Value::as_str) {
+        if let Some(normalized) = normalize_skill_name(member_skill_ref) {
+            items.push(normalized);
+        }
+    }
     dedupe_skill_names(items)
 }
 
@@ -236,6 +241,16 @@ mod tests {
         })));
         assert_eq!(state.requested.len(), 2);
         assert_eq!(state.active.len(), 2);
+    }
+
+    #[test]
+    fn session_skill_state_from_metadata_reads_member_skill_ref() {
+        assert_eq!(
+            requested_session_skill_names(Some(&json!({
+                "memberSkillRef": "member-advisor-1"
+            }))),
+            vec!["member-advisor-1".to_string()]
+        );
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::chat_binding::{bind_editor_session, EditorChatBindingRequest};
 use crate::commands::chat_state::diagnostics_session_defaults;
+use crate::member_skill::{advisor_member_skill_ref, attach_member_skill_metadata};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
@@ -1438,6 +1439,17 @@ pub fn handle_chat_sessions_wander_channel(
                 let initial_context = payload_string(&payload, "initialContext");
                 let metadata = payload_field(&payload, "metadata").cloned();
                 let session = with_store_mut(state, |store| {
+                    let mut metadata = metadata;
+                    if context_type == "advisor-discussion" {
+                        let mut object = metadata
+                            .and_then(|value| value.as_object().cloned())
+                            .unwrap_or_default();
+                        object.insert("advisorId".to_string(), Value::String(context_id.clone()));
+                        if let Some(skill_ref) = advisor_member_skill_ref(store, &context_id) {
+                            attach_member_skill_metadata(&mut object, &skill_ref);
+                        }
+                        metadata = Some(Value::Object(object));
+                    }
                     let session = create_context_session(
                         store,
                         &context_type,

@@ -359,6 +359,45 @@ pub(crate) fn load_advisors_from_fs(advisors_root: &Path) -> Vec<AdvisorRecord> 
                 .get("youtubeChannel")
                 .or_else(|| config.get("youtube_channel"))
                 .cloned(),
+            member_skill_ref: config
+                .get("memberSkillRef")
+                .or_else(|| config.get("member_skill_ref"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            member_skill_status: config
+                .get("memberSkillStatus")
+                .or_else(|| config.get("member_skill_status"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            member_skill_version: config
+                .get("memberSkillVersion")
+                .or_else(|| config.get("member_skill_version"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            member_skill_last_distilled_at: config
+                .get("memberSkillLastDistilledAt")
+                .or_else(|| config.get("member_skill_last_distilled_at"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            member_skill_last_error: config
+                .get("memberSkillLastError")
+                .or_else(|| config.get("member_skill_last_error"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            detected_knowledge_language: config
+                .get("detectedKnowledgeLanguage")
+                .or_else(|| config.get("detected_knowledge_language"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            language_detection_status: config
+                .get("languageDetectionStatus")
+                .or_else(|| config.get("language_detection_status"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            language_confidence: config
+                .get("languageConfidence")
+                .or_else(|| config.get("language_confidence"))
+                .and_then(|v| v.as_f64()),
             created_at: config
                 .get("createdAt")
                 .or_else(|| config.get("created_at"))

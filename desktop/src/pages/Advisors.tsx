@@ -13,6 +13,14 @@ interface Advisor {
     systemPrompt: string;
     knowledgeLanguage?: string;
     knowledgeFiles: string[];
+    memberSkillRef?: string;
+    memberSkillStatus?: string;
+    memberSkillVersion?: string;
+    memberSkillLastDistilledAt?: string;
+    memberSkillLastError?: string;
+    detectedKnowledgeLanguage?: string;
+    languageDetectionStatus?: string;
+    languageConfidence?: number;
     createdAt: string;
 }
 
@@ -53,10 +61,22 @@ const buildAdvisorInitialContext = (advisor: Advisor): string => {
         advisor.personality ? `成员定位：${advisor.personality}` : null,
         `知识库语言：${advisor.knowledgeLanguage || '中文'}`,
         advisor.knowledgeFiles.length > 0 ? `已接入知识文件：${advisor.knowledgeFiles.length} 个` : '当前暂无知识文件',
+        advisor.memberSkillRef ? `成员技能：${advisor.memberSkillRef}（${advisor.memberSkillStatus || 'ready'}）` : null,
         '请始终以该成员身份回答，保持表达风格、专业倾向和角色设定一致。',
         advisor.systemPrompt ? `系统设定：\n${advisor.systemPrompt}` : null,
     ];
     return sections.filter(Boolean).join('\n\n');
+};
+
+const buildAdvisorSessionMetadata = (advisor: Advisor): Record<string, unknown> => {
+    const metadata: Record<string, unknown> = {
+        advisorId: advisor.id,
+    };
+    if (advisor.memberSkillRef) {
+        metadata.memberSkillRef = advisor.memberSkillRef;
+        metadata.activeSkills = [advisor.memberSkillRef];
+    }
+    return metadata;
 };
 
 const getAdvisorWelcomeAvatarText = (advisor: Advisor): string => {
@@ -288,6 +308,7 @@ export function Advisors({
                     contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                     title: `与 ${advisor.name} 聊聊`,
                     initialContext: buildAdvisorInitialContext(advisor),
+                    metadata: buildAdvisorSessionMetadata(advisor),
                 }, {
                     timeoutMs: 3200,
                     fallback: null,
@@ -408,6 +429,7 @@ export function Advisors({
                 contextType: ADVISOR_CHAT_CONTEXT_TYPE,
                 title: `与 ${selectedAdvisor.name} 聊聊`,
                 initialContext: buildAdvisorInitialContext(selectedAdvisor),
+                metadata: buildAdvisorSessionMetadata(selectedAdvisor),
             }, {
                 timeoutMs: 3200,
                 fallback: null,
@@ -610,6 +632,12 @@ export function Advisors({
                                             <div className="text-sm font-medium text-text-primary truncate">{advisor.name}</div>
                                             <div className="text-xs text-text-tertiary truncate">{advisor.personality}</div>
                                             <div className="text-[11px] text-text-tertiary truncate">知识库语言：{advisor.knowledgeLanguage || '中文'}</div>
+                                            <div className={clsx(
+                                                "text-[11px] truncate",
+                                                advisor.memberSkillStatus === 'failed' ? "text-red-500" : "text-text-tertiary"
+                                            )}>
+                                                成员技能：{advisor.memberSkillRef ? advisor.memberSkillStatus || 'ready' : '待蒸馏'}
+                                            </div>
                                         </div>
                                     </div>
                                 </button>
