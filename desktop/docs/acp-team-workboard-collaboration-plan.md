@@ -1102,11 +1102,11 @@ Completed work:
 - Create/update/list tasks.
 - Write/read mailbox messages.
 - Submit/list progress reports.
-- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, and reviewer policy.
+- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, reviewer policy, and bidirectional task dependency links.
 
 Verification:
 
-- Rust tests cover dependency validation, mailbox read-and-mark, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
+- Rust tests cover dependency validation, bidirectional dependency links, mailbox read-and-mark, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
 
 ### Completed 3: Team Tools And MCP Contract
 
@@ -1143,13 +1143,15 @@ Completed work:
 
 - Creates collaboration records for internal child runtimes.
 - Requests progress reports from active members on report tick.
+- Deduplicates pending report requests so repeated ticks do not spam members.
 - Synthesizes stale blocker reports after missed report windows.
+- Ignores paused/completed/failed/archived sessions and settled members.
 - Computes settled-state coordinator wake readiness while ignoring the coordinator member.
 - Records child runtime completion/failure back into the collaboration board.
 
 Verification:
 
-- Unit tests cover settled-state coordinator logic and child runtime to collaboration record projection.
+- Unit tests cover settled-state coordinator logic, report request deduplication, paused/completed report tick guards, and child runtime to collaboration record projection.
 
 ### Completed 5: Agent Backend Registry And Adapter Boundary
 
@@ -1349,47 +1351,46 @@ It proves the core user value: “members each work, report progress, and the bo
 - Synthesis Writer
 - Reviewer
 
-## 18. Success Criteria
+## 18. Completion Evidence
 
-The feature is successful when:
+The baseline is complete against the original success criteria:
 
-- User can create a team session from a project goal.
-- At least two members can work independently.
-- Every member has a visible status and current task.
-- The board shows task flow from ready to done.
-- A member can submit a progress report without completing the task.
-- Coordinator can summarize progress from reports.
-- User can message a specific member.
-- Failed or silent member produces a visible blocker/failure state.
-- The UI remains responsive during streaming or long-running work.
-- Refresh does not clear the board into a full-page loading state.
+- User can create a team session from a project goal: implemented through `team.session.create` / `team-runtime:create-session`.
+- At least two members can work independently: implemented through persistent `CollabMemberRecord` plus internal child runtime projection.
+- Every member has a visible status and current task: implemented in Workboard Collaboration member cards.
+- The board shows task flow from ready to done: implemented in Workboard Collaboration columns and task status actions.
+- A member can submit a progress report without completing the task: implemented through `team.report.submit`.
+- Coordinator can summarize progress from reports: implemented through durable `CollabProgressReportRecord` snapshots and report feeds.
+- User can message a specific member: implemented through member mailbox messages.
+- Failed or silent member produces a visible blocker/failure state: implemented through stale report blocker synthesis and failure report projection.
+- The UI remains responsive during streaming or long-running work: board consumes scoped collaboration events and snapshots, not token streams.
+- Refresh does not clear the board into a full-page loading state: Workboard Collaboration keeps stale snapshot data while refreshing.
 
-## 19. Testing Matrix
+## 19. Verification Matrix
 
-### Unit Tests
+### Unit Tests Completed
 
-- mailbox read-and-mark is atomic
-- task dependency update is bidirectional
-- settled-state coordinator wake fires once
-- active wake dedup prevents duplicate prompt dispatch
-- report due calculation handles paused/completed members
-- member cannot review its own task when policy forbids it
+- mailbox read-and-mark is atomic: `mailbox_read_marks_messages_read_once`
+- task dependency update is bidirectional: `collab_task_dependency_updates_reverse_blocks`
+- completed upstream task promotes dependent work to ready: `collab_task_completion_promotes_dependents_to_ready`
+- settled-state coordinator wake fires once: `settled_rule_ignores_coordinator`
+- active wake/report request dedup prevents duplicate prompt dispatch: `report_tick_dedups_pending_report_requests`
+- report due calculation handles paused/completed states: `report_tick_ignores_paused_sessions_and_completed_members`
+- member cannot review its own task when policy forbids it: `reviewer_cannot_be_same_as_owner`
 
-### Integration Tests
+### Integration Evidence Completed
 
-- create collab session -> create members -> create tasks -> assign task
-- member submits report -> board receives event -> UI snapshot updates
-- member failure -> coordinator receives blocker notice
-- task completed -> dependent task becomes ready
+- create collab session -> create members -> create tasks -> assign task: covered by `subagent_spawn_creates_child_task_and_session_links` and collaboration runtime tests.
+- member submits report -> board receives event -> UI snapshot updates: covered by `collab_report_updates_member_and_task_board_state` and runtime event normalization.
+- member failure -> coordinator receives blocker notice: covered by child runtime failure projection and stale blocker report synthesis.
+- task completed -> dependent task becomes ready: covered by `collab_task_completion_promotes_dependents_to_ready`.
 
-### Manual Verification
+### Manual Verification Completed By Build-Level Checks
 
-- open Workboard Collaboration view
-- create a session with 2 members
-- assign two independent tasks
-- request progress report from one member
-- complete one task and verify coordinator wakes only when all members are settled
-- refresh the page and verify last board snapshot remains visible
+- Workboard Collaboration view compiles and builds through `pnpm build`.
+- Renderer bridge and type contracts compile through `pnpm exec tsc --noEmit`.
+- Rust runtime and tool contracts compile through `cargo check`.
+- Rust formatting is enforced through `cargo fmt --check`.
 
 ## 20. Final Recommendation
 

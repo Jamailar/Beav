@@ -45,6 +45,77 @@ fn value_object(payload: &Value, key: &str) -> Option<Value> {
     payload.get(key).filter(|value| value.is_object()).cloned()
 }
 
+fn sync_task_dependency_links(store: &mut AppStore, session_id: &str) {
+    let session_task_ids = store
+        .collab_tasks
+        .iter()
+        .filter(|task| task.session_id == session_id)
+        .map(|task| task.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let edges = store
+        .collab_tasks
+        .iter()
+        .filter(|task| task.session_id == session_id)
+        .flat_map(|task| {
+            task.depends_on_task_ids
+                .iter()
+                .filter(|dependency_id| session_task_ids.contains(*dependency_id))
+                .map(|dependency_id| (dependency_id.clone(), task.id.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    for task in store
+        .collab_tasks
+        .iter_mut()
+        .filter(|task| task.session_id == session_id)
+    {
+        task.blocks_task_ids
+            .retain(|blocked_id| !session_task_ids.contains(blocked_id));
+    }
+    for (dependency_id, blocked_task_id) in edges {
+        if let Some(task) = store
+            .collab_tasks
+            .iter_mut()
+            .find(|task| task.session_id == session_id && task.id == dependency_id)
+        {
+            if !task.blocks_task_ids.contains(&blocked_task_id) {
+                task.blocks_task_ids.push(blocked_task_id);
+            }
+        }
+    }
+}
+
+fn promote_ready_dependents(store: &mut AppStore, session_id: &str, now: i64) {
+    let completed_task_ids = store
+        .collab_tasks
+        .iter()
+        .filter(|task| task.session_id == session_id && task.status == "completed")
+        .map(|task| task.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    for task in store
+        .collab_tasks
+        .iter_mut()
+        .filter(|task| task.session_id == session_id)
+    {
+        if task.depends_on_task_ids.is_empty()
+            || !matches!(task.status.as_str(), "todo" | "backlog" | "blocked")
+        {
+            continue;
+        }
+        if task
+            .depends_on_task_ids
+            .iter()
+            .all(|dependency_id| completed_task_ids.contains(dependency_id))
+        {
+            task.status = "ready".to_string();
+            task.blocked_by_task_ids
+                .retain(|task_id| !completed_task_ids.contains(task_id));
+            task.updated_at = now;
+        }
+    }
+}
+
 fn completion_claim_payload(
     payload: &Value,
     session_id: &str,
@@ -1322,6 +1393,14 @@ pub fn create_collab_task(
         completed_at: None,
     };
     store.collab_tasks.push(task.clone());
+    sync_task_dependency_links(store, &session_id);
+    promote_ready_dependents(store, &session_id, now);
+    let task = store
+        .collab_tasks
+        .iter()
+        .find(|item| item.id == task.id)
+        .cloned()
+        .unwrap_or(task);
     if let Some(member_id) = task.member_id.as_deref() {
         if let Some(member) = store
             .collab_members
@@ -1449,7 +1528,15 @@ pub fn update_collab_task(
     } else {
         task.updated_at = now;
     }
-    let updated = task.clone();
+    let updated_id = task.id.clone();
+    sync_task_dependency_links(store, &session_id);
+    promote_ready_dependents(store, &session_id, now);
+    let updated = store
+        .collab_tasks
+        .iter()
+        .find(|task| task.id == updated_id)
+        .cloned()
+        .ok_or_else(|| "协作任务不存在".to_string())?;
     if let Some(member_id) = updated.member_id.as_deref() {
         if let Some(member) = store
             .collab_members
@@ -1598,6 +1685,7 @@ pub fn submit_collab_report(
 
     let now = now_i64();
     let status = value_string(payload, "status").unwrap_or_else(|| "reported".to_string());
+    let status_is_completed = status == "completed";
     let summary = value_string(payload, "summary").unwrap_or_default();
     let report = CollabProgressReportRecord {
         id: next_collab_id("collab-report", |candidate| {
@@ -1702,6 +1790,9 @@ pub fn submit_collab_report(
         {
             upsert_member_task_plan(member, task, Some(&report));
         }
+    }
+    if status_is_completed {
+        promote_ready_dependents(store, &session_id, now);
     }
 
     touch_session(store, &session_id, now);
@@ -1883,6 +1974,118 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn collab_task_dependency_updates_reverse_blocks() {
+        let mut store = AppStore::default();
+        let session = create_collab_session(&mut store, &json!({ "objective": "deps" })).unwrap();
+        let first = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "先做"
+            }),
+        )
+        .unwrap();
+        let second = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "后做"
+            }),
+        )
+        .unwrap();
+        let dependent = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "依赖任务",
+                "dependsOnTaskIds": [first.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        let first_after_create = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == first.id)
+            .unwrap();
+        assert!(first_after_create.blocks_task_ids.contains(&dependent.id));
+
+        update_collab_task(
+            &mut store,
+            &json!({
+                "taskId": dependent.id.clone(),
+                "dependsOnTaskIds": [second.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        let first_after_update = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == first.id)
+            .unwrap();
+        let second_after_update = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == second.id)
+            .unwrap();
+        assert!(!first_after_update.blocks_task_ids.contains(&dependent.id));
+        assert!(second_after_update.blocks_task_ids.contains(&dependent.id));
+    }
+
+    #[test]
+    fn collab_task_completion_promotes_dependents_to_ready() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "promote" })).unwrap();
+        let member = add_collab_member(
+            &mut store,
+            &json!({ "sessionId": session.id, "displayName": "成员" }),
+        )
+        .unwrap();
+        let upstream = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "title": "上游"
+            }),
+        )
+        .unwrap();
+        let downstream = create_collab_task(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "title": "下游",
+                "status": "blocked",
+                "dependsOnTaskIds": [upstream.id.clone()],
+                "blockedByTaskIds": [upstream.id.clone()]
+            }),
+        )
+        .unwrap();
+
+        submit_collab_report(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member.id,
+                "taskId": upstream.id,
+                "status": "completed",
+                "summary": "上游完成"
+            }),
+        )
+        .unwrap();
+
+        let downstream = store
+            .collab_tasks
+            .iter()
+            .find(|task| task.id == downstream.id)
+            .unwrap();
+        assert_eq!(downstream.status, "ready");
+        assert!(downstream.blocked_by_task_ids.is_empty());
     }
 
     #[test]
