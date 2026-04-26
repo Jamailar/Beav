@@ -55,6 +55,7 @@ impl ToolRegistryPlan {
             .any(|descriptor| descriptor.action == action)
     }
 
+    #[allow(dead_code)]
     pub fn has_deferred_app_cli_action(&self, action: &str) -> bool {
         self.deferred_app_cli_actions
             .iter()
@@ -133,6 +134,7 @@ fn should_apply_member_tool_policy(store: &AppStore, metadata: Option<&Value>) -
     crate::member_skill::member_feature_flag_enabled_for_store(store, "memberToolPolicy", true)
 }
 
+#[allow(dead_code)]
 pub fn build_tool_registry_plan_for_turn_context(context: &RedboxTurnContext) -> ToolRegistryPlan {
     build_tool_registry_plan(ToolRegistryPlanParams {
         runtime_mode: &context.runtime_mode,

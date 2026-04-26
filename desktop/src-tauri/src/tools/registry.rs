@@ -62,6 +62,7 @@ pub fn base_tool_names_for_session_metadata(
     base_tool_names_for_metadata(runtime_mode, metadata)
 }
 
+#[allow(dead_code)]
 pub fn tool_names_for_session(
     store: &AppStore,
     runtime_mode: &str,
