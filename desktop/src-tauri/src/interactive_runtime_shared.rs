@@ -774,6 +774,17 @@ pub(crate) fn interactive_runtime_tools_for_mode(
                 "tool plan generated".to_string(),
                 Some(snapshot),
             );
+            if let Some(member_skill_activation) =
+                crate::member_skill::member_skill_activation_checkpoint_payload(store, session_id)
+            {
+                append_session_checkpoint(
+                    store,
+                    session_id,
+                    "memberSkillActivation",
+                    "member skill activation resolved".to_string(),
+                    Some(member_skill_activation),
+                );
+            }
         }
         Ok(openai_schemas_for_session(&store, runtime_mode, session_id))
     })

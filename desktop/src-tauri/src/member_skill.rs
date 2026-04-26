@@ -1,4 +1,5 @@
 use serde_json::{json, Map, Value};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +16,25 @@ use crate::{
 
 const MEMBER_SKILL_REASON: &str = "advisor-member-skill";
 const MEMBER_SKILL_SOURCE_VERSION: &str = "member-skill-v1";
+const MEMBER_SKILL_REQUIRED_FILES: &[&str] = &[
+    "SKILL.md",
+    "member.json",
+    "persona.json",
+    "retrieval_scope.json",
+    "tool_policy.json",
+    "workflow.json",
+    "heuristics.jsonl",
+    "references/knowledge-evidence.md",
+    "examples/README.md",
+    "scripts/README.md",
+];
+const MEMBER_SKILL_REQUIRED_JSON_FILES: &[&str] = &[
+    "member.json",
+    "persona.json",
+    "retrieval_scope.json",
+    "tool_policy.json",
+    "workflow.json",
+];
 
 #[derive(Debug, Clone)]
 pub(crate) struct MemberSkillPublishResult {
@@ -379,6 +399,211 @@ pub(crate) fn inspect_member_skill_versions(
     }))
 }
 
+pub(crate) fn compile_member_skill_package(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    version: Option<&str>,
+    candidate: bool,
+) -> Result<Value, String> {
+    let advisor = with_store(state, |store| {
+        store
+            .advisors
+            .iter()
+            .find(|item| item.id == advisor_id)
+            .cloned()
+            .ok_or_else(|| "成员不存在".to_string())
+    })?;
+    let skill_name = advisor
+        .member_skill_ref
+        .clone()
+        .filter(|item| !item.trim().is_empty())
+        .unwrap_or_else(|| member_skill_name(&advisor));
+    let package_dir = workspace_root(state)?
+        .join("skills")
+        .join(slug_from_relative_path(&skill_name));
+    let requested_version = version.map(str::trim).filter(|item| !item.is_empty());
+    let (target_dir, target_kind, target_version) = if candidate {
+        let candidate_version = requested_version
+            .map(ToString::to_string)
+            .or(advisor.member_skill_candidate_version.clone())
+            .ok_or_else(|| "没有可校验的成员技能候选版本".to_string())?;
+        (
+            package_dir
+                .join("distillation_candidates")
+                .join(&candidate_version),
+            "candidate".to_string(),
+            Some(candidate_version),
+        )
+    } else if let Some(version) = requested_version {
+        if advisor
+            .member_skill_version
+            .as_deref()
+            .is_some_and(|current| current == version)
+        {
+            (
+                package_dir.clone(),
+                "current".to_string(),
+                Some(version.to_string()),
+            )
+        } else {
+            (
+                package_dir.join("versions").join(version),
+                "version".to_string(),
+                Some(version.to_string()),
+            )
+        }
+    } else {
+        (
+            package_dir.clone(),
+            "current".to_string(),
+            advisor.member_skill_version.clone(),
+        )
+    };
+    let validation = validate_member_skill_dir(&target_dir);
+    Ok(json!({
+        "success": true,
+        "advisorId": advisor_id,
+        "skillName": skill_name,
+        "target": target_kind,
+        "version": target_version,
+        "packagePath": target_dir.display().to_string(),
+        "validation": validation
+    }))
+}
+
+pub(crate) fn evaluate_member_skill(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+) -> Result<Value, String> {
+    let compiled = compile_member_skill_package(state, advisor_id, None, false)?;
+    let validation = compiled
+        .get("validation")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let valid = validation
+        .get("valid")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let missing_count = validation
+        .get("missingFiles")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let invalid_json_count = validation
+        .get("invalidJson")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let heuristic_count = validation
+        .get("heuristicsCount")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let evidence_chars = validation
+        .get("knowledgeEvidenceChars")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let allowed_tools = validation
+        .get("canonicalAllowedTools")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut score = 0;
+    if valid {
+        score += 55;
+    } else {
+        score += 20_i64.saturating_sub((missing_count + invalid_json_count) as i64 * 5);
+    }
+    if allowed_tools.contains("redbox_fs") {
+        score += 15;
+    }
+    if heuristic_count >= 2 {
+        score += 15;
+    }
+    if evidence_chars > 80 {
+        score += 15;
+    }
+    let passed = valid && score >= 80;
+    Ok(json!({
+        "success": true,
+        "advisorId": advisor_id,
+        "skillName": compiled.get("skillName").cloned().unwrap_or(Value::Null),
+        "version": compiled.get("version").cloned().unwrap_or(Value::Null),
+        "passed": passed,
+        "score": score,
+        "threshold": 80,
+        "validation": validation,
+        "recommendation": if passed {
+            "ready"
+        } else {
+            "review_required"
+        }
+    }))
+}
+
+pub(crate) fn member_skill_activation_checkpoint_payload(
+    store: &AppStore,
+    session_id: &str,
+) -> Option<Value> {
+    let session = store
+        .chat_sessions
+        .iter()
+        .find(|item| item.id == session_id)?;
+    let metadata = session.metadata.as_ref()?;
+    let advisor_id = metadata
+        .get("advisorId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string);
+    let metadata_member_skill_ref = metadata
+        .get("memberSkillRef")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string);
+    let advisor = advisor_id
+        .as_ref()
+        .and_then(|id| store.advisors.iter().find(|item| item.id == *id));
+    let resolved_member_skill_ref = metadata_member_skill_ref
+        .clone()
+        .or_else(|| advisor.and_then(|item| item.member_skill_ref.clone()));
+    if resolved_member_skill_ref.is_none() && advisor_id.is_none() {
+        return None;
+    }
+    let skill_state = crate::skills::session_skill_state_from_metadata(Some(metadata));
+    let active_skill_names = skill_state
+        .active
+        .iter()
+        .map(|item| item.skill_name.clone())
+        .collect::<Vec<_>>();
+    let fallback_reason = match resolved_member_skill_ref.as_deref() {
+        Some(skill_ref)
+            if active_skill_names
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(skill_ref)) =>
+        {
+            Value::Null
+        }
+        Some(_) => json!("member_skill_not_active"),
+        None => json!("member_skill_ref_missing"),
+    };
+    Some(json!({
+        "sessionId": session_id,
+        "advisorId": advisor_id,
+        "memberSkillRef": resolved_member_skill_ref,
+        "memberSkillVersion": advisor.and_then(|item| item.member_skill_version.clone()),
+        "memberSkillStatus": advisor.and_then(|item| item.member_skill_status.clone()),
+        "activeSkillNames": active_skill_names,
+        "fallbackReason": fallback_reason
+    }))
+}
+
 pub(crate) fn mark_member_skill_failed(
     state: &State<'_, AppState>,
     advisor_id: &str,
@@ -452,6 +677,98 @@ fn read_member_skill_manifest(path: &Path) -> Value {
         .ok()
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
         .unwrap_or_else(|| json!({}))
+}
+
+fn validate_member_skill_dir(path: &Path) -> Value {
+    let mut missing_files = Vec::new();
+    for file_name in MEMBER_SKILL_REQUIRED_FILES {
+        if !path.join(file_name).is_file() {
+            missing_files.push((*file_name).to_string());
+        }
+    }
+
+    let mut invalid_json = Vec::new();
+    let mut parsed_json = Map::new();
+    for file_name in MEMBER_SKILL_REQUIRED_JSON_FILES {
+        let file_path = path.join(file_name);
+        if !file_path.is_file() {
+            continue;
+        }
+        match fs::read_to_string(&file_path)
+            .map_err(|error| error.to_string())
+            .and_then(|content| {
+                serde_json::from_str::<Value>(&content).map_err(|error| error.to_string())
+            }) {
+            Ok(value) => {
+                parsed_json.insert((*file_name).to_string(), value);
+            }
+            Err(error) => {
+                invalid_json.push(json!({
+                    "file": file_name,
+                    "error": error
+                }));
+            }
+        }
+    }
+
+    let mut heuristics_count = 0_i64;
+    let mut invalid_heuristics = Vec::new();
+    if let Ok(content) = fs::read_to_string(path.join("heuristics.jsonl")) {
+        for (index, line) in content.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<Value>(line) {
+                Ok(_) => heuristics_count += 1,
+                Err(error) => invalid_heuristics.push(json!({
+                    "line": index + 1,
+                    "error": error.to_string()
+                })),
+            }
+        }
+    }
+
+    let policy = parsed_json
+        .get("tool_policy.json")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let canonical_allowed_tools = policy
+        .get("allowedTools")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(crate::tools::compat::canonical_tool_name)
+                .map(ToString::to_string)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let evidence_chars = fs::read_to_string(path.join("references").join("knowledge-evidence.md"))
+        .map(|content| content.chars().count() as i64)
+        .unwrap_or_default();
+    let tool_policy_valid = canonical_allowed_tools
+        .iter()
+        .any(|item| item == "redbox_fs");
+    let valid = missing_files.is_empty()
+        && invalid_json.is_empty()
+        && invalid_heuristics.is_empty()
+        && heuristics_count > 0
+        && tool_policy_valid;
+
+    json!({
+        "valid": valid,
+        "missingFiles": missing_files,
+        "invalidJson": invalid_json,
+        "invalidHeuristics": invalid_heuristics,
+        "heuristicsCount": heuristics_count,
+        "knowledgeEvidenceChars": evidence_chars,
+        "canonicalAllowedTools": canonical_allowed_tools,
+        "toolPolicyValid": tool_policy_valid
+    })
 }
 
 fn list_member_skill_versions(path: &Path) -> Result<Vec<Value>, String> {
@@ -918,7 +1235,7 @@ fn render_member_skill_body(
 name: {skill_name}
 description: 正鹅成员「{advisor_name}」的蒸馏技能。激活后必须按该成员身份、语气、知识边界和证据偏好发言。
 allowedRuntimeModes: [chatroom, advisor-discussion, wander, redclaw]
-allowedTools: [knowledge_search, redbox_fs]
+allowedTools: [redbox_fs]
 autoActivate: false
 activationScope: session
 hookMode: inline
