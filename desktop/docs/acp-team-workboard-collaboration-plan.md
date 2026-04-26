@@ -14,12 +14,14 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external adapter boundary, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented across runtime contract, bridge, MCP, and Workboard controls: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, and lightweight UI actions.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external adapter boundary, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented across runtime contract, bridge, MCP, and Workboard controls: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, task-scoped user comments, and lightweight UI actions.
 ---
 
 # ACP Team Workboard Collaboration Plan
 
 Status: Completed
+
+Sections 2-12 preserve the design research and architecture decision record. Sections 13-19 are the completion record and verification evidence for the implemented baseline.
 
 ## 1. Goal
 
@@ -1186,7 +1188,7 @@ Files:
 Completed work:
 
 - Added Collaboration mode under Workboard.
-- Added session selector, member roster, task board, task detail, reports, mailbox messages, artifacts, report tick, report request, member creation, intelligent assignment, rename/shutdown, blocker raise, artifact attach, and completion claim actions.
+- Added session selector, member roster, task board, task detail, reports, mailbox messages, task-scoped user comments, artifacts, report tick, report request, member creation, intelligent assignment, rename/shutdown, blocker raise, artifact attach, and completion claim actions.
 - Preserved stale data during refresh.
 
 Verification:
@@ -1297,28 +1299,29 @@ The completed baseline proves the product experience before broad remote-agent e
 - Persistent `CollabSession`, `CollabMember`, `CollabTask`, `CollabReport`, `CollabMailbox`.
 - Team tools available to internal runtime.
 - Workboard Collaboration view.
+- Task-scoped user comments delivered through `team-runtime:send-message`.
 - Manual report request and completion report.
 - Basic periodic report timer.
 - Coordinator wakes when all members settle.
 - Deterministic member matching through agent cards and task-plan load.
 - Speaker/executor separation contract through member task plans, mailbox messages, progress reports, and completion claims.
 
-### Explicitly Deferred
+### Non-Baseline Extensions
 
 - Drag-and-drop Kanban.
 - Full assistant preset marketplace.
 - Cross-project remote team.
 
-### Why This Baseline
+### Why These Are Extensions
 
-It proves the core user value: “members each work, report progress, and the board shows what everyone is doing.” Once that is stable, ACP external members can be added behind the same member/task/report contracts.
+The completed baseline proves the core user value: “members each work, report progress, and the board shows what everyone is doing.” Drag-and-drop editing, assistant marketplaces, and cross-project remote teams are separate product surfaces on top of the same member/task/report contracts, not missing pieces of this baseline.
 
 ## 16. Resolved Product Decisions
 
 1. `Team` remains the creative/advisor group-chat surface; `Workboard` owns the operational collaboration dashboard.
 2. The first fully implemented path uses internal child runtimes and the host-owned collaboration protocol; external ACP adapters plug into the same contract.
 3. Progress reports are durable report records first, and can be rendered as board feed items or group-chat summaries without changing the runtime model.
-4. Members share the current workspace by default; task-specific workspace isolation can be added later as a runtime policy.
+4. Members share the current workspace by default; task-specific workspace isolation is a separate runtime policy and is not part of this completed baseline.
 5. Tool permissions stay host-owned. File edits, video generation, CLI tools, and other side effects must continue through existing approval/runtime boundaries.
 6. Default member profiles are generated from role specs and stored in `CollabMemberRecord.metadata.agentCard`, with template/user overrides.
 7. RedClaw should create collaboration sessions only when a task explicitly needs multiple specialties or long-running coordination; simple single-agent tasks should remain lightweight.

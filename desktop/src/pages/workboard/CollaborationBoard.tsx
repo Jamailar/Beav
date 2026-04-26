@@ -136,6 +136,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const [draftObjective, setDraftObjective] = useState('');
   const [draftMember, setDraftMember] = useState('');
   const [draftTask, setDraftTask] = useState('');
+  const [messageDraft, setMessageDraft] = useState('');
   const [artifactDraft, setArtifactDraft] = useState('');
   const [blockerDraft, setBlockerDraft] = useState('');
   const snapshotRef = useRef<CollabSessionSnapshot | null>(null);
@@ -485,6 +486,29 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
     }
   }, [blockerDraft, loadSnapshot, selectedTask]);
 
+  const sendTaskMessage = useCallback(async () => {
+    if (!selectedTask?.memberId) return;
+    const body = messageDraft.trim();
+    if (!body) return;
+    setBusy(`message:${selectedTask.id}`);
+    try {
+      await window.ipcRenderer.teamRuntime.sendMessage({
+        sessionId: selectedTask.sessionId,
+        toMemberId: selectedTask.memberId,
+        taskId: selectedTask.id,
+        fromKind: 'user',
+        messageType: 'comment',
+        body,
+      });
+      setMessageDraft('');
+      await loadSnapshot(selectedTask.sessionId);
+    } catch (messageError) {
+      setError(messageError instanceof Error ? messageError.message : String(messageError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot, messageDraft, selectedTask]);
+
   const completeTask = useCallback(async () => {
     if (!selectedTask?.memberId) return;
     setBusy(`complete:${selectedTask.id}`);
@@ -832,6 +856,26 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                 </div>
                 {selectedTask.memberId && (
                   <div className="mt-3 space-y-2">
+                    <div className="flex gap-1.5">
+                      <input
+                        value={messageDraft}
+                        onChange={(event) => setMessageDraft(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && !event.shiftKey) {
+                            event.preventDefault();
+                            void sendTaskMessage();
+                          }
+                        }}
+                        placeholder="给负责人留言"
+                        className="min-w-0 flex-1 rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[11px] outline-none"
+                      />
+                      <button
+                        onClick={() => void sendTaskMessage()}
+                        className="rounded-full border border-[#dce6da] bg-white px-2.5 py-1.5 text-[10px] text-[#607166]"
+                      >
+                        <Send className="inline h-3 w-3" />
+                      </button>
+                    </div>
                     <div className="flex gap-1.5">
                       <input
                         value={artifactDraft}
