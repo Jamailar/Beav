@@ -53,6 +53,7 @@ pub(crate) enum ProviderTurnDelivery {
 #[derive(Debug, Clone)]
 pub(crate) struct ProviderTurnResult {
     pub content: String,
+    pub reasoning_content: String,
     pub tool_calls: Vec<InteractiveToolCall>,
     pub delivery: ProviderTurnDelivery,
 }

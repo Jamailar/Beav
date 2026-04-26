@@ -288,6 +288,7 @@ mod tests {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: None,
             model_name: "gpt-5".to_string(),
+            reasoning_effort: None,
         })
     }
 

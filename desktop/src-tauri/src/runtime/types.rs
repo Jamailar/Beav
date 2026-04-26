@@ -591,6 +591,7 @@ pub struct ResolvedChatConfig {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model_name: String,
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone)]

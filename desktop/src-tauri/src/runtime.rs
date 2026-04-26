@@ -432,6 +432,7 @@ mod tests {
                 base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
                 api_key: Some("default-key".to_string()),
                 model_name: "gemini-2.5-pro".to_string(),
+                reasoning_effort: None,
             }
         );
     }
@@ -460,8 +461,27 @@ mod tests {
                 base_url: "https://example.invalid/v1".to_string(),
                 api_key: Some("rbx-live-1".to_string()),
                 model_name: "gpt-5.3-codex".to_string(),
+                reasoning_effort: None,
             }
         );
+    }
+
+    #[test]
+    fn resolve_chat_config_preserves_reasoning_effort_override() {
+        let config = resolve_chat_config(
+            &json!({
+                "api_endpoint": "https://api.openai.com/v1",
+                "api_key": "sk-test",
+                "model_name": "gpt-5.4",
+                "reasoning_effort": "high"
+            }),
+            Some(&json!({
+                "reasoningEffort": "low"
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(config.reasoning_effort.as_deref(), Some("low"));
     }
 
     #[test]
