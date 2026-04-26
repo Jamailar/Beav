@@ -54,11 +54,11 @@ const APP_CLI_DESCRIPTION: &str =
 const REDBOX_EDITOR_DESCRIPTION: &str =
     "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg/remotion actions.";
 const READ_DESCRIPTION: &str =
-    "Read one local or RedBox virtual resource. Use paths like workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion.";
+    "Read one local, web URL, or RedBox virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion. Do not use bash/curl for web pages.";
 const LIST_DESCRIPTION: &str =
     "List a directory or RedBox collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, subjects:// for subjects, or media:// for media.";
 const SEARCH_DESCRIPTION: &str =
-    "Search files or RedBox collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and subjects:// for subject library lookup.";
+    "Search files or RedBox collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and subjects:// for subject library lookup. This is not a web search tool.";
 const WRITE_DESCRIPTION: &str =
     "Write content to a RedBox virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
 const REDBOX_DESCRIPTION: &str =
@@ -348,6 +348,27 @@ fn memory_rebuild_index_input_schema() -> Value {
 
 fn memory_diagnostics_input_schema() -> Value {
     no_payload_schema()
+}
+
+fn web_fetch_input_schema() -> Value {
+    object_schema(
+        &[
+            ("url", string_schema("Public http/https URL to fetch.")),
+            (
+                "maxChars",
+                integer_schema("Maximum text characters to return.", 1000, 40000),
+            ),
+            (
+                "includeLinks",
+                json!({
+                    "type": "boolean",
+                    "description": "Whether to include public links extracted from the page."
+                }),
+            ),
+        ],
+        &["url"],
+        Some("Fetch a user-provided public web page URL. This does not perform web search."),
+    )
 }
 
 fn memory_output_schema() -> Value {
@@ -1714,6 +1735,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "subject",
             "image",
             "video",
+            "web",
             "task",
             "editor",
             "skill",
@@ -1770,6 +1792,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "subjects" => Some("subject"),
         "image" => Some("image"),
         "video" => Some("video"),
+        "web" => Some("web"),
         "skills" => Some("skill"),
         "mcp" => Some("mcp"),
         "runtime" | "team" => Some("runtime"),
@@ -1786,8 +1809,8 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
     match verb {
         "list" => Some("list"),
         "search" => Some("search"),
-        "get" | "read" | "readCurrent" | "bundle" | "stats" | "query" | "getCheckpoints"
-        | "getToolResults" => Some("get"),
+        "get" | "read" | "fetch" | "readCurrent" | "bundle" | "stats" | "query"
+        | "getCheckpoints" | "getToolResults" => Some("get"),
         "create" | "createProject" | "preview" | "add" | "spawn" | "send" | "request" => {
             Some("create")
         }
@@ -1887,6 +1910,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "tools",
         description: "Search deferred app_cli actions available to the current session.",
         input_schema: tools_search_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "web.fetch",
+        namespace: "web",
+        description: "Fetch a user-provided public http/https URL and return readable page text. This does not search the web.",
+        input_schema: web_fetch_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,

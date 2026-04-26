@@ -237,6 +237,32 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
         .unwrap_or_default();
     let (scheme, resource_path) = split_virtual_path(path);
     match scheme.as_str() {
+        "http" | "https" => {
+            let mut payload = Map::new();
+            payload.insert("url".to_string(), json!(path));
+            copy_universal_as(&mut payload, &object, "limit", "maxChars");
+            copy_universal_as(&mut payload, &object, "maxChars", "maxChars");
+            copy_universal_as(&mut payload, &object, "includeLinks", "includeLinks");
+            app_cli_action_call(
+                "web.fetch",
+                Value::Object(payload),
+                Some("Read"),
+                Some(path),
+            )
+        }
+        "web" => {
+            let mut payload = Map::new();
+            payload.insert("url".to_string(), json!(web_resource_url(&resource_path)));
+            copy_universal_as(&mut payload, &object, "limit", "maxChars");
+            copy_universal_as(&mut payload, &object, "maxChars", "maxChars");
+            copy_universal_as(&mut payload, &object, "includeLinks", "includeLinks");
+            app_cli_action_call(
+                "web.fetch",
+                Value::Object(payload),
+                Some("Read"),
+                Some(path),
+            )
+        }
         "editor" => {
             let action = match editor_resource_name(&resource_path).as_str() {
                 "project" => "project_read",
@@ -329,6 +355,17 @@ fn normalize_search_call(arguments: &Value) -> NormalizedToolCall {
             copy_universal(&mut payload, &object, "query");
             app_cli_action_call(
                 "memory.search",
+                Value::Object(payload),
+                Some("Search"),
+                Some(path),
+            )
+        }
+        "web" => {
+            let mut payload = Map::new();
+            copy_universal(&mut payload, &object, "query");
+            copy_universal_as(&mut payload, &object, "limit", "limit");
+            app_cli_action_call(
+                "web.search",
                 Value::Object(payload),
                 Some("Search"),
                 Some(path),
@@ -496,6 +533,21 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ),
         ("memory", "create" | "update") => {
             app_cli_action_call("memory.add", payload, Some("Redbox"), Some("memory.add"))
+        }
+        ("web", "search") => {
+            app_cli_action_call("web.search", payload, Some("Redbox"), Some("web.search"))
+        }
+        ("web", "get" | "read" | "fetch") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            if let Some(id) = map.remove("id") {
+                map.entry("url".to_string()).or_insert(id);
+            }
+            app_cli_action_call(
+                "web.fetch",
+                Value::Object(map),
+                Some("Redbox"),
+                Some("web.fetch"),
+            )
         }
         ("subject" | "subjects", "search" | "list") => app_cli_action_call(
             "subjects.search",
@@ -747,6 +799,15 @@ fn split_virtual_path(path: &str) -> (String, String) {
         );
     }
     ("workspace".to_string(), trimmed.to_string())
+}
+
+fn web_resource_url(resource_path: &str) -> String {
+    let trimmed = resource_path.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{}", trimmed.trim_start_matches('/'))
+    }
 }
 
 fn editor_resource_name(path: &str) -> String {
@@ -1548,6 +1609,73 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_universal_read_https_url_to_web_fetch() {
+        let normalized = normalize_tool_call(
+            "Read",
+            &json!({
+                "path": "https://github.com/Yeachan-Heo/oh-my-codex",
+                "limit": 8000
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("web.fetch"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("url")),
+            Some(&json!("https://github.com/Yeachan-Heo/oh-my-codex"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("maxChars")),
+            Some(&json!(8000))
+        );
+    }
+
+    #[test]
+    fn normalizes_universal_read_web_url_to_web_fetch() {
+        let normalized = normalize_tool_call("Read", &json!({ "path": "web://example.com/a" }));
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("web.fetch"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("url")),
+            Some(&json!("https://example.com/a"))
+        );
+    }
+
+    #[test]
+    fn normalizes_universal_search_web_to_unavailable_web_search() {
+        let normalized = normalize_tool_call(
+            "Search",
+            &json!({ "path": "web://", "query": "oh-my-codex" }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("web.search"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("query")),
+            Some(&json!("oh-my-codex"))
+        );
+    }
+
+    #[test]
     fn normalizes_universal_write_to_bound_manuscript_save() {
         let normalized = normalize_tool_call(
             "Write",
@@ -1612,6 +1740,30 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("query")),
             Some(&json!("mcp"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_web_get_to_web_fetch() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "web",
+                "operation": "get",
+                "input": { "url": "https://example.com" }
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("web.fetch"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("url")),
+            Some(&json!("https://example.com"))
         );
     }
 

@@ -27,7 +27,7 @@ open = "5.3.2"
 pdf-extract = "0.7.7"
 pulldown-cmark = "0.12.2"
 regex = "1.12.2"
-reqwest = { version = "0.12.8", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
+reqwest = { version = "0.12.8", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "stream"] }
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

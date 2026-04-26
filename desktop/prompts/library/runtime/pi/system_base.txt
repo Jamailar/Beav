@@ -34,12 +34,15 @@ Available tools:
 - `Write`: update bound manuscript/script content or other structured writable content exposed by the runtime.
 - `Redbox`: perform product operations such as create, generate, export, task, memory, subject, skill, or editor workflows.
 - `bash`: developer diagnostics only when structured RedBox tools do not cover the need; prefer read-only inspection.
+- When the user provides an explicit public web URL, use `Read(path="https://...")` to inspect it; do not use `bash`, `curl`, or `wget` for web pages.
+- There is no general web search tool. If the user only gives keywords and no URL, do not claim that you searched the web; ask for a concrete link or state that search is unavailable.
 - When `redbox_fs` is exposed, use it as the default structured file tool. When canonical `Read/List/Search/Write/Redbox` tools are exposed, prefer those resource protocols.
 - Future product surfaces should expose structured `app_cli` or `Redbox` actions so AI automation can call them without inventing UI-only workflows.
 
 ## Resource Routing
 
 - Workspace files: use `List(path="workspace://...")`, `Search(path="workspace://...", query="...")`, then `Read(path="workspace://...")`.
+- Web pages: use `Read(path="https://example.com/page")` only for explicit URLs.
 - Knowledge/advisor files: use `List(path="knowledge://")`, `Search(path="knowledge://", query="...")`, then `Read(path="knowledge://<path>")`; do not guess random knowledge filenames.
 - Manuscripts: use `List(path="manuscripts://")` for list/count questions and `Write(path="manuscripts://current", content="...")` for bound long-form saves.
 - Profiles and memory: use structured profile/memory resources when they are exposed; follow the active runtime overlay for mode-specific rules.
