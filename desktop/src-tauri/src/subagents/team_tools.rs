@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 use crate::runtime::{
     add_collab_member, collab_session_snapshot, create_collab_session, list_collab_members,
-    list_collab_reports, list_collab_sessions,
+    list_collab_reports, list_collab_sessions, match_collab_members_for_task,
 };
 use crate::subagents::{
     team_mailbox_cleanup, team_mailbox_history, team_mailbox_read, team_mailbox_request_report,
@@ -45,6 +45,11 @@ pub fn team_tool_descriptors() -> Vec<TeamToolDescriptor> {
             name: "team.member.spawn",
             description: "Register a new internal runtime collaboration member.",
             mutating: true,
+        },
+        TeamToolDescriptor {
+            name: "team.member.match",
+            description: "Rank internal runtime collaboration members for a task.",
+            mutating: false,
         },
         TeamToolDescriptor {
             name: "team.message.send",
@@ -103,6 +108,7 @@ pub fn execute_team_tool(
             Ok(json!(list_collab_members(store, &session_id)))
         }
         "team.member.spawn" => Ok(json!(add_collab_member(store, payload)?)),
+        "team.member.match" => Ok(match_collab_members_for_task(store, payload)?),
         "team.message.send" => Ok(json!(team_mailbox_send(store, payload)?)),
         "team.message.read" => Ok(json!(team_mailbox_read(store, payload)?)),
         "team.message.history" => {

@@ -1,8 +1,8 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::runtime::{
-    CollabMailboxMessageRecord, CollabMemberRecord, CollabProgressReportRecord,
-    CollabSessionRecord, CollabSessionSnapshot, CollabTaskRecord,
+    runtime_subagent_role_spec, CollabMailboxMessageRecord, CollabMemberRecord,
+    CollabProgressReportRecord, CollabSessionRecord, CollabSessionSnapshot, CollabTaskRecord,
 };
 use crate::{make_id, now_i64, AppStore};
 
@@ -43,6 +43,197 @@ fn value_vec(payload: &Value, key: &str) -> Option<Vec<Value>> {
 
 fn value_object(payload: &Value, key: &str) -> Option<Value> {
     payload.get(key).filter(|value| value.is_object()).cloned()
+}
+
+fn value_string_array_or_default(payload: &Value, key: &str, fallback: &[&str]) -> Vec<Value> {
+    let values = value_string_array(payload, key);
+    if values.is_empty() {
+        fallback.iter().map(|value| json!(value)).collect()
+    } else {
+        values.into_iter().map(Value::String).collect()
+    }
+}
+
+fn merge_object_defaults(defaults: Value, overlay: Option<Value>) -> Value {
+    let mut object = defaults.as_object().cloned().unwrap_or_default();
+    if let Some(Value::Object(overlay)) = overlay {
+        for (key, value) in overlay {
+            object.insert(key, value);
+        }
+    }
+    Value::Object(object)
+}
+
+fn role_profile_defaults(role_id: &str) -> Value {
+    let role_spec = runtime_subagent_role_spec(role_id);
+    let normalized_role = role_id.trim().to_ascii_lowercase();
+    let (specialties, good_at, preferred_tasks, avoid_tasks, allowed_families) =
+        match normalized_role.as_str() {
+            "planner" => (
+                vec!["task_planning", "dependency_mapping", "execution_design"],
+                vec!["拆解目标", "定义阶段", "发现依赖", "生成可派发任务"],
+                vec!["planning", "coordination", "task_decomposition"],
+                vec!["final_review", "long_form_copy"],
+                vec!["team.task", "team.member", "knowledge.search"],
+            ),
+            "researcher" => (
+                vec!["research", "source_synthesis", "knowledge_retrieval"],
+                vec!["检索证据", "整理来源", "标注不确定项", "形成研究摘要"],
+                vec!["research", "evidence_collection", "knowledge_lookup"],
+                vec!["visual_generation", "final_delivery_claim"],
+                vec!["redbox_fs", "knowledge.search", "web.search"],
+            ),
+            "copywriter" => (
+                vec!["writing", "editing", "publishing_copy"],
+                vec!["正文成稿", "标题包装", "发布话术", "内容润色"],
+                vec!["copywriting", "manuscript_creation", "content_polish"],
+                vec!["source_verification", "media_rendering"],
+                vec!["manuscripts", "redbox_fs", "redbox_editor"],
+            ),
+            "image-director" => (
+                vec!["image_generation", "cover_direction", "visual_prompting"],
+                vec!["视觉方案", "图片提示词", "封面构图", "出图验收"],
+                vec!["image_generation", "cover_design", "visual_direction"],
+                vec!["backend_debugging", "long_code_review"],
+                vec!["media.generate", "image.generate", "redbox_fs"],
+            ),
+            "animation-director" => (
+                vec!["video_animation", "remotion", "shot_design"],
+                vec!["镜头规划", "动画结构", "时间线表达", "可执行视觉规范"],
+                vec!["animation_design", "video_generation", "timeline_planning"],
+                vec!["legal_review", "billing_debugging"],
+                vec!["redbox_editor", "media.generate", "redbox_fs"],
+            ),
+            "reviewer" => (
+                vec!["quality_review", "verification", "risk_detection"],
+                vec!["验收结果", "发现缺口", "阻止伪成功", "生成修复建议"],
+                vec!["review", "verification", "acceptance_check"],
+                vec!["primary_authoring", "self_review"],
+                vec!["redbox_fs", "team.task", "knowledge.search"],
+            ),
+            _ => (
+                vec!["operations", "maintenance", "runtime_coordination"],
+                vec!["后台推进", "状态检查", "恢复任务", "维护运行链路"],
+                vec!["ops", "maintenance", "runtime_recovery"],
+                vec!["brand_copy", "visual_concept"],
+                vec!["app_cli", "redbox_fs", "runtime"],
+            ),
+        };
+
+    json!({
+        "version": 1,
+        "memberId": "",
+        "displayName": "",
+        "roleId": normalized_role,
+        "oneLine": role_spec.purpose,
+        "persona": role_spec.system_prompt,
+        "specialties": specialties,
+        "goodAt": good_at,
+        "notGoodAt": [],
+        "preferredTasks": preferred_tasks,
+        "avoidTasks": avoid_tasks,
+        "toolPolicy": {
+            "allowedFamilies": allowed_families,
+            "allowedTools": [],
+            "requiresConfirmation": []
+        },
+        "capacity": {
+            "maxExecutorThreads": 5,
+            "defaultExecutorThreads": 1
+        },
+        "decisionBoundary": role_spec.handoff_contract,
+        "outputSchema": role_spec.output_schema
+    })
+}
+
+fn build_member_agent_card(
+    member_id: &str,
+    display_name: &str,
+    role_id: &str,
+    capabilities: &[String],
+    allowed_tools: &[String],
+    payload: &Value,
+    metadata: Option<&Value>,
+) -> Value {
+    let overlay = metadata.and_then(|value| value.get("agentCard").cloned());
+    let mut card = merge_object_defaults(role_profile_defaults(role_id), overlay);
+    let Some(object) = card.as_object_mut() else {
+        return card;
+    };
+
+    object.insert("memberId".to_string(), json!(member_id));
+    object.insert("displayName".to_string(), json!(display_name));
+    object.insert("roleId".to_string(), json!(role_id));
+    if !capabilities.is_empty() {
+        object.insert("capabilities".to_string(), json!(capabilities));
+    }
+    if !allowed_tools.is_empty() {
+        let policy = object
+            .entry("toolPolicy".to_string())
+            .or_insert_with(|| json!({}));
+        if let Some(policy_object) = policy.as_object_mut() {
+            policy_object.insert("allowedTools".to_string(), json!(allowed_tools));
+        }
+    }
+
+    for key in ["oneLine", "persona", "decisionBoundary", "outputSchema"] {
+        if let Some(value) = payload.get(key).filter(|value| !value.is_null()) {
+            object.insert(key.to_string(), value.clone());
+        }
+    }
+    for (key, fallback) in [
+        ("specialties", &[] as &[&str]),
+        ("goodAt", &[] as &[&str]),
+        ("notGoodAt", &[] as &[&str]),
+        ("preferredTasks", &[] as &[&str]),
+        ("avoidTasks", &[] as &[&str]),
+    ] {
+        let values = value_string_array_or_default(payload, key, fallback);
+        if !values.is_empty() {
+            object.insert(key.to_string(), Value::Array(values));
+        }
+    }
+    card
+}
+
+fn member_metadata_from_payload(
+    member_id: &str,
+    display_name: &str,
+    role_id: &str,
+    capabilities: &[String],
+    allowed_tools: &[String],
+    payload: &Value,
+) -> Option<Value> {
+    let mut metadata = value_object(payload, "metadata")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    for key in [
+        "advisorId",
+        "sourceId",
+        "knowledgeSourceId",
+        "rootPath",
+        "knowledgeRootPath",
+    ] {
+        if let Some(value) = payload.get(key).filter(|value| !value.is_null()) {
+            metadata.insert(key.to_string(), value.clone());
+        }
+    }
+    let metadata_value = Value::Object(metadata.clone());
+    let agent_card = build_member_agent_card(
+        member_id,
+        display_name,
+        role_id,
+        capabilities,
+        allowed_tools,
+        payload,
+        Some(&metadata_value),
+    );
+    metadata.insert("agentCard".to_string(), agent_card);
+    if metadata.is_empty() {
+        None
+    } else {
+        Some(Value::Object(metadata))
+    }
 }
 
 fn next_collab_id(prefix: &str, exists: impl Fn(&str) -> bool) -> String {
@@ -196,6 +387,288 @@ pub fn list_collab_members(store: &AppStore, session_id: &str) -> Vec<CollabMemb
     members
 }
 
+fn normalized_match_terms(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut terms = Vec::new();
+    for value in values {
+        for part in value
+            .split(|ch: char| {
+                ch.is_whitespace()
+                    || matches!(
+                        ch,
+                        ',' | '，'
+                            | '.'
+                            | '。'
+                            | ';'
+                            | '；'
+                            | ':'
+                            | '：'
+                            | '/'
+                            | '|'
+                            | '-'
+                            | '_'
+                            | '('
+                            | ')'
+                            | '（'
+                            | '）'
+                    )
+            })
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            let normalized = part.to_ascii_lowercase();
+            if normalized.chars().count() >= 2 && !terms.contains(&normalized) {
+                terms.push(normalized);
+            }
+        }
+    }
+    terms
+}
+
+fn text_term_matches(text: &str, terms: &[String]) -> usize {
+    let text = text.to_ascii_lowercase();
+    terms
+        .iter()
+        .filter(|term| text.contains(term.as_str()))
+        .count()
+}
+
+fn string_array_from_value(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn match_array_terms(value: Option<&Value>, requested: &[String]) -> usize {
+    let candidates = string_array_from_value(value);
+    requested
+        .iter()
+        .filter(|requested| {
+            candidates.iter().any(|candidate| {
+                let candidate = candidate.to_ascii_lowercase();
+                candidate == **requested || candidate.contains(requested.as_str())
+            })
+        })
+        .count()
+}
+
+fn agent_card_for_member(member: &CollabMemberRecord) -> Value {
+    member
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("agentCard"))
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| {
+            build_member_agent_card(
+                &member.id,
+                &member.display_name,
+                &member.role_id,
+                &member.capabilities,
+                &member.allowed_tools,
+                &json!({}),
+                None,
+            )
+        })
+}
+
+fn agent_card_capacity(agent_card: &Value) -> i64 {
+    agent_card
+        .pointer("/capacity/maxExecutorThreads")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(5)
+}
+
+pub fn match_collab_members_for_task(store: &AppStore, payload: &Value) -> Result<Value, String> {
+    let session_id =
+        value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    validate_session(store, &session_id)?;
+
+    let limit = value_i64(payload, "limit")
+        .filter(|value| *value > 0)
+        .map(|value| value as usize)
+        .unwrap_or(5);
+    let desired_role = value_string(payload, "roleId").map(|value| value.to_ascii_lowercase());
+    let task_type = value_string(payload, "taskType").map(|value| value.to_ascii_lowercase());
+    let objective = [
+        value_string(payload, "title"),
+        value_string(payload, "objective"),
+        value_string(payload, "description"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let objective_terms = normalized_match_terms(objective);
+    let required_capabilities =
+        normalized_match_terms(value_string_array(payload, "requiredCapabilities"));
+    let required_tool_families =
+        normalized_match_terms(value_string_array(payload, "requiredToolFamilies"));
+    let preferred_tasks = normalized_match_terms(
+        value_string_array(payload, "preferredTasks")
+            .into_iter()
+            .chain(task_type.clone()),
+    );
+
+    let mut candidates = Vec::new();
+    for member in list_collab_members(store, &session_id) {
+        let agent_card = agent_card_for_member(&member);
+        let max_executor_threads = agent_card_capacity(&agent_card);
+        let active_executor_count = store
+            .collab_tasks
+            .iter()
+            .filter(|task| task.session_id == session_id)
+            .filter(|task| task.member_id.as_deref() == Some(member.id.as_str()))
+            .filter(|task| matches!(task.status.as_str(), "running" | "in_progress" | "blocked"))
+            .count() as i64;
+        let mut score = 0_i64;
+        let mut reasons = Vec::<String>::new();
+
+        if let Some(desired_role) = desired_role.as_deref() {
+            if desired_role == member.role_id.to_ascii_lowercase() {
+                score += 35;
+                reasons.push("role_exact".to_string());
+            }
+        }
+
+        let preferred_task_hits =
+            match_array_terms(agent_card.get("preferredTasks"), &preferred_tasks);
+        if preferred_task_hits > 0 {
+            score += preferred_task_hits as i64 * 20;
+            reasons.push(format!("preferred_task:{preferred_task_hits}"));
+        }
+
+        let capability_hits = required_capabilities
+            .iter()
+            .filter(|term| {
+                member.capabilities.iter().any(|capability| {
+                    let capability = capability.to_ascii_lowercase();
+                    capability == **term || capability.contains(term.as_str())
+                }) || match_array_terms(agent_card.get("capabilities"), std::slice::from_ref(*term))
+                    > 0
+                    || match_array_terms(agent_card.get("specialties"), std::slice::from_ref(*term))
+                        > 0
+            })
+            .count();
+        if capability_hits > 0 {
+            score += capability_hits as i64 * 15;
+            reasons.push(format!("capability:{capability_hits}"));
+        }
+
+        let tool_family_hits = required_tool_families
+            .iter()
+            .filter(|term| {
+                member.allowed_tools.iter().any(|tool| {
+                    let tool = tool.to_ascii_lowercase();
+                    tool == **term || tool.contains(term.as_str())
+                }) || match_array_terms(
+                    agent_card.pointer("/toolPolicy/allowedFamilies"),
+                    std::slice::from_ref(*term),
+                ) > 0
+                    || match_array_terms(
+                        agent_card.pointer("/toolPolicy/allowedTools"),
+                        std::slice::from_ref(*term),
+                    ) > 0
+            })
+            .count();
+        if tool_family_hits > 0 {
+            score += tool_family_hits as i64 * 12;
+            reasons.push(format!("tool_family:{tool_family_hits}"));
+        }
+
+        let specialty_hits = match_array_terms(agent_card.get("specialties"), &objective_terms)
+            + match_array_terms(agent_card.get("goodAt"), &objective_terms);
+        if specialty_hits > 0 {
+            score += specialty_hits as i64 * 8;
+            reasons.push(format!("objective_fit:{specialty_hits}"));
+        }
+
+        let persona_text = [
+            agent_card.get("oneLine").and_then(Value::as_str),
+            agent_card.get("persona").and_then(Value::as_str),
+            agent_card.get("decisionBoundary").and_then(Value::as_str),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+        let text_hits = text_term_matches(&persona_text, &objective_terms);
+        if text_hits > 0 {
+            score += text_hits as i64 * 2;
+            reasons.push(format!("profile_text:{text_hits}"));
+        }
+
+        let avoid_hits = match_array_terms(agent_card.get("avoidTasks"), &preferred_tasks)
+            + match_array_terms(agent_card.get("avoidTasks"), &objective_terms);
+        if avoid_hits > 0 {
+            score -= avoid_hits as i64 * 25;
+            reasons.push(format!("avoid_task:{avoid_hits}"));
+        }
+
+        if active_executor_count >= max_executor_threads {
+            score -= 100;
+            reasons.push("capacity_full".to_string());
+        } else if active_executor_count > 0 {
+            score -= active_executor_count * 5;
+            reasons.push(format!("active_load:{active_executor_count}"));
+        }
+
+        if reasons.is_empty() {
+            reasons.push("fallback_available".to_string());
+        }
+
+        candidates.push(json!({
+            "memberId": member.id,
+            "displayName": member.display_name,
+            "roleId": member.role_id,
+            "status": member.status,
+            "score": score,
+            "reasons": reasons,
+            "activeExecutorCount": active_executor_count,
+            "maxExecutorThreads": max_executor_threads,
+            "agentCard": agent_card
+        }));
+    }
+
+    candidates.sort_by(|left, right| {
+        let left_score = left.get("score").and_then(Value::as_i64).unwrap_or(0);
+        let right_score = right.get("score").and_then(Value::as_i64).unwrap_or(0);
+        right_score.cmp(&left_score).then_with(|| {
+            left.get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .cmp(
+                    right
+                        .get("displayName")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+        })
+    });
+    candidates.truncate(limit);
+
+    Ok(json!({
+        "sessionId": session_id,
+        "query": {
+            "roleId": desired_role,
+            "taskType": task_type,
+            "objectiveTerms": objective_terms,
+            "requiredCapabilities": required_capabilities,
+            "requiredToolFamilies": required_tool_families,
+            "preferredTasks": preferred_tasks
+        },
+        "candidates": candidates
+    }))
+}
+
 pub fn list_collab_tasks(store: &AppStore, session_id: &str) -> Vec<CollabTaskRecord> {
     let mut tasks: Vec<CollabTaskRecord> = store
         .collab_tasks
@@ -336,18 +809,23 @@ pub fn add_collab_member(
         value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
     validate_session(store, &session_id)?;
     let now = now_i64();
+    let member_id = next_collab_id("collab-member", |candidate| {
+        store
+            .collab_members
+            .iter()
+            .any(|member| member.id == candidate)
+    });
+    let display_name = value_string(payload, "displayName")
+        .or_else(|| value_string(payload, "name"))
+        .unwrap_or_else(|| "协作成员".to_string());
+    let role_id = value_string(payload, "roleId").unwrap_or_else(|| "executor".to_string());
+    let capabilities = value_string_array(payload, "capabilities");
+    let allowed_tools = value_string_array(payload, "allowedTools");
     let member = CollabMemberRecord {
-        id: next_collab_id("collab-member", |candidate| {
-            store
-                .collab_members
-                .iter()
-                .any(|member| member.id == candidate)
-        }),
+        id: member_id.clone(),
         session_id: session_id.clone(),
-        display_name: value_string(payload, "displayName")
-            .or_else(|| value_string(payload, "name"))
-            .unwrap_or_else(|| "协作成员".to_string()),
-        role_id: value_string(payload, "roleId").unwrap_or_else(|| "executor".to_string()),
+        display_name: display_name.clone(),
+        role_id: role_id.clone(),
         source_kind: value_string(payload, "sourceKind")
             .or_else(|| value_string(payload, "adapterKind"))
             .unwrap_or_else(|| "internal_runtime".to_string()),
@@ -358,8 +836,8 @@ pub fn add_collab_member(
         current_task_id: value_string(payload, "currentTaskId"),
         conversation_id: value_string(payload, "conversationId"),
         runtime_id: value_string(payload, "runtimeId"),
-        capabilities: value_string_array(payload, "capabilities"),
-        allowed_tools: value_string_array(payload, "allowedTools"),
+        capabilities: capabilities.clone(),
+        allowed_tools: allowed_tools.clone(),
         desired_model_config: value_object(payload, "desiredModelConfig"),
         current_model_config: value_object(payload, "currentModelConfig"),
         progress_interval_ms: value_i64(payload, "progressIntervalMs")
@@ -372,7 +850,14 @@ pub fn add_collab_member(
         last_report_at: None,
         last_activity_at: None,
         last_error: None,
-        metadata: value_object(payload, "metadata"),
+        metadata: member_metadata_from_payload(
+            &member_id,
+            &display_name,
+            &role_id,
+            &capabilities,
+            &allowed_tools,
+            payload,
+        ),
         created_at: now,
         updated_at: now,
     };
@@ -878,5 +1363,154 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn collab_member_spawn_persists_agent_card_profile() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "profile" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "研究员",
+                "roleId": "researcher",
+                "capabilities": ["knowledge_retrieval"]
+            }),
+        )
+        .unwrap();
+
+        let agent_card = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agentCard"))
+            .expect("agent card should be persisted");
+        assert_eq!(
+            agent_card.get("memberId").and_then(Value::as_str),
+            Some(member.id.as_str())
+        );
+        assert_eq!(
+            agent_card.get("displayName").and_then(Value::as_str),
+            Some("研究员")
+        );
+        assert_eq!(
+            agent_card.get("roleId").and_then(Value::as_str),
+            Some("researcher")
+        );
+        assert_eq!(
+            agent_card
+                .pointer("/capacity/maxExecutorThreads")
+                .and_then(Value::as_i64),
+            Some(5)
+        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "research"));
+    }
+
+    #[test]
+    fn collab_member_match_prefers_task_specific_agent_card() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "visual production" }))
+                .unwrap();
+        add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "研究员",
+                "roleId": "researcher",
+                "capabilities": ["knowledge_retrieval"]
+            }),
+        )
+        .unwrap();
+        add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "图片导演",
+                "roleId": "image-director",
+                "capabilities": ["image_generation"],
+                "allowedTools": ["image.generate"]
+            }),
+        )
+        .unwrap();
+
+        let result = match_collab_members_for_task(
+            &store,
+            &json!({
+                "sessionId": session.id,
+                "title": "生成封面图",
+                "objective": "用生图工具生成封面和视觉方案",
+                "taskType": "image_generation",
+                "requiredCapabilities": ["image_generation"],
+                "requiredToolFamilies": ["image.generate"],
+                "limit": 2
+            }),
+        )
+        .unwrap();
+
+        let first = result
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .expect("candidate should exist");
+        assert_eq!(
+            first.get("roleId").and_then(Value::as_str),
+            Some("image-director")
+        );
+        assert!(first
+            .get("reasons")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("preferred_task")));
+    }
+
+    #[test]
+    fn collab_member_agent_card_allows_custom_profile_overlay() {
+        let mut store = AppStore::default();
+        let session =
+            create_collab_session(&mut store, &json!({ "objective": "custom profile" })).unwrap();
+
+        let member = add_collab_member(
+            &mut store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": "审稿人",
+                "roleId": "reviewer",
+                "metadata": {
+                    "agentCard": {
+                        "oneLine": "专门检查交付风险",
+                        "preferredTasks": ["acceptance_check"]
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+        let agent_card = member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("agentCard"))
+            .unwrap();
+        assert_eq!(
+            agent_card.get("oneLine").and_then(Value::as_str),
+            Some("专门检查交付风险")
+        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "acceptance_check"));
     }
 }

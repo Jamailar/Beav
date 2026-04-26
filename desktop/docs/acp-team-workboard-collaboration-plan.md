@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-25
+last_updated: 2026-04-26
 owner: ai-runtime
 scope: desktop
 target_files:
@@ -14,7 +14,7 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. External ACP/CLI members can now be launched from the host, injected with team MCP context, and reported back into the same member/task/report board state.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum defines persistent group-chat coordination, speaker/executor separation, member agent cards, task-plan continuity, runtime-owned concurrency, and deterministic member matching.
 ---
 
 # ACP Team Workboard Collaboration Plan
@@ -352,6 +352,194 @@ CollabArtifact
 8. Workboard shows who is active, blocked, waiting, reviewing, or done.
 9. Coordinator wakes when members settle or report blockers.
 10. User can inspect, redirect, pause, comment, approve, or ask for summary at any time.
+
+### 5.4 TeamGroupChat Runtime V2 Addendum
+
+This addendum refines team mode around the product direction discussed on 2026-04-26: group chat is the collaboration room, not the worker loop. Members do work in their own background runtimes, then report into the group only when useful.
+
+#### 5.4.1 Runtime-Owned Team Room
+
+The RedConvert runtime owns all team execution. The app does not need tmux or a CLI session manager because the Rust host already owns:
+
+- durable sessions and task records
+- member mailboxes and progress reports
+- runtime task queues
+- cancellation and recovery
+- concurrent child runtimes
+- persistence and event projection
+
+The group chat should be persisted as a `CollabSession` communication surface. Deleting an unneeded group chat deletes or archives that collaboration container according to product policy, but it must not be treated as an execution process.
+
+#### 5.4.2 Speaker And Executor Separation
+
+Each `CollabMember` has two runtime faces:
+
+```text
+CollabMember
+  Speaker Persona
+    -> reads member task plan, latest reports, mailbox, mentions, and group context
+    -> speaks in group only when mentioned, reporting progress, clarifying decisions, or escalating blockers
+
+  Executor Pool
+    -> runs one or more background executor threads
+    -> performs actual tasks
+    -> writes progress reports, artifacts, and task-plan updates
+```
+
+The speaker and executors share the same member identity, role, constraints, and task-plan state. They are not two personalities. They are two responsibilities behind one visible teammate:
+
+- Speaker owns communication and commitments.
+- Executor owns work and evidence.
+- Both write through typed runtime APIs, not free-form hidden state.
+
+#### 5.4.3 Member Task Plan JSON
+
+Every member should maintain a durable member-level plan:
+
+```json
+{
+  "memberId": "collab-member-...",
+  "sessionId": "collab-session-...",
+  "version": 1,
+  "activeExecutors": [],
+  "tasks": [
+    {
+      "taskId": "collab-task-...",
+      "status": "running",
+      "ownerThreadId": "executor-...",
+      "objective": "具体目标",
+      "nextSteps": [],
+      "blockers": [],
+      "artifactRefs": [],
+      "lastEvidence": []
+    }
+  ],
+  "speechQueue": [
+    {
+      "reason": "progress_report",
+      "priority": 40,
+      "summary": "可直接发送给群聊的简短进度"
+    }
+  ]
+}
+```
+
+This plan is the bridge between executor and speaker. Executors update it after meaningful progress or completion. Speakers read it before speaking, so they know the real execution state without inventing progress.
+
+#### 5.4.4 Executor Lifecycle And Capacity
+
+A member may work across multiple group chats and multiple tasks. The runtime should enforce:
+
+- one executor thread per independent active task by default
+- `maxConcurrentExecutorsPerMember = 5`
+- queue additional work when capacity is full
+- recover active executors from persisted task state after restart
+- report capacity pressure to the coordinator instead of silently starting unlimited work
+
+This uses the Rust runtime advantage: many lightweight executor records can exist, while only active work consumes model/runtime resources.
+
+#### 5.4.5 Reporting Contract
+
+Executor completion is not just a final chat message. It must write a structured completion claim:
+
+```json
+{
+  "taskId": "collab-task-...",
+  "memberId": "collab-member-...",
+  "status": "completed",
+  "summary": "完成了什么",
+  "evidence": ["真实文件、记录、日志、工具结果"],
+  "artifactRefs": [],
+  "handoff": "给下一个成员或 leader 的最小上下文",
+  "risks": []
+}
+```
+
+The speaker can then post a concise group update. If a verifier exists, verifier review should happen before the speaker claims final completion to the group.
+
+#### 5.4.6 Member Agent Card
+
+When a member is created, it must carry a concise profile so the coordinator can decide who should receive which work:
+
+```json
+{
+  "version": 1,
+  "memberId": "collab-member-...",
+  "displayName": "图片导演",
+  "roleId": "image-director",
+  "oneLine": "负责封面、配图、海报、图片策略和视觉执行指令。",
+  "persona": "角色提示词摘要",
+  "specialties": ["image_generation", "cover_direction", "visual_prompting"],
+  "goodAt": ["视觉方案", "图片提示词", "封面构图"],
+  "notGoodAt": [],
+  "preferredTasks": ["image_generation", "cover_design", "visual_direction"],
+  "avoidTasks": ["backend_debugging", "long_code_review"],
+  "toolPolicy": {
+    "allowedFamilies": ["media.generate", "image.generate", "redbox_fs"],
+    "allowedTools": []
+  },
+  "capacity": {
+    "maxExecutorThreads": 5,
+    "defaultExecutorThreads": 1
+  },
+  "decisionBoundary": "交付边界和移交要求",
+  "outputSchema": "该成员交付物结构"
+}
+```
+
+This profile should live in `CollabMemberRecord.metadata.agentCard`. It can be generated from the role spec and overridden by templates or user-created members.
+
+#### 5.4.7 Member Selection
+
+Coordinator assignment should not rely on vibes or member names. It should call a deterministic read-only action:
+
+```text
+team.member.match
+```
+
+Input:
+
+```json
+{
+  "sessionId": "collab-session-...",
+  "title": "生成封面图",
+  "objective": "用生图工具生成封面和视觉方案",
+  "taskType": "image_generation",
+  "requiredCapabilities": ["image_generation"],
+  "requiredToolFamilies": ["image.generate"],
+  "limit": 3
+}
+```
+
+Output:
+
+```json
+{
+  "candidates": [
+    {
+      "memberId": "collab-member-...",
+      "displayName": "图片导演",
+      "roleId": "image-director",
+      "score": 67,
+      "reasons": ["preferred_task:1", "capability:1", "tool_family:1"],
+      "activeExecutorCount": 0,
+      "maxExecutorThreads": 5
+    }
+  ]
+}
+```
+
+Recommended score factors:
+
+- exact role match
+- preferred task match
+- required capability match
+- required tool family match
+- objective/profile text match
+- avoid-task penalty
+- active executor load and capacity penalty
+
+The first implementation can be deterministic and local. Later versions can add richer embedding search over agent cards, but only after the typed matching contract is stable.
 
 ## 6. Data Model
 
