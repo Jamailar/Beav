@@ -35,6 +35,8 @@ enum KnowledgeScopeKind {
 #[derive(Debug, Clone)]
 struct KnowledgeScope {
     kind: KnowledgeScopeKind,
+    member_id: Option<String>,
+    member_name: Option<String>,
     advisor_id: Option<String>,
     advisor_name: Option<String>,
     source_id: Option<String>,
@@ -59,6 +61,8 @@ pub fn execute_glob(
         matched.truncate(limit);
         return Ok(json!({
             "scopeKind": scope_kind_label(&scope),
+            "memberId": scope.member_id,
+            "memberName": scope.member_name,
             "advisorId": scope.advisor_id,
             "advisorName": scope.advisor_name,
             "sourceId": scope.source_id,
@@ -87,6 +91,8 @@ pub fn execute_glob(
 
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
         "sourceId": scope.source_id,
@@ -161,6 +167,8 @@ pub fn execute_grep(
 
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
         "sourceId": scope.source_id,
@@ -187,6 +195,8 @@ pub fn execute_read(
                 let block = document_blocks::read_block(state, &anchor.block_id)?;
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
+                    "memberId": scope.member_id,
+                    "memberName": scope.member_name,
                     "sourceId": anchor.source_id,
                     "sourceName": anchor.source_name,
                     "documentId": anchor.document_id,
@@ -218,6 +228,8 @@ pub fn execute_read(
                 let anchors = citation_anchors::anchors_for_block(state, &block.block_id)?;
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
+                    "memberId": scope.member_id,
+                    "memberName": scope.member_name,
                     "sourceId": block.source_id,
                     "sourceName": block.source_name,
                     "documentId": block.document_id,
@@ -275,6 +287,8 @@ pub fn execute_read(
 
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
         "sourceId": scope.source_id,
@@ -336,6 +350,8 @@ pub fn execute_attach(
     let absolute_path = target_path.display().to_string();
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
         "sourceId": scope.source_id,
@@ -379,26 +395,16 @@ fn resolve_scope(
     session_id: Option<&str>,
     arguments: &Value,
 ) -> Result<KnowledgeScope, String> {
-    let advisor_id = payload_string(arguments, "advisorId")
-        .or_else(|| resolve_session_advisor_id(state, session_id));
-    if let Some(advisor_id) = advisor_id {
-        let advisor = with_store(state, |store| {
-            Ok(store
-                .advisors
-                .iter()
-                .find(|item| item.id == advisor_id)
-                .map(|item| (item.id.clone(), item.name.clone())))
-        })?
-        .ok_or_else(|| format!("advisor not found: {advisor_id}"))?;
-        let root = crate::advisor_knowledge_dir(state, &advisor.0)?;
-        return Ok(KnowledgeScope {
-            kind: KnowledgeScopeKind::Advisor,
-            advisor_id: Some(advisor.0),
-            advisor_name: Some(advisor.1.clone()),
-            source_id: Some(advisor_source_id(&advisor_id)),
-            source_name: Some(advisor.1.clone()),
-            root,
-        });
+    if let Some(advisor_id) = payload_string(arguments, "advisorId") {
+        return advisor_scope(state, &advisor_id, None, None);
+    }
+
+    if let Some(member_scope) = resolve_member_scope(state, session_id, arguments)? {
+        return Ok(member_scope);
+    }
+
+    if let Some(advisor_id) = resolve_session_advisor_id(state, session_id) {
+        return advisor_scope(state, &advisor_id, None, None);
     }
 
     if let Some(source_scope) = resolve_document_source_scope(state, arguments)? {
@@ -413,18 +419,134 @@ fn resolve_scope(
             .unwrap_or(false);
     if !has_workspace_target {
         return Err(
-            "knowledge tool requires advisorId, or a session bound to one advisor".to_string(),
+            "knowledge tool requires advisorId, memberId/sourceId, or a session bound to one advisor/member"
+                .to_string(),
         );
     }
 
     Ok(KnowledgeScope {
         kind: KnowledgeScopeKind::Workspace,
+        member_id: None,
+        member_name: None,
         advisor_id: None,
         advisor_name: None,
         source_id: None,
         source_name: None,
         root: crate::workspace_root(state)?.join("knowledge"),
     })
+}
+
+fn advisor_scope(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    member_id: Option<String>,
+    member_name: Option<String>,
+) -> Result<KnowledgeScope, String> {
+    let advisor = with_store(state, |store| {
+        Ok(store
+            .advisors
+            .iter()
+            .find(|item| item.id == advisor_id)
+            .map(|item| (item.id.clone(), item.name.clone())))
+    })?
+    .ok_or_else(|| format!("advisor not found: {advisor_id}"))?;
+    let root = crate::advisor_knowledge_dir(state, &advisor.0)?;
+    Ok(KnowledgeScope {
+        kind: KnowledgeScopeKind::Advisor,
+        member_id,
+        member_name,
+        advisor_id: Some(advisor.0),
+        advisor_name: Some(advisor.1.clone()),
+        source_id: Some(advisor_source_id(advisor_id)),
+        source_name: Some(advisor.1),
+        root,
+    })
+}
+
+fn resolve_member_scope(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    arguments: &Value,
+) -> Result<Option<KnowledgeScope>, String> {
+    let requested_member_id = payload_string(arguments, "memberId")
+        .or_else(|| payload_string(arguments, "collabMemberId"))
+        .or_else(|| resolve_session_collab_member_id(state, session_id));
+    let Some(member_id) = requested_member_id else {
+        return Ok(None);
+    };
+    let member = with_store(state, |store| {
+        Ok(store
+            .collab_members
+            .iter()
+            .find(|item| item.id == member_id)
+            .cloned())
+    })?
+    .ok_or_else(|| format!("collaboration member not found: {member_id}"))?;
+    let metadata = member.metadata.as_ref();
+    if let Some(advisor_id) = metadata.and_then(|value| payload_string(value, "advisorId")) {
+        return advisor_scope(
+            state,
+            &advisor_id,
+            Some(member.id.clone()),
+            Some(member.display_name.clone()),
+        )
+        .map(Some);
+    }
+    if let Some(source_id) = metadata
+        .and_then(|value| payload_string(value, "sourceId"))
+        .or_else(|| metadata.and_then(|value| payload_string(value, "knowledgeSourceId")))
+    {
+        if let Some(advisor_id) = source_id.strip_prefix("advisor:") {
+            return advisor_scope(
+                state,
+                advisor_id,
+                Some(member.id.clone()),
+                Some(member.display_name.clone()),
+            )
+            .map(Some);
+        }
+        let args = json!({ "sourceId": source_id });
+        if let Some(mut scope) = resolve_document_source_scope(state, &args)? {
+            scope.member_id = Some(member.id.clone());
+            scope.member_name = Some(member.display_name.clone());
+            return Ok(Some(scope));
+        }
+    }
+    if let Some(root_path) = metadata
+        .and_then(|value| payload_string(value, "rootPath"))
+        .or_else(|| metadata.and_then(|value| payload_string(value, "knowledgeRootPath")))
+    {
+        let args = json!({ "rootPath": root_path });
+        if let Some(mut scope) = resolve_document_source_scope(state, &args)? {
+            scope.member_id = Some(member.id.clone());
+            scope.member_name = Some(member.display_name.clone());
+            return Ok(Some(scope));
+        }
+    }
+    let matched_advisor_id = with_store(state, |store| {
+        Ok(store
+            .advisors
+            .iter()
+            .find(|advisor| {
+                advisor.id == member.role_id
+                    || advisor.id == member.display_name
+                    || advisor.name == member.display_name
+            })
+            .map(|advisor| advisor.id.clone()))
+    })?;
+    if let Some(advisor_id) = matched_advisor_id {
+        return advisor_scope(
+            state,
+            &advisor_id,
+            Some(member.id),
+            Some(member.display_name),
+        )
+        .map(Some);
+    }
+    Err(format!(
+        "collaboration member {} is not bound to a knowledge source; set metadata.advisorId or metadata.sourceId",
+        member.id
+    ))
 }
 
 fn resolve_document_source_scope(
@@ -463,6 +585,8 @@ fn resolve_document_source_scope(
     }
     Ok(Some(KnowledgeScope {
         kind: KnowledgeScopeKind::DocumentSource,
+        member_id: None,
+        member_name: None,
         advisor_id: None,
         advisor_name: None,
         source_id: Some(source_id),
@@ -621,6 +745,8 @@ fn execute_source_search(
         )?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
+            "memberId": scope.member_id,
+            "memberName": scope.member_name,
             "sourceId": scope.source_id,
             "sourceName": scope.source_name,
             "rootPath": scoped_root_path(scope),
@@ -681,6 +807,8 @@ fn execute_source_search(
     }
     Ok(json!({
         "scopeKind": scope_kind_label(scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "sourceId": scope.source_id,
         "sourceName": scope.source_name,
         "rootPath": scoped_root_path(scope),
@@ -873,6 +1001,34 @@ fn resolve_session_advisor_id(
     })
 }
 
+fn resolve_session_collab_member_id(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> Option<String> {
+    let session_id = session_id?;
+    with_store(state, |store| {
+        if let Some(member_id) = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|item| item.metadata.as_ref())
+            .and_then(|metadata| {
+                payload_string(metadata, "collabMemberId")
+                    .or_else(|| payload_string(metadata, "memberId"))
+            })
+        {
+            return Ok(Some(member_id));
+        }
+        Ok(store
+            .collab_members
+            .iter()
+            .find(|member| member.conversation_id.as_deref() == Some(session_id))
+            .map(|member| member.id.clone()))
+    })
+    .ok()
+    .flatten()
+}
+
 fn collect_matching_files(root: &Path, pattern: &Pattern) -> Result<Vec<MatchedFile>, String> {
     let mut files = Vec::<MatchedFile>::new();
     collect_matching_files_recursive(root, root, pattern, &mut files)?;
@@ -1012,6 +1168,8 @@ mod tests {
     fn workspace_scope() -> KnowledgeScope {
         KnowledgeScope {
             kind: KnowledgeScopeKind::Workspace,
+            member_id: None,
+            member_name: None,
             advisor_id: None,
             advisor_name: None,
             source_id: None,
@@ -1051,6 +1209,8 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         let scope = KnowledgeScope {
             kind: KnowledgeScopeKind::Workspace,
+            member_id: None,
+            member_name: None,
             advisor_id: None,
             advisor_name: None,
             source_id: None,
