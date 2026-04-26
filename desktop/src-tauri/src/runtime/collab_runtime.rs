@@ -7,6 +7,7 @@ use crate::runtime::{
 use crate::{make_id, now_i64, AppStore};
 
 const DEFAULT_PROGRESS_INTERVAL_MS: i64 = 15 * 60 * 1000;
+const COLLAB_MAILBOX_READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 fn value_string(payload: &Value, key: &str) -> Option<String> {
     payload
@@ -1646,13 +1647,18 @@ pub fn read_collab_mailbox(
 
 pub fn cleanup_collab_mailbox(store: &mut AppStore, session_id: &str, keep_latest: usize) -> usize {
     let keep_latest = keep_latest.max(1);
+    let cutoff = now_i64().saturating_sub(COLLAB_MAILBOX_READ_TTL_MS);
     let mut read_messages: Vec<CollabMailboxMessageRecord> = store
         .collab_mailbox_messages
         .iter()
         .filter(|message| message.session_id == session_id && message.read_at.is_some())
         .cloned()
         .collect();
-    if read_messages.len() <= keep_latest {
+    let expired_count = read_messages
+        .iter()
+        .filter(|message| message.read_at.unwrap_or(message.created_at) < cutoff)
+        .count();
+    if read_messages.len() <= keep_latest || expired_count == 0 {
         return 0;
     }
     read_messages.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -1665,6 +1671,7 @@ pub fn cleanup_collab_mailbox(store: &mut AppStore, session_id: &str, keep_lates
     store.collab_mailbox_messages.retain(|message| {
         message.session_id != session_id
             || message.read_at.is_none()
+            || message.read_at.unwrap_or(message.created_at) >= cutoff
             || keep_ids.contains(&message.id)
     });
     before.saturating_sub(store.collab_mailbox_messages.len())

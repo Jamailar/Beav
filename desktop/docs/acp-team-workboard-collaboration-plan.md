@@ -1104,11 +1104,11 @@ Completed work:
 - Create/update/list tasks.
 - Write/read mailbox messages.
 - Submit/list progress reports.
-- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, reviewer policy, and bidirectional task dependency links.
+- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, reviewer policy, mailbox TTL cleanup, and bidirectional task dependency links.
 
 Verification:
 
-- Rust tests cover dependency validation, bidirectional dependency links, mailbox read-and-mark, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
+- Rust tests cover dependency validation, bidirectional dependency links, mailbox read-and-mark, mailbox TTL cleanup, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
 
 ### Completed 3: Team Tools And MCP Contract
 
@@ -1374,6 +1374,7 @@ The baseline is complete against the original success criteria:
 ### Unit Tests Completed
 
 - mailbox read-and-mark is atomic: `mailbox_read_marks_messages_read_once`
+- mailbox cleanup keeps recent read messages, latest read messages, and unread messages: `mailbox_cleanup_keeps_recent_read_latest_read_and_unread_messages`
 - task dependency update is bidirectional: `collab_task_dependency_updates_reverse_blocks`
 - completed upstream task promotes dependent work to ready: `collab_task_completion_promotes_dependents_to_ready`
 - settled-state coordinator wake fires once: `settled_rule_ignores_coordinator`
