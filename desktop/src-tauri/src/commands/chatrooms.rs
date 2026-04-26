@@ -9,6 +9,9 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::commands::runtime_query::handle_runtime_query;
 use crate::events::emit_creative_chat_checkpoint;
+use crate::member_skill::{
+    advisor_member_skill_ref, attach_member_skill_metadata, detach_member_skill_metadata,
+};
 use crate::session_manager::{clear_session_runtime_artifacts, ensure_context_session};
 use std::fs;
 use std::path::PathBuf;
@@ -199,6 +202,11 @@ fn ensure_chatroom_advisor_runtime_session(
         advisors,
     );
     with_store_mut(state, |store| {
+        let member_skill_ref = if advisor_id == CHATROOM_DIRECTOR_ID {
+            None
+        } else {
+            advisor_member_skill_ref(store, advisor_id)
+        };
         let session = ensure_context_session(
             store,
             CHATROOM_ADVISOR_CONTEXT_TYPE,
@@ -260,8 +268,14 @@ fn ensure_chatroom_advisor_runtime_session(
                 "advisorId".to_string(),
                 Value::String(advisor_id.to_string()),
             );
+            if let Some(skill_ref) = member_skill_ref.as_deref() {
+                attach_member_skill_metadata(&mut metadata, skill_ref);
+            } else {
+                detach_member_skill_metadata(&mut metadata);
+            }
         } else {
             metadata.remove("advisorId");
+            detach_member_skill_metadata(&mut metadata);
         }
         existing.metadata = Some(Value::Object(metadata));
         existing.updated_at = now_iso();

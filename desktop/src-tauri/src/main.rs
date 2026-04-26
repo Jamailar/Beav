@@ -28,6 +28,7 @@ mod manuscript_package;
 mod mcp;
 mod media_generation;
 mod media_runtime;
+mod member_skill;
 mod memory;
 mod memory_maintenance;
 mod official_support;
@@ -219,6 +220,18 @@ struct AdvisorRecord {
     knowledge_language: Option<String>,
     knowledge_files: Vec<String>,
     youtube_channel: Option<Value>,
+    member_skill_ref: Option<String>,
+    member_skill_status: Option<String>,
+    member_skill_version: Option<String>,
+    member_skill_last_distilled_at: Option<String>,
+    member_skill_last_error: Option<String>,
+    member_skill_candidate_version: Option<String>,
+    member_skill_candidate_path: Option<String>,
+    member_skill_candidate_created_at: Option<String>,
+    member_skill_candidate_source_event: Option<String>,
+    detected_knowledge_language: Option<String>,
+    language_detection_status: Option<String>,
+    language_confidence: Option<f64>,
     created_at: String,
     updated_at: String,
 }

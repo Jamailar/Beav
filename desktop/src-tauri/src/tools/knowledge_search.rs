@@ -35,8 +35,12 @@ enum KnowledgeScopeKind {
 #[derive(Debug, Clone)]
 struct KnowledgeScope {
     kind: KnowledgeScopeKind,
+    member_id: Option<String>,
+    member_name: Option<String>,
     advisor_id: Option<String>,
     advisor_name: Option<String>,
+    language: Option<String>,
+    language_detection_status: Option<String>,
     source_id: Option<String>,
     source_name: Option<String>,
     root: PathBuf,
@@ -48,23 +52,61 @@ pub fn execute_glob(
     arguments: &Value,
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
+    let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
+    let pattern_text = list_pattern_for_scope(&scope, arguments)?;
+    let pattern = compile_pattern(&pattern_text)?;
+    if let Some(source_id) = scope.source_id.as_deref() {
+        let indexed_count = document_blocks::count_blocks_for_source(state, source_id)?;
+        if indexed_count > 0 {
+            let documents =
+                document_blocks::list_documents_for_source(state, source_id, &pattern, limit)?;
+            let total_matches = documents.len();
+            return Ok(json!({
+                "scopeKind": scope_kind_label(&scope),
+                "memberId": scope.member_id,
+                "memberName": scope.member_name,
+                "advisorId": scope.advisor_id,
+                "advisorName": scope.advisor_name,
+                "language": scope.language,
+                "languageDetectionStatus": scope.language_detection_status,
+                "sourceId": scope.source_id,
+                "sourceName": scope.source_name,
+                "rootPath": scoped_root_path(&scope),
+                "pattern": pattern_text,
+                "searchMode": "indexed-documents",
+                "totalMatches": total_matches,
+                "files": documents.into_iter().map(|item| {
+                    json!({
+                        "path": item.path,
+                        "name": item.name,
+                        "title": item.title,
+                        "language": item.language,
+                        "extension": item.extension,
+                        "sizeBytes": item.size_bytes,
+                        "updatedAt": item.updated_at
+                    })
+                }).collect::<Vec<_>>()
+            }));
+        }
+    }
     if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
-        let root_path = scoped_root_path(&scope);
-        let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
-        let pattern_text = list_pattern_for_scope(&scope, arguments)?;
-        let pattern = compile_pattern(&pattern_text)?;
         let mut matched = collect_matching_files(&scope.root, &pattern)?;
         matched.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
         let total_matches = matched.len();
         matched.truncate(limit);
         return Ok(json!({
             "scopeKind": scope_kind_label(&scope),
+            "memberId": scope.member_id,
+            "memberName": scope.member_name,
             "advisorId": scope.advisor_id,
             "advisorName": scope.advisor_name,
+            "language": scope.language,
+            "languageDetectionStatus": scope.language_detection_status,
             "sourceId": scope.source_id,
             "sourceName": scope.source_name,
-            "rootPath": root_path,
+            "rootPath": scoped_root_path(&scope),
             "pattern": pattern_text,
+            "searchMode": "filesystem-fallback",
             "totalMatches": total_matches,
             "files": matched.into_iter().map(|item| {
                 json!({
@@ -77,9 +119,6 @@ pub fn execute_glob(
             }).collect::<Vec<_>>()
         }));
     }
-    let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
-    let pattern_text = list_pattern_for_scope(&scope, arguments)?;
-    let pattern = compile_pattern(&pattern_text)?;
     let mut matched = collect_matching_files(&scope.root, &pattern)?;
     matched.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let total_matches = matched.len();
@@ -87,12 +126,17 @@ pub fn execute_glob(
 
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
+        "language": scope.language,
+        "languageDetectionStatus": scope.language_detection_status,
         "sourceId": scope.source_id,
         "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
         "pattern": pattern_text,
+        "searchMode": "filesystem-fallback",
         "totalMatches": total_matches,
         "files": matched.into_iter().map(|item| {
             json!({
@@ -161,8 +205,12 @@ pub fn execute_grep(
 
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
+        "language": scope.language,
+        "languageDetectionStatus": scope.language_detection_status,
         "sourceId": scope.source_id,
         "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
@@ -187,6 +235,10 @@ pub fn execute_read(
                 let block = document_blocks::read_block(state, &anchor.block_id)?;
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
+                    "memberId": scope.member_id,
+                    "memberName": scope.member_name,
+                    "scopeLanguage": scope.language,
+                    "languageDetectionStatus": scope.language_detection_status,
                     "sourceId": anchor.source_id,
                     "sourceName": anchor.source_name,
                     "documentId": anchor.document_id,
@@ -218,6 +270,10 @@ pub fn execute_read(
                 let anchors = citation_anchors::anchors_for_block(state, &block.block_id)?;
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
+                    "memberId": scope.member_id,
+                    "memberName": scope.member_name,
+                    "scopeLanguage": scope.language,
+                    "languageDetectionStatus": scope.language_detection_status,
                     "sourceId": block.source_id,
                     "sourceName": block.source_name,
                     "documentId": block.document_id,
@@ -275,8 +331,12 @@ pub fn execute_read(
 
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
+        "language": scope.language,
+        "languageDetectionStatus": scope.language_detection_status,
         "sourceId": scope.source_id,
         "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
@@ -336,8 +396,12 @@ pub fn execute_attach(
     let absolute_path = target_path.display().to_string();
     Ok(json!({
         "scopeKind": scope_kind_label(&scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
         "advisorId": scope.advisor_id,
         "advisorName": scope.advisor_name,
+        "language": scope.language,
+        "languageDetectionStatus": scope.language_detection_status,
         "sourceId": scope.source_id,
         "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
@@ -379,26 +443,16 @@ fn resolve_scope(
     session_id: Option<&str>,
     arguments: &Value,
 ) -> Result<KnowledgeScope, String> {
-    let advisor_id = payload_string(arguments, "advisorId")
-        .or_else(|| resolve_session_advisor_id(state, session_id));
-    if let Some(advisor_id) = advisor_id {
-        let advisor = with_store(state, |store| {
-            Ok(store
-                .advisors
-                .iter()
-                .find(|item| item.id == advisor_id)
-                .map(|item| (item.id.clone(), item.name.clone())))
-        })?
-        .ok_or_else(|| format!("advisor not found: {advisor_id}"))?;
-        let root = crate::advisor_knowledge_dir(state, &advisor.0)?;
-        return Ok(KnowledgeScope {
-            kind: KnowledgeScopeKind::Advisor,
-            advisor_id: Some(advisor.0),
-            advisor_name: Some(advisor.1.clone()),
-            source_id: Some(advisor_source_id(&advisor_id)),
-            source_name: Some(advisor.1.clone()),
-            root,
-        });
+    if let Some(advisor_id) = payload_string(arguments, "advisorId") {
+        return advisor_scope(state, &advisor_id, None, None);
+    }
+
+    if let Some(member_scope) = resolve_member_scope(state, session_id, arguments)? {
+        return Ok(member_scope);
+    }
+
+    if let Some(advisor_id) = resolve_session_advisor_id(state, session_id) {
+        return advisor_scope(state, &advisor_id, None, None);
     }
 
     if let Some(source_scope) = resolve_document_source_scope(state, arguments)? {
@@ -413,18 +467,147 @@ fn resolve_scope(
             .unwrap_or(false);
     if !has_workspace_target {
         return Err(
-            "knowledge tool requires advisorId, or a session bound to one advisor".to_string(),
+            "knowledge tool requires advisorId, memberId/sourceId, or a session bound to one advisor/member"
+                .to_string(),
         );
     }
 
     Ok(KnowledgeScope {
         kind: KnowledgeScopeKind::Workspace,
+        member_id: None,
+        member_name: None,
         advisor_id: None,
         advisor_name: None,
+        language: None,
+        language_detection_status: None,
         source_id: None,
         source_name: None,
         root: crate::workspace_root(state)?.join("knowledge"),
     })
+}
+
+fn advisor_scope(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    member_id: Option<String>,
+    member_name: Option<String>,
+) -> Result<KnowledgeScope, String> {
+    let advisor = with_store(state, |store| {
+        Ok(store
+            .advisors
+            .iter()
+            .find(|item| item.id == advisor_id)
+            .map(|item| {
+                (
+                    item.id.clone(),
+                    item.name.clone(),
+                    item.detected_knowledge_language
+                        .clone()
+                        .or(item.knowledge_language.clone()),
+                    item.language_detection_status.clone(),
+                )
+            }))
+    })?
+    .ok_or_else(|| format!("advisor not found: {advisor_id}"))?;
+    let root = crate::advisor_knowledge_dir(state, &advisor.0)?;
+    Ok(KnowledgeScope {
+        kind: KnowledgeScopeKind::Advisor,
+        member_id,
+        member_name,
+        advisor_id: Some(advisor.0),
+        advisor_name: Some(advisor.1.clone()),
+        language: advisor.2,
+        language_detection_status: advisor.3,
+        source_id: Some(advisor_source_id(advisor_id)),
+        source_name: Some(advisor.1),
+        root,
+    })
+}
+
+fn resolve_member_scope(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    arguments: &Value,
+) -> Result<Option<KnowledgeScope>, String> {
+    let requested_member_id = payload_string(arguments, "memberId")
+        .or_else(|| payload_string(arguments, "collabMemberId"))
+        .or_else(|| resolve_session_collab_member_id(state, session_id));
+    let Some(member_id) = requested_member_id else {
+        return Ok(None);
+    };
+    let member = with_store(state, |store| {
+        Ok(store
+            .collab_members
+            .iter()
+            .find(|item| item.id == member_id)
+            .cloned())
+    })?
+    .ok_or_else(|| format!("collaboration member not found: {member_id}"))?;
+    let metadata = member.metadata.as_ref();
+    if let Some(advisor_id) = metadata.and_then(|value| payload_string(value, "advisorId")) {
+        return advisor_scope(
+            state,
+            &advisor_id,
+            Some(member.id.clone()),
+            Some(member.display_name.clone()),
+        )
+        .map(Some);
+    }
+    if let Some(source_id) = metadata
+        .and_then(|value| payload_string(value, "sourceId"))
+        .or_else(|| metadata.and_then(|value| payload_string(value, "knowledgeSourceId")))
+    {
+        if let Some(advisor_id) = source_id.strip_prefix("advisor:") {
+            return advisor_scope(
+                state,
+                advisor_id,
+                Some(member.id.clone()),
+                Some(member.display_name.clone()),
+            )
+            .map(Some);
+        }
+        let args = json!({ "sourceId": source_id });
+        if let Some(mut scope) = resolve_document_source_scope(state, &args)? {
+            scope.member_id = Some(member.id.clone());
+            scope.member_name = Some(member.display_name.clone());
+            return Ok(Some(scope));
+        }
+    }
+    if let Some(root_path) = metadata
+        .and_then(|value| payload_string(value, "rootPath"))
+        .or_else(|| metadata.and_then(|value| payload_string(value, "knowledgeRootPath")))
+    {
+        let args = json!({ "rootPath": root_path });
+        if let Some(mut scope) = resolve_document_source_scope(state, &args)? {
+            scope.member_id = Some(member.id.clone());
+            scope.member_name = Some(member.display_name.clone());
+            return Ok(Some(scope));
+        }
+    }
+    let matched_advisor_id = with_store(state, |store| {
+        Ok(store
+            .advisors
+            .iter()
+            .find(|advisor| {
+                advisor.id == member.role_id
+                    || advisor.id == member.display_name
+                    || advisor.name == member.display_name
+            })
+            .map(|advisor| advisor.id.clone()))
+    })?;
+    if let Some(advisor_id) = matched_advisor_id {
+        return advisor_scope(
+            state,
+            &advisor_id,
+            Some(member.id),
+            Some(member.display_name),
+        )
+        .map(Some);
+    }
+    Err(format!(
+        "collaboration member {} is not bound to a knowledge source; set metadata.advisorId or metadata.sourceId",
+        member.id
+    ))
 }
 
 fn resolve_document_source_scope(
@@ -463,8 +646,12 @@ fn resolve_document_source_scope(
     }
     Ok(Some(KnowledgeScope {
         kind: KnowledgeScopeKind::DocumentSource,
+        member_id: None,
+        member_name: None,
         advisor_id: None,
         advisor_name: None,
+        language: None,
+        language_detection_status: None,
         source_id: Some(source_id),
         source_name: Some(source_name),
         root,
@@ -621,6 +808,10 @@ fn execute_source_search(
         )?;
         return Ok(json!({
             "scopeKind": scope_kind_label(scope),
+            "memberId": scope.member_id,
+            "memberName": scope.member_name,
+            "language": scope.language,
+            "languageDetectionStatus": scope.language_detection_status,
             "sourceId": scope.source_id,
             "sourceName": scope.source_name,
             "rootPath": scoped_root_path(scope),
@@ -681,6 +872,10 @@ fn execute_source_search(
     }
     Ok(json!({
         "scopeKind": scope_kind_label(scope),
+        "memberId": scope.member_id,
+        "memberName": scope.member_name,
+        "language": scope.language,
+        "languageDetectionStatus": scope.language_detection_status,
         "sourceId": scope.source_id,
         "sourceName": scope.source_name,
         "rootPath": scoped_root_path(scope),
@@ -747,6 +942,7 @@ fn build_hit_payloads_and_evidence_pack(
                 "fusionScore": hit.fusion_score,
                 "rerankScore": hit.rerank_score,
                 "legalScore": hit.legal_score,
+                "languageMatchScore": hit.language_match_score,
                 "totalScore": hit.total_score
             },
             "retrievalLanes": hit.retrieval_lanes,
@@ -780,13 +976,15 @@ fn build_hit_payloads_and_evidence_pack(
         json!({
             "query": query,
             "queryProfile": query_profile_json.clone(),
-            "queryPlan": {
-                "intent": query_profile_json.get("intent").cloned().unwrap_or(Value::Null),
-                "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
-                "lexicalEngine": "tantivy+sqlite-fts5-bm25",
-                "lexicalFallback": "sqlite-like",
-                "fusion": if retrieval_mode == RetrievalMode::Hybrid { "weighted-rrf" } else { "none" },
-                "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
+        "queryPlan": {
+            "intent": query_profile_json.get("intent").cloned().unwrap_or(Value::Null),
+            "queryLanguage": query_profile_json.get("language").cloned().unwrap_or(Value::Null),
+            "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
+            "lexicalEngine": "tantivy+sqlite-fts5-bm25",
+            "lexicalFallback": "sqlite-like",
+            "fusion": if retrieval_mode == RetrievalMode::Hybrid { "weighted-rrf" } else { "none" },
+            "languageAwareRanking": true,
+            "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
                 "citationRequirement": query_profile_json.get("citationRequirement").cloned().unwrap_or(Value::Null),
                 "documentTypeHints": query_profile_json.get("documentTypeHints").cloned().unwrap_or(Value::Null),
                 "legalBiases": query_profile_json.get("legalBiases").cloned().unwrap_or(Value::Null),
@@ -810,8 +1008,10 @@ fn build_query_plan_value(
     json!({
         "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
         "searchMode": search_mode,
+        "queryLanguage": query_profile_json.get("language").cloned().unwrap_or(Value::Null),
         "lexicalEngine": "tantivy+sqlite-fts5-bm25",
         "lexicalFallback": "sqlite-like",
+        "languageAwareRanking": true,
         "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
         "citationRequirement": query_profile_json.get("citationRequirement").cloned().unwrap_or(Value::Null),
         "documentTypeHints": query_profile_json.get("documentTypeHints").cloned().unwrap_or(Value::Null),
@@ -871,6 +1071,34 @@ fn resolve_session_advisor_id(
                 })
         })
     })
+}
+
+fn resolve_session_collab_member_id(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+) -> Option<String> {
+    let session_id = session_id?;
+    with_store(state, |store| {
+        if let Some(member_id) = store
+            .chat_sessions
+            .iter()
+            .find(|item| item.id == session_id)
+            .and_then(|item| item.metadata.as_ref())
+            .and_then(|metadata| {
+                payload_string(metadata, "collabMemberId")
+                    .or_else(|| payload_string(metadata, "memberId"))
+            })
+        {
+            return Ok(Some(member_id));
+        }
+        Ok(store
+            .collab_members
+            .iter()
+            .find(|member| member.conversation_id.as_deref() == Some(session_id))
+            .map(|member| member.id.clone()))
+    })
+    .ok()
+    .flatten()
 }
 
 fn collect_matching_files(root: &Path, pattern: &Pattern) -> Result<Vec<MatchedFile>, String> {
@@ -1012,8 +1240,12 @@ mod tests {
     fn workspace_scope() -> KnowledgeScope {
         KnowledgeScope {
             kind: KnowledgeScopeKind::Workspace,
+            member_id: None,
+            member_name: None,
             advisor_id: None,
             advisor_name: None,
+            language: None,
+            language_detection_status: None,
             source_id: None,
             source_name: None,
             root: PathBuf::from("/tmp/workspace/knowledge"),
@@ -1051,8 +1283,12 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         let scope = KnowledgeScope {
             kind: KnowledgeScopeKind::Workspace,
+            member_id: None,
+            member_name: None,
             advisor_id: None,
             advisor_name: None,
+            language: None,
+            language_detection_status: None,
             source_id: None,
             source_name: None,
             root,

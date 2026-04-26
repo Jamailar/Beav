@@ -29,6 +29,7 @@ pub fn canonical_tool_name(name: &str) -> &str {
         "redbox_fs"
         | "redbox_list_directory"
         | "redbox_read_path"
+        | "knowledge_search"
         | "knowledge_glob"
         | "knowledge_grep"
         | "knowledge_read" => "redbox_fs",

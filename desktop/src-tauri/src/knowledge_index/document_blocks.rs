@@ -20,6 +20,7 @@ use crate::{
             citation_rerank_bonus, expand_query, query_embedding, semantic_similarity,
             semantic_vector_json, weighted_rrf, RetrievalMode,
         },
+        query_profile::{self, QueryLanguage},
         schema::ensure_catalog_ready,
         tantivy_index,
     },
@@ -98,10 +99,24 @@ pub(crate) struct DocumentBlockHit {
     pub semantic_score: f64,
     pub bm25_score: f64,
     pub fusion_score: f64,
+    pub language_match_score: f64,
     pub rerank_score: f64,
     pub legal_score: f64,
     pub total_score: f64,
     pub retrieval_lanes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IndexedKnowledgeDocument {
+    pub path: String,
+    pub absolute_path: String,
+    pub name: String,
+    pub extension: Option<String>,
+    pub title: Option<String>,
+    pub language: Option<String>,
+    pub size_bytes: u64,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -316,6 +331,96 @@ pub(crate) fn count_blocks_for_source(
     .map_err(|error| error.to_string())
 }
 
+pub(crate) fn list_documents_for_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+    pattern: &Pattern,
+    limit: usize,
+) -> Result<Vec<IndexedKnowledgeDocument>, String> {
+    let conn = connection(state)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT absolute_path, relative_path, file_extension, title, language, updated_at
+            FROM knowledge_canonical_documents
+            WHERE source_id = ?1
+            ORDER BY relative_path COLLATE NOCASE ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(params![source_id], row_to_indexed_document)
+        .map_err(|error| error.to_string())?;
+    let mut documents = collect_indexed_document_rows(rows, pattern, limit)?;
+    if !documents.is_empty() {
+        return Ok(documents);
+    }
+
+    let mut fallback_stmt = conn
+        .prepare(
+            r#"
+            SELECT absolute_path, relative_path, file_extension, title, language, MAX(updated_at)
+            FROM knowledge_document_blocks
+            WHERE source_id = ?1
+            GROUP BY absolute_path, relative_path, file_extension, title, language
+            ORDER BY relative_path COLLATE NOCASE ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let fallback_rows = fallback_stmt
+        .query_map(params![source_id], row_to_indexed_document)
+        .map_err(|error| error.to_string())?;
+    documents = collect_indexed_document_rows(fallback_rows, pattern, limit)?;
+    Ok(documents)
+}
+
+fn collect_indexed_document_rows<I>(
+    rows: I,
+    pattern: &Pattern,
+    limit: usize,
+) -> Result<Vec<IndexedKnowledgeDocument>, String>
+where
+    I: Iterator<Item = Result<IndexedKnowledgeDocument, rusqlite::Error>>,
+{
+    let mut documents = Vec::new();
+    for row in rows {
+        let document = row.map_err(|error| error.to_string())?;
+        if !pattern.matches_path_with(Path::new(&document.path), glob_match_options()) {
+            continue;
+        }
+        documents.push(document);
+        if documents.len() >= limit {
+            break;
+        }
+    }
+    Ok(documents)
+}
+
+fn row_to_indexed_document(
+    row: &rusqlite::Row<'_>,
+) -> Result<IndexedKnowledgeDocument, rusqlite::Error> {
+    let absolute_path: String = row.get(0)?;
+    let path: String = row.get(1)?;
+    let size_bytes = fs::metadata(&absolute_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let name = Path::new(&path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path.as_str())
+        .to_string();
+    Ok(IndexedKnowledgeDocument {
+        path,
+        absolute_path,
+        name,
+        extension: row.get(2)?,
+        title: row.get(3)?,
+        language: row.get(4)?,
+        size_bytes,
+        updated_at: row.get(5)?,
+    })
+}
+
 pub(crate) fn rebuild_fts_index(state: &State<'_, AppState>) -> Result<(), String> {
     let mut conn = connection(state)?;
     let tx = conn.transaction().map_err(|error| error.to_string())?;
@@ -406,6 +511,7 @@ pub(crate) fn search_blocks(
     retrieval_mode: RetrievalMode,
 ) -> Result<Vec<DocumentBlockHit>, String> {
     let conn = connection(state)?;
+    let query_profile = query_profile::build_query_profile(query);
     let normalized_query = normalize_text(query);
     let lexical_terms = extract_query_terms(&normalized_query);
     if lexical_terms.is_empty() {
@@ -550,6 +656,8 @@ pub(crate) fn search_blocks(
             is_superseded: candidate.is_superseded,
         };
         let legal_score = legal_priority_score(&legal_metadata, &today);
+        let language_match_score =
+            language_match_score(query_profile.language, candidate.language.as_deref());
         let fusion_score = if retrieval_mode == RetrievalMode::Hybrid {
             weighted_rrf(
                 lexical_order.get(&candidate.block_id).copied(),
@@ -576,6 +684,7 @@ pub(crate) fn search_blocks(
         let total_score = candidate.lexical_score
             + (semantic_score * 12.0)
             + (fusion_score * 250.0)
+            + language_match_score
             + rerank_score;
         let mut retrieval_lanes = Vec::new();
         if lexical_order.contains_key(&candidate.block_id) {
@@ -583,6 +692,9 @@ pub(crate) fn search_blocks(
         }
         if semantic_order.contains_key(&candidate.block_id) {
             retrieval_lanes.push("semantic".to_string());
+        }
+        if language_match_score > 0.0 {
+            retrieval_lanes.push("language-match".to_string());
         }
         scored_hits.push(DocumentBlockHit {
             block_id: candidate.block_id,
@@ -615,6 +727,7 @@ pub(crate) fn search_blocks(
             semantic_score,
             bm25_score: candidate.bm25_score,
             fusion_score,
+            language_match_score,
             rerank_score,
             legal_score,
             total_score,
@@ -1513,6 +1626,40 @@ fn query_has_multilingual_terms(terms: &[String]) -> bool {
     has_han && has_ascii
 }
 
+fn language_match_score(query_language: QueryLanguage, document_language: Option<&str>) -> f64 {
+    let Some(document_language) = normalize_language_label(document_language) else {
+        return 0.0;
+    };
+    match query_language {
+        QueryLanguage::Zh => match document_language {
+            "zh" => 6.0,
+            "multilingual" => 2.5,
+            _ => 0.0,
+        },
+        QueryLanguage::En => match document_language {
+            "en" => 6.0,
+            "multilingual" => 2.5,
+            _ => 0.0,
+        },
+        QueryLanguage::Mixed => match document_language {
+            "multilingual" => 5.0,
+            "zh" | "en" => 1.5,
+            _ => 0.0,
+        },
+        QueryLanguage::Other => 0.0,
+    }
+}
+
+fn normalize_language_label(value: Option<&str>) -> Option<&'static str> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "zh" | "zh-cn" | "zh-hans" | "chinese" | "中文" => Some("zh"),
+        "en" | "en-us" | "en-gb" | "english" => Some("en"),
+        "mixed" | "multilingual" | "bilingual" => Some("multilingual"),
+        _ => None,
+    }
+}
+
 fn legal_priority_score(metadata: &LegalMetadata, today: &str) -> f64 {
     let mut score = metadata.authority_level.unwrap_or(0) as f64 / 8.0;
     score += match metadata.document_type.as_deref().unwrap_or("general") {
@@ -1647,6 +1794,17 @@ mod tests {
         assert!(value.iter().any(|item| item == "动合"));
         assert!(value.iter().any(|item| item == "合同"));
         assert!(value.iter().any(|item| item == "同法"));
+    }
+
+    #[test]
+    fn language_match_score_boosts_same_language_documents() {
+        assert!(language_match_score(QueryLanguage::Zh, Some("zh")) > 0.0);
+        assert!(language_match_score(QueryLanguage::En, Some("en")) > 0.0);
+        assert_eq!(language_match_score(QueryLanguage::Zh, Some("en")), 0.0);
+        assert!(
+            language_match_score(QueryLanguage::Mixed, Some("multilingual"))
+                > language_match_score(QueryLanguage::Mixed, Some("zh"))
+        );
     }
 
     #[test]
