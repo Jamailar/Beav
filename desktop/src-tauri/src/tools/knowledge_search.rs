@@ -942,6 +942,7 @@ fn build_hit_payloads_and_evidence_pack(
                 "fusionScore": hit.fusion_score,
                 "rerankScore": hit.rerank_score,
                 "legalScore": hit.legal_score,
+                "languageMatchScore": hit.language_match_score,
                 "totalScore": hit.total_score
             },
             "retrievalLanes": hit.retrieval_lanes,
@@ -975,13 +976,15 @@ fn build_hit_payloads_and_evidence_pack(
         json!({
             "query": query,
             "queryProfile": query_profile_json.clone(),
-            "queryPlan": {
-                "intent": query_profile_json.get("intent").cloned().unwrap_or(Value::Null),
-                "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
-                "lexicalEngine": "tantivy+sqlite-fts5-bm25",
-                "lexicalFallback": "sqlite-like",
-                "fusion": if retrieval_mode == RetrievalMode::Hybrid { "weighted-rrf" } else { "none" },
-                "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
+        "queryPlan": {
+            "intent": query_profile_json.get("intent").cloned().unwrap_or(Value::Null),
+            "queryLanguage": query_profile_json.get("language").cloned().unwrap_or(Value::Null),
+            "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
+            "lexicalEngine": "tantivy+sqlite-fts5-bm25",
+            "lexicalFallback": "sqlite-like",
+            "fusion": if retrieval_mode == RetrievalMode::Hybrid { "weighted-rrf" } else { "none" },
+            "languageAwareRanking": true,
+            "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
                 "citationRequirement": query_profile_json.get("citationRequirement").cloned().unwrap_or(Value::Null),
                 "documentTypeHints": query_profile_json.get("documentTypeHints").cloned().unwrap_or(Value::Null),
                 "legalBiases": query_profile_json.get("legalBiases").cloned().unwrap_or(Value::Null),
@@ -1005,8 +1008,10 @@ fn build_query_plan_value(
     json!({
         "retrievalMode": query_profile::retrieval_mode_label(retrieval_mode),
         "searchMode": search_mode,
+        "queryLanguage": query_profile_json.get("language").cloned().unwrap_or(Value::Null),
         "lexicalEngine": "tantivy+sqlite-fts5-bm25",
         "lexicalFallback": "sqlite-like",
+        "languageAwareRanking": true,
         "granularity": query_profile_json.get("granularity").cloned().unwrap_or(Value::Null),
         "citationRequirement": query_profile_json.get("citationRequirement").cloned().unwrap_or(Value::Null),
         "documentTypeHints": query_profile_json.get("documentTypeHints").cloned().unwrap_or(Value::Null),

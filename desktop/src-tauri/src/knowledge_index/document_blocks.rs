@@ -20,6 +20,7 @@ use crate::{
             citation_rerank_bonus, expand_query, query_embedding, semantic_similarity,
             semantic_vector_json, weighted_rrf, RetrievalMode,
         },
+        query_profile::{self, QueryLanguage},
         schema::ensure_catalog_ready,
         tantivy_index,
     },
@@ -98,6 +99,7 @@ pub(crate) struct DocumentBlockHit {
     pub semantic_score: f64,
     pub bm25_score: f64,
     pub fusion_score: f64,
+    pub language_match_score: f64,
     pub rerank_score: f64,
     pub legal_score: f64,
     pub total_score: f64,
@@ -509,6 +511,7 @@ pub(crate) fn search_blocks(
     retrieval_mode: RetrievalMode,
 ) -> Result<Vec<DocumentBlockHit>, String> {
     let conn = connection(state)?;
+    let query_profile = query_profile::build_query_profile(query);
     let normalized_query = normalize_text(query);
     let lexical_terms = extract_query_terms(&normalized_query);
     if lexical_terms.is_empty() {
@@ -653,6 +656,8 @@ pub(crate) fn search_blocks(
             is_superseded: candidate.is_superseded,
         };
         let legal_score = legal_priority_score(&legal_metadata, &today);
+        let language_match_score =
+            language_match_score(query_profile.language, candidate.language.as_deref());
         let fusion_score = if retrieval_mode == RetrievalMode::Hybrid {
             weighted_rrf(
                 lexical_order.get(&candidate.block_id).copied(),
@@ -679,6 +684,7 @@ pub(crate) fn search_blocks(
         let total_score = candidate.lexical_score
             + (semantic_score * 12.0)
             + (fusion_score * 250.0)
+            + language_match_score
             + rerank_score;
         let mut retrieval_lanes = Vec::new();
         if lexical_order.contains_key(&candidate.block_id) {
@@ -686,6 +692,9 @@ pub(crate) fn search_blocks(
         }
         if semantic_order.contains_key(&candidate.block_id) {
             retrieval_lanes.push("semantic".to_string());
+        }
+        if language_match_score > 0.0 {
+            retrieval_lanes.push("language-match".to_string());
         }
         scored_hits.push(DocumentBlockHit {
             block_id: candidate.block_id,
@@ -718,6 +727,7 @@ pub(crate) fn search_blocks(
             semantic_score,
             bm25_score: candidate.bm25_score,
             fusion_score,
+            language_match_score,
             rerank_score,
             legal_score,
             total_score,
@@ -1616,6 +1626,40 @@ fn query_has_multilingual_terms(terms: &[String]) -> bool {
     has_han && has_ascii
 }
 
+fn language_match_score(query_language: QueryLanguage, document_language: Option<&str>) -> f64 {
+    let Some(document_language) = normalize_language_label(document_language) else {
+        return 0.0;
+    };
+    match query_language {
+        QueryLanguage::Zh => match document_language {
+            "zh" => 6.0,
+            "multilingual" => 2.5,
+            _ => 0.0,
+        },
+        QueryLanguage::En => match document_language {
+            "en" => 6.0,
+            "multilingual" => 2.5,
+            _ => 0.0,
+        },
+        QueryLanguage::Mixed => match document_language {
+            "multilingual" => 5.0,
+            "zh" | "en" => 1.5,
+            _ => 0.0,
+        },
+        QueryLanguage::Other => 0.0,
+    }
+}
+
+fn normalize_language_label(value: Option<&str>) -> Option<&'static str> {
+    let normalized = value?.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "zh" | "zh-cn" | "zh-hans" | "chinese" | "中文" => Some("zh"),
+        "en" | "en-us" | "en-gb" | "english" => Some("en"),
+        "mixed" | "multilingual" | "bilingual" => Some("multilingual"),
+        _ => None,
+    }
+}
+
 fn legal_priority_score(metadata: &LegalMetadata, today: &str) -> f64 {
     let mut score = metadata.authority_level.unwrap_or(0) as f64 / 8.0;
     score += match metadata.document_type.as_deref().unwrap_or("general") {
@@ -1750,6 +1794,17 @@ mod tests {
         assert!(value.iter().any(|item| item == "动合"));
         assert!(value.iter().any(|item| item == "合同"));
         assert!(value.iter().any(|item| item == "同法"));
+    }
+
+    #[test]
+    fn language_match_score_boosts_same_language_documents() {
+        assert!(language_match_score(QueryLanguage::Zh, Some("zh")) > 0.0);
+        assert!(language_match_score(QueryLanguage::En, Some("en")) > 0.0);
+        assert_eq!(language_match_score(QueryLanguage::Zh, Some("en")), 0.0);
+        assert!(
+            language_match_score(QueryLanguage::Mixed, Some("multilingual"))
+                > language_match_score(QueryLanguage::Mixed, Some("zh"))
+        );
     }
 
     #[test]
