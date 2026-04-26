@@ -14,7 +14,7 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum defines persistent group-chat coordination, speaker/executor separation, member agent cards, task-plan continuity, runtime-owned concurrency, and deterministic member matching.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented at the runtime contract layer: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, and artifact/blocker helpers.
 ---
 
 # ACP Team Workboard Collaboration Plan
@@ -540,6 +540,20 @@ Recommended score factors:
 - active executor load and capacity penalty
 
 The first implementation can be deterministic and local. Later versions can add richer embedding search over agent cards, but only after the typed matching contract is stable.
+
+#### 5.4.8 Runtime Implementation Status
+
+Implemented baseline:
+
+- `CollabMemberRecord.metadata.agentCard` is generated on member creation and can be overridden by member templates.
+- `CollabMemberRecord.metadata.memberTaskPlan` is generated on member creation and updated when tasks are assigned, updated, or reported.
+- Running task assignment enforces the member's `capacity.maxExecutorThreads`; default is 5.
+- `team.member.match` ranks existing members by role, preferred task, capabilities, tool policy, objective fit, avoid-task penalties, and active executor load.
+- `team.member.rename` and `team.member.shutdown` preserve member history while changing lifecycle state.
+- `team.artifact.attach` appends artifact metadata through a structured artifact report.
+- `team.blocker.raise` submits a structured blocker report and moves the task/member into blocker state.
+- Completion reports include `payload.completionClaim` with evidence, artifact refs, handoff, and risks.
+- The redbox-team MCP contract exposes the same conceptual tools for external adapters.
 
 ## 6. Data Model
 

@@ -38,6 +38,54 @@ pub fn team_mcp_tool_contracts() -> Vec<TeamMcpToolContract> {
             ),
         },
         TeamMcpToolContract {
+            name: "team_match_member",
+            description: "Rank existing collaboration members for a task objective.",
+            host_action: "team.member.match",
+            mutating: false,
+            input_schema: object_schema(
+                &["sessionId"],
+                json!({
+                    "sessionId": { "type": "string" },
+                    "title": { "type": "string" },
+                    "objective": { "type": "string" },
+                    "taskType": { "type": "string" },
+                    "requiredCapabilities": { "type": "array", "items": { "type": "string" } },
+                    "requiredToolFamilies": { "type": "array", "items": { "type": "string" } },
+                    "limit": { "type": "integer" }
+                }),
+            ),
+        },
+        TeamMcpToolContract {
+            name: "team_rename_agent",
+            description: "Rename or retitle one collaboration member.",
+            host_action: "team.member.rename",
+            mutating: true,
+            input_schema: object_schema(
+                &["sessionId", "memberId", "displayName"],
+                json!({
+                    "sessionId": { "type": "string" },
+                    "memberId": { "type": "string" },
+                    "displayName": { "type": "string" },
+                    "roleId": { "type": "string" }
+                }),
+            ),
+        },
+        TeamMcpToolContract {
+            name: "team_shutdown_agent",
+            description: "Mark one collaboration member offline or suspended.",
+            host_action: "team.member.shutdown",
+            mutating: true,
+            input_schema: object_schema(
+                &["sessionId", "memberId"],
+                json!({
+                    "sessionId": { "type": "string" },
+                    "memberId": { "type": "string" },
+                    "status": { "type": "string" },
+                    "reason": { "type": "string" }
+                }),
+            ),
+        },
+        TeamMcpToolContract {
             name: "team_list_work_items",
             description: "List structured work items in the current RedBox team session.",
             host_action: "team.task.list",
@@ -144,7 +192,7 @@ pub fn team_mcp_tool_contracts() -> Vec<TeamMcpToolContract> {
         TeamMcpToolContract {
             name: "team_save_artifact",
             description: "Attach artifact metadata to a task through a structured progress report.",
-            host_action: "team.report.submit",
+            host_action: "team.artifact.attach",
             mutating: true,
             input_schema: object_schema(
                 &["sessionId", "memberId", "taskId", "artifact"],
@@ -154,6 +202,24 @@ pub fn team_mcp_tool_contracts() -> Vec<TeamMcpToolContract> {
                     "taskId": { "type": "string" },
                     "summary": { "type": "string" },
                     "artifact": { "type": "object" }
+                }),
+            ),
+        },
+        TeamMcpToolContract {
+            name: "team_raise_blocker",
+            description: "Raise a structured blocker report for a task.",
+            host_action: "team.blocker.raise",
+            mutating: true,
+            input_schema: object_schema(
+                &["sessionId", "memberId", "taskId"],
+                json!({
+                    "sessionId": { "type": "string" },
+                    "memberId": { "type": "string" },
+                    "taskId": { "type": "string" },
+                    "blocker": { "type": "string" },
+                    "summary": { "type": "string" },
+                    "blockers": { "type": "array", "items": { "type": "string" } },
+                    "nextSteps": { "type": "array", "items": { "type": "string" } }
                 }),
             ),
         },
@@ -231,11 +297,15 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"team_send_message"));
         assert!(names.contains(&"team_list_members"));
+        assert!(names.contains(&"team_match_member"));
+        assert!(names.contains(&"team_rename_agent"));
+        assert!(names.contains(&"team_shutdown_agent"));
         assert!(names.contains(&"team_list_work_items"));
         assert!(names.contains(&"team_claim_work_item"));
         assert!(names.contains(&"team_update_work_item"));
         assert!(names.contains(&"team_request_report"));
         assert!(names.contains(&"team_save_artifact"));
+        assert!(names.contains(&"team_raise_blocker"));
     }
 
     #[test]
