@@ -393,7 +393,7 @@ function GeneralSettingsSectionInner({
                             </button>
                         </p>
                         <p className="text-xs text-text-tertiary mt-1">
-                            自动更新已关闭，请前往 GitHub Releases 手动下载新版本。
+                            启动时自动检查新版本，安装包从 GitHub Releases 下载。
                         </p>
                     </div>
                     <a
