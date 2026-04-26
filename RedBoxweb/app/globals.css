@@ -17,10 +17,7 @@ html {
 body {
     margin: 0;
     min-height: 100svh;
-    background:
-        radial-gradient(circle at 0% 0%, rgba(215, 93, 49, 0.12), transparent 24%),
-        radial-gradient(circle at 100% 8%, rgba(13, 108, 104, 0.1), transparent 26%),
-        linear-gradient(180deg, #fbf5ed 0%, #f3e7d9 52%, #f8efe4 100%);
+    background: #ffffff;
     color: #22170f;
     font-family: var(--font-body), sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -32,9 +29,6 @@ a {
     text-decoration: none;
 }
 
-h1,
-h2,
-h3,
 .font-serif {
     font-family: var(--font-display), serif;
 }
