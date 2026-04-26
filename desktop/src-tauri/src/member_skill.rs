@@ -242,6 +242,63 @@ pub(crate) fn discard_member_skill_candidate(
     })
 }
 
+pub(crate) fn rollback_member_skill_version(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    version: &str,
+) -> Result<MemberSkillPublishResult, String> {
+    let advisor = with_store(state, |store| {
+        store
+            .advisors
+            .iter()
+            .find(|item| item.id == advisor_id)
+            .cloned()
+            .ok_or_else(|| "成员不存在".to_string())
+    })?;
+    let skill_name = advisor
+        .member_skill_ref
+        .clone()
+        .filter(|item| !item.trim().is_empty())
+        .unwrap_or_else(|| member_skill_name(&advisor));
+    let version = version.trim();
+    if version.is_empty() {
+        return Err("缺少要回滚的成员技能版本".to_string());
+    }
+    let package_dir = workspace_root(state)?
+        .join("skills")
+        .join(slug_from_relative_path(&skill_name));
+    let version_dir = package_dir.join("versions").join(version);
+    if !version_dir.join("SKILL.md").is_file() {
+        return Err(format!("成员技能历史版本不存在：{}", version_dir.display()));
+    }
+    copy_member_skill_dir(&version_dir, &package_dir)?;
+    let rolled_back_at = now_iso();
+    with_store_mut(state, |store| {
+        if let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) {
+            advisor.member_skill_ref = Some(skill_name.clone());
+            advisor.member_skill_status = Some("ready".to_string());
+            advisor.member_skill_version = Some(version.to_string());
+            advisor.member_skill_last_distilled_at = Some(rolled_back_at.clone());
+            advisor.member_skill_last_error = None;
+            advisor.updated_at = now_iso();
+        }
+        Ok(())
+    })?;
+    let refreshed_catalog = refresh_skill_store_catalog(state)?;
+    Ok(MemberSkillPublishResult {
+        skill_name,
+        status: "ready".to_string(),
+        version: version.to_string(),
+        package_path: package_dir.display().to_string(),
+        language: advisor
+            .detected_knowledge_language
+            .or(advisor.knowledge_language)
+            .unwrap_or_else(|| "中文".to_string()),
+        refreshed_catalog,
+        candidate: false,
+    })
+}
+
 pub(crate) fn mark_member_skill_failed(
     state: &State<'_, AppState>,
     advisor_id: &str,

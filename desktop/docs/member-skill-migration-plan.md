@@ -32,10 +32,12 @@ last_updated: 2026-04-26
 - 团队页已展示成员技能状态，并在创建新 advisor 单聊时显式携带成员技能 metadata。
 - 已补上候选版本双轨：已有技能的成员新增/删除知识后先生成 `distillation_candidates/<version>`，团队页可发布或丢弃候选。
 - 成员技能包已补齐 `versions/<version>`、`heuristics.jsonl`、`workflow.json`、`examples/`、`scripts/`，当前版本与候选版本都使用同一 package schema。
+- 已补后台历史版本回滚入口：`advisors:rollback-member-skill-version` 可把 `versions/<version>` 恢复为当前技能。
+- runtime advisor 上下文会显式写出 `memberSkillRef`，便于检查当前成员发言是否绑定正确技能。
 
 仍未完成的部分：
 
-- 候选版本 diff 可视化和一键回滚到历史 `versions/<version>` 尚未做 UI。
+- 候选版本 diff 可视化和历史版本回滚 UI 尚未做。
 - 文件 catalog 索引、语言感知搜索工具仍属于后续阶段。
 
 ## 2. 当前系统基础
