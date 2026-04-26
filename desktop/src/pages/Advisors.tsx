@@ -627,6 +627,21 @@ export function Advisors({
         }
     };
 
+    const handleRefreshMemberSkill = async (advisor: Advisor) => {
+        try {
+            const result = await window.ipcRenderer.advisors.distillMemberSkill({ advisorId: advisor.id }) as { success?: boolean; error?: string };
+            if (result && result.success === false) {
+                throw new Error(result.error || '成员技能蒸馏失败');
+            }
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to refresh member skill:', e);
+            void appAlert(`成员技能蒸馏失败：${e instanceof Error ? e.message : '未知错误'}`);
+        }
+    };
+
     const handleRollbackMemberSkillVersion = async (advisor: Advisor, version: string) => {
         if (!version) return;
         if (!(await appConfirm(`确定要把 ${advisor.name} 回滚到成员技能版本 "${version}" 吗？`, {
@@ -855,6 +870,7 @@ export function Advisors({
                                 onDeleteKnowledge={(fileName) => void handleDeleteKnowledge(selectedAdvisor.id, fileName)}
                                 onPromoteMemberSkillCandidate={() => void handlePromoteMemberSkillCandidate(selectedAdvisor)}
                                 onDiscardMemberSkillCandidate={() => void handleDiscardMemberSkillCandidate(selectedAdvisor)}
+                                onRefreshMemberSkill={() => handleRefreshMemberSkill(selectedAdvisor)}
                                 onRollbackMemberSkillVersion={(version) => void handleRollbackMemberSkillVersion(selectedAdvisor, version)}
                                 onEdit={() => handleEdit(selectedAdvisor)}
                                 onDelete={() => void handleDelete(selectedAdvisor.id)}
@@ -1033,6 +1049,7 @@ function AdvisorSettingsPanel({
     onDeleteKnowledge,
     onPromoteMemberSkillCandidate,
     onDiscardMemberSkillCandidate,
+    onRefreshMemberSkill,
     onRollbackMemberSkillVersion,
     onEdit,
     onDelete,
@@ -1049,6 +1066,7 @@ function AdvisorSettingsPanel({
     onDeleteKnowledge: (fileName: string) => void;
     onPromoteMemberSkillCandidate: () => void;
     onDiscardMemberSkillCandidate: () => void;
+    onRefreshMemberSkill: () => Promise<void>;
     onRollbackMemberSkillVersion: (version: string) => void;
     onEdit: () => void;
     onDelete: () => void;
@@ -1057,6 +1075,7 @@ function AdvisorSettingsPanel({
     const [memberSkillDetails, setMemberSkillDetails] = useState<MemberSkillInspectResult | null>(null);
     const [isMemberSkillDetailsOpen, setIsMemberSkillDetailsOpen] = useState(false);
     const [isMemberSkillDetailsLoading, setIsMemberSkillDetailsLoading] = useState(false);
+    const [isMemberSkillRefreshing, setIsMemberSkillRefreshing] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -1094,6 +1113,15 @@ function AdvisorSettingsPanel({
     const rollbackVersions = (memberSkillDetails?.versions || [])
         .filter((item) => item.version && item.version !== advisor.memberSkillVersion)
         .slice(0, 5);
+    const handleRefreshClick = async () => {
+        setIsMemberSkillRefreshing(true);
+        try {
+            await onRefreshMemberSkill();
+            setMemberSkillDetails(null);
+        } finally {
+            setIsMemberSkillRefreshing(false);
+        }
+    };
 
     return (
         <div className="flex h-full flex-col">
@@ -1143,6 +1171,22 @@ function AdvisorSettingsPanel({
                         )}>
                             {advisor.memberSkillCandidateVersion ? '候选待确认' : advisor.memberSkillStatus || 'pending'}
                         </span>
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => void handleRefreshClick()}
+                            disabled={isMemberSkillRefreshing}
+                            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-black/10 bg-white/75 px-2.5 text-xs font-medium text-text-secondary transition-colors hover:bg-white hover:text-accent-primary disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            <RefreshCw className={clsx("h-3 w-3", isMemberSkillRefreshing && "animate-spin")} />
+                            {isMemberSkillRefreshing ? '蒸馏中' : advisor.memberSkillLastError || !advisor.memberSkillRef ? '重新蒸馏' : '刷新技能'}
+                        </button>
+                        {advisor.memberSkillVersion && (
+                            <span className="truncate text-[11px] text-text-tertiary">
+                                当前版本：{advisor.memberSkillVersion}
+                            </span>
+                        )}
                     </div>
                     {advisor.memberSkillCandidateVersion && (
                         <div className="mt-3 rounded-2xl border border-accent-primary/15 bg-white/70 p-3">

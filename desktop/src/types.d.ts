@@ -1275,6 +1275,7 @@ declare global {
         uploadKnowledge: (payload: string | { advisorId: string; filePaths?: string[] }) => Promise<unknown>;
         deleteKnowledge: (payload: { advisorId: string; fileName: string }) => Promise<unknown>;
         inspectMemberSkill: (payload: { advisorId: string }) => Promise<unknown>;
+        distillMemberSkill: (payload: { advisorId: string }) => Promise<unknown>;
         promoteMemberSkillCandidate: (payload: { advisorId: string; candidateVersion?: string }) => Promise<unknown>;
         discardMemberSkillCandidate: (payload: { advisorId: string }) => Promise<unknown>;
         rollbackMemberSkillVersion: (payload: { advisorId: string; version: string }) => Promise<unknown>;
