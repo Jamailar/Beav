@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: in_progress
+execution_status: completed
 last_updated: 2026-04-26
 ---
 
@@ -35,12 +35,11 @@ last_updated: 2026-04-26
 - 已补后台历史版本回滚入口：`advisors:rollback-member-skill-version` 可把 `versions/<version>` 恢复为当前技能。
 - 团队页成员设置已能查看候选版本差异、发布/丢弃候选，并列出历史版本进行回滚。
 - 成员/顾问知识检索 scope 已暴露 `language / languageDetectionStatus`，read block/anchor 保留证据自身 `language`，避免成员画像语言和证据语言混淆。
+- catalog index 已补齐 `scope / ownerType / ownerId`，成员/文档知识列表在已有 block/canonical 索引时优先走 `indexed-documents`，缺索引才回退文件系统。
+- 语言感知检索已把 query language 接入 ranking，命中结果输出 `languageMatchScore`，query plan 显示 `languageAwareRanking=true`。
 - runtime advisor 上下文会显式写出 `memberSkillRef`，便于检查当前成员发言是否绑定正确技能。
 
-仍未完成的部分：
-
-- 文件 catalog 索引仍属于后续阶段。
-- 语言感知搜索已完成成员 scope 元数据透传，后续还需要把 `language_match_score` 接入 catalog/ranking。
+本计划当前定义的成员技能升级、文件/YouTube 自动蒸馏、候选版本闭环、运行时激活、成员作用域检索与语言感知排序已完成。后续若继续扩大范围，应另起计划覆盖更重的评测面板、自动灰度开关和跨团队权限策略。
 
 ## 2. 当前系统基础
 
