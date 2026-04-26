@@ -67,7 +67,6 @@ import type {
   CliRuntimeToolRecord,
   DiagnosticsLogStatus,
   DiagnosticsPendingReport,
-  NotificationPermissionState,
   NotificationSettingsPayload,
 } from '../types';
 import {
@@ -134,16 +133,6 @@ const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
 };
 
 const DEFAULT_SPACE_ID = 'default';
-
-function normalizeNotificationPermissionState(
-  value: unknown,
-): NotificationPermissionState['state'] {
-  const state = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (state === 'granted' || state === 'denied' || state === 'prompt') {
-    return state;
-  }
-  return 'unknown';
-}
 
 type AssistantDaemonStatus = Awaited<ReturnType<typeof window.ipcRenderer.assistantDaemon.getStatus>>;
 type RuntimeDiagnosticsSummary = Awaited<ReturnType<typeof window.ipcRenderer.debug.getRuntimeSummary>>;
@@ -615,8 +604,6 @@ export function Settings({
   const [showScopedModelOverrides, setShowScopedModelOverrides] = useState(false);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsPayload>(DEFAULT_NOTIFICATION_SETTINGS);
-  const [notificationPermissionState, setNotificationPermissionState] = useState<NotificationPermissionState['state']>('unknown');
-  const [notificationStatusMessage, setNotificationStatusMessage] = useState('');
   const hasSelectedRuntimeSession = useMemo(
     () => Boolean(selectedRuntimeSessionId && runtimeSessions.some((session) => session.id === selectedRuntimeSessionId)),
     [runtimeSessions, selectedRuntimeSessionId],
@@ -3247,17 +3234,6 @@ export function Settings({
     });
   }, [loadSettings]);
 
-  const loadNotificationPermissionState = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.notifications.getPermissionState();
-      setNotificationPermissionState(normalizeNotificationPermissionState(result?.state));
-    } catch (error) {
-      console.warn('Failed to load notification permission state:', error);
-      setNotificationPermissionState('unknown');
-    }
-  }, []);
-
-
   useEffect(() => {
     if (!formData.developer_mode_enabled || !formData.developer_mode_unlocked_at) {
       return;
@@ -3277,10 +3253,6 @@ export function Settings({
     }, remaining);
     return () => window.clearTimeout(timer);
   }, [expireDeveloperMode, formData.developer_mode_enabled, formData.developer_mode_unlocked_at]);
-
-  useEffect(() => {
-    void loadNotificationPermissionState();
-  }, [loadNotificationPermissionState]);
 
   const checkTools = useCallback(async () => {
     try {
@@ -4400,40 +4372,10 @@ export function Settings({
   const handleTestNotificationSound = useCallback(async () => {
     try {
       await playTestNotificationSound('attention', notificationSettings.sound.volume);
-      setNotificationStatusMessage('已播放测试提醒音。');
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotificationStatusMessage(`播放测试提醒音失败：${message}`);
+      console.warn('Failed to play notification test sound:', error);
     }
   }, [notificationSettings.sound.volume]);
-
-  const handleRequestNotificationPermission = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.notifications.requestPermission();
-      const state = normalizeNotificationPermissionState(result?.state);
-      setNotificationPermissionState(state);
-      setNotificationStatusMessage(`系统通知权限状态：${state}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotificationStatusMessage(`请求系统通知权限失败：${message}`);
-    }
-  }, []);
-
-  const handleSendTestSystemNotification = useCallback(async () => {
-    try {
-      const result = await window.ipcRenderer.notifications.showSystem({
-        title: 'RedBox 通知测试',
-        body: '这是一条系统通知测试消息。',
-      });
-      if (!result?.success) {
-        throw new Error(result?.error || '系统通知发送失败');
-      }
-      setNotificationStatusMessage('系统通知已发送。');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setNotificationStatusMessage(`系统通知测试失败：${message}`);
-    }
-  }, []);
 
   const tabs = [
     { id: 'ai', label: 'AI 模型', icon: Cpu },
@@ -4477,11 +4419,7 @@ export function Settings({
                 setFormData={setFormData}
                 notificationSettings={notificationSettings}
                 setNotificationSettings={setNotificationSettings}
-                notificationPermissionState={notificationPermissionState}
-                notificationStatusMessage={notificationStatusMessage}
                 handleTestNotificationSound={handleTestNotificationSound}
-                handleRequestNotificationPermission={handleRequestNotificationPermission}
-                handleSendTestSystemNotification={handleSendTestSystemNotification}
                 handlePickWorkspaceDir={handlePickWorkspaceDir}
                 handleResetWorkspaceDir={handleResetWorkspaceDir}
                 handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
