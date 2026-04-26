@@ -67,7 +67,9 @@ pub fn build_tool_registry_plan_for_session(
     runtime_mode: &str,
     session_id: Option<&str>,
 ) -> ToolRegistryPlan {
-    let metadata = session_metadata(store, session_id);
+    let raw_metadata = session_metadata(store, session_id);
+    let effective_metadata = effective_member_runtime_metadata(store, raw_metadata);
+    let metadata = effective_metadata.as_ref().or(raw_metadata);
     let internal_tool_names = base_tool_names_for_metadata(runtime_mode, metadata);
     let skill_state =
         build_skill_runtime_state(&store.skills, runtime_mode, metadata, &internal_tool_names);
@@ -76,17 +78,59 @@ pub fn build_tool_registry_plan_for_session(
         .iter()
         .map(|skill| skill.name.clone())
         .collect::<Vec<_>>();
+    let apply_member_tool_policy = should_apply_member_tool_policy(store, metadata);
+    let allowed_tool_names = if apply_member_tool_policy {
+        &skill_state.allowed_tools
+    } else {
+        &internal_tool_names
+    };
     build_tool_registry_plan(ToolRegistryPlanParams {
         runtime_mode,
         session_id,
         session_metadata: metadata,
         active_skills: &active_skills,
-        allowed_tool_names: Some(&skill_state.allowed_tools),
+        allowed_tool_names: Some(allowed_tool_names),
         task_intent: metadata
             .and_then(|item| item.get("taskIntent"))
             .and_then(Value::as_str),
         max_direct_app_cli_actions: None,
     })
+}
+
+fn effective_member_runtime_metadata<'a>(
+    store: &AppStore,
+    metadata: Option<&'a Value>,
+) -> Option<Value> {
+    let metadata = metadata?;
+    let has_member_skill = metadata
+        .get("memberSkillRef")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !has_member_skill
+        || crate::member_skill::member_feature_flag_enabled_for_store(
+            store,
+            "memberRuntimeOverlay",
+            true,
+        )
+    {
+        return None;
+    }
+    let mut object = metadata.as_object()?.clone();
+    crate::member_skill::detach_member_skill_metadata(&mut object);
+    Some(Value::Object(object))
+}
+
+fn should_apply_member_tool_policy(store: &AppStore, metadata: Option<&Value>) -> bool {
+    let has_member_skill = metadata
+        .and_then(|value| value.get("memberSkillRef"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !has_member_skill {
+        return true;
+    }
+    crate::member_skill::member_feature_flag_enabled_for_store(store, "memberToolPolicy", true)
 }
 
 pub fn build_tool_registry_plan_for_turn_context(context: &RedboxTurnContext) -> ToolRegistryPlan {

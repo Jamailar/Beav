@@ -50,13 +50,15 @@ pub(crate) fn interactive_runtime_context_bundle(
         advisor_context_section,
         host_runtime_context_section,
     ) = with_store(state, |store| {
-        let metadata = session_id.and_then(|id| {
+        let raw_metadata = session_id.and_then(|id| {
             store
                 .chat_sessions
                 .iter()
                 .find(|item| item.id == id)
                 .and_then(|item| item.metadata.as_ref())
         });
+        let effective_metadata = effective_member_runtime_metadata(&store, raw_metadata);
+        let metadata = effective_metadata.as_ref().or(raw_metadata);
         let base_tools = base_tool_names_for_session_metadata(runtime_mode, metadata);
         let resolved_skills = resolve_skill_set(&store.skills, runtime_mode, metadata, &base_tools);
         let skill_prompt = build_skill_prompt_bundle(&resolved_skills);
@@ -362,6 +364,30 @@ Host runtime context: {}\n{}",
             &fallback,
         ),
     )
+}
+
+fn effective_member_runtime_metadata(
+    store: &crate::AppStore,
+    metadata: Option<&Value>,
+) -> Option<Value> {
+    let metadata = metadata?;
+    let has_member_skill = metadata
+        .get("memberSkillRef")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !has_member_skill
+        || crate::member_skill::member_feature_flag_enabled_for_store(
+            store,
+            "memberRuntimeOverlay",
+            true,
+        )
+    {
+        return None;
+    }
+    let mut object = metadata.as_object()?.clone();
+    crate::member_skill::detach_member_skill_metadata(&mut object);
+    Some(Value::Object(object))
 }
 
 pub(crate) fn interactive_runtime_system_prompt(

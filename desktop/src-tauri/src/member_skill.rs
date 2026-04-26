@@ -36,6 +36,71 @@ const MEMBER_SKILL_REQUIRED_JSON_FILES: &[&str] = &[
     "workflow.json",
 ];
 
+pub(crate) fn member_feature_flag_enabled(
+    settings: &Value,
+    flag_name: &str,
+    default_value: bool,
+) -> bool {
+    let flag_names = member_feature_flag_names(flag_name);
+    for key in &flag_names {
+        if let Some(value) = settings.get(key).and_then(Value::as_bool) {
+            return value;
+        }
+    }
+    for container_key in ["memberSkillFlags", "featureFlags", "features"] {
+        if let Some(object) = settings.get(container_key).and_then(Value::as_object) {
+            for key in &flag_names {
+                if let Some(value) = object.get(key).and_then(Value::as_bool) {
+                    return value;
+                }
+            }
+        }
+    }
+    default_value
+}
+
+pub(crate) fn member_feature_flag_enabled_for_store(
+    store: &AppStore,
+    flag_name: &str,
+    default_value: bool,
+) -> bool {
+    member_feature_flag_enabled(&store.settings, flag_name, default_value)
+}
+
+fn member_feature_flag_names(flag_name: &str) -> Vec<String> {
+    let mut names = vec![flag_name.to_string()];
+    match flag_name {
+        "memberSkillDistillation" => names.extend(
+            [
+                "member_skill_distillation",
+                "member_skill_distillation_enabled",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        ),
+        "memberRuntimeOverlay" => names.extend(
+            ["member_runtime_overlay", "member_runtime_overlay_enabled"]
+                .into_iter()
+                .map(str::to_string),
+        ),
+        "memberToolPolicy" => names.extend(
+            ["member_tool_policy", "member_tool_policy_enabled"]
+                .into_iter()
+                .map(str::to_string),
+        ),
+        "memberSkillAutoRefresh" => names.extend(
+            [
+                "member_skill_auto_refresh",
+                "member_skill_auto_refresh_enabled",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        ),
+        _ => {}
+    }
+    names
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MemberSkillPublishResult {
     pub skill_name: String,
@@ -48,6 +113,9 @@ pub(crate) struct MemberSkillPublishResult {
 }
 
 pub(crate) fn advisor_member_skill_ref(store: &AppStore, advisor_id: &str) -> Option<String> {
+    if !member_feature_flag_enabled_for_store(store, "memberRuntimeOverlay", true) {
+        return None;
+    }
     store
         .advisors
         .iter()
@@ -55,6 +123,15 @@ pub(crate) fn advisor_member_skill_ref(store: &AppStore, advisor_id: &str) -> Op
         .and_then(|advisor| advisor.member_skill_ref.clone())
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
+}
+
+pub(crate) fn detach_member_skill_metadata(metadata: &mut Map<String, Value>) {
+    metadata.remove("memberSkillRef");
+    metadata.remove("memberSkillName");
+    metadata.remove("activeSkills");
+    metadata.remove("skillNames");
+    metadata.remove("skills");
+    metadata.remove("sessionSkillState");
 }
 
 pub(crate) fn attach_member_skill_metadata(
@@ -111,7 +188,15 @@ pub(crate) fn publish_member_skill_for_advisor(
     let package_dir = workspace
         .join("skills")
         .join(slug_from_relative_path(&skill_name));
-    let should_promote = should_promote_member_skill_immediately(&advisor, &package_dir);
+    let auto_refresh = with_store(state, |store| {
+        Ok(member_feature_flag_enabled_for_store(
+            &store,
+            "memberSkillAutoRefresh",
+            false,
+        ))
+    })?;
+    let should_promote =
+        should_promote_member_skill_immediately(&advisor, &package_dir) || auto_refresh;
     if should_promote {
         write_member_skill_package(&package_dir, &artifacts)?;
         write_member_skill_package(&package_dir.join("versions").join(&version), &artifacts)?;
