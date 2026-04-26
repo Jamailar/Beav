@@ -104,6 +104,19 @@ pub(crate) struct DocumentBlockHit {
     pub retrieval_lanes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IndexedKnowledgeDocument {
+    pub path: String,
+    pub absolute_path: String,
+    pub name: String,
+    pub extension: Option<String>,
+    pub title: Option<String>,
+    pub language: Option<String>,
+    pub size_bytes: u64,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct BuildSourceBlocksResult {
     pub blocks: Vec<DocumentBlockRecord>,
@@ -314,6 +327,96 @@ pub(crate) fn count_blocks_for_source(
         |row| row.get(0),
     )
     .map_err(|error| error.to_string())
+}
+
+pub(crate) fn list_documents_for_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+    pattern: &Pattern,
+    limit: usize,
+) -> Result<Vec<IndexedKnowledgeDocument>, String> {
+    let conn = connection(state)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT absolute_path, relative_path, file_extension, title, language, updated_at
+            FROM knowledge_canonical_documents
+            WHERE source_id = ?1
+            ORDER BY relative_path COLLATE NOCASE ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(params![source_id], row_to_indexed_document)
+        .map_err(|error| error.to_string())?;
+    let mut documents = collect_indexed_document_rows(rows, pattern, limit)?;
+    if !documents.is_empty() {
+        return Ok(documents);
+    }
+
+    let mut fallback_stmt = conn
+        .prepare(
+            r#"
+            SELECT absolute_path, relative_path, file_extension, title, language, MAX(updated_at)
+            FROM knowledge_document_blocks
+            WHERE source_id = ?1
+            GROUP BY absolute_path, relative_path, file_extension, title, language
+            ORDER BY relative_path COLLATE NOCASE ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let fallback_rows = fallback_stmt
+        .query_map(params![source_id], row_to_indexed_document)
+        .map_err(|error| error.to_string())?;
+    documents = collect_indexed_document_rows(fallback_rows, pattern, limit)?;
+    Ok(documents)
+}
+
+fn collect_indexed_document_rows<I>(
+    rows: I,
+    pattern: &Pattern,
+    limit: usize,
+) -> Result<Vec<IndexedKnowledgeDocument>, String>
+where
+    I: Iterator<Item = Result<IndexedKnowledgeDocument, rusqlite::Error>>,
+{
+    let mut documents = Vec::new();
+    for row in rows {
+        let document = row.map_err(|error| error.to_string())?;
+        if !pattern.matches_path_with(Path::new(&document.path), glob_match_options()) {
+            continue;
+        }
+        documents.push(document);
+        if documents.len() >= limit {
+            break;
+        }
+    }
+    Ok(documents)
+}
+
+fn row_to_indexed_document(
+    row: &rusqlite::Row<'_>,
+) -> Result<IndexedKnowledgeDocument, rusqlite::Error> {
+    let absolute_path: String = row.get(0)?;
+    let path: String = row.get(1)?;
+    let size_bytes = fs::metadata(&absolute_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let name = Path::new(&path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(path.as_str())
+        .to_string();
+    Ok(IndexedKnowledgeDocument {
+        path,
+        absolute_path,
+        name,
+        extension: row.get(2)?,
+        title: row.get(3)?,
+        language: row.get(4)?,
+        size_bytes,
+        updated_at: row.get(5)?,
+    })
 }
 
 pub(crate) fn rebuild_fts_index(state: &State<'_, AppState>) -> Result<(), String> {

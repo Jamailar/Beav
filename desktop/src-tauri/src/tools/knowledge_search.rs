@@ -52,11 +52,44 @@ pub fn execute_glob(
     arguments: &Value,
 ) -> Result<Value, String> {
     let scope = resolve_scope(state, session_id, arguments)?;
+    let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
+    let pattern_text = list_pattern_for_scope(&scope, arguments)?;
+    let pattern = compile_pattern(&pattern_text)?;
+    if let Some(source_id) = scope.source_id.as_deref() {
+        let indexed_count = document_blocks::count_blocks_for_source(state, source_id)?;
+        if indexed_count > 0 {
+            let documents =
+                document_blocks::list_documents_for_source(state, source_id, &pattern, limit)?;
+            let total_matches = documents.len();
+            return Ok(json!({
+                "scopeKind": scope_kind_label(&scope),
+                "memberId": scope.member_id,
+                "memberName": scope.member_name,
+                "advisorId": scope.advisor_id,
+                "advisorName": scope.advisor_name,
+                "language": scope.language,
+                "languageDetectionStatus": scope.language_detection_status,
+                "sourceId": scope.source_id,
+                "sourceName": scope.source_name,
+                "rootPath": scoped_root_path(&scope),
+                "pattern": pattern_text,
+                "searchMode": "indexed-documents",
+                "totalMatches": total_matches,
+                "files": documents.into_iter().map(|item| {
+                    json!({
+                        "path": item.path,
+                        "name": item.name,
+                        "title": item.title,
+                        "language": item.language,
+                        "extension": item.extension,
+                        "sizeBytes": item.size_bytes,
+                        "updatedAt": item.updated_at
+                    })
+                }).collect::<Vec<_>>()
+            }));
+        }
+    }
     if matches!(scope.kind, KnowledgeScopeKind::DocumentSource) {
-        let root_path = scoped_root_path(&scope);
-        let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
-        let pattern_text = list_pattern_for_scope(&scope, arguments)?;
-        let pattern = compile_pattern(&pattern_text)?;
         let mut matched = collect_matching_files(&scope.root, &pattern)?;
         matched.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
         let total_matches = matched.len();
@@ -71,8 +104,9 @@ pub fn execute_glob(
             "languageDetectionStatus": scope.language_detection_status,
             "sourceId": scope.source_id,
             "sourceName": scope.source_name,
-            "rootPath": root_path,
+            "rootPath": scoped_root_path(&scope),
             "pattern": pattern_text,
+            "searchMode": "filesystem-fallback",
             "totalMatches": total_matches,
             "files": matched.into_iter().map(|item| {
                 json!({
@@ -85,9 +119,6 @@ pub fn execute_glob(
             }).collect::<Vec<_>>()
         }));
     }
-    let limit = parse_usize(arguments, "limit", DEFAULT_GLOB_LIMIT, MAX_GLOB_LIMIT);
-    let pattern_text = list_pattern_for_scope(&scope, arguments)?;
-    let pattern = compile_pattern(&pattern_text)?;
     let mut matched = collect_matching_files(&scope.root, &pattern)?;
     matched.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     let total_matches = matched.len();
@@ -105,6 +136,7 @@ pub fn execute_glob(
         "sourceName": scope.source_name,
         "rootPath": scope.root.display().to_string(),
         "pattern": pattern_text,
+        "searchMode": "filesystem-fallback",
         "totalMatches": total_matches,
         "files": matched.into_iter().map(|item| {
             json!({
