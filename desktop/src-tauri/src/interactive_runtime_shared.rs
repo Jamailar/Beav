@@ -509,6 +509,7 @@ fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &st
 
 fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
     match runtime_mode {
+        "redclaw" => load_redbox_prompt("runtime/agents/redclaw/base.txt").unwrap_or_default(),
         "image-generation" => {
             load_redbox_prompt("runtime/agents/image_generation/base.txt").unwrap_or_default()
         }
