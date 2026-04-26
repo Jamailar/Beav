@@ -18,6 +18,10 @@ interface Advisor {
     memberSkillVersion?: string;
     memberSkillLastDistilledAt?: string;
     memberSkillLastError?: string;
+    memberSkillCandidateVersion?: string;
+    memberSkillCandidatePath?: string;
+    memberSkillCandidateCreatedAt?: string;
+    memberSkillCandidateSourceEvent?: string;
     detectedKnowledgeLanguage?: string;
     languageDetectionStatus?: string;
     languageConfidence?: number;
@@ -574,6 +578,31 @@ export function Advisors({
         }
     };
 
+    const handlePromoteMemberSkillCandidate = async (advisor: Advisor) => {
+        try {
+            await window.ipcRenderer.advisors.promoteMemberSkillCandidate({
+                advisorId: advisor.id,
+                candidateVersion: advisor.memberSkillCandidateVersion,
+            });
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to promote member skill candidate:', e);
+        }
+    };
+
+    const handleDiscardMemberSkillCandidate = async (advisor: Advisor) => {
+        try {
+            await window.ipcRenderer.advisors.discardMemberSkillCandidate({ advisorId: advisor.id });
+            const list = await loadAdvisors();
+            const updated = list.find((item) => item.id === advisor.id);
+            if (updated) setSelectedAdvisor(updated);
+        } catch (e) {
+            console.error('Failed to discard member skill candidate:', e);
+        }
+    };
+
     return (
         <div className="flex h-full min-h-0">
             {!hideAdvisorList && (
@@ -636,7 +665,7 @@ export function Advisors({
                                                 "text-[11px] truncate",
                                                 advisor.memberSkillStatus === 'failed' ? "text-red-500" : "text-text-tertiary"
                                             )}>
-                                                成员技能：{advisor.memberSkillRef ? advisor.memberSkillStatus || 'ready' : '待蒸馏'}
+                                                成员技能：{advisor.memberSkillCandidateVersion ? '有候选待确认' : advisor.memberSkillRef ? advisor.memberSkillStatus || 'ready' : '待蒸馏'}
                                             </div>
                                         </div>
                                     </div>
@@ -783,6 +812,8 @@ export function Advisors({
                                 onOptimizePrompt={() => void handleOptimizePrompt(selectedAdvisor)}
                                 onUploadKnowledge={() => void handleUploadKnowledge(selectedAdvisor.id)}
                                 onDeleteKnowledge={(fileName) => void handleDeleteKnowledge(selectedAdvisor.id, fileName)}
+                                onPromoteMemberSkillCandidate={() => void handlePromoteMemberSkillCandidate(selectedAdvisor)}
+                                onDiscardMemberSkillCandidate={() => void handleDiscardMemberSkillCandidate(selectedAdvisor)}
                                 onEdit={() => handleEdit(selectedAdvisor)}
                                 onDelete={() => void handleDelete(selectedAdvisor.id)}
                                 onClose={() => setIsSettingsDrawerOpen(false)}
@@ -958,6 +989,8 @@ function AdvisorSettingsPanel({
     onOptimizePrompt,
     onUploadKnowledge,
     onDeleteKnowledge,
+    onPromoteMemberSkillCandidate,
+    onDiscardMemberSkillCandidate,
     onEdit,
     onDelete,
     onClose,
@@ -971,6 +1004,8 @@ function AdvisorSettingsPanel({
     onOptimizePrompt: () => void;
     onUploadKnowledge: () => void;
     onDeleteKnowledge: (fileName: string) => void;
+    onPromoteMemberSkillCandidate: () => void;
+    onDiscardMemberSkillCandidate: () => void;
     onEdit: () => void;
     onDelete: () => void;
     onClose: () => void;
@@ -1009,6 +1044,54 @@ function AdvisorSettingsPanel({
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 custom-scrollbar">
+                <section className="rounded-2xl border border-black/[0.04] bg-white/55 p-4 shadow-[0_10px_30px_-22px_rgba(0,0,0,0.25)]">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <h3 className="text-sm font-medium text-text-primary">成员技能</h3>
+                            <p className="mt-1 truncate text-xs text-text-tertiary">
+                                {advisor.memberSkillRef || '尚未生成成员技能'}
+                            </p>
+                        </div>
+                        <span className={clsx(
+                            "shrink-0 rounded-full px-2 py-1 text-[10px] font-medium",
+                            advisor.memberSkillLastError ? "bg-red-50 text-red-500" : "bg-accent-primary/10 text-accent-primary"
+                        )}>
+                            {advisor.memberSkillCandidateVersion ? '候选待确认' : advisor.memberSkillStatus || 'pending'}
+                        </span>
+                    </div>
+                    {advisor.memberSkillCandidateVersion && (
+                        <div className="mt-3 rounded-2xl border border-accent-primary/15 bg-white/70 p-3">
+                            <div className="text-xs font-medium text-text-primary">
+                                候选版本：{advisor.memberSkillCandidateVersion}
+                            </div>
+                            <div className="mt-1 text-[11px] text-text-tertiary">
+                                来源：{advisor.memberSkillCandidateSourceEvent || '知识更新'} · {advisor.memberSkillCandidateCreatedAt || '刚刚'}
+                            </div>
+                            <div className="mt-3 flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={onPromoteMemberSkillCandidate}
+                                    className="h-7 rounded-lg bg-accent-primary px-3 text-xs font-medium text-white hover:bg-accent-primary/90"
+                                >
+                                    发布候选
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onDiscardMemberSkillCandidate}
+                                    className="h-7 rounded-lg border border-black/10 bg-white/70 px-3 text-xs font-medium text-text-secondary hover:bg-white"
+                                >
+                                    丢弃
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {advisor.memberSkillLastError && (
+                        <div className="mt-3 rounded-2xl border border-red-100 bg-red-50/70 p-3 text-xs text-red-500">
+                            {advisor.memberSkillLastError}
+                        </div>
+                    )}
+                </section>
+
                 <section className="rounded-2xl border border-black/[0.04] bg-white/55 p-4 shadow-[0_10px_30px_-22px_rgba(0,0,0,0.25)]">
                     <div className="mb-2 flex items-center justify-between gap-3">
                         <button

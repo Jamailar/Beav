@@ -384,6 +384,26 @@ pub(crate) fn load_advisors_from_fs(advisors_root: &Path) -> Vec<AdvisorRecord> 
                 .or_else(|| config.get("member_skill_last_error"))
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string),
+            member_skill_candidate_version: config
+                .get("memberSkillCandidateVersion")
+                .or_else(|| config.get("member_skill_candidate_version"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            member_skill_candidate_path: config
+                .get("memberSkillCandidatePath")
+                .or_else(|| config.get("member_skill_candidate_path"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            member_skill_candidate_created_at: config
+                .get("memberSkillCandidateCreatedAt")
+                .or_else(|| config.get("member_skill_candidate_created_at"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            member_skill_candidate_source_event: config
+                .get("memberSkillCandidateSourceEvent")
+                .or_else(|| config.get("member_skill_candidate_source_event"))
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
             detected_knowledge_language: config
                 .get("detectedKnowledgeLanguage")
                 .or_else(|| config.get("detected_knowledge_language"))

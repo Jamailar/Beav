@@ -30,12 +30,13 @@ last_updated: 2026-04-26
 - 成员记录已经扩展 `memberSkillRef / memberSkillStatus / memberSkillVersion / memberSkillLastDistilledAt / memberSkillLastError / detectedKnowledgeLanguage / languageDetectionStatus / languageConfidence`。
 - advisor 单聊创建、creative chat 成员发言会话已自动注入 `memberSkillRef` 并写入 `activeSkills/sessionSkillState`，让 runtime 使用对应成员技能。
 - 团队页已展示成员技能状态，并在创建新 advisor 单聊时显式携带成员技能 metadata。
+- 已补上候选版本双轨：已有技能的成员新增/删除知识后先生成 `distillation_candidates/<version>`，团队页可发布或丢弃候选。
+- 成员技能包已补齐 `versions/<version>`、`heuristics.jsonl`、`workflow.json`、`examples/`、`scripts/`，当前版本与候选版本都使用同一 package schema。
 
 仍未完成的部分：
 
-- `distillation_candidate`、人工审核、diff、回滚尚未实现；当前第一版为“自动刷新当前技能包”。
-- `heuristics.jsonl / workflow.json / examples / scripts` 还没有自动生成结构化内容，当前先生成 `SKILL.md / member.json / persona.json / retrieval_scope.json / tool_policy.json / references/knowledge-evidence.md`。
-- 文件 catalog 索引、语言感知搜索工具与 `tool_policy.json` 对 runtime tool set 的强约束仍属于后续阶段。
+- 候选版本 diff 可视化和一键回滚到历史 `versions/<version>` 尚未做 UI。
+- 文件 catalog 索引、语言感知搜索工具仍属于后续阶段。
 
 ## 2. 当前系统基础
 

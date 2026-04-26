@@ -1,6 +1,6 @@
 use serde_json::{json, Map, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use tauri::State;
 
@@ -24,6 +24,7 @@ pub(crate) struct MemberSkillPublishResult {
     pub package_path: String,
     pub language: String,
     pub refreshed_catalog: bool,
+    pub candidate: bool,
 }
 
 pub(crate) fn advisor_member_skill_ref(store: &AppStore, advisor_id: &str) -> Option<String> {
@@ -77,7 +78,7 @@ pub(crate) fn publish_member_skill_for_advisor(
     let language_profile = detect_advisor_language(state, &advisor);
     let knowledge_evidence = collect_member_skill_knowledge(state, &advisor)?;
     let source_summary = member_source_summary(&advisor, source_event);
-    let skill_body = render_member_skill_body(
+    let artifacts = build_member_skill_artifacts(
         &advisor,
         &skill_name,
         &version,
@@ -90,76 +91,44 @@ pub(crate) fn publish_member_skill_for_advisor(
     let package_dir = workspace
         .join("skills")
         .join(slug_from_relative_path(&skill_name));
-    fs::create_dir_all(package_dir.join("references")).map_err(|error| error.to_string())?;
-    fs::write(package_dir.join("SKILL.md"), skill_body).map_err(|error| error.to_string())?;
-    fs::write(
-        package_dir.join("member.json"),
-        serde_json::to_string_pretty(&json!({
-            "advisorId": advisor.id,
-            "advisorName": advisor.name,
-            "sourceEvent": source_event,
-            "sourceSummary": source_summary,
-            "skillName": skill_name,
-            "version": version,
-            "language": language_profile.language,
-            "languageDetectionStatus": language_profile.status,
-            "languageConfidence": language_profile.confidence,
-            "knowledgeFileCount": advisor.knowledge_files.len(),
-            "youtubeChannel": advisor.youtube_channel,
-            "updatedAt": now_iso()
-        }))
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    fs::write(
-        package_dir.join("persona.json"),
-        serde_json::to_string_pretty(&json!({
-            "name": advisor.name,
-            "avatar": advisor.avatar,
-            "personality": advisor.personality,
-            "systemPrompt": advisor.system_prompt
-        }))
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    fs::write(
-        package_dir.join("retrieval_scope.json"),
-        serde_json::to_string_pretty(&json!({
-            "advisorId": advisor.id,
-            "knowledgeFiles": advisor.knowledge_files,
-            "youtubeChannel": advisor.youtube_channel,
-            "maxInlineEvidenceChars": 6000,
-            "policy": "Prefer advisor-bound knowledge evidence before generic workspace knowledge."
-        }))
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    fs::write(
-        package_dir.join("tool_policy.json"),
-        serde_json::to_string_pretty(&json!({
-            "allowedTools": ["knowledge_search", "redbox_fs"],
-            "blockedBehaviors": [
-                "Do not invent source facts that are absent from advisor knowledge.",
-                "Do not speak as a generic assistant when the advisor identity is active."
-            ]
-        }))
-        .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    fs::write(
-        package_dir.join("references").join("knowledge-evidence.md"),
-        render_knowledge_reference(&knowledge_evidence),
-    )
-    .map_err(|error| error.to_string())?;
+    let should_promote = should_promote_member_skill_immediately(&advisor, &package_dir);
+    if should_promote {
+        write_member_skill_package(&package_dir, &artifacts)?;
+        write_member_skill_package(&package_dir.join("versions").join(&version), &artifacts)?;
+    } else {
+        write_member_skill_package(
+            &package_dir.join("distillation_candidates").join(&version),
+            &artifacts,
+        )?;
+    }
 
     let distilled_at = now_iso();
     with_store_mut(state, |store| {
         if let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) {
-            advisor.member_skill_ref = Some(skill_name.clone());
-            advisor.member_skill_status = Some("ready".to_string());
-            advisor.member_skill_version = Some(version.clone());
-            advisor.member_skill_last_distilled_at = Some(distilled_at.clone());
-            advisor.member_skill_last_error = None;
+            if should_promote {
+                advisor.member_skill_ref = Some(skill_name.clone());
+                advisor.member_skill_status = Some("ready".to_string());
+                advisor.member_skill_version = Some(version.clone());
+                advisor.member_skill_last_distilled_at = Some(distilled_at.clone());
+                advisor.member_skill_last_error = None;
+                advisor.member_skill_candidate_version = None;
+                advisor.member_skill_candidate_path = None;
+                advisor.member_skill_candidate_created_at = None;
+                advisor.member_skill_candidate_source_event = None;
+            } else {
+                advisor.member_skill_status = Some("ready".to_string());
+                advisor.member_skill_last_error = None;
+                advisor.member_skill_candidate_version = Some(version.clone());
+                advisor.member_skill_candidate_path = Some(
+                    package_dir
+                        .join("distillation_candidates")
+                        .join(&version)
+                        .display()
+                        .to_string(),
+                );
+                advisor.member_skill_candidate_created_at = Some(distilled_at.clone());
+                advisor.member_skill_candidate_source_event = Some(source_event.to_string());
+            }
             advisor.detected_knowledge_language = Some(language_profile.language.clone());
             advisor.language_detection_status = Some(language_profile.status.clone());
             advisor.language_confidence = Some(language_profile.confidence);
@@ -176,6 +145,100 @@ pub(crate) fn publish_member_skill_for_advisor(
         package_path: package_dir.display().to_string(),
         language: language_profile.language,
         refreshed_catalog,
+        candidate: !should_promote,
+    })
+}
+
+pub(crate) fn promote_member_skill_candidate(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+    candidate_version: Option<&str>,
+) -> Result<MemberSkillPublishResult, String> {
+    let advisor = with_store(state, |store| {
+        store
+            .advisors
+            .iter()
+            .find(|item| item.id == advisor_id)
+            .cloned()
+            .ok_or_else(|| "成员不存在".to_string())
+    })?;
+    let skill_name = advisor
+        .member_skill_ref
+        .clone()
+        .filter(|item| !item.trim().is_empty())
+        .unwrap_or_else(|| member_skill_name(&advisor));
+    let version = candidate_version
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .or(advisor.member_skill_candidate_version.clone())
+        .ok_or_else(|| "没有可发布的成员技能候选版本".to_string())?;
+    let package_dir = workspace_root(state)?
+        .join("skills")
+        .join(slug_from_relative_path(&skill_name));
+    let candidate_dir = package_dir.join("distillation_candidates").join(&version);
+    if !candidate_dir.join("SKILL.md").is_file() {
+        return Err(format!("成员技能候选不存在：{}", candidate_dir.display()));
+    }
+    copy_member_skill_dir(&candidate_dir, &package_dir)?;
+    copy_member_skill_dir(&candidate_dir, &package_dir.join("versions").join(&version))?;
+    let promoted_at = now_iso();
+    with_store_mut(state, |store| {
+        if let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) {
+            advisor.member_skill_ref = Some(skill_name.clone());
+            advisor.member_skill_status = Some("ready".to_string());
+            advisor.member_skill_version = Some(version.clone());
+            advisor.member_skill_last_distilled_at = Some(promoted_at.clone());
+            advisor.member_skill_last_error = None;
+            advisor.member_skill_candidate_version = None;
+            advisor.member_skill_candidate_path = None;
+            advisor.member_skill_candidate_created_at = None;
+            advisor.member_skill_candidate_source_event = None;
+            advisor.updated_at = now_iso();
+        }
+        Ok(())
+    })?;
+    let refreshed_catalog = refresh_skill_store_catalog(state)?;
+    Ok(MemberSkillPublishResult {
+        skill_name,
+        status: "ready".to_string(),
+        version,
+        package_path: package_dir.display().to_string(),
+        language: advisor
+            .detected_knowledge_language
+            .or(advisor.knowledge_language)
+            .unwrap_or_else(|| "中文".to_string()),
+        refreshed_catalog,
+        candidate: false,
+    })
+}
+
+pub(crate) fn discard_member_skill_candidate(
+    state: &State<'_, AppState>,
+    advisor_id: &str,
+) -> Result<(), String> {
+    let candidate_path = with_store(state, |store| {
+        store
+            .advisors
+            .iter()
+            .find(|item| item.id == advisor_id)
+            .map(|item| item.member_skill_candidate_path.clone())
+            .ok_or_else(|| "成员不存在".to_string())
+    })?;
+    if let Some(path) = candidate_path {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            fs::remove_dir_all(path).map_err(|error| error.to_string())?;
+        }
+    }
+    with_store_mut(state, |store| {
+        if let Some(advisor) = store.advisors.iter_mut().find(|item| item.id == advisor_id) {
+            advisor.member_skill_candidate_version = None;
+            advisor.member_skill_candidate_path = None;
+            advisor.member_skill_candidate_created_at = None;
+            advisor.member_skill_candidate_source_event = None;
+            advisor.updated_at = now_iso();
+        }
+        Ok(())
     })
 }
 
@@ -221,7 +284,42 @@ pub(crate) fn member_skill_result_value(result: &MemberSkillPublishResult) -> Va
         "version": result.version,
         "packagePath": result.package_path,
         "language": result.language,
-        "refreshedCatalog": result.refreshed_catalog
+        "refreshedCatalog": result.refreshed_catalog,
+        "candidate": result.candidate
+    })
+}
+
+fn should_promote_member_skill_immediately(advisor: &AdvisorRecord, package_dir: &Path) -> bool {
+    let Some(skill_ref) = advisor
+        .member_skill_ref
+        .as_ref()
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+    else {
+        return true;
+    };
+    if advisor.member_skill_status.as_deref() != Some("ready") {
+        return true;
+    }
+    if !package_dir.join("SKILL.md").is_file() {
+        return true;
+    }
+    if current_member_skill_source_kind(package_dir).as_deref() == Some("manual-profile")
+        && !advisor.knowledge_files.is_empty()
+    {
+        return true;
+    }
+    skill_ref != member_skill_name(advisor)
+}
+
+fn current_member_skill_source_kind(package_dir: &Path) -> Option<String> {
+    let member_json = fs::read_to_string(package_dir.join("member.json")).ok()?;
+    let parsed: Value = serde_json::from_str(&member_json).ok()?;
+    let summary = parsed.get("sourceSummary").and_then(Value::as_str)?;
+    summary.split(';').find_map(|part| {
+        part.trim()
+            .strip_prefix("sourceKind=")
+            .map(ToString::to_string)
     })
 }
 
@@ -248,6 +346,20 @@ struct LanguageProfile {
     language: String,
     status: String,
     confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+struct MemberSkillArtifacts {
+    skill_body: String,
+    member_json: String,
+    persona_json: String,
+    retrieval_scope_json: String,
+    tool_policy_json: String,
+    workflow_json: String,
+    heuristics_jsonl: String,
+    knowledge_reference: String,
+    example_readme: String,
+    script_readme: String,
 }
 
 fn detect_advisor_language(
@@ -333,6 +445,210 @@ fn collect_member_skill_knowledge(
 fn read_member_skill_sample(path: &Path, max_chars: usize) -> String {
     let content = fs::read_to_string(path).unwrap_or_default();
     content.chars().take(max_chars).collect::<String>()
+}
+
+fn build_member_skill_artifacts(
+    advisor: &AdvisorRecord,
+    skill_name: &str,
+    version: &str,
+    language: &str,
+    source_summary: &str,
+    evidence: &[(String, String)],
+) -> MemberSkillArtifacts {
+    let updated_at = now_iso();
+    MemberSkillArtifacts {
+        skill_body: render_member_skill_body(
+            advisor,
+            skill_name,
+            version,
+            language,
+            source_summary,
+            evidence,
+        ),
+        member_json: serde_json::to_string_pretty(&json!({
+            "advisorId": advisor.id,
+            "advisorName": advisor.name,
+            "sourceSummary": source_summary,
+            "skillName": skill_name,
+            "version": version,
+            "language": language,
+            "knowledgeFileCount": advisor.knowledge_files.len(),
+            "youtubeChannel": advisor.youtube_channel,
+            "updatedAt": updated_at
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        persona_json: serde_json::to_string_pretty(&json!({
+            "name": advisor.name,
+            "avatar": advisor.avatar,
+            "personality": advisor.personality,
+            "systemPrompt": advisor.system_prompt,
+            "preferredLanguage": language
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        retrieval_scope_json: serde_json::to_string_pretty(&json!({
+            "advisorId": advisor.id,
+            "knowledgeFiles": advisor.knowledge_files,
+            "youtubeChannel": advisor.youtube_channel,
+            "languagePriority": [language, "中文", "English"],
+            "maxInlineEvidenceChars": 6000,
+            "policy": "Prefer advisor-bound knowledge evidence before generic workspace knowledge.",
+            "toolCallHint": {
+                "tool": "redbox_fs",
+                "scope": "knowledge",
+                "advisorId": advisor.id
+            }
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        tool_policy_json: serde_json::to_string_pretty(&json!({
+            "allowedTools": ["redbox_fs"],
+            "allowedKnowledgeActions": ["list", "search", "read"],
+            "approval": {
+                "readOnlyKnowledge": "auto",
+                "workspaceWrite": "require_approval",
+                "externalNetwork": "require_approval"
+            },
+            "blockedBehaviors": [
+                "Do not invent source facts that are absent from advisor knowledge.",
+                "Do not speak as a generic assistant when the advisor identity is active.",
+                "Do not act as another member unless the runtime explicitly changes memberSkillRef."
+            ]
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        workflow_json: serde_json::to_string_pretty(&json!({
+            "defaultAnswerFlow": [
+                "Identify the user's concrete request.",
+                "Search advisor-bound knowledge when the answer depends on source facts.",
+                "Answer in the member's voice with concise evidence and next actions.",
+                "State uncertainty only when source coverage changes the recommendation."
+            ],
+            "discussionFlow": [
+                "Stay within this member's role.",
+                "Respond to the previous speaker's point.",
+                "Add a distinct angle instead of repeating the room consensus."
+            ]
+        }))
+        .unwrap_or_else(|_| "{}".to_string()),
+        heuristics_jsonl: render_heuristics_jsonl(advisor, language),
+        knowledge_reference: render_knowledge_reference(evidence),
+        example_readme: format!(
+            "# Examples\n\nUse this folder for reviewed sample replies from {}. Runtime generation does not require examples to exist.\n",
+            advisor.name
+        ),
+        script_readme: "# Scripts\n\nOptional local helper scripts for this member skill package.\n"
+            .to_string(),
+    }
+}
+
+fn write_member_skill_package(path: &Path, artifacts: &MemberSkillArtifacts) -> Result<(), String> {
+    fs::create_dir_all(path.join("references")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(path.join("examples")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(path.join("scripts")).map_err(|error| error.to_string())?;
+    fs::write(path.join("SKILL.md"), &artifacts.skill_body).map_err(|error| error.to_string())?;
+    fs::write(path.join("member.json"), &artifacts.member_json)
+        .map_err(|error| error.to_string())?;
+    fs::write(path.join("persona.json"), &artifacts.persona_json)
+        .map_err(|error| error.to_string())?;
+    fs::write(
+        path.join("retrieval_scope.json"),
+        &artifacts.retrieval_scope_json,
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(path.join("tool_policy.json"), &artifacts.tool_policy_json)
+        .map_err(|error| error.to_string())?;
+    fs::write(path.join("workflow.json"), &artifacts.workflow_json)
+        .map_err(|error| error.to_string())?;
+    fs::write(path.join("heuristics.jsonl"), &artifacts.heuristics_jsonl)
+        .map_err(|error| error.to_string())?;
+    fs::write(
+        path.join("references").join("knowledge-evidence.md"),
+        &artifacts.knowledge_reference,
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(
+        path.join("examples").join("README.md"),
+        &artifacts.example_readme,
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(
+        path.join("scripts").join("README.md"),
+        &artifacts.script_readme,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn copy_member_skill_dir(source: &Path, target: &Path) -> Result<(), String> {
+    if target.exists() {
+        for file_name in [
+            "SKILL.md",
+            "member.json",
+            "persona.json",
+            "retrieval_scope.json",
+            "tool_policy.json",
+            "workflow.json",
+            "heuristics.jsonl",
+        ] {
+            let _ = fs::remove_file(target.join(file_name));
+        }
+        let _ = fs::remove_dir_all(target.join("references"));
+        let _ = fs::remove_dir_all(target.join("examples"));
+        let _ = fs::remove_dir_all(target.join("scripts"));
+    }
+    fs::create_dir_all(target).map_err(|error| error.to_string())?;
+    for file_name in [
+        "SKILL.md",
+        "member.json",
+        "persona.json",
+        "retrieval_scope.json",
+        "tool_policy.json",
+        "workflow.json",
+        "heuristics.jsonl",
+    ] {
+        fs::copy(source.join(file_name), target.join(file_name))
+            .map_err(|error| error.to_string())?;
+    }
+    copy_member_skill_subdir(source, target, "references")?;
+    copy_member_skill_subdir(source, target, "examples")?;
+    copy_member_skill_subdir(source, target, "scripts")?;
+    Ok(())
+}
+
+fn copy_member_skill_subdir(source: &Path, target: &Path, name: &str) -> Result<(), String> {
+    let source_dir = source.join(name);
+    let target_dir = target.join(name);
+    fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
+    let Ok(entries) = fs::read_dir(source_dir) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            fs::copy(&path, target_dir.join(entry.file_name()))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn render_heuristics_jsonl(advisor: &AdvisorRecord, language: &str) -> String {
+    [
+        json!({
+            "kind": "identity",
+            "rule": format!("Answer as {}, preserving the member role and voice.", advisor.name)
+        }),
+        json!({
+            "kind": "retrieval",
+            "rule": "Search advisor-bound knowledge before making factual claims from imported files or videos."
+        }),
+        json!({
+            "kind": "language",
+            "rule": format!("Use {} unless the user explicitly requests another language.", language)
+        }),
+    ]
+    .into_iter()
+    .map(|value| serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string()))
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 fn render_member_skill_body(

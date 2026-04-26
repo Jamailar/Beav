@@ -1,6 +1,6 @@
 use crate::member_skill::{
-    mark_member_skill_failed, member_skill_result_value, publish_member_skill_for_advisor,
-    remove_member_skill_package,
+    discard_member_skill_candidate, mark_member_skill_failed, member_skill_result_value,
+    promote_member_skill_candidate, publish_member_skill_for_advisor, remove_member_skill_package,
 };
 use crate::persistence::{ensure_store_hydrated_for_advisors, with_store, with_store_mut};
 use crate::*;
@@ -279,6 +279,8 @@ pub fn handle_advisor_channel(
             | "advisors:optimize-prompt"
             | "advisors:optimize-prompt-deep"
             | "advisors:generate-persona"
+            | "advisors:promote-member-skill-candidate"
+            | "advisors:discard-member-skill-candidate"
             | "advisors:select-avatar"
             | "advisors:youtube-runner-status"
             | "advisors:fetch-youtube-info"
@@ -322,6 +324,10 @@ pub fn handle_advisor_channel(
                         member_skill_version: None,
                         member_skill_last_distilled_at: None,
                         member_skill_last_error: None,
+                        member_skill_candidate_version: None,
+                        member_skill_candidate_path: None,
+                        member_skill_candidate_created_at: None,
+                        member_skill_candidate_source_event: None,
                         detected_knowledge_language: None,
                         language_detection_status: None,
                         language_confidence: None,
@@ -526,6 +532,31 @@ pub fn handle_advisor_channel(
                     "advisor-knowledge-delete",
                 )
                 .map_err(|error| mark_member_skill_failed(state, &advisor_id, &error));
+                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                Ok(result)
+            }
+            "advisors:promote-member-skill-candidate" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let candidate_version = payload_string(payload, "candidateVersion")
+                    .or_else(|| payload_string(payload, "version"));
+                let result =
+                    promote_member_skill_candidate(state, &advisor_id, candidate_version.as_deref())
+                        .map(|result| {
+                            json!({ "success": true, "memberSkill": member_skill_result_value(&result) })
+                        })
+                        .unwrap_or_else(|error| json!({ "success": false, "error": error }));
+                let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                Ok(result)
+            }
+            "advisors:discard-member-skill-candidate" => {
+                let advisor_id = payload_string(payload, "advisorId")
+                    .or_else(|| payload_string(payload, "id"))
+                    .unwrap_or_default();
+                let result = discard_member_skill_candidate(state, &advisor_id)
+                    .map(|_| json!({ "success": true }))
+                    .unwrap_or_else(|error| json!({ "success": false, "error": error }));
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
                 Ok(result)
             }
