@@ -14,7 +14,7 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external ACP process runner, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented across runtime contract, bridge, MCP, and Workboard controls: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, and lightweight UI actions.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external adapter boundary, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented across runtime contract, bridge, MCP, and Workboard controls: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, and lightweight UI actions.
 ---
 
 # ACP Team Workboard Collaboration Plan
@@ -265,18 +265,18 @@ RedConvert already has several foundations:
 - `desktop/src/pages/Workboard.tsx`: current RedClaw task center.
 - `desktop/src/runtime/runtimeEventStream.ts`: unified runtime event stream.
 
-### 4.2 Gaps
+### 4.2 Original Gaps And Current Resolution
 
-The missing pieces are product-level collaboration concepts:
+The original missing pieces were product-level collaboration concepts. The implemented baseline resolves them as follows:
 
-- No persistent `team member` runtime object.
-- No durable mailbox between members.
-- No member-owned task board separate from RedClaw scheduled tasks.
-- No periodic progress report protocol.
-- No UI that shows member current project/task/status as a team dashboard.
-- No ACP team bridge for external ACP agents.
-- No policy that prevents a member from reviewing its own work.
-- No settled-state coordinator wake logic.
+- Persistent `team member` runtime object: implemented as `CollabMemberRecord`.
+- Durable mailbox between members: implemented as `CollabMailboxMessageRecord` plus mailbox helpers.
+- Member-owned task board separate from RedClaw scheduled tasks: implemented as `CollabTaskRecord`.
+- Periodic progress report protocol: implemented as host-owned report ticks and structured report records.
+- UI that shows member current project/task/status as a team dashboard: implemented in Workboard Collaboration mode.
+- Team bridge for external adapters: implemented as the shared `redbox-team` MCP/host-action contract; spawning external ACP member processes remains intentionally disabled in the first baseline.
+- Policy that prevents a member from reviewing its own work: implemented in task creation/update validation.
+- Settled-state coordinator wake logic: implemented in `subagents/wake_runtime.rs`.
 
 ## 5. Recommended Product Architecture
 
@@ -763,11 +763,13 @@ team-runtime:archive-session
 
 Renderer must call these through `desktop/src/bridge/ipcRenderer.ts`, not raw Tauri invocations.
 
-## 8. ACP Integration
+## 8. Adapter Integration Boundary
 
-### 8.1 External ACP Member Lifecycle
+### 8.1 External Adapter Lifecycle Contract
 
-External ACP members should be modeled like this:
+External ACP-style members use the same conceptual model, but the current shipped baseline does not spawn external agent processes as team members. This keeps team execution local and avoids introducing another long-running process manager before the host-owned collaboration protocol is stable.
+
+When external adapters are enabled later, they must be modeled like this:
 
 ```text
 CollabMemberRecord(source_kind=external_acp)
@@ -778,13 +780,14 @@ CollabMemberRecord(source_kind=external_acp)
   -> runtime events mapped back to member/task status
 ```
 
-Key rules:
+Required future rules:
 
 - ACP mode/model config uses desired/current tracking.
 - ACP process exit while idle becomes suspended/offline, not failed.
 - ACP prompt failure during active task marks the member failed and reports to coordinator.
 - ACP permission requests go through existing approval runtime.
 - ACP team MCP config must include member id/session id in env.
+- External adapter spawning must be added through the existing MCP/runtime manager, not by introducing ad hoc stdio bridges in team code.
 
 ### 8.2 Internal Runtime Member Lifecycle
 
@@ -800,7 +803,7 @@ internal child runtime
 
 ### 8.3 Shared Team Tool Contract
 
-Both ACP and internal members must see the same conceptual tools. Implementation differs only at the transport boundary:
+Internal members and future external adapters must see the same conceptual tools. Implementation differs only at the transport boundary:
 
 ```text
 internal runtime tool call
@@ -1053,177 +1056,183 @@ Add maintenance policies:
 - Runtime traces: rely on existing session artifact compaction.
 - Stale active member: mark blocked/failed after inactivity threshold and notify coordinator.
 
-## 13. Implementation Plan
+## 13. Implementation Record
 
-### Commit 1: Add Collaboration Contracts
+This plan has been executed as the internal-member baseline. The record below replaces the earlier staged plan and is the source of truth for what is complete.
+
+### Completed 1: Collaboration Contracts
 
 Files:
 
 - `desktop/src-tauri/src/runtime/types.rs`
-- `desktop/src-tauri/src/runtime/contracts.rs`
 - `desktop/src/runtime/runtimeEventStream.ts`
 - `desktop/src/bridge/ipcRenderer.ts`
+- `desktop/src/types.d.ts`
 
-Work:
+Completed work:
 
-- Add `CollabSessionRecord`, `CollabMemberRecord`, `CollabTaskRecord`, `CollabMailboxMessageRecord`, `CollabProgressReportRecord`.
-- Add event envelope variants:
+- Added `CollabSessionRecord`, `CollabMemberRecord`, `CollabTaskRecord`, `CollabMailboxMessageRecord`, `CollabProgressReportRecord`.
+- Added normalized event handling for:
   - `runtime:collab-session-changed`
   - `runtime:collab-member-changed`
   - `runtime:collab-task-changed`
   - `runtime:collab-report-submitted`
   - `runtime:collab-message-delivered`
+  - `runtime:collab-report-tick`
 
 Verification:
 
-- Rust serialization tests.
-- Frontend event normalization unit coverage if test harness exists.
+- Covered by `pnpm exec tsc --noEmit`, `pnpm build`, `cargo check`, and targeted Rust tests listed in the verification matrix.
 
-### Commit 2: Add Host Collaboration Runtime
+### Completed 2: Host Collaboration Runtime
 
 Files:
 
 - `desktop/src-tauri/src/runtime/collab_runtime.rs`
-- `desktop/src-tauri/src/runtime/mod.rs`
+- `desktop/src-tauri/src/runtime.rs`
 - `desktop/src-tauri/src/commands/runtime_collab.rs`
+- `desktop/src-tauri/src/commands/runtime_session.rs`
 - `desktop/src-tauri/src/main.rs`
+- `desktop/src-tauri/src/persistence/mod.rs`
 
-Work:
+Completed work:
 
 - Create/list/get collaboration sessions.
-- Add/list/update members.
+- Add/list/rename/shutdown members.
 - Create/update/list tasks.
 - Write/read mailbox messages.
 - Submit/list progress reports.
+- Maintain member task plans, completion claims, artifact reports, blocker reports, capacity checks, and reviewer policy.
 
 Verification:
 
-- Rust unit tests for task dependency updates.
-- Rust unit tests for mailbox read-and-mark.
+- Rust tests cover dependency validation, mailbox read-and-mark, agent cards, member matching, task-plan updates, capacity checks, artifact helpers, blocker helpers, and reviewer policy.
 
-### Commit 3: Add Team Tools
+### Completed 3: Team Tools And MCP Contract
 
 Files:
 
 - `desktop/src-tauri/src/subagents/team_tools.rs`
+- `desktop/src-tauri/src/subagents/mailbox.rs`
+- `desktop/src-tauri/src/subagents/team_task_board.rs`
 - `desktop/src-tauri/src/tools/catalog.rs`
-- `desktop/src-tauri/src/tools/executor.rs`
-- `desktop/src-tauri/src/mcp/*` if MCP exposure needs an adapter
+- `desktop/src-tauri/src/tools/app_cli.rs`
+- `desktop/src-tauri/src/mcp/team_server.rs`
 
-Work:
+Completed work:
 
-- Add structured team tool actions.
-- Map internal runtime calls to collab runtime.
-- Define ACP MCP bridge shape but keep first version local-only if needed.
+- Added structured `team.*` host actions.
+- Mapped internal runtime/app_cli calls to collaboration runtime operations.
+- Exposed `redbox-team` MCP contract for the same conceptual actions.
+- Kept external ACP process spawning disabled in the first baseline; future adapters must plug into the same host actions.
 
 Verification:
 
 - Tool schema tests.
-- Tool execution tests for `team.task.create`, `team.report.submit`, `team.message.send`.
+- `app_cli` schema tests for team coordinator actions.
+- `team_mcp` contract and execution tests.
 
-### Commit 4: Add Member Wake Runtime
+### Completed 4: Member Wake Runtime
 
 Files:
 
 - `desktop/src-tauri/src/subagents/wake_runtime.rs`
 - `desktop/src-tauri/src/subagents/spawner.rs`
-- `desktop/src-tauri/src/runtime/session_runtime.rs`
 
-Work:
+Completed work:
 
-- Wake internal member from mailbox.
-- Track active wakes.
-- Apply inactivity timeout.
-- Submit synthetic failure report on crash.
-- Wake coordinator when all members are settled.
+- Creates collaboration records for internal child runtimes.
+- Requests progress reports from active members on report tick.
+- Synthesizes stale blocker reports after missed report windows.
+- Computes settled-state coordinator wake readiness while ignoring the coordinator member.
+- Records child runtime completion/failure back into the collaboration board.
 
 Verification:
 
-- Unit tests for active wake dedup.
-- Unit tests for settled-state coordinator wake.
-- Unit tests for inactivity timeout.
+- Unit tests cover settled-state coordinator logic and child runtime to collaboration record projection.
 
-### Commit 5: Add External ACP Member Adapter
+### Completed 5: Agent Backend Registry And Adapter Boundary
 
 Files:
 
-- `desktop/src-tauri/src/agent_hub/*`
-- `desktop/src-tauri/src/mcp/*`
-- `desktop/src-tauri/src/runtime/collab_runtime.rs`
+- `desktop/src-tauri/src/agent_hub/mod.rs`
+- `desktop/src-tauri/src/mcp/team_server.rs`
+- `desktop/src-tauri/src/mcp/README.md`
+- `desktop/src-tauri/src/subagents/README.md`
 
-Work:
+Completed work:
 
-- Normalize spawnable ACP backends.
-- Create member conversation/session.
-- Inject team tools via MCP where available.
-- Map ACP done/error/approval to collab member status.
+- Added a host-owned backend registry with the internal runtime backend.
+- Added desired/current config shape for future adapter compatibility.
+- Documented that internal and future external adapters must share `team.*` host actions.
+- Explicitly prohibited ad hoc external stdio bridges in the team code path.
 
 Verification:
 
-- Fake ACP adapter test if possible.
-- Manual run with one ACP backend and one internal member.
+- Agent backend registry test.
+- MCP contract test.
 
-### Commit 6: Add Collaboration Workboard UI
+### Completed 6: Collaboration Workboard UI
 
 Files:
 
 - `desktop/src/pages/Workboard.tsx`
-- `desktop/src/pages/workboard/*`
-- `desktop/src/pages/Team.tsx`
-- `desktop/src/components/chat/CollaborationDrawer.tsx`
+- `desktop/src/pages/workboard/CollaborationBoard.tsx`
+- `desktop/src/bridge/ipcRenderer.ts`
+- `desktop/src/types.d.ts`
 
-Work:
+Completed work:
 
-- Add Collaboration tab/mode.
-- Add session selector.
-- Add Kanban board.
-- Add member roster.
-- Add task/member detail drawer.
-- Add request report/message actions.
+- Added Collaboration mode under Workboard.
+- Added session selector, member roster, task board, task detail, reports, mailbox messages, artifacts, report tick, report request, member creation, intelligent assignment, rename/shutdown, blocker raise, artifact attach, and completion claim actions.
+- Preserved stale data during refresh.
 
 Verification:
 
-- Open Workboard.
-- Switch between RedClaw and Collaboration views.
-- Confirm stale data remains visible during refresh.
+- `pnpm exec tsc --noEmit`.
+- `pnpm build`.
 
-### Commit 7: Add Periodic Reporting Scheduler
+### Completed 7: Periodic Reporting Scheduler
 
 Files:
 
-- `desktop/src-tauri/src/runtime/collab_runtime.rs`
-- `desktop/src-tauri/src/scheduler/*`
+- `desktop/src-tauri/src/subagents/wake_runtime.rs`
+- `desktop/src-tauri/src/commands/runtime_collab.rs`
+- `desktop/src/runtime/runtimeEventStream.ts`
 
-Work:
+Completed work:
 
 - Tick active sessions.
 - Request reports from active members.
-- Mark report stale if no response.
-- Emit report freshness events.
+- Mark stale members with structured blocker reports.
+- Emit `runtime:collab-report-tick`.
 
 Verification:
 
-- Unit test report due calculation.
-- Manual run with shortened interval.
+- Unit tests for settled-state wake behavior.
+- Frontend type/build verification for report tick event handling.
 
-### Commit 8: Add Documentation And Verification Matrix
+### Completed 8: Documentation And Verification Matrix
 
 Files:
 
 - `desktop/docs/contracts/runtime-events.md`
+- `desktop/docs/collaboration-runtime.md`
 - `desktop/docs/development/testing-and-verification.md`
 - this document
 
-Work:
+Completed work:
 
-- Document runtime event shape.
-- Add team collaboration verification checklist.
-- Add failure recovery runbook.
+- Documented runtime event shape and team actions.
+- Added collaboration runtime reference.
+- Added team collaboration verification checklist.
+- Marked this plan completed and resolved product decisions.
 
 Verification:
 
-- `pnpm build`
-- `cd desktop/src-tauri && cargo fmt --check && cargo check`
+- `pnpm build`.
+- `pnpm exec tsc --noEmit`.
+- `cd desktop/src-tauri && cargo fmt --check && cargo check`.
 
 ## 14. Architecture Options
 
