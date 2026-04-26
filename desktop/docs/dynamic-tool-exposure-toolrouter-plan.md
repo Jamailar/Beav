@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-25
+last_updated: 2026-04-26
 owner: codex
 scope:
   - desktop/src-tauri/src/tools
@@ -48,7 +48,7 @@ success_metrics:
 - 哪些工具需要权限或只能在特定 runtime 使用。
 - 工具结果如何进入 transcript、checkpoint、trace 和下一轮上下文。
 
-本轮明确不做 UI 改造。只落底层 runtime、工具 registry、schema 注入、执行路由和日志可观测性。UI 后续只消费这些底层数据。
+本能力明确作为底层 runtime 机制存在，不做用户可见 UI。ToolRouter、dynamic exposure、direct/deferred action、fingerprint 和 `tool_plan` checkpoint 只服务于模型路由、日志审计和故障复盘；普通用户不应看到这些内部概念。
 
 ## 1.1 Implementation Progress
 
@@ -72,7 +72,7 @@ success_metrics:
 - `directActionFamilies` / `allowedActionFamilies` / `maxDirectActions` session metadata 已接入 ToolRegistryPlan，用于结构化控制本轮 action 曝光。
 - prompt 工具摘要会明确提示 deferred actions 通过 `Redbox(resource=tools, operation=search)` 发现。
 
-本计划约定“不做 UI 改造”，因此 UI 消费 ToolRegistryPlan 快照不属于本轮底层完成范围。当前底层已经输出 checkpoint / log / schema，可供后续 UI 直接读取。
+本计划约定“不做 UI 改造”，且后续也不应新增用户可见的 ToolRegistryPlan / ToolRouter 诊断面板。当前底层已经输出 checkpoint / log / schema；出现问题时通过本地日志、session checkpoint 和 tool result metadata 复盘。
 
 ## 2. Current Problem
 

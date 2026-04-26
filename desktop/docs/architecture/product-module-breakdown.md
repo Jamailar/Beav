@@ -799,7 +799,7 @@ Status: Current
 
 **职责拆解**
 
-- 通用设置、AI 源配置、MCP 管理、工具诊断、runtime 诊断、任务和 session 观测。
+- 通用设置、AI 源配置、MCP 管理、runtime 诊断、任务和 session 观测。
 - assistant daemon 配置。
 - Weixin/relay/feishu 等外部入口配置。
 - browser plugin 状态、yt-dlp 安装、日志目录等系统运维能力。
@@ -807,7 +807,7 @@ Status: Current
 **实现方式**
 
 - 页面是当前最大的“运维控制台”。
-- 对 runtime perf、tool hooks、background tasks、worker pool、task trace、session transcript、MCP oauth status 都有直接面板。
+- 对 runtime perf、background tasks、worker pool、task trace、session transcript、MCP oauth status 都有直接面板。ToolRouter / tool plan 属于底层日志与 checkpoint 审计信息，不进入用户可见设置面板。
 - 官方能力面板动态加载，避免普通场景下强耦合。
 
 **必须用现成库**
