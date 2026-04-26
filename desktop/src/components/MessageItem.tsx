@@ -378,7 +378,10 @@ export const MessageItem = memo(({
   const activeThoughtContent = !isUser
     ? stripInternalProtocolMarkup(String(latestTimelineThought?.content || msg.thinking || ''))
     : '';
-  const showStreamingThought = !isUser && !isThinkingMessage && Boolean(msg.isStreaming && activeThoughtContent);
+  const showInlineThought = !isUser
+    && !isThinkingMessage
+    && Boolean(activeThoughtContent)
+    && (showTimeline || !showLegacyWorkflow);
 
   useEffect(() => {
     if (!imageMenu.visible) return;
@@ -681,7 +684,7 @@ export const MessageItem = memo(({
         </div>
       )}
 
-      {showStreamingThought && (
+      {showInlineThought && (
         <div className={clsx(showWorkflowOnTop ? 'mb-2' : 'mt-2', 'w-full max-w-[740px]')}>
           {renderThoughtText(activeThoughtContent)}
         </div>
