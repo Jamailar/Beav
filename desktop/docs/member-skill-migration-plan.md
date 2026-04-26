@@ -44,8 +44,9 @@ last_updated: 2026-04-26
 - 成员技能包已支持结构校验与轻量评测，覆盖必需文件、JSON 文件、`heuristics.jsonl`、知识证据和工具策略。
 - `advisors:create` 在需要蒸馏但创建后缺少 `memberSkillRef` 时会写入 `member_skill_missing_after_create` diagnostics 日志。
 - 团队页成员设置已补“重新蒸馏 / 刷新技能”入口，失败或缺失技能时可手动重试。
+- `memberSkillDistillation / memberRuntimeOverlay / memberToolPolicy / memberSkillAutoRefresh` 已具备 host 侧语义，支持直接 settings key，也兼容 `memberSkillFlags / featureFlags / features` 嵌套配置。
 
-本计划当前定义的成员技能升级、文件/YouTube 自动蒸馏、候选版本闭环、运行时激活、成员作用域检索与语言感知排序已完成。后续若继续扩大范围，应另起计划覆盖更重的评测面板、自动灰度开关和跨团队权限策略。
+本计划当前定义的成员技能升级、文件/YouTube 自动蒸馏、候选版本闭环、运行时激活、成员作用域检索、语言感知排序与灰度开关语义已完成。后续若继续扩大范围，应另起计划覆盖更重的评测面板和跨团队权限策略。
 
 ## 2. 当前系统基础
 
@@ -58,7 +59,7 @@ last_updated: 2026-04-26
 - 技能可影响工具可见性与运行时 capability set：`src-tauri/src/skills/runtime.rs`、`src-tauri/src/skills/permissions.rs`
 - 工具调用已有 guardrails 与 audit：`docs/runtime-capability-guardrails.md`
 
-当前缺失的系统层能力主要有：
+迁移前缺失、现已由本计划逐项覆盖的系统层能力主要有：
 
 - 知识库页面与知识检索仍缺少稳定的文件索引/catalog 层
 - 自动语言识别尚未成为知识库 ingest 的统一元数据层
@@ -186,6 +187,13 @@ Member Skill Package
 - `memberRuntimeOverlay`
 - `memberToolPolicy`
 - `memberSkillAutoRefresh`
+
+当前开关语义：
+
+- `memberSkillDistillation` 默认开启。关闭后，文件蒸馏、YouTube 导入、成员更新、知识删除只保留 advisor fallback，不自动生成或刷新成员技能包。
+- `memberRuntimeOverlay` 默认开启。关闭后，新会话和已有会话的 runtime/context/tool plan 会剥离 `memberSkillRef / activeSkills / sessionSkillState`，恢复旧 advisor 发言链路。
+- `memberToolPolicy` 默认开启。关闭后，成员仍可按已激活技能发言，但 tool plan 不再用成员技能的 `allowedTools` 收窄 runtime 默认工具包。
+- `memberSkillAutoRefresh` 默认关闭。开启后，已有成员的新候选包必须先通过结构校验与轻量评测，校验有效才会自动提升为当前版本；校验失败时仍停留在候选版本，等待人工处理。
 
 启用顺序：
 
