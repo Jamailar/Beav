@@ -217,11 +217,9 @@ async function buildTarget({
   await runCommand('pnpm', buildArgs, { cwd: repoRoot, env: buildEnv });
 
   const { appPath, dmgPath } = await resolveArtifacts({ productName, version, target });
-  const installerPath = await copyArtifactToDir(dmgPath, installerArtifactsDir('macos'));
 
   logStep(`Generated app (${target}): ${path.relative(repoRoot, appPath)}`);
   logStep(`Generated dmg (${target}): ${path.relative(repoRoot, dmgPath)}`);
-  logStep(`Copied macOS installer (${target}): ${path.relative(repoRoot, installerPath)}`);
 
   logStep(`Verifying code signature for ${target}`);
   await runCommand('codesign', ['--verify', '--deep', '--verbose=2', appPath], { cwd: repoRoot });
@@ -259,6 +257,9 @@ async function buildTarget({
       allowFailure: true,
     });
   }
+
+  const installerPath = await copyArtifactToDir(dmgPath, installerArtifactsDir('macos'));
+  logStep(`Copied macOS installer (${target}): ${path.relative(repoRoot, installerPath)}`);
 
   return {
     target,
