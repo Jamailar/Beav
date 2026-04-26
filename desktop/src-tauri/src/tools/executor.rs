@@ -1,12 +1,10 @@
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
+use crate::persistence::with_store;
+use crate::tools::plan::build_tool_registry_plan_for_session;
+use crate::tools::router::{PreparedToolCall, ToolRouter};
 use crate::AppState;
-
-pub struct PreparedToolCall {
-    pub name: &'static str,
-    pub arguments: Value,
-}
 
 pub struct InteractiveToolExecutor<'a> {
     app: &'a AppHandle,
@@ -38,28 +36,14 @@ impl<'a> InteractiveToolExecutor<'a> {
         name: &str,
         arguments: &Value,
     ) -> Result<PreparedToolCall, String> {
-        let original_allowed = crate::tools::guards::ensure_tool_allowed_for_session(
-            self.state,
-            self.runtime_mode,
-            self.session_id,
-            name,
-        )
-        .is_ok();
-        let normalized_call = crate::tools::compat::normalize_tool_call(name, arguments);
-        let normalized_name = normalized_call.name;
-        let normalized_arguments = normalized_call.arguments;
-        if !original_allowed {
-            crate::tools::guards::ensure_tool_allowed_for_session(
-                self.state,
+        let plan = with_store(self.state, |store| {
+            Ok(build_tool_registry_plan_for_session(
+                &store,
                 self.runtime_mode,
                 self.session_id,
-                normalized_name,
-            )?;
-        }
-        Ok(PreparedToolCall {
-            name: normalized_name,
-            arguments: normalized_arguments,
-        })
+            ))
+        })?;
+        ToolRouter::new(plan).prepare(name, arguments)
     }
 
     pub fn dispatch_action_tool(

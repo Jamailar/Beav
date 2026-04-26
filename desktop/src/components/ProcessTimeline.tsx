@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import React, { useMemo } from 'react';
 import { clsx } from 'clsx';
 
 export type ProcessItemType =
@@ -54,43 +53,11 @@ interface ProcessTimelineProps {
   variant?: 'default' | 'compact';
 }
 
-type SummaryItem = {
+type StatusLine = {
   id: string;
   status: 'running' | 'done' | 'failed';
-  label: string;
-  desc: string;
-  input?: string;
-  output?: string;
-};
-
-const getToolDisplayLabel = (name: string): string => {
-  const labelMap: Record<string, string> = {
-    save_memory: '写入记忆',
-    read_file: '读取文件',
-    write_file: '写入文件',
-    edit_file: '编辑文件',
-    list_dir: '列出目录',
-    grep: '内容搜索',
-    app_cli: '应用命令',
-    bash: '终端执行',
-    run_command: '终端执行',
-    web_search: '联网搜索',
-    duckduckgo_search: '联网搜索',
-    calculator: '计算器',
-    explore_workspace: '工作区浏览',
-    workspace: '工作区操作',
-  };
-  return labelMap[name] || name;
-};
-
-const stringifyValue = (value: unknown): string => {
-  if (value === undefined) return '';
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+  text: string;
+  detail?: string;
 };
 
 const toObjectIfJsonLike = (value: unknown): Record<string, unknown> | null => {
@@ -113,39 +80,166 @@ const toObjectIfJsonLike = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
-const getToolSummary = (toolName: string, input: unknown): string => {
-  const inputObject = toObjectIfJsonLike(input);
-  if (!inputObject) return '';
-
-  const pickText = (...keys: string[]): string => {
-    for (const key of keys) {
-      const value = inputObject[key];
-      if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-    return '';
-  };
-
-  if (toolName === 'app_cli') return pickText('action', 'command');
-  if (toolName === 'redbox_fs') {
-    const action = pickText('action');
-    const target = pickText('path', 'pattern', 'query');
-    if (action && target) return `${action} · ${target}`;
-    return action || target;
+const textAtPath = (source: Record<string, unknown> | null, path: string): string => {
+  if (!source) return '';
+  const parts = path.split('.');
+  let value: unknown = source;
+  for (const part of parts) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    value = (value as Record<string, unknown>)[part];
   }
-  if (toolName === 'redbox_editor') return pickText('action', 'filePath');
-  if (toolName === 'bash' || toolName === 'run_command') return pickText('cmd', 'command');
-  if (toolName === 'workspace') return pickText('action', 'path', 'query');
-  if (toolName === 'read_file') return pickText('filePath', 'path');
-  if (toolName === 'write_file' || toolName === 'edit_file') return pickText('filePath', 'path');
-  if (toolName === 'list_dir') return pickText('path');
-  if (toolName === 'explore_workspace') return pickText('target');
-  if (toolName === 'web_search' || toolName === 'duckduckgo_search') return pickText('query', 'q');
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+};
+
+const numberAtPath = (source: Record<string, unknown> | null, path: string): number | null => {
+  if (!source) return null;
+  const parts = path.split('.');
+  let value: unknown = source;
+  for (const part of parts) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    value = (value as Record<string, unknown>)[part];
+  }
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+};
+
+const pickText = (source: Record<string, unknown> | null, ...paths: string[]): string => {
+  for (const path of paths) {
+    const value = textAtPath(source, path);
+    if (value) return value;
+  }
   return '';
 };
 
-const truncateText = (text: string, maxLength = 800): string => {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}\n...`;
+const truncateInline = (value: string, maxLength = 96): string => {
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= maxLength) return collapsed;
+  return `${collapsed.slice(0, maxLength - 1)}...`;
+};
+
+const normalizeActionName = (toolName: string, inputObject: Record<string, unknown> | null): string => {
+  const explicitAction = pickText(inputObject, 'action', 'command');
+  if (explicitAction) return explicitAction;
+
+  const resource = pickText(inputObject, 'resource');
+  const operation = pickText(inputObject, 'operation');
+  if (resource && operation) return `${resource}.${operation}`;
+
+  return toolName;
+};
+
+const statusVerb = (
+  status: StatusLine['status'],
+  running: string,
+  done: string,
+  failed: string,
+): string => {
+  if (status === 'running') return running;
+  if (status === 'failed') return failed;
+  return done;
+};
+
+const getHumanStatusText = (toolName: string, actionName: string, status: StatusLine['status']): string => {
+  const normalizedTool = toolName.trim();
+  const normalizedAction = actionName.trim();
+
+  if (normalizedAction === 'image.generate' || normalizedAction === 'image.generation.generate') {
+    return statusVerb(status, '正在生成图片', '已生成图片', '图片生成失败');
+  }
+  if (normalizedAction === 'video.generate') {
+    return statusVerb(status, '正在生成视频', '已生成视频', '视频生成失败');
+  }
+  if (normalizedAction === 'tools.search') {
+    return statusVerb(status, '正在查找可用能力', '已查找可用能力', '能力查找失败');
+  }
+  if (normalizedAction.startsWith('memory.')) {
+    return statusVerb(status, '正在处理记忆', '已处理记忆', '记忆处理失败');
+  }
+  if (normalizedAction.startsWith('knowledge.') || normalizedAction.startsWith('subjects.')) {
+    if (normalizedAction.includes('.search')) {
+      return statusVerb(status, '正在搜索知识库', '已搜索知识库', '知识库搜索失败');
+    }
+    return statusVerb(status, '正在读取知识库', '已读取知识库', '知识库读取失败');
+  }
+  if (normalizedAction.startsWith('workspace.')) {
+    if (normalizedAction.includes('.search')) {
+      return statusVerb(status, '正在搜索工作区', '已搜索工作区', '工作区搜索失败');
+    }
+    if (normalizedAction.includes('.list')) {
+      return statusVerb(status, '正在浏览工作区', '已浏览工作区', '工作区浏览失败');
+    }
+    return statusVerb(status, '正在读取工作区', '已读取工作区', '工作区读取失败');
+  }
+  if (normalizedAction.startsWith('redclaw.task.')) {
+    return statusVerb(status, '正在处理 RedClaw 任务', '已处理 RedClaw 任务', 'RedClaw 任务处理失败');
+  }
+  if (normalizedAction.startsWith('manuscripts.')) {
+    return statusVerb(status, '正在处理稿件', '已处理稿件', '稿件处理失败');
+  }
+  if (normalizedAction.startsWith('mcp.')) {
+    return statusVerb(status, '正在连接外部服务', '已连接外部服务', '外部服务调用失败');
+  }
+  if (normalizedAction.startsWith('skills.')) {
+    return statusVerb(status, '正在使用技能', '已使用技能', '技能执行失败');
+  }
+  if (normalizedAction.startsWith('cli_runtime.') || normalizedTool === 'bash' || normalizedTool === 'run_command') {
+    return statusVerb(status, '正在执行命令', '已执行命令', '命令执行失败');
+  }
+  if (normalizedTool === 'Read' || normalizedTool === 'read_file' || normalizedAction.includes('read')) {
+    return statusVerb(status, '正在读取文件', '已读取文件', '文件读取失败');
+  }
+  if (normalizedTool === 'List' || normalizedTool === 'list_dir' || normalizedAction.includes('list')) {
+    return statusVerb(status, '正在浏览文件', '已浏览文件', '文件浏览失败');
+  }
+  if (normalizedTool === 'Search' || normalizedTool === 'grep' || normalizedTool === 'web_search' || normalizedTool === 'duckduckgo_search' || normalizedAction.includes('search')) {
+    return statusVerb(status, '正在搜索内容', '已搜索内容', '内容搜索失败');
+  }
+  if (normalizedTool === 'Write' || normalizedTool === 'write_file' || normalizedTool === 'edit_file' || normalizedTool === 'redbox_editor' || normalizedAction.includes('write') || normalizedAction.includes('edit')) {
+    return statusVerb(status, '正在编辑文件', '已编辑文件', '文件编辑失败');
+  }
+  if (normalizedTool.startsWith('task_node:')) {
+    return statusVerb(status, '正在执行任务节点', '已执行任务节点', '任务节点失败');
+  }
+  if (normalizedTool.startsWith('subagent:')) {
+    return statusVerb(status, '正在启动协作成员', '已启动协作成员', '协作成员启动失败');
+  }
+
+  return statusVerb(status, '正在处理', '已处理', '处理失败');
+};
+
+const getProgressText = (output: string | undefined): string => {
+  const value = String(output || '');
+  const match = value.match(/已完成\s*\d+\s*\/\s*\d+\s*张/);
+  return match ? match[0].replace(/\s+/g, ' ') : '';
+};
+
+const getDetailText = (
+  toolName: string,
+  actionName: string,
+  inputObject: Record<string, unknown> | null,
+  output: string | undefined,
+): string => {
+  const progress = getProgressText(output);
+  if (progress) return progress;
+
+  if (actionName === 'image.generate' || actionName === 'video.generate') {
+    const count = numberAtPath(inputObject, 'input.count') ?? numberAtPath(inputObject, 'count');
+    const aspectRatio = pickText(inputObject, 'input.aspectRatio', 'aspectRatio');
+    const size = pickText(inputObject, 'input.size', 'size');
+    return [count ? `${count} 个结果` : '', aspectRatio, size].filter(Boolean).join(' · ');
+  }
+
+  const query = pickText(inputObject, 'input.query', 'input.q', 'query', 'q', 'pattern');
+  if (query) return truncateInline(query);
+
+  const path = pickText(inputObject, 'input.path', 'input.filePath', 'path', 'filePath', 'cwd');
+  if (path) return truncateInline(path);
+
+  const prompt = pickText(inputObject, 'input.prompt', 'prompt');
+  if (prompt && (actionName === 'tools.search' || toolName === 'Search')) {
+    return truncateInline(prompt);
+  }
+
+  return '';
 };
 
 const stringifyCliCommand = (argv?: string[], fallback?: string): string => {
@@ -155,38 +249,17 @@ const stringifyCliCommand = (argv?: string[], fallback?: string): string => {
   return String(fallback || '').trim();
 };
 
-const getStatusTone = (status: SummaryItem['status']) => {
-  if (status === 'running') {
-    return {
-      dot: 'bg-blue-500 animate-pulse',
-      badge: 'processing',
-      text: '运行中',
-    };
-  }
-  if (status === 'failed') {
-    return {
-      dot: 'bg-red-500',
-      badge: 'error',
-      text: '失败',
-    };
-  }
-  return {
-    dot: 'bg-emerald-500',
-    badge: 'success',
-    text: '完成',
-  };
-};
-
-const buildSummaryItem = (item: ProcessItem): SummaryItem | null => {
+const buildStatusLine = (item: ProcessItem): StatusLine | null => {
   if (item.type === 'tool-call') {
     const name = item.toolData?.name || 'tool_call';
+    const inputObject = toObjectIfJsonLike(item.toolData?.input);
+    const actionName = normalizeActionName(name, inputObject);
+    const detail = getDetailText(name, actionName, inputObject, item.toolData?.output || item.content);
     return {
       id: item.id,
       status: item.status,
-      label: getToolDisplayLabel(name),
-      desc: getToolSummary(name, item.toolData?.input) || item.content || name,
-      input: stringifyValue(item.toolData?.input),
-      output: item.toolData?.output ? truncateText(item.toolData.output) : '',
+      text: getHumanStatusText(name, actionName, item.status),
+      detail,
     };
   }
 
@@ -194,9 +267,8 @@ const buildSummaryItem = (item: ProcessItem): SummaryItem | null => {
     return {
       id: item.id,
       status: item.status,
-      label: item.skillData?.name || item.title || '技能',
-      desc: item.skillData?.description || truncateText(item.content || '', 180),
-      output: '',
+      text: statusVerb(item.status, '正在使用技能', '已使用技能', '技能执行失败'),
+      detail: truncateInline(item.skillData?.description || item.content || item.skillData?.name || ''),
     };
   }
 
@@ -210,15 +282,8 @@ const buildSummaryItem = (item: ProcessItem): SummaryItem | null => {
     return {
       id: item.id,
       status: item.status,
-      label: `安装 ${toolName}`,
-      desc: parts.join(' · ') || item.content || toolName,
-      input: stringifyValue({
-        installId: item.cliData?.installId,
-        environmentId: item.cliData?.environmentId,
-        installMethod: item.cliData?.installMethod,
-        spec: item.cliData?.spec,
-      }),
-      output: item.cliData?.logPreview ? truncateText(item.cliData.logPreview, 1200) : '',
+      text: statusVerb(item.status, '正在安装命令环境', '已安装命令环境', '命令环境安装失败'),
+      detail: truncateInline(parts.join(' · ') || item.content || toolName),
     };
   }
 
@@ -228,15 +293,8 @@ const buildSummaryItem = (item: ProcessItem): SummaryItem | null => {
     return {
       id: item.id,
       status: item.status,
-      label: toolName,
-      desc: commandPreview || item.content || '执行外部命令',
-      input: stringifyValue({
-        executionId: item.cliData?.executionId,
-        command: commandPreview,
-        cwd: item.cliData?.cwd,
-        environmentId: item.cliData?.environmentId,
-      }),
-      output: item.cliData?.logPreview ? truncateText(item.cliData.logPreview, 1200) : '',
+      text: statusVerb(item.status, '正在执行命令', '已执行命令', '命令执行失败'),
+      detail: truncateInline(commandPreview || item.content || toolName),
     };
   }
 
@@ -244,20 +302,8 @@ const buildSummaryItem = (item: ProcessItem): SummaryItem | null => {
     return {
       id: item.id,
       status: item.status,
-      label: item.title || '权限确认',
-      desc: item.content || 'CLI 请求额外权限',
-      input: stringifyValue({
-        escalationId: item.cliData?.escalationId,
-        commandPreview: item.cliData?.commandPreview,
-        permissions: item.cliData?.permissions,
-      }),
-      output: truncateText(
-        [
-          item.cliData?.resolutionScope ? `scope: ${item.cliData.resolutionScope}` : '',
-          item.content,
-        ].filter(Boolean).join('\n'),
-        1200,
-      ),
+      text: statusVerb(item.status, '等待确认', '已确认', '确认未通过'),
+      detail: truncateInline(item.content || item.cliData?.commandPreview || '需要额外权限'),
     };
   }
 
@@ -265,12 +311,8 @@ const buildSummaryItem = (item: ProcessItem): SummaryItem | null => {
     return {
       id: item.id,
       status: item.status,
-      label: item.title || '结果校验',
-      desc: item.cliData?.verificationSummary || item.content || '执行后校验',
-      input: stringifyValue({
-        executionId: item.cliData?.executionId,
-      }),
-      output: item.cliData?.verificationSummary ? truncateText(item.cliData.verificationSummary, 1200) : '',
+      text: statusVerb(item.status, '正在校验结果', '已校验结果', '结果校验失败'),
+      detail: truncateInline(item.cliData?.verificationSummary || item.content || ''),
     };
   }
 
@@ -281,102 +323,55 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default' }: Pro
   if (!items || items.length === 0) return null;
 
   const isCompact = variant === 'compact';
-  const summaryItems = useMemo(
-    () => items.map(buildSummaryItem).filter((item): item is SummaryItem => Boolean(item)),
+  const statusLines = useMemo(
+    () => items.map(buildStatusLine).filter((item): item is StatusLine => Boolean(item)),
     [items],
   );
-  const runningCount = summaryItems.filter((item) => item.status === 'running').length;
-  const failedCount = summaryItems.filter((item) => item.status === 'failed').length;
-  const [expanded, setExpanded] = useState(() => Boolean(isStreaming));
+  const runningLines = statusLines.filter((item) => item.status === 'running');
+  const failedCount = statusLines.filter((item) => item.status === 'failed').length;
+  const activeText = runningLines.length === 1
+    ? runningLines[0].text
+    : runningLines.length > 1
+      ? `正在处理 ${runningLines.length} 个任务`
+      : '';
 
-  useEffect(() => {
-    if (runningCount > 0 || isStreaming) {
-      setExpanded(true);
-    }
-  }, [runningCount, isStreaming]);
-
-  if (summaryItems.length === 0) return null;
+  if (statusLines.length === 0) return null;
 
   return (
     <div
       className={clsx(
-        'w-full max-w-[780px] overflow-hidden rounded-lg border border-border/70 bg-surface-primary/60',
-        isCompact ? 'mt-2' : 'mt-3',
+        'w-full max-w-[780px] space-y-1 text-[12px] leading-5 text-text-tertiary/80',
+        isCompact ? 'mt-1.5' : 'mt-2',
       )}
+      aria-live={runningLines.length > 0 || isStreaming ? 'polite' : 'off'}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-surface-secondary/45"
-      >
-        <div className="flex min-w-0 items-center gap-2 text-xs text-text-tertiary">
-          <span
+      {activeText ? (
+        <div className="font-medium text-text-tertiary/85">
+          {activeText}
+        </div>
+      ) : failedCount > 0 ? (
+        <div className="font-medium text-red-500/80">
+          有 {failedCount} 个步骤失败
+        </div>
+      ) : null}
+
+      <div className="space-y-0.5">
+        {statusLines.map((item) => (
+          <div
+            key={item.id}
             className={clsx(
-              'inline-flex h-2 w-2 shrink-0 rounded-full',
-              runningCount > 0 || isStreaming ? 'bg-amber-500 animate-pulse' : failedCount > 0 ? 'bg-red-500' : 'bg-slate-400',
+              'min-w-0 truncate',
+              item.status === 'running' && 'text-text-tertiary/85',
+              item.status === 'done' && 'text-text-tertiary/70',
+              item.status === 'failed' && 'text-red-500/80',
             )}
-          />
-          <span className="truncate">
-            查看执行过程
-            <span className="ml-1 text-text-tertiary/80">({summaryItems.length})</span>
-          </span>
-          {runningCount > 0 && <span className="text-blue-500">{runningCount} 运行中</span>}
-          {failedCount > 0 && <span className="text-red-500">{failedCount} 失败</span>}
-        </div>
-        {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-text-tertiary" />
-        ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary" />
-        )}
-      </button>
-
-      {expanded && (
-        <div className="space-y-2 border-t border-border/60 px-3 py-3">
-          {summaryItems.map((item) => {
-            const tone = getStatusTone(item.status);
-            const hasDetail = Boolean((item.input && item.input.trim()) || (item.output && item.output.trim()));
-
-            return (
-              <details
-                key={item.id}
-                className="border-b border-border/40 pb-2 last:border-b-0 last:pb-0"
-                open={item.status === 'running'}
-              >
-                <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-text-secondary marker:hidden">
-                  <span className={clsx('h-2 w-2 shrink-0 rounded-full', tone.dot)} />
-                  <span className="min-w-0 flex-1 truncate">
-                    <span className="text-text-primary">{item.label}</span>
-                    {item.desc && <span className="ml-1 text-text-tertiary">({item.desc})</span>}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-text-tertiary">{tone.text}</span>
-                  {hasDetail ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-text-tertiary" /> : null}
-                </summary>
-
-                {hasDetail && (
-                  <div className="ml-4 mt-2 space-y-2 border-l-2 border-border/70 pl-3">
-                    {item.input && item.input.trim() && (
-                      <div>
-                        <div className="mb-1 text-[11px] font-medium text-text-tertiary">Input</div>
-                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary">
-                          {item.input}
-                        </pre>
-                      </div>
-                    )}
-                    {item.output && item.output.trim() && (
-                      <div>
-                        <div className="mb-1 text-[11px] font-medium text-text-tertiary">Output</div>
-                        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-surface-secondary/60 px-3 py-2 text-xs text-text-secondary">
-                          {item.output}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </details>
-            );
-          })}
-        </div>
-      )}
+            title={[item.text, item.detail].filter(Boolean).join(' · ')}
+          >
+            <span>{item.text}</span>
+            {item.detail ? <span className="ml-1">{item.detail}</span> : null}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ use crate::persistence::with_store;
 use crate::tools::registry::{descriptor_by_name_for_runtime_mode, descriptor_by_name_for_session};
 use crate::AppState;
 
+#[allow(dead_code)]
 pub fn ensure_tool_allowed_for_runtime_mode(
     runtime_mode: &str,
     tool_name: &str,
@@ -17,6 +18,7 @@ pub fn ensure_tool_allowed_for_runtime_mode(
     ))
 }
 
+#[allow(dead_code)]
 pub fn ensure_tool_allowed_for_session(
     state: &State<'_, AppState>,
     runtime_mode: &str,

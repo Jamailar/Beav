@@ -686,6 +686,12 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 )
             }
         }
+        ("tool" | "tools", "search" | "list" | "get") => app_cli_action_call(
+            "tools.search",
+            payload,
+            Some("Redbox"),
+            Some("tools.search"),
+        ),
         _ => app_cli_legacy_command_call(
             "help",
             json!({ "resource": resource, "operation": operation, "input": payload }),
@@ -1581,6 +1587,30 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("prompt")),
             Some(&json!("cover"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_tools_search_to_app_cli_action() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "tools",
+                "operation": "search",
+                "input": { "query": "mcp" }
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("tools.search"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("query")),
+            Some(&json!("mcp"))
         );
     }
 
