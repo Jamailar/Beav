@@ -3,7 +3,9 @@ import path from 'node:path';
 
 import {
   artifactsRoot,
+  browserPluginSummaryPath,
   logStep,
+  packageBrowserPluginArchive,
   parseArgs,
   repoRoot,
   runCommand,
@@ -48,7 +50,7 @@ function collectInstallerLines(summary) {
   if (artifacts.length > 0) {
     for (const artifact of artifacts) {
       const target = artifact?.target ? ` (${artifact.target})` : '';
-      for (const key of ['installerPath', 'debArtifactPath']) {
+      for (const key of ['installerPath', 'debArtifactPath', 'zipPath']) {
         const value = String(artifact?.[key] || '').trim();
         if (value) {
           lines.push(`${key}${target}: ${value}`);
@@ -58,7 +60,7 @@ function collectInstallerLines(summary) {
     return lines;
   }
 
-  for (const key of ['installerPath', 'debArtifactPath']) {
+  for (const key of ['installerPath', 'debArtifactPath', 'zipPath']) {
     const value = String(summary?.[key] || '').trim();
     if (value) {
       lines.push(`${key}: ${value}`);
@@ -149,6 +151,23 @@ async function main() {
         summaryPath: linuxSummaryPath,
       }),
     );
+  }
+
+  logStep('Packaging browser plugin release asset');
+  try {
+    await fs.rm(browserPluginSummaryPath, { force: true });
+    results.push({
+      name: 'Browser plugin',
+      ok: true,
+      summary: await packageBrowserPluginArchive(),
+    });
+  } catch (error) {
+    results.push({
+      name: 'Browser plugin',
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      summary: await readSummary(browserPluginSummaryPath),
+    });
   }
 
   console.log('');

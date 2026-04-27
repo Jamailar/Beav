@@ -14,6 +14,7 @@ export const workspaceRoot = path.resolve(repoRoot, '..');
 export const artifactsRoot = path.join(repoRoot, 'artifacts');
 export const browserPluginSourceDir = path.join(workspaceRoot, 'Plugin');
 export const bundledBrowserPluginResource = '../../Plugin';
+export const browserPluginSummaryPath = path.join(artifactsRoot, 'release', 'browser-plugin-summary.json');
 export const requiredBundledReleaseResources = [
   'resources/knowledge-api-guide.html',
   'resources/richpost-theme-guide.html',
@@ -246,6 +247,48 @@ export async function findBundledBrowserPluginDir(appPath) {
   return manifestPath ? path.dirname(manifestPath) : null;
 }
 
+export async function findBrowserPluginDirUnder(rootDir) {
+  const candidates = [
+    path.join(rootDir, '_up_', '_up_', 'Plugin'),
+    path.join(rootDir, '_up_', 'Plugin'),
+    path.join(rootDir, 'Plugin'),
+  ];
+
+  for (const candidate of candidates) {
+    if (await pathExists(path.join(candidate, 'manifest.json'))) {
+      return candidate;
+    }
+  }
+
+  const files = await listFilesRecursive(rootDir);
+  const manifestPath = files.find((filePath) => {
+    const normalized = filePath.split(path.sep).join('/');
+    return normalized.endsWith('/Plugin/manifest.json');
+  });
+
+  return manifestPath ? path.dirname(manifestPath) : null;
+}
+
+export async function assertDirectoryIncludesBrowserPlugin(rootDir, expectedInfo, label = 'bundle output') {
+  const pluginDir = await findBrowserPluginDirUnder(rootDir);
+  if (!pluginDir) {
+    throw new Error(`${label} is missing bundled browser plugin: ${rootDir}`);
+  }
+
+  const actualInfo = await getBrowserPluginInfo(pluginDir);
+  if (expectedInfo?.version && actualInfo.version !== expectedInfo.version) {
+    throw new Error(`${label} contains browser plugin ${actualInfo.version}, expected ${expectedInfo.version}`);
+  }
+  if (expectedInfo?.digest && actualInfo.digest !== expectedInfo.digest) {
+    throw new Error(`${label} browser plugin does not match the current Plugin directory.`);
+  }
+
+  return {
+    ...actualInfo,
+    bundleDir: pluginDir,
+  };
+}
+
 export async function assertMacAppIncludesBrowserPlugin(appPath, expectedInfo) {
   const pluginDir = await findBundledBrowserPluginDir(appPath);
   if (!pluginDir) {
@@ -266,6 +309,51 @@ export async function assertMacAppIncludesBrowserPlugin(appPath, expectedInfo) {
     ...actualInfo,
     bundleDir: pluginDir,
   };
+}
+
+export async function packageBrowserPluginArchive() {
+  await ensureCommandExists('zip', 'zip is required to package the browser extension release asset.');
+
+  const pluginInfo = await getBrowserPluginInfo();
+  const pluginArtifactsDir = path.join(artifactsRoot, 'installers', 'browser-plugin');
+  const archivePath = path.join(pluginArtifactsDir, `RedBox_Browser_Extension_${pluginInfo.version}.zip`);
+  const files = (await listFilesRecursive(browserPluginSourceDir))
+    .filter((filePath) => path.basename(filePath) !== '.DS_Store')
+    .map((filePath) => path.relative(browserPluginSourceDir, filePath).split(path.sep).join('/'))
+    .sort((left, right) => left.localeCompare(right));
+
+  if (files.length === 0) {
+    throw new Error(`Browser plugin source directory has no files: ${browserPluginSourceDir}`);
+  }
+
+  await fs.rm(pluginArtifactsDir, { recursive: true, force: true });
+  await ensureDir(pluginArtifactsDir);
+  await runCommand('zip', ['-qr', '-X', archivePath, ...files], { cwd: browserPluginSourceDir });
+
+  const summary = {
+    type: 'browser-plugin',
+    sourceDir: pluginInfo.sourceDir,
+    manifestName: pluginInfo.manifestName,
+    version: pluginInfo.version,
+    digest: pluginInfo.digest,
+    fileCount: pluginInfo.fileCount,
+    zipPath: archivePath,
+    installerPath: archivePath,
+    artifacts: [
+      {
+        type: 'browser-plugin',
+        version: pluginInfo.version,
+        digest: pluginInfo.digest,
+        fileCount: pluginInfo.fileCount,
+        zipPath: archivePath,
+        installerPath: archivePath,
+      },
+    ],
+  };
+
+  await ensureDir(path.dirname(browserPluginSummaryPath));
+  await fs.writeFile(browserPluginSummaryPath, JSON.stringify(summary, null, 2), 'utf8');
+  return summary;
 }
 
 export async function findNewestFile(rootDir, matcher) {
