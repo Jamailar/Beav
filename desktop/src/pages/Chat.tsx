@@ -85,6 +85,8 @@ interface ChatProps {
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
   messageWorkflowDisplayMode?: 'all' | 'thoughts-only';
+  messageWorkflowAutoHideWhenComplete?: boolean;
+  messageWorkflowFailureTone?: 'danger' | 'neutral';
   embeddedTheme?: 'default' | 'dark' | 'auto';
   showWelcomeHeader?: boolean;
   emptyStateComposerPlacement?: 'inline' | 'bottom';
@@ -421,6 +423,8 @@ export function Chat({
   messageWorkflowVariant = 'compact',
   messageWorkflowEmphasis = 'default',
   messageWorkflowDisplayMode = 'all',
+  messageWorkflowAutoHideWhenComplete = false,
+  messageWorkflowFailureTone = 'danger',
   embeddedTheme = 'default',
   showWelcomeHeader = true,
   emptyStateComposerPlacement = 'inline',
@@ -3183,6 +3187,8 @@ export function Chat({
                           workflowVariant={messageWorkflowVariant}
                           workflowEmphasis={messageWorkflowEmphasis}
                           workflowDisplayMode={messageWorkflowDisplayMode}
+                          workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
+                          workflowFailureTone={messageWorkflowFailureTone}
                           showAttachments={showMessageAttachments}
                         />
                       </ErrorBoundary>

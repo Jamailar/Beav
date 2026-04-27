@@ -1171,6 +1171,8 @@ export function RedClaw({
                                 messageWorkflowPlacement="bottom"
                                 messageWorkflowVariant="compact"
                                 messageWorkflowEmphasis="default"
+                                messageWorkflowAutoHideWhenComplete={true}
+                                messageWorkflowFailureTone="neutral"
                             />
                             <RedClawHistoryDrawer
                                 open={historyDrawerOpen}
