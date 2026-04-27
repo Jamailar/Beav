@@ -269,6 +269,254 @@ fn pick_random_wander_items(
     eligible
 }
 
+fn normalize_guided_text(raw: &str) -> String {
+    raw.trim()
+        .to_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch) {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+}
+
+fn push_unique_guided_term(terms: &mut Vec<String>, term: String) {
+    let normalized = term.trim().to_string();
+    if normalized.chars().count() < 2 || terms.iter().any(|item| item == &normalized) {
+        return;
+    }
+    terms.push(normalized);
+}
+
+fn extract_guided_terms(parts: &[String]) -> Vec<String> {
+    let mut terms = Vec::new();
+    for part in parts {
+        let normalized = normalize_guided_text(part);
+        for token in normalized.split_whitespace() {
+            if token
+                .chars()
+                .any(|ch| ('\u{4e00}'..='\u{9fff}').contains(&ch))
+            {
+                let chars = token.chars().collect::<Vec<_>>();
+                if chars.len() >= 2 {
+                    push_unique_guided_term(&mut terms, token.to_string());
+                }
+                for size in [2usize, 3usize] {
+                    if chars.len() < size {
+                        continue;
+                    }
+                    for index in 0..=(chars.len() - size) {
+                        push_unique_guided_term(
+                            &mut terms,
+                            chars[index..index + size].iter().collect::<String>(),
+                        );
+                        if terms.len() >= 80 {
+                            return terms;
+                        }
+                    }
+                }
+            } else if token.len() >= 2 {
+                push_unique_guided_term(&mut terms, token.to_string());
+            }
+            if terms.len() >= 80 {
+                return terms;
+            }
+        }
+    }
+    terms
+}
+
+fn wander_item_id(item: &Value) -> String {
+    item.get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn wander_guided_score(item: &Value, terms: &[String], full_query: &str) -> f64 {
+    if terms.is_empty() && full_query.trim().is_empty() {
+        return 0.0;
+    }
+    let title = normalize_guided_text(item.get("title").and_then(Value::as_str).unwrap_or(""));
+    let content = normalize_guided_text(item.get("content").and_then(Value::as_str).unwrap_or(""));
+    let meta = item.get("meta").cloned().unwrap_or_else(|| json!({}));
+    let meta_text = normalize_guided_text(&meta.to_string());
+    let mut score = 0.0;
+    let normalized_query = normalize_guided_text(full_query);
+    let compact_query = normalized_query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("");
+    if compact_query.chars().count() >= 3 {
+        if title.replace(' ', "").contains(&compact_query) {
+            score += 10.0;
+        }
+        if content.replace(' ', "").contains(&compact_query) {
+            score += 5.0;
+        }
+    }
+    for term in terms {
+        if title.contains(term) {
+            score += 4.0;
+        }
+        if content.contains(term) {
+            score += 2.0;
+        }
+        if meta_text.contains(term) {
+            score += 0.75;
+        }
+    }
+    score
+}
+
+fn pick_weighted_guided_items(scored: &mut [(Value, f64)], count: usize, seed: u64) -> Vec<Value> {
+    if scored.is_empty() || count == 0 {
+        return Vec::new();
+    }
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| wander_item_id(&left.0).cmp(&wander_item_id(&right.0)))
+    });
+    let mut pool = scored
+        .iter()
+        .take(30)
+        .map(|(item, score)| (item.clone(), score.max(0.1)))
+        .collect::<Vec<_>>();
+    let mut picked = Vec::new();
+    let mut state = xorshift64(seed);
+    while !pool.is_empty() && picked.len() < count {
+        state = xorshift64(state);
+        let total = pool.iter().map(|(_, score)| *score).sum::<f64>().max(0.1);
+        let mut cursor = (state as f64 / u64::MAX as f64) * total;
+        let mut picked_index = 0usize;
+        for (index, (_, score)) in pool.iter().enumerate() {
+            if cursor <= *score {
+                picked_index = index;
+                break;
+            }
+            cursor -= *score;
+        }
+        picked.push(pool.remove(picked_index).0);
+    }
+    picked
+}
+
+fn compose_guided_wander_items(store: &AppStore, payload: &Value) -> Value {
+    let topic = payload_string(payload, "topic").unwrap_or_default();
+    let seed_text = payload_string(payload, "seedText").unwrap_or_default();
+    let target_count = payload_field(payload, "targetCount")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(3)
+        .clamp(1, 6);
+    let anchor_item = payload
+        .get("anchorItem")
+        .filter(|value| value.is_object())
+        .cloned();
+    let anchor_id = anchor_item
+        .as_ref()
+        .map(wander_item_id)
+        .filter(|id| !id.is_empty());
+    let mut query_parts = vec![topic.clone(), seed_text.clone()];
+    if let Some(anchor) = anchor_item.as_ref() {
+        query_parts.push(
+            anchor
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        );
+        query_parts.push(
+            anchor
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(400)
+                .collect::<String>(),
+        );
+    }
+    let full_query = query_parts
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let terms = extract_guided_terms(&query_parts);
+    let excluded_ids = recent_wander_excluded_ids(store, 5);
+    let mut selected = Vec::new();
+    if let Some(anchor) = anchor_item {
+        selected.push(anchor);
+    }
+    let needed = target_count.saturating_sub(selected.len());
+    let candidate_items = collect_wander_candidate_items(store);
+    let scored = candidate_items
+        .into_iter()
+        .filter(|item| {
+            let id = wander_item_id(item);
+            !id.is_empty()
+                && anchor_id
+                    .as_ref()
+                    .map(|anchor| anchor != &id)
+                    .unwrap_or(true)
+                && !excluded_ids.contains(&id)
+        })
+        .map(|item| {
+            let score = wander_guided_score(&item, &terms, &full_query);
+            (item, score)
+        })
+        .collect::<Vec<_>>();
+    let minimum_score = if anchor_id.is_some() { 0.75 } else { 4.0 };
+    let mut strong_scored = scored
+        .iter()
+        .filter(|(_, score)| *score >= minimum_score)
+        .cloned()
+        .collect::<Vec<_>>();
+    let seed_items = scored.iter().map(|(item, _)| item.clone()).collect::<Vec<_>>();
+    let mut picked =
+        pick_weighted_guided_items(&mut strong_scored, needed, wander_shuffle_seed(&seed_items));
+    if picked.len() < needed {
+        let picked_ids = picked.iter().map(wander_item_id).collect::<HashSet<_>>();
+        let mut relaxed_scored = scored
+            .iter()
+            .filter(|(item, score)| *score > 0.0 && !picked_ids.contains(&wander_item_id(item)))
+            .cloned()
+            .collect::<Vec<_>>();
+        let relaxed_seed_items = relaxed_scored
+            .iter()
+            .map(|(item, _)| item.clone())
+            .collect::<Vec<_>>();
+        let mut relaxed = pick_weighted_guided_items(
+            &mut relaxed_scored,
+            needed - picked.len(),
+            wander_shuffle_seed(&relaxed_seed_items),
+        );
+        picked.append(&mut relaxed);
+    }
+    selected.append(&mut picked);
+    let warning = if selected.len() < target_count {
+        Some(format!(
+            "只找到 {} 条方向相关素材，请换一个主题或选择信息更完整的锚点笔记。",
+            selected.len()
+        ))
+    } else {
+        None
+    };
+    json!({
+        "items": selected,
+        "warning": warning,
+        "query": full_query,
+        "candidateCount": scored.len(),
+    })
+}
+
 fn parse_wander_json_payload(payload: &str) -> Option<Value> {
     let trimmed = payload.trim();
     if trimmed.is_empty() {
@@ -1360,6 +1608,7 @@ pub fn handle_chat_sessions_wander_channel(
             | "wander:list-history"
             | "wander:delete-history"
             | "wander:get-random"
+            | "wander:get-guided-items"
             | "wander:brainstorm"
     ) {
         return None;
@@ -2034,6 +2283,9 @@ pub fn handle_chat_sessions_wander_channel(
                     &excluded_ids,
                 )))
             }),
+            "wander:get-guided-items" => with_store(state, |store| {
+                Ok(compose_guided_wander_items(&store, &payload))
+            }),
             "wander:brainstorm" => {
                 let request_started_at = now_ms();
                 let (mut items, options) = parse_wander_brainstorm_payload(&payload);
@@ -2508,5 +2760,133 @@ mod tests {
         assert!(prompt.contains("宿主已经预读了每条素材的关键内容"));
         assert!(prompt.contains("先用预读 bundle 判断"));
         assert!(!prompt.contains("至少发起 1 次工具调用"));
+    }
+
+    #[test]
+    fn compose_guided_wander_items_keeps_anchor_and_filters_by_direction() {
+        let mut store = AppStore::default();
+        store.knowledge_notes = vec![
+            KnowledgeNoteRecord {
+                id: "note-fasting-1".to_string(),
+                r#type: None,
+                source_domain: None,
+                source_link: None,
+                source_url: None,
+                title: "轻断食反弹后怎么重新开始".to_string(),
+                author: "tester".to_string(),
+                author_id: None,
+                author_url: None,
+                author_avatar_url: None,
+                author_description: None,
+                content: "减脂失败、暴食和反弹后的复盘。".to_string(),
+                excerpt: None,
+                site_name: None,
+                capture_kind: Some("note".to_string()),
+                html_file: None,
+                html_file_url: None,
+                images: Vec::new(),
+                tags: Some(vec!["轻断食".to_string(), "减脂".to_string()]),
+                cover: None,
+                video: None,
+                video_url: None,
+                transcript: None,
+                transcription_status: None,
+                stats: KnowledgeNoteStatsRecord {
+                    likes: 0,
+                    collects: None,
+                },
+                created_at: "2026-04-27T00:00:00Z".to_string(),
+                folder_path: None,
+            },
+            KnowledgeNoteRecord {
+                id: "note-fasting-2".to_string(),
+                r#type: None,
+                source_domain: None,
+                source_link: None,
+                source_url: None,
+                title: "减脂期暴食不是意志力差".to_string(),
+                author: "tester".to_string(),
+                author_id: None,
+                author_url: None,
+                author_avatar_url: None,
+                author_description: None,
+                content: "轻断食后报复性进食导致体重反弹。".to_string(),
+                excerpt: None,
+                site_name: None,
+                capture_kind: Some("note".to_string()),
+                html_file: None,
+                html_file_url: None,
+                images: Vec::new(),
+                tags: Some(vec!["暴食".to_string(), "反弹".to_string()]),
+                cover: None,
+                video: None,
+                video_url: None,
+                transcript: None,
+                transcription_status: None,
+                stats: KnowledgeNoteStatsRecord {
+                    likes: 0,
+                    collects: None,
+                },
+                created_at: "2026-04-27T00:00:00Z".to_string(),
+                folder_path: None,
+            },
+            KnowledgeNoteRecord {
+                id: "note-unrelated".to_string(),
+                r#type: None,
+                source_domain: None,
+                source_link: None,
+                source_url: None,
+                title: "春季穿搭和口红颜色".to_string(),
+                author: "tester".to_string(),
+                author_id: None,
+                author_url: None,
+                author_avatar_url: None,
+                author_description: None,
+                content: "通勤穿搭、配饰和妆容。".to_string(),
+                excerpt: None,
+                site_name: None,
+                capture_kind: Some("note".to_string()),
+                html_file: None,
+                html_file_url: None,
+                images: Vec::new(),
+                tags: Some(vec!["穿搭".to_string()]),
+                cover: None,
+                video: None,
+                video_url: None,
+                transcript: None,
+                transcription_status: None,
+                stats: KnowledgeNoteStatsRecord {
+                    likes: 0,
+                    collects: None,
+                },
+                created_at: "2026-04-27T00:00:00Z".to_string(),
+                folder_path: None,
+            },
+        ];
+
+        let response = compose_guided_wander_items(
+            &store,
+            &json!({
+                "topic": "轻断食反弹",
+                "seedText": "最近减脂后暴食，想写失败复盘",
+                "anchorItem": {
+                    "id": "anchor-note",
+                    "type": "note",
+                    "title": "我的轻断食经历",
+                    "content": "断食之后反弹，很挫败。"
+                },
+                "targetCount": 3
+            }),
+        );
+
+        let items = response["items"].as_array().expect("items");
+        let ids = items
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(ids.first(), Some(&"anchor-note"));
+        assert!(ids.contains(&"note-fasting-1"));
+        assert!(ids.contains(&"note-fasting-2"));
+        assert!(!ids.contains(&"note-unrelated"));
     }
 }
