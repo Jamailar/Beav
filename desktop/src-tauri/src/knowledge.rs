@@ -9,7 +9,9 @@ use crate::workspace_loaders::read_json_file;
 use crate::*;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 use url::Url;
@@ -41,6 +43,12 @@ pub(crate) struct KnowledgeEntryStatsInput {
 pub(crate) struct KnowledgeEntryContentInput {
     pub title: String,
     pub author: Option<String>,
+    pub author_id: Option<String>,
+    pub author_url: Option<String>,
+    pub author_profile_url: Option<String>,
+    pub author_avatar_url: Option<String>,
+    pub author_description: Option<String>,
+    pub author_platform_user_id: Option<String>,
     pub text: Option<String>,
     pub excerpt: Option<String>,
     pub html: Option<String>,
@@ -640,6 +648,216 @@ fn note_entry_id(seed: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone)]
+struct KnowledgeAuthorReference {
+    id: String,
+    profile_url: Option<String>,
+    avatar_url: Option<String>,
+    description: Option<String>,
+}
+
+fn author_entry_id(seed: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    seed.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    let slug = slug_from_relative_path(seed);
+    if slug.is_empty() {
+        format!("author-{hash}")
+    } else {
+        format!(
+            "author-{}-{hash}",
+            slug.chars().take(48).collect::<String>()
+        )
+    }
+}
+
+fn knowledge_authors_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = knowledge_root(state)?.join("authors");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn normalize_author_profile_url(
+    request: &KnowledgeEntryIngestRequest,
+    normalized_kind: &str,
+) -> Option<String> {
+    normalize_string(request.content.author_url.clone())
+        .or_else(|| normalize_string(request.content.author_profile_url.clone()))
+        .or_else(|| {
+            if normalized_kind == "xhs-blogger" {
+                source_link_from_input(&request.source)
+            } else {
+                None
+            }
+        })
+}
+
+fn knowledge_platform_from_source(
+    source_domain: Option<&str>,
+    profile_url: Option<&str>,
+) -> String {
+    let combined = format!(
+        "{} {}",
+        source_domain.unwrap_or_default().to_ascii_lowercase(),
+        profile_url.unwrap_or_default().to_ascii_lowercase()
+    );
+    if combined.contains("xiaohongshu.com") {
+        "xiaohongshu".to_string()
+    } else if combined.contains("douyin.com") {
+        "douyin".to_string()
+    } else if combined.contains("bilibili.com") {
+        "bilibili".to_string()
+    } else if combined.contains("kuaishou.com") || combined.contains("kwaixiaodian.com") {
+        "kuaishou".to_string()
+    } else if combined.contains("tiktok.com") {
+        "tiktok".to_string()
+    } else if combined.contains("reddit.com") {
+        "reddit".to_string()
+    } else if combined.contains("x.com") || combined.contains("twitter.com") {
+        "x".to_string()
+    } else if combined.contains("instagram.com") {
+        "instagram".to_string()
+    } else if combined.contains("youtube.com") || combined.contains("youtu.be") {
+        "youtube".to_string()
+    } else if combined.contains("weixin.qq.com") {
+        "wechat".to_string()
+    } else {
+        "web".to_string()
+    }
+}
+
+fn should_create_author_profile(author: &str) -> bool {
+    let normalized = author.trim();
+    !normalized.is_empty() && !matches!(normalized, "原文链接" | "手动导入" | "文本摘录" | "未知")
+}
+
+fn upsert_knowledge_author_profile(
+    state: &State<'_, AppState>,
+    request: &KnowledgeEntryIngestRequest,
+    normalized_kind: &str,
+    note_id: &str,
+    author: &str,
+    source_domain: Option<&str>,
+    created_at: &str,
+) -> Result<Option<KnowledgeAuthorReference>, String> {
+    if !should_create_author_profile(author) {
+        return Ok(None);
+    }
+    let profile_url = normalize_author_profile_url(request, normalized_kind);
+    let platform_user_id = normalize_string(request.content.author_platform_user_id.clone());
+    let explicit_author_id = normalize_string(request.content.author_id.clone())
+        .map(|value| slug_from_relative_path(&value))
+        .filter(|value| !value.is_empty());
+    let seed = explicit_author_id
+        .clone()
+        .or_else(|| {
+            platform_user_id
+                .as_ref()
+                .map(|value| format!("{}:{value}", source_domain.unwrap_or("web")))
+        })
+        .or_else(|| profile_url.clone())
+        .unwrap_or_else(|| format!("{}:{author}", source_domain.unwrap_or("web")));
+    let author_id = explicit_author_id.unwrap_or_else(|| author_entry_id(&seed));
+    let author_dir = knowledge_authors_root(state)?.join(&author_id);
+    fs::create_dir_all(&author_dir).map_err(|error| error.to_string())?;
+    let meta_path = author_dir.join("meta.json");
+    let existing = read_json_value_or(&meta_path, json!({}));
+    let mut linked_note_ids = existing
+        .get("linkedNoteIds")
+        .or_else(|| existing.get("linked_note_ids"))
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !linked_note_ids.iter().any(|item| item == note_id) {
+        linked_note_ids.push(note_id.to_string());
+    }
+    let avatar_url = normalize_string(request.content.author_avatar_url.clone()).or_else(|| {
+        existing
+            .get("avatarUrl")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string)
+    });
+    let description = normalize_string(request.content.author_description.clone())
+        .or_else(|| {
+            normalize_string(request.content.description.clone())
+                .filter(|_| normalized_kind == "xhs-blogger")
+        })
+        .or_else(|| {
+            existing
+                .get("description")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+        });
+    let platform = knowledge_platform_from_source(source_domain, profile_url.as_deref());
+    let first_seen_at = existing
+        .get("firstSeenAt")
+        .or_else(|| existing.get("createdAt"))
+        .and_then(|value| value.as_str())
+        .unwrap_or(created_at)
+        .to_string();
+    let updated_at = now_iso();
+    let note_count = linked_note_ids.len() as i64;
+    let meta = json!({
+        "id": author_id.clone(),
+        "type": "knowledge-author",
+        "name": author,
+        "platform": platform,
+        "platformUserId": platform_user_id.clone(),
+        "handle": author,
+        "profileUrl": profile_url.clone(),
+        "avatarUrl": avatar_url.clone(),
+        "description": description.clone(),
+        "sourceDomain": source_domain,
+        "linkedNoteIds": linked_note_ids,
+        "noteCount": note_count,
+        "firstSeenAt": first_seen_at.clone(),
+        "latestNoteAt": created_at,
+        "createdAt": first_seen_at.clone(),
+        "updatedAt": updated_at,
+    });
+    write_json_value(&meta_path, &meta)?;
+    let profile_markdown = [
+        format!("# {author}"),
+        String::new(),
+        format!(
+            "平台: {}",
+            meta.get("platform")
+                .and_then(|value| value.as_str())
+                .unwrap_or("web")
+        ),
+        profile_url
+            .as_ref()
+            .map(|value| format!("主页: {value}"))
+            .unwrap_or_default(),
+        platform_user_id
+            .as_ref()
+            .map(|value| format!("平台用户ID: {value}"))
+            .unwrap_or_default(),
+        description
+            .as_ref()
+            .map(|value| format!("简介: {value}"))
+            .unwrap_or_default(),
+        format!("已关联笔记: {note_count}"),
+    ]
+    .into_iter()
+    .filter(|line| !line.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
+    fs::write(author_dir.join("profile.md"), profile_markdown)
+        .map_err(|error| error.to_string())?;
+    Ok(Some(KnowledgeAuthorReference {
+        id: author_id,
+        profile_url,
+        avatar_url,
+        description,
+    }))
+}
+
 fn youtube_entry_dir(state: &State<'_, AppState>, entry_id: &str) -> Result<PathBuf, String> {
     let root = knowledge_root(state)?.join("youtube").join(entry_id);
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
@@ -1154,6 +1372,27 @@ fn normalize_entry_kind(kind: &str) -> String {
     }
 }
 
+const SOCIAL_ENTRY_KINDS: &[&str] = &[
+    "bilibili-video",
+    "bilibili-profile",
+    "bilibili-search",
+    "bilibili-page",
+    "kuaishou-video",
+    "kuaishou-page",
+    "tiktok-video",
+    "tiktok-page",
+    "reddit-post",
+    "reddit-page",
+    "x-post",
+    "x-page",
+    "instagram-post",
+    "instagram-page",
+];
+
+fn is_supported_social_entry_kind(kind: &str) -> bool {
+    SOCIAL_ENTRY_KINDS.contains(&kind)
+}
+
 fn note_meta_type(kind: &str) -> String {
     if kind == "text-note" {
         "text".to_string()
@@ -1539,6 +1778,16 @@ fn ingest_note_entry(
         existing_transcription_status
     };
     let created_at = normalize_string(request.source.captured_at.clone()).unwrap_or_else(now_iso);
+    let author = derive_note_author(request, &normalized_kind);
+    let author_profile = upsert_knowledge_author_profile(
+        state,
+        request,
+        &normalized_kind,
+        &entry_id,
+        &author,
+        source_domain.as_deref(),
+        &created_at,
+    )?;
     let meta = json!({
         "id": entry_id,
         "type": note_meta_type(&normalized_kind),
@@ -1551,7 +1800,11 @@ fn ingest_note_entry(
         "externalId": normalize_string(request.source.external_id.clone()),
         "dedupeKey": normalize_string(request.options.dedupe_key.clone()),
         "title": title,
-        "author": derive_note_author(request, &normalized_kind),
+        "author": author,
+        "authorId": author_profile.as_ref().map(|item| item.id.clone()),
+        "authorUrl": author_profile.as_ref().and_then(|item| item.profile_url.clone()),
+        "authorAvatarUrl": author_profile.as_ref().and_then(|item| item.avatar_url.clone()),
+        "authorDescription": author_profile.as_ref().and_then(|item| item.description.clone()),
         "excerpt": normalize_string(request.content.excerpt.clone()),
         "description": normalize_string(request.content.description.clone()),
         "siteName": normalize_string(request.content.site_name.clone()),
@@ -1603,6 +1856,7 @@ fn ingest_note_entry(
         "duplicate": existing_entry_id.is_some(),
         "updated": existing_entry_id.is_some(),
         "entryId": entry_id,
+        "authorId": author_profile.as_ref().map(|item| item.id.clone()),
         "requestedActions": {
             "summarize": request.options.summarize,
             "transcribe": request.options.transcribe,
@@ -1821,9 +2075,9 @@ pub(crate) fn ingest_entry(
     match kind {
         "youtube-video" => ingest_youtube_entry(app, state, request),
         "xhs-note" | "xhs-video" | "douyin-video" | "link-article" | "wechat-article"
-        | "knowledge-note" | "webpage" | "article" | "text-note" => {
-            ingest_note_entry(app, state, request)
-        }
+        | "xhs-blogger" | "xhs-comments" | "knowledge-note" | "webpage" | "article"
+        | "text-note" => ingest_note_entry(app, state, request),
+        kind if is_supported_social_entry_kind(kind) => ingest_note_entry(app, state, request),
         other => Err(format!("暂不支持的 knowledge entry kind: {other}")),
     }
 }
@@ -1901,6 +2155,8 @@ pub(crate) fn knowledge_http_health(
                     "youtube-video",
                     "xhs-note",
                     "xhs-video",
+                    "xhs-blogger",
+                    "xhs-comments",
                     "douyin-video",
                     "link-article",
                     "wechat-article",
@@ -1908,6 +2164,20 @@ pub(crate) fn knowledge_http_health(
                     "webpage",
                     "article",
                     "text-note",
+                    "bilibili-video",
+                    "bilibili-profile",
+                    "bilibili-search",
+                    "bilibili-page",
+                    "kuaishou-video",
+                    "kuaishou-page",
+                    "tiktok-video",
+                    "tiktok-page",
+                    "reddit-post",
+                    "reddit-page",
+                    "x-post",
+                    "x-page",
+                    "instagram-post",
+                    "instagram-page",
                 ],
                 "mediaAssetKinds": ["image"],
             },
@@ -2295,8 +2565,9 @@ pub(crate) fn persist_note_transcript(
 mod tests {
     use super::{
         decode_embedded_js_string, extract_css_url_near, extract_html_attribute_near,
-        extract_json_string_values, maybe_backfill_xiaohongshu_assets,
-        note_transcript_file_from_meta, KnowledgeEntryAssetsInput,
+        extract_json_string_values, is_supported_social_entry_kind,
+        maybe_backfill_xiaohongshu_assets, note_transcript_file_from_meta,
+        KnowledgeEntryAssetsInput,
     };
     use serde_json::json;
 
@@ -2365,5 +2636,23 @@ mod tests {
             note_transcript_file_from_meta(&json!({ "transcript": "hello" })),
             Some("transcript.md".to_string())
         );
+    }
+
+    #[test]
+    fn accepts_social_platform_entry_kinds() {
+        for kind in [
+            "bilibili-video",
+            "kuaishou-video",
+            "tiktok-video",
+            "reddit-post",
+            "x-post",
+            "instagram-post",
+        ] {
+            assert!(
+                is_supported_social_entry_kind(kind),
+                "{kind} should be supported"
+            );
+        }
+        assert!(!is_supported_social_entry_kind("unknown-social-kind"));
     }
 }

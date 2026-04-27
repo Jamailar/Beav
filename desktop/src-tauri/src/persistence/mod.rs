@@ -17,10 +17,11 @@ use crate::workspace_loaders::{
 };
 use crate::{
     active_space_workspace_root_from_store, load_advisors_from_fs, load_cover_assets_from_fs,
-    load_document_sources_from_fs, load_knowledge_notes_from_fs, load_media_assets_from_fs,
-    load_redclaw_state_from_fs, load_subject_categories_from_fs, load_subjects_from_fs,
-    load_work_items_from_fs, load_youtube_videos_from_fs, now_iso, storage_safe_file_stem,
-    AppState, AppStore, AssistantStateRecord, RedclawStateRecord, SpaceRecord,
+    load_document_sources_from_fs, load_knowledge_authors_from_fs, load_knowledge_notes_from_fs,
+    load_media_assets_from_fs, load_redclaw_state_from_fs, load_subject_categories_from_fs,
+    load_subjects_from_fs, load_work_items_from_fs, load_youtube_videos_from_fs, now_iso,
+    storage_safe_file_stem, AppState, AppStore, AssistantStateRecord, RedclawStateRecord,
+    SpaceRecord,
 };
 
 pub(crate) struct WorkspaceHydrationSnapshot {
@@ -34,6 +35,7 @@ pub(crate) struct WorkspaceHydrationSnapshot {
     media_assets: Vec<crate::MediaAssetRecord>,
     cover_assets: Vec<crate::CoverAssetRecord>,
     knowledge_notes: Vec<crate::KnowledgeNoteRecord>,
+    knowledge_authors: Vec<crate::KnowledgeAuthorRecord>,
     youtube_videos: Vec<crate::YoutubeVideoRecord>,
     document_sources: Vec<crate::DocumentKnowledgeSourceRecord>,
     redclaw_state: RedclawStateRecord,
@@ -42,6 +44,7 @@ pub(crate) struct WorkspaceHydrationSnapshot {
 
 pub(crate) struct KnowledgeHydrationSnapshot {
     knowledge_notes: Vec<crate::KnowledgeNoteRecord>,
+    knowledge_authors: Vec<crate::KnowledgeAuthorRecord>,
     youtube_videos: Vec<crate::YoutubeVideoRecord>,
     document_sources: Vec<crate::DocumentKnowledgeSourceRecord>,
 }
@@ -96,6 +99,7 @@ pub(crate) fn load_workspace_hydration_snapshot(root: &Path) -> WorkspaceHydrati
         media_assets: load_media_assets_from_fs(&root.join("media")),
         cover_assets: load_cover_assets_from_fs(&root.join("cover")),
         knowledge_notes: load_knowledge_notes_from_fs(&root.join("knowledge")),
+        knowledge_authors: load_knowledge_authors_from_fs(&root.join("knowledge")),
         youtube_videos: load_youtube_videos_from_fs(&root.join("knowledge")),
         document_sources: load_document_sources_from_fs(&root.join("knowledge")),
         redclaw_state: load_redclaw_state_from_fs(&root.join("redclaw")),
@@ -107,6 +111,7 @@ pub(crate) fn load_knowledge_hydration_snapshot(root: &Path) -> KnowledgeHydrati
     let knowledge_root = root.join("knowledge");
     KnowledgeHydrationSnapshot {
         knowledge_notes: load_knowledge_notes_from_fs(&knowledge_root),
+        knowledge_authors: load_knowledge_authors_from_fs(&knowledge_root),
         youtube_videos: load_youtube_videos_from_fs(&knowledge_root),
         document_sources: load_document_sources_from_fs(&knowledge_root),
     }
@@ -117,6 +122,7 @@ pub(crate) fn apply_knowledge_hydration_snapshot(
     snapshot: KnowledgeHydrationSnapshot,
 ) {
     store.knowledge_notes = snapshot.knowledge_notes;
+    store.knowledge_authors = snapshot.knowledge_authors;
     store.youtube_videos = snapshot.youtube_videos;
     store.document_sources = snapshot.document_sources;
 }
@@ -223,6 +229,7 @@ pub(crate) fn apply_workspace_hydration_snapshot(
     store.media_assets = snapshot.media_assets;
     store.cover_assets = snapshot.cover_assets;
     store.knowledge_notes = snapshot.knowledge_notes;
+    store.knowledge_authors = snapshot.knowledge_authors;
     store.youtube_videos = snapshot.youtube_videos;
     store.document_sources = snapshot.document_sources;
     store.redclaw_state = snapshot.redclaw_state;
@@ -464,6 +471,7 @@ pub fn default_store() -> AppStore {
         manuscript_write_proposals: Vec::new(),
         youtube_videos: Vec::new(),
         knowledge_notes: Vec::new(),
+        knowledge_authors: Vec::new(),
         document_sources: Vec::new(),
         session_transcript_records: Vec::new(),
         session_checkpoints: Vec::new(),
@@ -689,6 +697,7 @@ pub fn hydrate_store_from_workspace_files(
 pub fn ensure_store_hydrated_for_knowledge(state: &State<'_, AppState>) -> Result<(), String> {
     let root = with_store(state, |store| {
         let needs_hydration = store.knowledge_notes.is_empty()
+            || store.knowledge_authors.is_empty()
             || store.youtube_videos.is_empty()
             || store.document_sources.is_empty();
         if !needs_hydration {

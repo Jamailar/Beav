@@ -570,6 +570,8 @@ fn summary_to_legacy_note(summary: &KnowledgeCatalogSummary) -> Value {
         "sourceUrl": summary.source_url,
         "title": summary.title,
         "author": summary.author,
+        "authorId": summary.author_id,
+        "authorUrl": summary.author_url,
         "content": "",
         "excerpt": summary.preview_text,
         "siteName": summary.site_name,
