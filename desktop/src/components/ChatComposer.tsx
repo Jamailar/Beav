@@ -34,6 +34,7 @@ export interface UploadedFileAttachment {
   ext?: string;
   size?: number;
   thumbnailDataUrl?: string;
+  inlineDataUrl?: string;
   workspaceRelativePath?: string;
   absolutePath?: string;
   originalAbsolutePath?: string;
@@ -146,6 +147,7 @@ function modelSupportsChat(model: string | { id?: unknown; capability?: unknown;
 function getAttachmentSource(attachment: UploadedFileAttachment): string {
   const preferred = String(
     attachment.thumbnailDataUrl
+      || attachment.inlineDataUrl
       || attachment.localUrl
       || attachment.absolutePath
       || attachment.originalAbsolutePath
@@ -169,7 +171,8 @@ function getAttachmentVisualKind(attachment: UploadedFileAttachment): ComposerAt
   const kind = String(attachment.kind || '').trim().toLowerCase();
   const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
   const source = String(
-    attachment.localUrl
+    attachment.inlineDataUrl
+      || attachment.localUrl
       || attachment.absolutePath
       || attachment.originalAbsolutePath
       || attachment.name

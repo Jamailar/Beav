@@ -39,7 +39,7 @@ async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
     return await invoke('ipc_invoke', { channel, payload: payload ?? null });
   } catch (error) {
     console.warn(`[RedBox] invoke failed for ${channel}:`, error);
-    return buildFallbackResponse(channel, error);
+    return buildFallbackResponse(channel, error, payload);
   }
 }
 
@@ -146,7 +146,65 @@ async function invokeCommandGuarded<T = unknown>(
   }
 }
 
-function buildFallbackResponse(channel: string, error: unknown): any {
+function dataUrlMimeType(dataUrl: string): string {
+  const match = String(dataUrl || '').match(/^data:([^;,]+)[;,]/i);
+  return String(match?.[1] || '').trim().toLowerCase();
+}
+
+function dataUrlPayloadByteSize(dataUrl: string): number {
+  const base64 = String(dataUrl || '').split(',', 2)[1] || '';
+  if (!base64) return 0;
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function fileExtFromName(fileName: string): string {
+  const match = String(fileName || '').match(/\.([^.]+)$/);
+  return String(match?.[1] || '').trim().toLowerCase();
+}
+
+function inlineAttachmentFallback(payload: unknown): any {
+  const record = payload && typeof payload === 'object'
+    ? payload as Record<string, unknown>
+    : {};
+  const dataUrl = String(record.dataUrl || '').trim();
+  if (!dataUrl.startsWith('data:')) {
+    return { success: false, error: 'RedBox inline attachment fallback missing dataUrl' };
+  }
+  const fileName = String(record.fileName || '').trim() || `inline-image-${Date.now()}.png`;
+  const mimeType = dataUrlMimeType(dataUrl) || 'application/octet-stream';
+  const kind = mimeType.startsWith('image/')
+    ? 'image'
+    : mimeType.startsWith('video/')
+      ? 'video'
+      : mimeType.startsWith('audio/')
+        ? 'audio'
+        : mimeType.startsWith('text/')
+          ? 'text'
+          : 'binary';
+
+  return {
+    success: true,
+    attachment: {
+      type: 'uploaded-file',
+      name: fileName,
+      ext: fileExtFromName(fileName),
+      size: dataUrlPayloadByteSize(dataUrl),
+      thumbnailDataUrl: kind === 'image' ? dataUrl : undefined,
+      inlineDataUrl: dataUrl,
+      kind,
+      mimeType,
+      storageMode: 'inline',
+      directUploadEligible: kind === 'image',
+      processingStrategy: kind === 'image' ? 'direct' : 'inline',
+      deliveryMode: kind === 'image' ? 'direct-input' : 'tool-read',
+      summary: fileName,
+      requiresMultimodal: kind === 'image' || kind === 'audio' || kind === 'video',
+    },
+  };
+}
+
+function buildFallbackResponse(channel: string, error: unknown, payload?: unknown): any {
   const message = error instanceof Error ? error.message : String(error);
 
   if (channel === 'spaces:list') {
@@ -233,6 +291,9 @@ function buildFallbackResponse(channel: string, error: unknown): any {
   }
   if (channel === 'chat:pick-attachment') {
     return { success: true, canceled: true };
+  }
+  if (channel === 'chat:create-inline-attachment') {
+    return inlineAttachmentFallback(payload);
   }
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };

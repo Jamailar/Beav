@@ -361,6 +361,7 @@ struct AppStore {
     manuscript_write_proposals: Vec<ManuscriptWriteProposalRecord>,
     youtube_videos: Vec<YoutubeVideoRecord>,
     knowledge_notes: Vec<KnowledgeNoteRecord>,
+    knowledge_authors: Vec<KnowledgeAuthorRecord>,
     document_sources: Vec<DocumentKnowledgeSourceRecord>,
     session_transcript_records: Vec<SessionTranscriptRecord>,
     session_checkpoints: Vec<SessionCheckpointRecord>,
@@ -567,6 +568,10 @@ struct KnowledgeNoteRecord {
     source_url: Option<String>,
     title: String,
     author: String,
+    author_id: Option<String>,
+    author_url: Option<String>,
+    author_avatar_url: Option<String>,
+    author_description: Option<String>,
     content: String,
     excerpt: Option<String>,
     site_name: Option<String>,
@@ -582,6 +587,28 @@ struct KnowledgeNoteRecord {
     transcription_status: Option<String>,
     stats: KnowledgeNoteStatsRecord,
     created_at: String,
+    folder_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KnowledgeAuthorRecord {
+    id: String,
+    r#type: String,
+    name: String,
+    platform: String,
+    platform_user_id: Option<String>,
+    handle: Option<String>,
+    profile_url: Option<String>,
+    avatar_url: Option<String>,
+    description: Option<String>,
+    source_domain: Option<String>,
+    linked_note_ids: Vec<String>,
+    note_count: i64,
+    first_seen_at: String,
+    latest_note_at: Option<String>,
+    created_at: String,
+    updated_at: String,
     folder_path: Option<String>,
 }
 
@@ -1495,7 +1522,8 @@ mod tests {
     use super::{
         append_generated_media_markdown, asset_preview_url_from_result,
         clear_interactive_execution_contract_metadata, decode_command_json_stdout,
-        guess_mime_and_kind, interactive_execution_progress_observe_success,
+        guess_mime_and_kind, interactive_attachment_inline_data_url,
+        interactive_base64_payload_size, interactive_execution_progress_observe_success,
         interactive_skill_activation_continuation, interactive_skill_activations,
         interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result,
@@ -1512,6 +1540,18 @@ mod tests {
         assert_eq!(mime_type, "image/svg+xml");
         assert_eq!(kind, "image");
         assert!(direct_upload_eligible);
+    }
+
+    #[test]
+    fn interactive_attachment_inline_data_url_reads_base64_payload() {
+        let attachment = json!({
+            "inlineDataUrl": "data:image/png;base64,aGVsbG8="
+        });
+        let (mime_type, base64_data) =
+            interactive_attachment_inline_data_url(&attachment).expect("inline data url");
+        assert_eq!(mime_type, "image/png");
+        assert_eq!(base64_data, "aGVsbG8=");
+        assert_eq!(interactive_base64_payload_size(&base64_data), 5);
     }
 
     #[test]
@@ -4328,6 +4368,45 @@ fn interactive_attachment_kind(attachment: &Value) -> String {
         .to_ascii_lowercase()
 }
 
+fn interactive_attachment_inline_data_url(attachment: &Value) -> Option<(String, String)> {
+    let data_url = interactive_attachment_string_field(attachment, "inlineDataUrl")?;
+    let (metadata, payload) = data_url.split_once(',')?;
+    let metadata = metadata.strip_prefix("data:")?;
+    if !metadata
+        .split(';')
+        .any(|part| part.eq_ignore_ascii_case("base64"))
+    {
+        return None;
+    }
+    let mime_type = metadata
+        .split(';')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let base64_data = payload.trim().to_string();
+    if base64_data.is_empty() {
+        return None;
+    }
+    Some((mime_type, base64_data))
+}
+
+fn interactive_base64_payload_size(base64_data: &str) -> u64 {
+    let trimmed = base64_data.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    let padding = if trimmed.ends_with("==") {
+        2
+    } else if trimmed.ends_with('=') {
+        1
+    } else {
+        0
+    };
+    ((trimmed.len() * 3) / 4).saturating_sub(padding) as u64
+}
+
 fn interactive_transport_supports_direct_attachment(protocol: &str, attachment_kind: &str) -> bool {
     match protocol {
         "openai" | "anthropic" => attachment_kind == "image",
@@ -4407,7 +4486,13 @@ fn interactive_attachment_direct_input_payload(
         return Ok(None);
     }
     let attachment_kind = interactive_attachment_kind(attachment);
+    let inline_data = interactive_attachment_inline_data_url(attachment);
+    let base64_data = inline_data
+        .as_ref()
+        .map(|(_, data)| data.clone())
+        .or_else(|| interactive_attachment_string_field(attachment, "base64Data"));
     let mime_type = interactive_attachment_string_field(attachment, "mimeType")
+        .or_else(|| inline_data.as_ref().map(|(mime_type, _)| mime_type.clone()))
         .unwrap_or_else(|| "application/octet-stream".to_string());
     if !interactive_model_supports_direct_attachment(
         protocol,
@@ -4417,13 +4502,25 @@ fn interactive_attachment_direct_input_payload(
     ) {
         return Ok(None);
     }
+    let max_bytes = interactive_direct_attachment_max_bytes(protocol, &attachment_kind);
+    if let Some(base64_data) = base64_data {
+        let size = interactive_base64_payload_size(&base64_data);
+        if max_bytes == 0 || size == 0 || size > max_bytes {
+            return Ok(None);
+        }
+        return Ok(Some(json!({
+            "kind": attachment_kind,
+            "mimeType": mime_type,
+            "name": interactive_attachment_string_field(attachment, "name").unwrap_or_else(|| "attachment".to_string()),
+            "base64Data": base64_data,
+        })));
+    }
     let absolute_path = interactive_attachment_string_field(attachment, "absolutePath")
         .or_else(|| interactive_attachment_string_field(attachment, "originalAbsolutePath"));
     let Some(absolute_path) = absolute_path else {
         return Ok(None);
     };
     let metadata = fs::metadata(&absolute_path).map_err(|error| error.to_string())?;
-    let max_bytes = interactive_direct_attachment_max_bytes(protocol, &attachment_kind);
     if max_bytes == 0 || metadata.len() == 0 || metadata.len() > max_bytes {
         return Ok(None);
     }
