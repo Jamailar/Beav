@@ -6,12 +6,14 @@ import process from 'node:process';
 import {
   assertBundledGuideResources,
   artifactsRoot,
+  browserPluginSourceDir,
   bundleRootForTarget,
   copyArtifactToDir,
   ensureRustTargets,
   ensureCommandExists,
   envFlag,
   findNewestFile,
+  getBrowserPluginInfo,
   installerArtifactsDir,
   logStep,
   parseTargetList,
@@ -36,6 +38,10 @@ function shellQuote(value) {
 
 function remoteCommand(parts) {
   return parts.filter(Boolean).join(' ');
+}
+
+function remoteSiblingDir(remoteWorkdir, dirname) {
+  return path.posix.join(path.posix.dirname(remoteWorkdir.replace(/\/+$/, '')), dirname);
 }
 
 function remoteNsisDirForTarget(remoteWorkdir, target) {
@@ -260,6 +266,10 @@ async function buildLocally({ targets, runner, signCommand, requireSigning }) {
   await ensureCommandExists('rustup');
   const tauriConfig = await readTauriConfig();
   assertBundledGuideResources(tauriConfig);
+  const pluginInfo = await getBrowserPluginInfo();
+  logStep(
+    `Using browser plugin ${pluginInfo.version} (${pluginInfo.fileCount} files, ${pluginInfo.digest.slice(0, 12)})`,
+  );
   await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot });
 
   const hostIsWindows = process.platform === 'win32';
@@ -372,10 +382,17 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
 
   const remoteScriptPath = path.posix.join(remoteWorkdir, 'scripts', 'build-windows-release.mjs');
   const remoteRoot = `${remoteHost}:${remoteWorkdir}/`;
+  const remotePluginDir = remoteSiblingDir(remoteWorkdir, 'Plugin');
   const localWinDir = installerArtifactsDir('windows');
+  const pluginInfo = await getBrowserPluginInfo();
 
   logStep(`Syncing source to ${remoteHost}:${remoteWorkdir}`);
-  await runCommand('ssh', [remoteHost, `mkdir -p ${shellQuote(remoteWorkdir)}`], { cwd: repoRoot });
+  logStep(
+    `Syncing browser plugin ${pluginInfo.version} (${pluginInfo.fileCount} files, ${pluginInfo.digest.slice(0, 12)})`,
+  );
+  await runCommand('ssh', [remoteHost, `mkdir -p ${shellQuote(remoteWorkdir)} ${shellQuote(remotePluginDir)}`], {
+    cwd: repoRoot,
+  });
   await runCommand(
     'rsync',
     [
@@ -388,6 +405,17 @@ async function buildOnRemote({ targets, runner, signCommand, requireSigning, rem
       '--exclude=src-tauri/target',
       `${repoRoot}/`,
       remoteRoot,
+    ],
+    { cwd: repoRoot },
+  );
+  await runCommand(
+    'rsync',
+    [
+      '-az',
+      '--delete',
+      '--exclude=.DS_Store',
+      `${browserPluginSourceDir}/`,
+      `${remoteHost}:${remotePluginDir}/`,
     ],
     { cwd: repoRoot },
   );
