@@ -29,6 +29,13 @@ interface SettingsShape {
     active_space_id?: string;
 }
 
+interface WorkspaceSpace {
+    id: string;
+    name: string;
+    createdAt?: string;
+    updatedAt?: string;
+}
+
 interface CoverTemplate {
     id: string;
     name: string;
@@ -362,6 +369,7 @@ const normalizeTitleEntries = (entries: CoverTitleEntry[]): Array<{ type: string
 export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [spaceId, setSpaceId] = useState('default');
+    const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
 
     const [templates, setTemplates] = useState<CoverTemplate[]>([]);
     const [activeTemplateId, setActiveTemplateId] = useState('');
@@ -387,6 +395,10 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     const [recentAssets, setRecentAssets] = useState<CoverAsset[]>([]);
 
     const storageKey = useMemo(() => getTemplateStorageKey(spaceId), [spaceId]);
+    const activeSpaceName = useMemo(
+        () => spaces.find((space) => space.id === spaceId)?.name || spaceId,
+        [spaceId, spaces]
+    );
     const normalizeTemplateList = useCallback((items: unknown[] | undefined): CoverTemplate[] => (
         Array.isArray(items)
             ? items.map(normalizeTemplate).filter((item): item is CoverTemplate => Boolean(item)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -437,6 +449,19 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
             setQuality(next.image_quality || 'auto');
         } catch (error) {
             console.error('Failed to load cover settings:', error);
+        }
+    }, []);
+
+    const loadSpaceContext = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.spaces.list() as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
+            const nextSpaces = Array.isArray(result?.spaces) ? result.spaces : [];
+            setSpaces(nextSpaces);
+            if (result?.activeSpaceId) {
+                setSpaceId(result.activeSpaceId);
+            }
+        } catch (error) {
+            console.error('Failed to load cover spaces:', error);
         }
     }, []);
 
@@ -510,8 +535,20 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
     useEffect(() => {
         if (!isActive) return;
         void loadSettings();
+        void loadSpaceContext();
         void loadRecentAssets();
-    }, [isActive, loadRecentAssets, loadSettings]);
+    }, [isActive, loadRecentAssets, loadSettings, loadSpaceContext]);
+
+    useEffect(() => {
+        const handleSpaceChanged = () => {
+            void loadSettings();
+            void loadSpaceContext();
+        };
+        window.ipcRenderer.on('space:changed', handleSpaceChanged);
+        return () => {
+            window.ipcRenderer.off('space:changed', handleSpaceChanged);
+        };
+    }, [loadSettings, loadSpaceContext]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -773,7 +810,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
                         <span className="text-[11px] text-text-tertiary">{templates.length}</span>
                     </div>
                     <div className="px-4 py-2 text-[11px] text-text-tertiary border-b border-border">
-                        空间：<span className="font-mono">{spaceId}</span>
+                        空间：<span className="font-medium text-text-secondary">{activeSpaceName}</span>
                     </div>
 
                     <div className="flex-1 overflow-auto p-2">

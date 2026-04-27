@@ -97,14 +97,33 @@ pub fn handle_spaces_channel(
                 let Some(name) = payload_string(payload, "name") else {
                     return Ok(json!({ "success": false, "error": "空间名称不能为空" }));
                 };
-                with_store_mut(state, |store| {
+                let result = with_store_mut(state, |store| {
+                    let active_space_id = store.active_space_id.clone();
+                    let renamed_active_space = active_space_id == id;
                     let Some(space) = store.spaces.iter_mut().find(|item| item.id == id) else {
                         return Ok(json!({ "success": false, "error": "空间不存在" }));
                     };
                     space.name = name;
                     space.updated_at = now_iso();
-                    Ok(json!({ "success": true, "space": space.clone() }))
-                })
+                    Ok(json!({
+                        "success": true,
+                        "space": space.clone(),
+                        "activeSpaceId": active_space_id,
+                        "renamedActiveSpace": renamed_active_space,
+                    }))
+                })?;
+                if result
+                    .get("renamedActiveSpace")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+                {
+                    if let Some(active_space_id) =
+                        result.get("activeSpaceId").and_then(|value| value.as_str())
+                    {
+                        emit_space_changed(app, active_space_id);
+                    }
+                }
+                Ok(result)
             }
             "spaces:switch" => {
                 let next_id =
