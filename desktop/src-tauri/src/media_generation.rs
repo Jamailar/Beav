@@ -821,17 +821,7 @@ fn run_openai_image_request(
             .map(|item| materialize_transport_value_to_temp_file(item, "image-ref"))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let primary_files = materialized_images
-            .iter()
-            .map(|path| {
-                let field_name = if refs.len() == 1 {
-                    "image".to_string()
-                } else {
-                    "image[]".to_string()
-                };
-                (field_name, path.clone())
-            })
-            .collect::<Vec<_>>();
+        let primary_files = build_openai_edit_file_fields(&materialized_images);
 
         let fallback_files = materialized_images
             .iter()
@@ -933,6 +923,13 @@ fn run_openai_image_request(
         &request_url,
         run_curl_json_response("POST", &request_url, api_key, &[], Some(body), None)?,
     )
+}
+
+fn build_openai_edit_file_fields(paths: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    paths
+        .iter()
+        .map(|path| ("image".to_string(), path.clone()))
+        .collect()
 }
 
 fn build_openai_edit_form_fields(
@@ -2228,5 +2225,17 @@ mod tests {
         assert!(fields
             .iter()
             .any(|(key, value)| key == "size" && value == "1536x1024"));
+    }
+
+    #[test]
+    fn build_openai_edit_file_fields_repeats_image_field_for_multiple_refs() {
+        let fields = build_openai_edit_file_fields(&[
+            PathBuf::from("/tmp/ref-a.png"),
+            PathBuf::from("/tmp/ref-b.png"),
+        ]);
+
+        assert_eq!(fields.len(), 2);
+        assert!(fields.iter().all(|(key, _path)| key == "image"));
+        assert!(!fields.iter().any(|(key, _path)| key == "image[]"));
     }
 }
