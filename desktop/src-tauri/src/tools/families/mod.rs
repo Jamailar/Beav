@@ -24,7 +24,7 @@ pub fn default_exposure_policy(runtime_mode: &str) -> ActionExposurePolicy {
         runtime_mode: normalized,
         direct_namespaces: default_direct_namespaces(normalized, None),
         deferred_namespaces: default_deferred_namespaces(normalized),
-        max_direct_actions: 14,
+        max_direct_actions: 16,
     }
 }
 

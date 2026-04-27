@@ -807,6 +807,22 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list".to_string()];
                 self.handle_mcp(&tokens, payload)
             }
+            "mcpsessions" => {
+                let tokens = vec!["sessions".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpoauthstatus" => {
+                let tokens = vec!["oauth-status".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpsave" => {
+                let tokens = vec!["save".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcptest" => {
+                let tokens = vec!["test".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
             "mcpcall" => {
                 let tokens = vec!["call".to_string()];
                 self.handle_mcp(&tokens, payload)
@@ -819,8 +835,24 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list-resources".to_string()];
                 self.handle_mcp(&tokens, payload)
             }
+            "mcplistresourcetemplates" => {
+                let tokens = vec!["list-resource-templates".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
             "mcpdisconnect" => {
                 let tokens = vec!["disconnect".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpdisconnectall" => {
+                let tokens = vec!["disconnect-all".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpdiscoverlocal" => {
+                let tokens = vec!["discover-local".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpimportlocal" => {
+                let tokens = vec!["import-local".to_string()];
                 self.handle_mcp(&tokens, payload)
             }
             "skillslist" => {
@@ -2443,6 +2475,8 @@ impl<'a> AppCliExecutor<'a> {
                 self.state,
                 &args
                     .string(&["id", "server-id"])
+                    .or_else(|| payload_string(payload, "serverId"))
+                    .or_else(|| payload_string(payload, "id"))
                     .or_else(|| args.positionals.first().cloned())
                     .ok_or_else(|| "mcp oauth-status requires --id".to_string())?,
             ),
