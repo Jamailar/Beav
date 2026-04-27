@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const accessCookieName = 'redbox_access_token';
 const refreshCookieName = 'redbox_refresh_token';
+const defaultAccountApiBaseUrl = 'https://api.ziz.hk';
 
 const cookieOptions = {
     httpOnly: true,
@@ -20,10 +21,12 @@ interface UpstreamResult {
 interface AuthTokens {
     access_token?: unknown;
     refresh_token?: unknown;
+    accessToken?: unknown;
+    refreshToken?: unknown;
 }
 
 function getAccountApiBaseUrl() {
-    return String(process.env.REDBOX_API_BASE_URL || '').trim().replace(/\/+$/, '');
+    return String(process.env.REDBOX_API_BASE_URL || defaultAccountApiBaseUrl).trim().replace(/\/+$/, '');
 }
 
 function getAccountAppSlug() {
@@ -80,6 +83,38 @@ function stringToken(value: unknown) {
     return token || null;
 }
 
+function unwrapPayload(data: unknown) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return data;
+    }
+    const record = data as Record<string, unknown>;
+    const nestedData = record.data;
+    if (nestedData && typeof nestedData === 'object') {
+        return nestedData;
+    }
+    const nestedResult = record.result;
+    if (nestedResult && typeof nestedResult === 'object' && !Array.isArray(nestedResult)) {
+        const resultData = (nestedResult as Record<string, unknown>).data;
+        if (resultData && typeof resultData === 'object') {
+            return resultData;
+        }
+    }
+    return data;
+}
+
+function authPayloadFromWechatStatus(data: unknown) {
+    const payload = unwrapPayload(data);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return null;
+    }
+    const record = payload as Record<string, unknown>;
+    const authPayload = record.auth_payload || record.authPayload || record.session;
+    if (authPayload && typeof authPayload === 'object' && !Array.isArray(authPayload)) {
+        return authPayload as AuthTokens;
+    }
+    return record as AuthTokens;
+}
+
 export function configuredAccountApi() {
     return Boolean(getAccountApiBaseUrl());
 }
@@ -95,8 +130,8 @@ export function accountApiUnavailableResponse() {
 }
 
 export function setAuthCookies(response: NextResponse, tokens: AuthTokens) {
-    const accessToken = stringToken(tokens.access_token);
-    const refreshToken = stringToken(tokens.refresh_token);
+    const accessToken = stringToken(tokens.access_token) || stringToken(tokens.accessToken);
+    const refreshToken = stringToken(tokens.refresh_token) || stringToken(tokens.refreshToken);
     if (accessToken) {
         response.cookies.set(accessCookieName, accessToken, {
             ...cookieOptions,
@@ -126,7 +161,13 @@ export function sanitizeAuthPayload(data: unknown) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
         return data;
     }
-    const { access_token: _accessToken, refresh_token: _refreshToken, ...rest } = data as Record<string, unknown>;
+    const {
+        access_token: _accessToken,
+        refresh_token: _refreshToken,
+        accessToken: _camelAccessToken,
+        refreshToken: _camelRefreshToken,
+        ...rest
+    } = data as Record<string, unknown>;
     return rest;
 }
 
@@ -135,6 +176,53 @@ export async function loginAccount(body: JsonBody) {
         method: 'POST',
         body: JSON.stringify(body),
     });
+}
+
+export async function startWechatLogin(state = 'redboxweb') {
+    return fetchAccountApi(`auth/login/wechat/url?state=${encodeURIComponent(state)}`, {
+        method: 'GET',
+    });
+}
+
+export async function pollWechatLogin(sessionId: string) {
+    return fetchAccountApi(`auth/login/wechat/status?session_id=${encodeURIComponent(sessionId)}`, {
+        method: 'GET',
+    });
+}
+
+export function normalizeWechatStartPayload(data: unknown) {
+    const payload = unwrapPayload(data);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return {};
+    }
+    const record = payload as Record<string, unknown>;
+    return {
+        enabled: record.enabled ?? true,
+        sessionId: record.session_id || record.sessionId || '',
+        qrContentUrl: record.qr_content_url || record.qrContentUrl || record.url || '',
+        url: record.url || '',
+        expiresIn: record.expires_in || record.expiresIn || 120,
+        status: record.status || 'PENDING',
+    };
+}
+
+export function normalizeWechatStatusPayload(data: unknown) {
+    const payload = unwrapPayload(data);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return { status: 'PENDING' };
+    }
+    const record = payload as Record<string, unknown>;
+    return {
+        status: String(record.status || 'PENDING').toUpperCase(),
+        sessionId: record.session_id || record.sessionId || '',
+    };
+}
+
+export function setWechatAuthCookies(response: NextResponse, data: unknown) {
+    const authPayload = authPayloadFromWechatStatus(data);
+    if (authPayload) {
+        setAuthCookies(response, authPayload);
+    }
 }
 
 async function refreshAccessToken(request: NextRequest) {
@@ -152,7 +240,7 @@ async function refreshAccessToken(request: NextRequest) {
     }
 
     const payload = refreshResult.data as AuthTokens;
-    const accessToken = stringToken(payload.access_token);
+    const accessToken = stringToken(payload.access_token) || stringToken(payload.accessToken);
     return accessToken ? payload : null;
 }
 
@@ -170,7 +258,7 @@ export async function proxyAccountRequest(request: NextRequest, pathname: string
     let refreshedTokens: AuthTokens | null = null;
     if (result.status === 401) {
         refreshedTokens = await refreshAccessToken(request);
-        const refreshedAccessToken = stringToken(refreshedTokens?.access_token);
+        const refreshedAccessToken = stringToken(refreshedTokens?.access_token) || stringToken(refreshedTokens?.accessToken);
         if (refreshedAccessToken) {
             result = await fetchAccountApi(pathname, init, refreshedAccessToken);
         }

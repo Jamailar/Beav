@@ -1,16 +1,13 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import {
-    Check,
-    Copy,
-    KeyRound,
     LoaderCircle,
     LogIn,
     LogOut,
+    MessageCircle,
     RefreshCw,
-    ShieldCheck,
-    Trash2,
 } from 'lucide-react';
 
 interface UserProfile {
@@ -20,6 +17,13 @@ interface UserProfile {
     full_name?: string;
     app_slug?: string;
     membership_type?: string;
+    points?: number | string | null;
+    balance?: number | string | null;
+    pointsBalance?: number | string | null;
+    current_points?: number | string | null;
+    currentPoints?: number | string | null;
+    available_points?: number | string | null;
+    availablePoints?: number | string | null;
     last_login_at?: string | null;
 }
 
@@ -38,21 +42,26 @@ interface UsageResponse {
     items: UsageLog[];
 }
 
-interface ApiKeyItem {
-    id: string;
-    name: string;
-    key_prefix: string;
-    key_last4: string;
-    is_active: boolean;
-    created_at: string;
-    last_used_at: string | null;
-}
-
-interface ApiKeyResponse {
-    items: ApiKeyItem[];
-}
+type PointsResponse = Record<string, unknown> | null;
 
 type AuthState = 'checking' | 'signed_out' | 'signed_in';
+type WechatStatus = 'idle' | 'PENDING' | 'SCANNED' | 'CONFIRMED' | 'EXPIRED' | 'FAILED';
+
+interface WechatStartResponse {
+    enabled?: boolean;
+    sessionId?: string;
+    qrContentUrl?: string;
+    url?: string;
+    expiresIn?: number;
+    status?: WechatStatus | string;
+    error?: string;
+}
+
+interface WechatStatusResponse {
+    status?: WechatStatus | string;
+    sessionId?: string;
+    error?: string;
+}
 
 const defaultUsage: UsageResponse = {
     page: 1,
@@ -60,6 +69,46 @@ const defaultUsage: UsageResponse = {
     total: 0,
     items: [],
 };
+
+const wechatStatusCopy: Record<WechatStatus, string> = {
+    idle: '正在准备二维码',
+    PENDING: '请使用微信扫码登录',
+    SCANNED: '已扫码，请在微信中确认',
+    CONFIRMED: '登录成功',
+    EXPIRED: '二维码已过期',
+    FAILED: '登录失败，请重试',
+};
+
+const wechatPollInitialDelayMs = 0;
+const wechatPollPendingIntervalMs = 900;
+const wechatPollScannedIntervalMs = 250;
+const wechatPollErrorIntervalMs = 1200;
+
+function isLikelyImageUrl(value: string) {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return false;
+    if (normalized.startsWith('data:image/') || normalized.startsWith('blob:')) return true;
+    return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?(#.*)?$/i.test(normalized);
+}
+
+async function buildWechatQrDataUrl(value: string) {
+    const content = value.trim();
+    if (!content) {
+        throw new Error('二维码内容为空');
+    }
+    if (isLikelyImageUrl(content)) {
+        return content;
+    }
+    return QRCode.toDataURL(content, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 360,
+        color: {
+            dark: '#22170f',
+            light: '#ffffff',
+        },
+    });
+}
 
 async function readJson<T>(response: Response): Promise<T> {
     const data = await response.json().catch(() => ({}));
@@ -90,29 +139,87 @@ function formatPoints(value: number) {
     return Number(value || 0).toFixed(2);
 }
 
+function unwrapPayload(data: unknown): unknown {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return data;
+    }
+    const record = data as Record<string, unknown>;
+    if (record.data && typeof record.data === 'object') {
+        return record.data;
+    }
+    if (record.result && typeof record.result === 'object' && !Array.isArray(record.result)) {
+        const result = record.result as Record<string, unknown>;
+        if (result.data && typeof result.data === 'object') {
+            return result.data;
+        }
+    }
+    return data;
+}
+
+function pointsBalanceFromPayload(data: unknown): number | null {
+    const payload = unwrapPayload(data);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return null;
+    }
+    const record = payload as Record<string, unknown>;
+    const candidates = [
+        record.points,
+        record.balance,
+        record.pointsBalance,
+        record.current_points,
+        record.currentPoints,
+        record.available_points,
+        record.availablePoints,
+    ];
+    for (const candidate of candidates) {
+        const value = Number(candidate);
+        if (Number.isFinite(value)) {
+            return value;
+        }
+    }
+    return null;
+}
+
+function displayEmail(value?: string) {
+    const email = String(value || '').trim();
+    if (!email || email.toLowerCase().endsWith('@wechat.local')) {
+        return '未绑定';
+    }
+    return email;
+}
+
 export function AccountConsole() {
     const [authState, setAuthState] = useState<AuthState>('checking');
     const [user, setUser] = useState<UserProfile | null>(null);
     const [usage, setUsage] = useState<UsageResponse>(defaultUsage);
-    const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [newKeyName, setNewKeyName] = useState('RedBox API Key');
-    const [revealedKey, setRevealedKey] = useState('');
+    const [points, setPoints] = useState<PointsResponse>(null);
+    const [wechatQrUrl, setWechatQrUrl] = useState('');
+    const [wechatLoginUrl, setWechatLoginUrl] = useState('');
+    const [wechatSessionId, setWechatSessionId] = useState('');
+    const [wechatStatus, setWechatStatus] = useState<WechatStatus>('idle');
+    const [wechatExpiresAt, setWechatExpiresAt] = useState(0);
     const [notice, setNotice] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [wechatLoading, setWechatLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const pollTimerRef = useRef<number | null>(null);
+    const pollRunTokenRef = useRef(0);
+    const pollSessionIdRef = useRef('');
+    const pollInFlightRef = useRef(false);
 
     const usageSummary = useMemo(() => {
         return usage.items.reduce(
             (acc, item) => ({
                 tokens: acc.tokens + Number(item.token || 0),
-                points: acc.points + Number(item.points_cost || 0),
             }),
-            { tokens: 0, points: 0 },
+            { tokens: 0 },
         );
     }, [usage.items]);
+
+    const pointsBalance = useMemo(() => {
+        return pointsBalanceFromPayload(points) ?? pointsBalanceFromPayload(user);
+    }, [points, user]);
 
     const loadAccount = useCallback(async (quiet = false) => {
         if (!quiet) {
@@ -120,19 +227,19 @@ export function AccountConsole() {
         }
         setError('');
         try {
-            const [profile, usageData, keyData] = await Promise.all([
+            const [profile, usageData, pointsData] = await Promise.all([
                 fetch('/api/account/me', { cache: 'no-store' }).then((response) => readJson<UserProfile>(response)),
                 fetch('/api/account/usage?limit=20&page=1', { cache: 'no-store' }).then((response) => readJson<UsageResponse>(response)),
-                fetch('/api/account/api-keys', { cache: 'no-store' }).then((response) => readJson<ApiKeyResponse>(response)),
+                fetch('/api/account/points', { cache: 'no-store' }).then((response) => readJson<PointsResponse>(response)).catch(() => null),
             ]);
             setUser(profile);
             setUsage(usageData);
-            setApiKeys(Array.isArray(keyData.items) ? keyData.items : []);
+            setPoints(pointsData);
             setAuthState('signed_in');
         } catch (loadError) {
             setUser(null);
             setUsage(defaultUsage);
-            setApiKeys([]);
+            setPoints(null);
             setAuthState('signed_out');
             if (!quiet) {
                 setError(loadError instanceof Error ? loadError.message : '读取账号信息失败');
@@ -146,30 +253,131 @@ export function AccountConsole() {
         loadAccount(true);
     }, [loadAccount]);
 
-    async function handleLogin(event: FormEvent<HTMLFormElement>) {
-        event.preventDefault();
-        setLoading(true);
+    const stopWechatPolling = useCallback(() => {
+        pollRunTokenRef.current += 1;
+        if (pollTimerRef.current !== null) {
+            window.clearTimeout(pollTimerRef.current);
+            pollTimerRef.current = null;
+        }
+        pollSessionIdRef.current = '';
+        pollInFlightRef.current = false;
+    }, []);
+
+    const startWechatPolling = useCallback((sessionId: string) => {
+        const normalizedSessionId = sessionId.trim();
+        if (!normalizedSessionId) return;
+
+        stopWechatPolling();
+        pollSessionIdRef.current = normalizedSessionId;
+        const runToken = pollRunTokenRef.current;
+
+        const scheduleNext = (delayMs: number) => {
+            if (pollRunTokenRef.current !== runToken) return;
+            pollTimerRef.current = window.setTimeout(() => {
+                void runPoll();
+            }, delayMs);
+        };
+
+        const runPoll = async () => {
+            if (pollRunTokenRef.current !== runToken || pollSessionIdRef.current !== normalizedSessionId) {
+                return;
+            }
+            if (pollInFlightRef.current) {
+                scheduleNext(wechatPollPendingIntervalMs);
+                return;
+            }
+
+            pollInFlightRef.current = true;
+            try {
+                const data = await fetch(`/api/account/wechat/status?session_id=${encodeURIComponent(normalizedSessionId)}`, {
+                    cache: 'no-store',
+                }).then((response) => readJson<WechatStatusResponse>(response));
+                if (pollRunTokenRef.current !== runToken || pollSessionIdRef.current !== normalizedSessionId) {
+                    return;
+                }
+
+                const nextStatus = String(data.status || 'PENDING').toUpperCase() as WechatStatus;
+                setWechatStatus(nextStatus);
+
+                if (nextStatus === 'CONFIRMED') {
+                    stopWechatPolling();
+                    setNotice('微信登录成功');
+                    await loadAccount(true);
+                    return;
+                }
+
+                if (nextStatus === 'EXPIRED' || nextStatus === 'FAILED') {
+                    stopWechatPolling();
+                    setError(nextStatus === 'EXPIRED' ? '二维码已过期，请刷新后重试' : '微信登录失败，请刷新后重试');
+                    return;
+                }
+
+                scheduleNext(nextStatus === 'SCANNED' ? wechatPollScannedIntervalMs : wechatPollPendingIntervalMs);
+            } catch {
+                if (pollRunTokenRef.current === runToken && pollSessionIdRef.current === normalizedSessionId) {
+                    scheduleNext(wechatPollErrorIntervalMs);
+                }
+            } finally {
+                pollInFlightRef.current = false;
+            }
+        };
+
+        scheduleNext(wechatPollInitialDelayMs);
+    }, [loadAccount, stopWechatPolling]);
+
+    const fetchWechatQr = useCallback(async (options?: { silent?: boolean }) => {
+        const silent = Boolean(options?.silent);
+        setWechatLoading(true);
         setError('');
-        setNotice('');
+        if (!silent) {
+            setNotice('');
+        }
         try {
-            const data = await fetch('/api/account/login', {
+            stopWechatPolling();
+            const data = await fetch('/api/account/wechat/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password }),
-            }).then((response) => readJson<{ user?: UserProfile }>(response));
-            if (data.user) {
-                setUser(data.user);
+                body: JSON.stringify({ state: 'redboxweb' }),
+            }).then((response) => readJson<WechatStartResponse>(response));
+            if (data.enabled === false) {
+                throw new Error('微信扫码登录暂未启用');
             }
-            setPassword('');
-            await loadAccount(true);
-            setNotice('已登录');
-        } catch (loginError) {
-            setAuthState('signed_out');
-            setError(loginError instanceof Error ? loginError.message : '登录失败');
+            const qrContent = String(data.qrContentUrl || data.url || '').trim();
+            if (!qrContent) {
+                throw new Error('后端未返回二维码内容');
+            }
+            const sessionId = String(data.sessionId || '').trim();
+            setWechatQrUrl(await buildWechatQrDataUrl(qrContent));
+            setWechatLoginUrl(String(data.url || '').trim());
+            setWechatSessionId(sessionId);
+            setWechatStatus(String(data.status || 'PENDING').toUpperCase() as WechatStatus);
+            setWechatExpiresAt(Date.now() + Math.max(10, Number(data.expiresIn || 120)) * 1000);
+            if (!silent) {
+                setNotice('请使用微信扫码登录');
+            }
+            if (sessionId) {
+                startWechatPolling(sessionId);
+            }
+        } catch (qrError) {
+            stopWechatPolling();
+            setWechatQrUrl('');
+            setWechatSessionId('');
+            setWechatStatus('FAILED');
+            setError(qrError instanceof Error ? qrError.message : '获取微信登录二维码失败');
         } finally {
-            setLoading(false);
+            setWechatLoading(false);
         }
-    }
+    }, [startWechatPolling, stopWechatPolling]);
+
+    useEffect(() => {
+        if (authState === 'signed_out' && !wechatQrUrl && !wechatLoading) {
+            void fetchWechatQr({ silent: true });
+        }
+    }, [authState, fetchWechatQr, wechatLoading, wechatQrUrl]);
+
+    useEffect(() => {
+        return () => stopWechatPolling();
+    }, [stopWechatPolling]);
 
     async function handleLogout() {
         setLoading(true);
@@ -180,56 +388,10 @@ export function AccountConsole() {
         } finally {
             setUser(null);
             setUsage(defaultUsage);
-            setApiKeys([]);
-            setRevealedKey('');
+            setPoints(null);
             setAuthState('signed_out');
             setLoading(false);
         }
-    }
-
-    async function createApiKey(ensureDefault = false) {
-        setLoading(true);
-        setError('');
-        setNotice('');
-        try {
-            const endpoint = ensureDefault ? '/api/account/api-keys/ensure-default' : '/api/account/api-keys';
-            const data = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newKeyName }),
-            }).then((response) => readJson<Record<string, unknown>>(response));
-            const key = typeof data.key === 'string' ? data.key : '';
-            setRevealedKey(key);
-            setNotice(key ? 'API Key 已生成，请现在保存。' : '已有可用 API Key');
-            await loadAccount(true);
-        } catch (createError) {
-            setError(createError instanceof Error ? createError.message : '创建 API Key 失败');
-        } finally {
-            setLoading(false);
-        }
-    }
-
-    async function revokeApiKey(keyId: string) {
-        setLoading(true);
-        setError('');
-        setNotice('');
-        try {
-            await fetch(`/api/account/api-keys/${encodeURIComponent(keyId)}/revoke`, {
-                method: 'POST',
-            }).then((response) => readJson(response));
-            setNotice('API Key 已撤销');
-            await loadAccount(true);
-        } catch (revokeError) {
-            setError(revokeError instanceof Error ? revokeError.message : '撤销 API Key 失败');
-        } finally {
-            setLoading(false);
-        }
-    }
-
-    async function copyRevealedKey() {
-        if (!revealedKey) return;
-        await navigator.clipboard.writeText(revealedKey);
-        setNotice('已复制 API Key');
     }
 
     if (authState === 'checking') {
@@ -244,77 +406,67 @@ export function AccountConsole() {
     }
 
     if (authState === 'signed_out') {
-        return (
-            <section className="mx-auto grid w-full max-w-6xl gap-6 px-4 py-10 lg:grid-cols-[0.95fr_1.05fr]">
-                <div className="rounded-[30px] bg-[linear-gradient(180deg,rgba(37,29,24,0.96),rgba(26,21,18,0.95))] p-8 text-white shadow-[0_24px_48px_rgba(47,28,16,0.14)]">
-                    <span className="inline-flex rounded-full border border-white/10 bg-white/8 px-4 py-2 text-[11px] font-extrabold uppercase tracking-[0.18em] text-white/68">
-                        Account
-                    </span>
-                    <h1 className="mt-5 max-w-[9ch] font-serif text-[clamp(2.7rem,6vw,5rem)] leading-[0.92] text-white">
-                        登录
-                        <span className="block text-[#ffd4c6]">RedBox</span>
-                    </h1>
-                    <div className="mt-8 grid gap-3 text-[15px] font-semibold text-white/78">
-                        <div className="flex items-center gap-3">
-                            <ShieldCheck className="h-5 w-5 text-[#ffd4c6]" />
-                            查看自己的 AI 调用明细
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <KeyRound className="h-5 w-5 text-[#ffd4c6]" />
-                            创建、复制和撤销自己的 API Key
-                        </div>
-                    </div>
-                </div>
+        const minutesUntilExpiry = wechatExpiresAt > Date.now() ? Math.max(1, Math.ceil((wechatExpiresAt - Date.now()) / 60000)) : 0;
+        const canOpenWechatLink = Boolean(wechatLoginUrl && wechatLoginUrl !== wechatQrUrl);
 
-                <form
-                    onSubmit={handleLogin}
-                    className="rounded-[30px] border border-[#32231714] bg-white/76 p-6 shadow-[0_20px_44px_rgba(47,28,16,0.08)] md:p-8"
-                >
+        return (
+            <section className="mx-auto grid w-full max-w-2xl px-4 py-10">
+                <div className="rounded-[30px] border border-[#32231714] bg-white/78 p-6 shadow-[0_20px_44px_rgba(47,28,16,0.08)] md:p-8">
                     <div className="flex items-center justify-between gap-4">
                         <div>
-                            <h2 className="text-2xl font-black text-[#22170f]">账号登录</h2>
-                            <p className="mt-2 text-sm font-semibold text-[#7a6758]">使用 RedBox 账号继续。</p>
+                            <h1 className="text-2xl font-black text-[#22170f]">微信扫码登录</h1>
+                            <p className="mt-2 text-sm font-semibold text-[#7a6758]">使用微信扫码继续登录 RedBox。</p>
                         </div>
                         <span className="flex h-11 w-11 items-center justify-center rounded-[16px] bg-[#0f5d5a]/10 text-[#0f5d5a]">
-                            <LogIn className="h-5 w-5" />
+                            <MessageCircle className="h-5 w-5" />
                         </span>
                     </div>
 
-                    <label className="mt-7 grid gap-2 text-sm font-bold text-[#4d3b2f]">
-                        邮箱
-                        <input
-                            value={email}
-                            onChange={(event) => setEmail(event.target.value)}
-                            type="email"
-                            autoComplete="email"
-                            className="h-12 rounded-[16px] border border-[#32231718] bg-white/80 px-4 text-base text-[#22170f] outline-none transition focus:border-[#0f5d5a]/50 focus:ring-4 focus:ring-[#0f5d5a]/10"
-                            required
-                        />
-                    </label>
-
-                    <label className="mt-4 grid gap-2 text-sm font-bold text-[#4d3b2f]">
-                        密码
-                        <input
-                            value={password}
-                            onChange={(event) => setPassword(event.target.value)}
-                            type="password"
-                            autoComplete="current-password"
-                            className="h-12 rounded-[16px] border border-[#32231718] bg-white/80 px-4 text-base text-[#22170f] outline-none transition focus:border-[#0f5d5a]/50 focus:ring-4 focus:ring-[#0f5d5a]/10"
-                            required
-                        />
-                    </label>
+                    <div className="mt-7 grid place-items-center rounded-[24px] border border-[#32231714] bg-[#fffaf6] p-5">
+                        <div className="grid h-[280px] w-full max-w-[280px] place-items-center rounded-[20px] bg-white p-4 shadow-[0_14px_34px_rgba(47,28,16,0.08)]">
+                            {wechatQrUrl ? (
+                                <img src={wechatQrUrl} alt="微信登录二维码" className="h-full w-full object-contain" />
+                            ) : (
+                                <div className="flex flex-col items-center gap-3 text-sm font-bold text-[#8a715d]">
+                                    <LoaderCircle className="h-5 w-5 animate-spin" />
+                                    正在获取二维码
+                                </div>
+                            )}
+                        </div>
+                        <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-center text-sm font-bold text-[#6b5b4d]">
+                            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-[#0f5d5a]" />
+                            {wechatStatusCopy[wechatStatus] || wechatStatusCopy.PENDING}
+                            {minutesUntilExpiry > 0 && wechatStatus !== 'CONFIRMED' ? <span className="text-[#9a7c69]">约 {minutesUntilExpiry} 分钟内有效</span> : null}
+                            {wechatSessionId && (wechatStatus === 'PENDING' || wechatStatus === 'SCANNED') ? <span className="sr-only">扫码会话已建立</span> : null}
+                        </div>
+                    </div>
 
                     {error ? <div className="mt-5 rounded-[18px] border border-[#c8321c]/20 bg-[#c8321c]/8 px-4 py-3 text-sm font-bold text-[#9d2a17]">{error}</div> : null}
+                    {notice ? <div className="mt-5 rounded-[18px] border border-[#0f5d5a]/18 bg-[#0f5d5a]/8 px-4 py-3 text-sm font-bold text-[#0f5d5a]">{notice}</div> : null}
 
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="mt-6 inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-[linear-gradient(135deg,#df6031,#b13012_65%,#881d08)] px-5 text-sm font-black text-white shadow-[0_12px_24px_rgba(177,48,18,0.22)] transition hover:translate-y-[-1px] disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                        {loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
-                        登录
-                    </button>
-                </form>
+                    <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                        <button
+                            type="button"
+                            onClick={() => fetchWechatQr()}
+                            disabled={wechatLoading}
+                            className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-full bg-[linear-gradient(135deg,#df6031,#b13012_65%,#881d08)] px-5 text-sm font-black text-white shadow-[0_12px_24px_rgba(177,48,18,0.22)] transition hover:translate-y-[-1px] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {wechatLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                            刷新二维码
+                        </button>
+                        {canOpenWechatLink ? (
+                            <a
+                                href={wechatLoginUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex h-12 flex-1 items-center justify-center gap-2 rounded-full border border-[#32231714] bg-white/76 px-5 text-sm font-black text-[#22170f] transition hover:bg-white"
+                            >
+                                <LogIn className="h-4 w-4" />
+                                打开登录链接
+                            </a>
+                        ) : null}
+                    </div>
+                </div>
             </section>
         );
     }
@@ -361,11 +513,7 @@ export function AccountConsole() {
                     <div className="mt-5 grid gap-3 text-sm font-semibold text-[#6b5b4d]">
                         <div className="flex justify-between gap-4 border-b border-[#32231712] pb-3">
                             <span>邮箱</span>
-                            <strong className="text-right text-[#22170f]">{user?.email || '-'}</strong>
-                        </div>
-                        <div className="flex justify-between gap-4 border-b border-[#32231712] pb-3">
-                            <span>应用</span>
-                            <strong className="text-right text-[#22170f]">{user?.app_slug || 'redbox'}</strong>
+                            <strong className="text-right text-[#22170f]">{displayEmail(user?.email)}</strong>
                         </div>
                         <div className="flex justify-between gap-4">
                             <span>最近登录</span>
@@ -384,13 +532,13 @@ export function AccountConsole() {
                         <strong className="mt-4 block text-3xl font-black text-[#22170f]">{formatCount(usageSummary.tokens)}</strong>
                     </article>
                     <article className="rounded-[28px] border border-[#32231714] bg-white/74 p-5 shadow-[0_18px_40px_rgba(47,28,16,0.08)]">
-                        <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-[#8a715d]">积分</span>
-                        <strong className="mt-4 block text-3xl font-black text-[#22170f]">{formatPoints(usageSummary.points)}</strong>
+                        <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-[#8a715d]">积分余额</span>
+                        <strong className="mt-4 block text-3xl font-black text-[#22170f]">{pointsBalance === null ? '-' : formatPoints(pointsBalance)}</strong>
                     </article>
                 </div>
             </div>
 
-            <div className="mt-4 grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="mt-4">
                 <article className="overflow-hidden rounded-[28px] border border-[#32231714] bg-white/74 shadow-[0_18px_40px_rgba(47,28,16,0.08)]">
                     <div className="flex items-center justify-between gap-4 border-b border-[#32231712] px-5 py-4">
                         <h2 className="text-lg font-black text-[#22170f]">调用详情</h2>
@@ -425,92 +573,6 @@ export function AccountConsole() {
                                 )}
                             </tbody>
                         </table>
-                    </div>
-                </article>
-
-                <article className="rounded-[28px] border border-[#32231714] bg-white/74 p-5 shadow-[0_18px_40px_rgba(47,28,16,0.08)]">
-                    <div className="flex items-center justify-between gap-4">
-                        <h2 className="text-lg font-black text-[#22170f]">API Key</h2>
-                        <KeyRound className="h-5 w-5 text-[#0f5d5a]" />
-                    </div>
-
-                    <div className="mt-5 flex gap-2">
-                        <input
-                            value={newKeyName}
-                            onChange={(event) => setNewKeyName(event.target.value)}
-                            className="h-11 min-w-0 flex-1 rounded-[15px] border border-[#32231718] bg-white/80 px-4 text-sm font-semibold text-[#22170f] outline-none focus:border-[#0f5d5a]/50 focus:ring-4 focus:ring-[#0f5d5a]/10"
-                        />
-                        <button
-                            type="button"
-                            onClick={() => createApiKey(false)}
-                            disabled={loading}
-                            className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-full bg-[#0f5d5a] px-4 text-sm font-black text-white transition hover:bg-[#0c4e4b] disabled:opacity-60"
-                        >
-                            <KeyRound className="h-4 w-4" />
-                            新建
-                        </button>
-                    </div>
-
-                    <button
-                        type="button"
-                        onClick={() => createApiKey(true)}
-                        disabled={loading}
-                        className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-full border border-[#32231714] bg-white/70 px-4 text-sm font-bold text-[#4d3b2f] transition hover:bg-white disabled:opacity-60"
-                    >
-                        <Check className="h-4 w-4" />
-                        确保默认 Key
-                    </button>
-
-                    {revealedKey ? (
-                        <div className="mt-4 rounded-[18px] border border-[#0f5d5a]/18 bg-[#0f5d5a]/8 p-4">
-                            <div className="flex items-center justify-between gap-3">
-                                <span className="text-xs font-extrabold uppercase tracking-[0.14em] text-[#0f5d5a]">只显示一次</span>
-                                <button
-                                    type="button"
-                                    onClick={copyRevealedKey}
-                                    className="inline-flex h-8 items-center justify-center gap-1 rounded-full bg-white/80 px-3 text-xs font-black text-[#0f5d5a]"
-                                >
-                                    <Copy className="h-3.5 w-3.5" />
-                                    复制
-                                </button>
-                            </div>
-                            <code className="mt-3 block break-all rounded-[14px] bg-white/82 p-3 text-xs font-bold text-[#22170f]">{revealedKey}</code>
-                        </div>
-                    ) : null}
-
-                    <div className="mt-5 grid gap-3">
-                        {apiKeys.length > 0 ? (
-                            apiKeys.map((item) => (
-                                <div key={item.id} className="rounded-[18px] border border-[#32231712] bg-white/66 p-4">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <div className="truncate font-black text-[#22170f]">{item.name}</div>
-                                            <div className="mt-1 font-mono text-xs font-bold text-[#6b5b4d]">
-                                                {item.key_prefix}...{item.key_last4}
-                                            </div>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => revokeApiKey(item.id)}
-                                            disabled={loading || !item.is_active}
-                                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#32231714] bg-white/80 text-[#9d2a17] transition hover:bg-[#c8321c]/8 disabled:opacity-40"
-                                            aria-label="撤销 API Key"
-                                        >
-                                            <Trash2 className="h-4 w-4" />
-                                        </button>
-                                    </div>
-                                    <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold text-[#8a715d]">
-                                        <span className="rounded-full bg-[#f3e7d9]/70 px-3 py-1">{item.is_active ? '可用' : '已撤销'}</span>
-                                        <span className="rounded-full bg-[#f3e7d9]/70 px-3 py-1">创建 {formatDateTime(item.created_at)}</span>
-                                        <span className="rounded-full bg-[#f3e7d9]/70 px-3 py-1">使用 {formatDateTime(item.last_used_at)}</span>
-                                    </div>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="rounded-[18px] border border-[#32231712] bg-white/66 px-4 py-8 text-center text-sm font-bold text-[#8a715d]">
-                                还没有 API Key
-                            </div>
-                        )}
                     </div>
                 </article>
             </div>
