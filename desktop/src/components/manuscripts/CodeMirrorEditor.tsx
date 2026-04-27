@@ -102,6 +102,68 @@ const markdownHighlighting = HighlightStyle.define([
     { tag: tags.monospace, color: "rgb(var(--color-status-warning) / 1)", fontFamily: "monospace" }, // Inline code
 ]);
 
+const readSelectedText = (view: EditorView) => {
+    const ranges: string[] = [];
+    for (const range of view.state.selection.ranges) {
+        if (!range.empty) {
+            ranges.push(view.state.sliceDoc(range.from, range.to));
+        }
+    }
+    return ranges.join('\n');
+};
+
+const selectWholeDocument = (view: EditorView) => {
+    view.focus();
+    view.dispatch({
+        selection: { anchor: 0, head: view.state.doc.length },
+        scrollIntoView: true,
+    });
+    return true;
+};
+
+const editorInteractionHandlers = EditorView.domEventHandlers({
+    contextmenu(event) {
+        event.stopPropagation();
+        return false;
+    },
+    keydown(event, view) {
+        event.stopPropagation();
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a') {
+            event.preventDefault();
+            return selectWholeDocument(view);
+        }
+        return false;
+    },
+    copy(event, view) {
+        const text = readSelectedText(view);
+        if (!text || !event.clipboardData) return false;
+        event.clipboardData.setData('text/plain', text);
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+    },
+    cut(event, view) {
+        const text = readSelectedText(view);
+        if (!text || !event.clipboardData) return false;
+        event.clipboardData.setData('text/plain', text);
+        view.dispatch(view.state.replaceSelection(''));
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+    },
+    paste(event, view) {
+        const text = event.clipboardData?.getData('text/plain');
+        if (!text) return false;
+        view.dispatch({
+            ...view.state.replaceSelection(text),
+            scrollIntoView: true,
+        });
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+    },
+});
+
 export function CodeMirrorEditor({ value, onChange, className }: CodeMirrorEditorProps) {
     const handleChange = React.useCallback((val: string, _viewUpdate: any) => {
         onChange(val);
@@ -119,21 +181,22 @@ export function CodeMirrorEditor({ value, onChange, className }: CodeMirrorEdito
                     EditorView.lineWrapping,
                     obsidianTheme,
                     syntaxHighlighting(markdownHighlighting),
+                    editorInteractionHandlers,
                 ]}
                 onChange={handleChange}
                 basicSetup={{
                     lineNumbers: false,
                     foldGutter: false,
                     highlightActiveLine: false,
-                    drawSelection: true,
+                    drawSelection: false,
                     dropCursor: true,
-                    allowMultipleSelections: true,
+                    allowMultipleSelections: false,
                     indentOnInput: true,
                     bracketMatching: true,
                     closeBrackets: true,
                     autocompletion: true,
-                    rectangularSelection: true,
-                    crosshairCursor: true,
+                    rectangularSelection: false,
+                    crosshairCursor: false,
                     highlightActiveLineGutter: false,
                     highlightSelectionMatches: true,
                     closeBracketsKeymap: true,

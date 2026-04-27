@@ -101,8 +101,6 @@ select {
 }
 
 .editor-ui-shell {
-  -webkit-user-select: none;
-  user-select: none;
   cursor: default;
 }
 
@@ -111,7 +109,9 @@ select {
 .editor-ui-shell a,
 .editor-ui-shell summary,
 .editor-ui-shell label {
+  -webkit-user-select: none;
   cursor: pointer;
+  user-select: none;
 }
 
 .editor-ui-shell input,
@@ -131,14 +131,21 @@ select {
 
 .manuscript-editor-shell .cm-editor,
 .manuscript-editor-shell .cm-scroller,
-.manuscript-editor-shell .cm-content,
 .manuscript-editor-shell .cm-gutters {
   background-color: rgb(var(--color-surface-primary) / 1) !important;
   color: rgb(var(--color-text-primary) / 1) !important;
 }
 
+.manuscript-editor-shell .cm-content {
+  background-color: transparent !important;
+  color: rgb(var(--color-text-primary) / 1) !important;
+}
+
 .manuscript-editor-shell,
-.manuscript-editor-shell * {
+.manuscript-editor-shell .cm-editor,
+.manuscript-editor-shell .cm-scroller,
+.manuscript-editor-shell .cm-content,
+.manuscript-editor-shell .cm-line {
   -webkit-user-select: text !important;
   user-select: text !important;
 }
@@ -148,6 +155,28 @@ select {
 .manuscript-editor-shell .cm-content,
 .manuscript-editor-shell .cm-line {
   cursor: text !important;
+}
+
+.manuscript-editor-shell .cm-selectionLayer,
+.manuscript-editor-shell .cm-cursorLayer,
+.manuscript-editor-shell .cm-layer,
+.manuscript-editor-shell .cm-dropCursor,
+.manuscript-editor-shell .cm-measure {
+  -webkit-user-select: none !important;
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+.manuscript-editor-shell .cm-selectionBackground,
+.manuscript-editor-shell .cm-focused .cm-selectionBackground,
+.manuscript-editor-shell .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background-color: rgb(var(--color-accent-primary) / 0.28) !important;
+}
+
+.manuscript-editor-shell .cm-content::selection,
+.manuscript-editor-shell .cm-line::selection,
+.manuscript-editor-shell .cm-line *::selection {
+  background-color: rgb(var(--color-accent-primary) / 0.32) !important;
 }
 
 .manuscript-editor-shell .cm-activeLine {
