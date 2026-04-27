@@ -439,7 +439,99 @@ Rules:
 - Plan JSON must not replace canonical task state. It is member-local working memory.
 - If plan JSON conflicts with canonical task state, canonical task state wins.
 
-### 5.2.2 Persona Consistency
+### 5.2.2 Executor To Speaker Reporting
+
+Speaker knows executor state through durable structured state, not by reading hidden reasoning. Executors must write progress into three places:
+
+```text
+MemberTaskPlan JSON       // current member-local task state
+TeamEvent                 // event cursor for scheduler/await
+speechQueue               // suggested group-chat speaking moments
+```
+
+Progress update shape:
+
+```json
+{
+  "taskId": "collab-task-...",
+  "executorId": "executor-...",
+  "status": "running",
+  "currentStep": "整理竞品素材",
+  "progressPercent": 45,
+  "lastProgressSummary": "已完成 12 条素材初筛，发现 3 个高频冲突角度。",
+  "nextSteps": ["提炼可复用结构", "整理证据摘要"],
+  "blockers": [],
+  "artifactRefs": [],
+  "updatedAt": 1777178300000
+}
+```
+
+Speech queue entry:
+
+```json
+{
+  "reason": "progress_milestone",
+  "groupChatId": "collab-session-...",
+  "taskId": "collab-task-...",
+  "executorId": "executor-...",
+  "suggestedMessage": "我已完成素材初筛，发现 3 个可复用冲突角度，下一步整理证据摘要。",
+  "priority": 5
+}
+```
+
+The speaker runtime may rewrite `suggestedMessage` into the member's voice, but it must not invent progress that is not present in plan/event/evidence state.
+
+Completion claim shape:
+
+```json
+{
+  "taskId": "collab-task-...",
+  "executorId": "executor-...",
+  "status": "claimed_completed",
+  "summary": "完成竞品素材分析，提炼出 3 个冲突角度。",
+  "artifactRefs": [
+    {
+      "type": "document",
+      "path": "redclaw/research/topic-conflicts.md"
+    }
+  ],
+  "evidence": [
+    {
+      "type": "tool_result",
+      "tool": "redbox_fs.write",
+      "ref": "tool-call-789"
+    }
+  ],
+  "handoff": {
+    "acceptedFacts": ["高互动内容普遍使用身份冲突开头"],
+    "openQuestions": ["是否需要继续补充近期爆款样本"],
+    "requiredActions": ["交给 copywriter 生成标题包"]
+  }
+}
+```
+
+Completion flow:
+
+```text
+Executor writes completion claim
+-> task status becomes claimed_completed or review
+-> TeamVerifier validates schema/evidence/artifacts
+-> verifier accepts or rejects
+-> accepted result enters artifact refs and handoff packet
+-> speechQueue receives artifact/completion event
+-> Speaker posts a human-readable group update
+-> Leader decides next task or final synthesis
+```
+
+Speaker message example:
+
+```text
+我这边完成了竞品素材分析，整理出了 3 个高频冲突角度，并把证据摘要提交到了任务产物里。建议下一步交给 Copywriter 基于这些冲突角度生成标题包。
+```
+
+Hard rule: group chat messages may only be based on `MemberTaskPlan`, `TeamEvent`, `artifactRefs`, `evidence`, and accepted handoff packets. Hidden executor reasoning must not be surfaced.
+
+### 5.2.3 Persona Consistency
 
 Speaker and executors must feel like one member, not two unrelated agents. Use a shared member profile:
 
@@ -456,6 +548,127 @@ Speaker and executors must feel like one member, not two unrelated agents. Use a
 ```
 
 Both speaker and executor overlays must include this profile. The executor owns doing; the speaker owns saying.
+
+### 5.2.4 Member Profile / Agent Card
+
+Leader cannot assign work reliably from a member name alone. Every member must have a structured profile card created and persisted at member creation time.
+
+The card is the canonical description of:
+
+- who this member is
+- what it is good at
+- what it should avoid
+- how it speaks
+- which tool families it can use
+- where its decision boundary ends
+- how many executor threads it may run
+
+Initial storage:
+
+```text
+CollabMemberRecord.metadata.agentCard
+```
+
+Shape:
+
+```json
+{
+  "memberId": "collab-member-...",
+  "displayName": "爆款选题研究员",
+  "roleId": "researcher",
+  "oneLine": "擅长从素材和竞品里提炼可复用冲突、证据和选题角度。",
+  "persona": {
+    "voice": "简洁、证据优先、会标注不确定性",
+    "style": "先给结论，再给依据",
+    "collaborationStyle": "适合接收明确研究目标和样本范围"
+  },
+  "specialties": ["竞品分析", "素材归纳", "小红书/短视频选题", "证据摘要"],
+  "goodAt": ["从大量素材里提炼模式", "给写作者提供事实和角度", "发现内容冲突点"],
+  "notGoodAt": ["最终成稿润色", "视觉生成", "视频剪辑"],
+  "preferredTasks": ["research", "evidence_summary", "topic_angle_analysis"],
+  "avoidTasks": ["image_generation", "final_copywriting", "video_rendering"],
+  "toolPolicy": {
+    "allowedToolFamilies": ["knowledge", "redbox_fs", "team.report"],
+    "restrictedToolFamilies": ["image.generate", "video.render"]
+  },
+  "capacity": {
+    "maxConcurrentExecutors": 5,
+    "currentActiveExecutors": 0
+  },
+  "decisionBoundary": "可以提出研究结论和建议，但不能宣布项目完成，也不能替 Leader 派发任务。"
+}
+```
+
+Rules:
+
+- `team.member.spawn` must create `metadata.agentCard` when it is missing.
+- Caller may provide `metadata.agentCard` to override defaults.
+- Speaker and executor both receive the same card in their prompt overlay.
+- ToolRouter should derive default tool exposure from the card's `toolPolicy`.
+- Leader should use member matching instead of picking members by display name alone.
+
+### 5.2.5 Member Selection
+
+Add a member candidate matching action:
+
+```text
+team.member.match
+```
+
+Input:
+
+```json
+{
+  "sessionId": "collab-session-...",
+  "taskType": "image_generation",
+  "objective": "生成小红书封面",
+  "requiredCapabilities": ["视觉构图", "封面策略"],
+  "requiredToolFamilies": ["image.generate"],
+  "limit": 3
+}
+```
+
+Output:
+
+```json
+{
+  "candidates": [
+    {
+      "memberId": "collab-member-image-director",
+      "displayName": "图片导演",
+      "roleId": "image-director",
+      "score": 24,
+      "reasons": ["preferred_task:image_generation", "tool:image.generate", "specialty:封面策略"],
+      "agentCard": {}
+    }
+  ]
+}
+```
+
+Initial scoring can be simple and deterministic:
+
+```text
+score =
+  specialty_match * 4
++ preferred_task_match * 3
++ required_tool_match * 3
++ availability * 2
+- avoid_task_match * 5
+- restricted_tool_match * 4
+- overloaded_penalty
+```
+
+Leader selection flow:
+
+```text
+task requirement
+-> team.member.match
+-> pick highest scoring available member
+-> if no candidate is suitable, create a new member with an agent card
+-> assign canonical task to selected member
+```
+
+This keeps member selection explainable and auditable.
 
 ### 5.3 TeamMessage / CollabMailboxMessageRecord
 
@@ -563,6 +776,56 @@ TeamEvent {
 ```
 
 This enables `team.event.await` without model-side polling.
+
+### 5.6 Team Runtime State
+
+Long-running team work needs runtime state beyond chat messages. Add a durable state envelope for every active group:
+
+```json
+{
+  "groupChatId": "collab-session-...",
+  "runtimeStatus": "active",
+  "scheduler": {
+    "lastTickAt": 1777178300000,
+    "nextTickAt": 1777178360000,
+    "activeLeaseCount": 3,
+    "queuedTaskCount": 5
+  },
+  "leader": {
+    "memberId": "collab-member-leader",
+    "speakerSessionId": "session-...",
+    "status": "waiting"
+  },
+  "members": [
+    {
+      "memberId": "collab-member-researcher",
+      "activeExecutorCount": 2,
+      "queuedTaskCount": 1,
+      "lastSeenAt": 1777178300000,
+      "lastReportAt": 1777178200000
+    }
+  ],
+  "eventCursor": {
+    "latestEventId": "team-event-...",
+    "lastLeaderSeenEventId": "team-event-..."
+  },
+  "recovery": {
+    "resumeAfterRestart": true,
+    "lastRecoveredAt": null,
+    "lastRecoveryError": null
+  }
+}
+```
+
+This can live in session metadata first. If it grows too large, move it into a dedicated `TeamRuntimeStateRecord`.
+
+Hard rule:
+
+```text
+canonical task/member/runtime state must be written before any executor starts
+```
+
+This is what allows the app to recover after restart, crash, timeout, or partial tool failure.
 
 ## 6. Runtime Modules
 
@@ -797,7 +1060,36 @@ model loops forever asking "is it done yet?"
 
 The runtime waits or times out.
 
-### 6.5 `TeamVerifier`
+### 6.5 `TeamEventBus`
+
+Location:
+
+- `desktop/src-tauri/src/runtime/team_event_runtime.rs`
+- `desktop/src-tauri/src/events.rs`
+
+Responsibilities:
+
+- Append durable team events for every canonical state transition.
+- Maintain monotonic event IDs per group chat.
+- Allow event queries after cursor.
+- Notify scheduler, leader, speaker, and UI listeners.
+- Bridge runtime task events into team events.
+- Avoid duplicate events with idempotency keys.
+
+Event categories:
+
+```text
+state_event       // task/member/group state changed
+runtime_event     // executor started/heartbeat/finished/failed
+message_event     // group message created/read
+speech_event      // speaker queued/drained
+verification_event
+recovery_event
+```
+
+This is the backbone of continuity. `team.event.await` is a consumer of the event bus, not the event bus itself.
+
+### 6.6 `TeamVerifier`
 
 Location:
 
@@ -824,6 +1116,55 @@ blocked             // needs leader action
 ```
 
 No member should move a task directly from running to completed unless verifier accepts it.
+
+### 6.7 `TeamRecovery`
+
+Location:
+
+- `desktop/src-tauri/src/subagents/team_recovery.rs`
+- startup hook from app initialization / scheduler startup
+
+Responsibilities:
+
+- Scan active group chats on app startup.
+- Rebuild in-memory scheduler queues from canonical records.
+- Detect running tasks with missing runtime bindings.
+- Resume recoverable child sessions.
+- Release expired leases.
+- Mark orphaned executors blocked when they cannot be resumed.
+- Wake leader with recovery summary.
+
+Recovery startup flow:
+
+```text
+App starts
+-> load AppStore and session bundles
+-> scan group chats where status=active
+-> scan tasks where status=running/waiting/review/claimed_completed
+-> validate member executor pool state
+-> resume active child runtimes if possible
+-> release expired leases
+-> enqueue leader recovery message when state changed
+-> scheduler continues ticking
+```
+
+Recovery must never rely on a live model remembering previous state. It must reconstruct state from persisted records.
+
+### 6.8 `TeamRuntimeV2` Required Layers
+
+To guarantee long-running continuity, Team mode requires all of these layers:
+
+```text
+TeamGroupChatStore   // durable group/member/task/message state
+TeamMemberRuntime    // speaker + executor pool + member plan
+TeamAgentControl     // spawn / await / resume / close / cancel
+TeamScheduler        // lease / heartbeat / retry / wakeups
+TeamEventBus         // event cursor and notifications
+TeamVerifier         // completion and evidence gate
+TeamRecovery         // app restart and crash recovery
+```
+
+Prompt alone is not a reliability mechanism. Group chat messages alone are not a scheduler. The runtime must own continuity.
 
 ## 7. AI Prompt Architecture
 
@@ -1296,6 +1637,57 @@ Each failure creates:
 - task status update
 - optional repair task
 
+### 12.7 Continuity Contract
+
+Team Runtime v2 must satisfy this contract:
+
+```text
+If the app is running:
+  ready work eventually starts when capacity is available
+  running work emits heartbeat or times out
+  completed claims go through verifier
+  relevant events wake speaker or leader
+
+If the app restarts:
+  active groups reload from durable state
+  recoverable executors resume
+  expired leases are released
+  orphaned tasks become blocked or retryable
+  leader receives a recovery summary
+
+If a model/tool fails:
+  failure becomes a task event
+  member plan records the blocker
+  speaker can report it
+  leader can reassign or create repair work
+```
+
+The system is allowed to pause or block work when evidence is missing. It is not allowed to silently lose active work.
+
+### 12.8 Executor To Speaker Visibility Boundary
+
+Speaker can read:
+
+```text
+MemberTaskPlan JSON
+TeamEvent stream
+TeamTask canonical state
+artifactRefs
+evidence records
+accepted handoff packets
+```
+
+Speaker cannot read by default:
+
+```text
+executor hidden reasoning
+raw prompt internals
+full unrelated tool logs
+other members' private scratch state
+```
+
+This boundary keeps group chat clean while still making progress visible.
+
 ## 13. Implementation Plan
 
 This is a bottom-up implementation. UI can stay minimal until the runtime is stable.
@@ -1315,12 +1707,15 @@ Tasks:
 3. Ensure every team mutation emits a canonical event.
 4. Add archive/delete semantics distinct from runtime close.
 5. Add snapshot fields for latest event id and active runtime bindings.
+6. Add durable team runtime state envelope.
+7. Enforce canonical state before executor spawn.
 
 Acceptance:
 
 - Creating a team group chat writes session, leader, kickoff message, and `group_created` event.
 - Updating a task writes `task_updated` event.
 - Deleting or archiving a group has explicit behavior.
+- A worker cannot start unless group, member, task, lease, and runtime binding records exist.
 
 ### 13.2 Agent Control
 
@@ -1364,6 +1759,8 @@ Tasks:
 5. Add member assignment decision: reuse, spawn, queue.
 6. Add speech queue in member task plan.
 7. Wake speaker from speech queue events.
+8. Add executor progress and completion claim writers.
+9. Add speaker summary reader for plan/event/evidence state.
 
 Acceptance:
 
@@ -1372,6 +1769,7 @@ Acceptance:
 - Over-cap tasks queue instead of spawning unlimited runtimes.
 - Speaker remains available for reports while executors work.
 - Speaker and executor use the same member profile.
+- Executor completion claim becomes verifier input before group chat completion messaging.
 
 ### 13.3 Scheduler
 
@@ -1425,7 +1823,30 @@ Acceptance:
 - Await times out with `timedOut=true`.
 - Await never blocks the UI thread.
 
-### 13.5 Verifier
+### 13.5 Event Bus
+
+Files:
+
+- `desktop/src-tauri/src/runtime/team_event_runtime.rs`
+- `desktop/src-tauri/src/events.rs`
+- `desktop/src-tauri/src/commands/runtime_collab.rs`
+
+Tasks:
+
+1. Add durable event append helper.
+2. Add per-group monotonic event id or sequence.
+3. Emit events from group/member/task/message/report mutations.
+4. Bridge child runtime state into team events.
+5. Add event query after cursor.
+6. Add idempotency keys for repeated scheduler ticks.
+
+Acceptance:
+
+- Every canonical mutation has an event.
+- `team.event.await` can consume existing and future events.
+- Duplicate scheduler ticks do not duplicate semantic events.
+
+### 13.6 Verifier
 
 Files:
 
@@ -1447,7 +1868,30 @@ Acceptance:
 - Claimed file/image/video artifacts must have tool evidence or artifact refs.
 - Rejected output creates group message and task status update.
 
-### 13.6 Prompt And ToolRouter
+### 13.7 Recovery
+
+Files:
+
+- `desktop/src-tauri/src/subagents/team_recovery.rs`
+- `desktop/src-tauri/src/subagents/team_scheduler.rs`
+- app startup wiring
+
+Tasks:
+
+1. Scan active group chats on startup.
+2. Rebuild scheduler queues from persisted records.
+3. Resume recoverable child runtimes.
+4. Release expired leases.
+5. Mark orphaned executors blocked or retryable.
+6. Wake leader with recovery summary when state changed.
+
+Acceptance:
+
+- Active group resumes after app restart.
+- Running task with expired lease does not remain stuck forever.
+- Recovery creates durable events and group messages.
+
+### 13.8 Prompt And ToolRouter
 
 Files:
 
@@ -1475,7 +1919,7 @@ Acceptance:
 - Speaker and executor keep one member voice/profile while preserving separate responsibilities.
 - Team mode disables forced speaker order and uses event-driven speech.
 
-### 13.7 UI Integration
+### 13.9 UI Integration
 
 Files:
 
@@ -1562,9 +2006,12 @@ The most valuable first slice is:
 ```text
 TeamEvent + team.event.await
 + canonical group chat metadata
++ durable TeamRuntimeState
 + TeamAgentControl binding groupChatId/memberId/taskId
 + TeamMemberRuntime speaker/executor split
 + member task plan JSON
++ TeamEventBus
++ TeamRecovery startup scan
 + leader/worker prompt overlays
 ```
 
@@ -1576,6 +2023,8 @@ This directly addresses the current failure modes:
 - lack of durable group progress
 - forced speaking order replacing real work
 - members losing track of multiple active tasks
+- app restart losing active work
+- speaker not knowing executor progress
 
 Do not start from a rich UI. The runtime must be solid first.
 
