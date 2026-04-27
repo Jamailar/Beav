@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RedBox Capture 设置</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <main class="settings-shell">
+    <header class="page-header">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="RedBox" class="brand-icon">
+        <div>
+          <h1>RedBox Capture 设置</h1>
+          <p>采集任务、本地连接和更新检查参数</p>
+        </div>
+      </div>
+      <button id="test-connection" class="btn">测试连接</button>
+    </header>
+
+    <form id="settings-form" class="settings-grid">
+      <section class="panel">
+        <h2>本地 RedBox</h2>
+        <label class="field">
+          <span>Knowledge API 地址</span>
+          <input id="api-base-url" type="url" spellcheck="false" placeholder="http://127.0.0.1:31937">
+        </label>
+        <label class="field">
+          <span>接口路径</span>
+          <input id="api-endpoint-path" type="text" spellcheck="false" placeholder="/api/knowledge">
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>小红书采集</h2>
+        <div class="field-row">
+          <label class="field">
+            <span>最小间隔（秒）</span>
+            <input id="interval-min" type="number" min="0.5" max="60" step="0.5">
+          </label>
+          <label class="field">
+            <span>最大间隔（秒）</span>
+            <input id="interval-max" type="number" min="0.5" max="60" step="0.5">
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span>博主主页默认条数</span>
+            <input id="blogger-limit" type="number" min="1" max="200" step="1">
+          </label>
+          <label class="field">
+            <span>关键词默认条数</span>
+            <input id="keyword-limit" type="number" min="1" max="50" step="1">
+          </label>
+        </div>
+        <label class="field">
+          <span>链接批量上限</span>
+          <input id="batch-limit" type="number" min="1" max="50" step="1">
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>默认行为</h2>
+        <label class="switch-row">
+          <input id="save-default" type="checkbox">
+          <span>批量采集默认写入知识库</span>
+        </label>
+        <label class="switch-row">
+          <input id="auto-update" type="checkbox">
+          <span>自动检查插件更新</span>
+        </label>
+      </section>
+
+      <section id="status" class="status-panel hidden"></section>
+
+      <footer class="actions">
+        <button id="reset-settings" type="button" class="btn ghost">恢复默认</button>
+        <button type="submit" class="btn primary">保存设置</button>
+      </footer>
+    </form>
+  </main>
+  <script src="settings.js"></script>
+</body>
+</html>

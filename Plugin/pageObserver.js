@@ -15,6 +15,12 @@ let dragZoneMetaElement = null;
 let currentDragPayload = null;
 let dragHideTimer = null;
 let dragSaveInFlight = false;
+let xhsOverlayHost = null;
+let xhsOverlayStatusElement = null;
+let xhsOverlayStatusTimer = null;
+let xhsDomStyleElement = null;
+let xhsDomStatusTimer = null;
+let xhsDomInjectionTimer = null;
 
 const EMIT_DEBOUNCE_MS = 40;
 const FAST_POLL_INTERVAL_MS = 120;
@@ -23,6 +29,10 @@ const URL_WATCH_INTERVAL_MS = 150;
 const DRAG_HIDE_DELAY_MS = 140;
 const DRAG_RESULT_HIDE_DELAY_MS = 1800;
 const PAGE_ROUTE_EVENT_NAME = 'redbox:locationchange';
+const REDBOX_XHS_DETAIL_ACTIONS_ID = 'redbox-xhs-detail-actions';
+const REDBOX_XHS_PROFILE_ACTIONS_ID = 'redbox-xhs-profile-actions';
+const REDBOX_XHS_STYLE_ID = 'redbox-xhs-dom-style';
+const REDBOX_XHS_DETAIL_HOST_TAG = 'redbox-xhs-explore';
 
 function normalizeText(value) {
     return String(value || '').trim();
@@ -54,7 +64,21 @@ function isInspectHost() {
         || hostname === 'youtube.com'
         || hostname.endsWith('.youtube.com')
         || /(^|\.)xiaohongshu\.com$/i.test(hostname)
+        || /(^|\.)rednote\.com$/i.test(hostname)
         || /(^|\.)douyin\.com$/i.test(hostname);
+}
+
+function isXhsHost() {
+    const hostname = String(location.hostname || '').toLowerCase();
+    return /(^|\.)xiaohongshu\.com$/i.test(hostname) || /(^|\.)rednote\.com$/i.test(hostname);
+}
+
+function isXhsNoteDetailPath() {
+    return /^\/(?:explore|discovery\/item)\/[A-Za-z0-9]+/i.test(String(location.pathname || ''));
+}
+
+function isXhsProfilePath() {
+    return /^\/user\/profile\/[^/]+/i.test(String(location.pathname || ''));
 }
 
 function createLinkFallbackPageInfo(overrides = {}) {
@@ -612,7 +636,17 @@ function detectPageInfo() {
         };
     }
 
-    if (/(^|\.)xiaohongshu\.com$/i.test(hostname)) {
+    if (/(^|\.)xiaohongshu\.com$/i.test(hostname) || /(^|\.)rednote\.com$/i.test(hostname)) {
+        if (isXhsProfilePath()) {
+            return {
+                kind: 'xhs-profile',
+                action: 'xhs:collect-current-blogger',
+                label: '保存小红书博主资料到知识库',
+                description: '当前页面已识别为小红书博主页。',
+                primaryEnabled: true,
+                detected: true,
+            };
+        }
         return detectXhsNoteInfo();
     }
 
@@ -644,6 +678,86 @@ function detectPageInfo() {
             kind: 'douyin-pending',
             description: '当前页面还没有稳定识别到有效的抖音视频内容。',
         });
+    }
+
+    if (hostname === 'bilibili.com' || hostname.endsWith('.bilibili.com') || hostname === 'b23.tv') {
+        const isVideoPage = pathname.startsWith('/video/') || pathname.startsWith('/bangumi/play/');
+        const isSpacePage = hostname === 'space.bilibili.com' || pathname.startsWith('/space/');
+        const isSearchPage = hostname === 'search.bilibili.com';
+        return {
+            kind: isVideoPage ? 'bilibili-video' : isSpacePage ? 'bilibili-profile' : isSearchPage ? 'bilibili-search' : 'bilibili-page',
+            platform: 'bilibili',
+            action: 'save-bilibili',
+            label: isVideoPage ? '保存 Bilibili 视频页到知识库' : '保存 Bilibili 页面到知识库',
+            description: isVideoPage ? '当前页面已识别为 Bilibili 视频页。' : '当前页面已识别为 Bilibili 页面。',
+            primaryEnabled: true,
+            detected: true,
+        };
+    }
+
+    if (hostname === 'kuaishou.com' || hostname.endsWith('.kuaishou.com') || hostname === 'kwai.com' || hostname.endsWith('.kwai.com')) {
+        const isVideoPage = pathname.startsWith('/short-video/') || pathname.startsWith('/fw/photo/');
+        return {
+            kind: isVideoPage ? 'kuaishou-video' : 'kuaishou-page',
+            platform: 'kuaishou',
+            action: 'save-kuaishou',
+            label: isVideoPage ? '保存快手视频页到知识库' : '保存快手页面到知识库',
+            description: isVideoPage ? '当前页面已识别为快手视频页。' : '当前页面已识别为快手页面。',
+            primaryEnabled: true,
+            detected: true,
+        };
+    }
+
+    if (hostname === 'tiktok.com' || hostname.endsWith('.tiktok.com')) {
+        const isVideoPage = pathname.includes('/video/');
+        return {
+            kind: isVideoPage ? 'tiktok-video' : 'tiktok-page',
+            platform: 'tiktok',
+            action: 'save-tiktok',
+            label: isVideoPage ? '保存 TikTok 视频页到知识库' : '保存 TikTok 页面到知识库',
+            description: isVideoPage ? '当前页面已识别为 TikTok 视频页。' : '当前页面已识别为 TikTok 页面。',
+            primaryEnabled: true,
+            detected: true,
+        };
+    }
+
+    if (hostname === 'reddit.com' || hostname.endsWith('.reddit.com')) {
+        const isPostPage = pathname.includes('/comments/');
+        return {
+            kind: isPostPage ? 'reddit-post' : 'reddit-page',
+            platform: 'reddit',
+            action: 'save-reddit',
+            label: isPostPage ? '保存 Reddit 帖子到知识库' : '保存 Reddit 页面到知识库',
+            description: isPostPage ? '当前页面已识别为 Reddit 帖子。' : '当前页面已识别为 Reddit 页面。',
+            primaryEnabled: true,
+            detected: true,
+        };
+    }
+
+    if (hostname === 'x.com' || hostname.endsWith('.x.com') || hostname === 'twitter.com' || hostname.endsWith('.twitter.com')) {
+        const isPostPage = pathname.includes('/status/');
+        return {
+            kind: isPostPage ? 'x-post' : 'x-page',
+            platform: 'x',
+            action: 'save-x',
+            label: isPostPage ? '保存 X 推文到知识库' : '保存 X 页面到知识库',
+            description: isPostPage ? '当前页面已识别为 X 推文。' : '当前页面已识别为 X 页面。',
+            primaryEnabled: true,
+            detected: true,
+        };
+    }
+
+    if (hostname === 'instagram.com' || hostname.endsWith('.instagram.com')) {
+        const isPostPage = pathname.startsWith('/p/') || pathname.startsWith('/reel/');
+        return {
+            kind: isPostPage ? 'instagram-post' : 'instagram-page',
+            platform: 'instagram',
+            action: 'save-instagram',
+            label: isPostPage ? '保存 Instagram 内容到知识库' : '保存 Instagram 页面到知识库',
+            description: isPostPage ? '当前页面已识别为 Instagram 内容页。' : '当前页面已识别为 Instagram 页面。',
+            primaryEnabled: true,
+            detected: true,
+        };
     }
 
     return createLinkFallbackPageInfo();
@@ -985,6 +1099,927 @@ function handleDocumentDrop(event) {
     hideDragZone(true);
 }
 
+function setXhsOverlayStatus(message, state = 'idle') {
+    if (!xhsOverlayStatusElement) return;
+    clearTimeout(xhsOverlayStatusTimer);
+    xhsOverlayStatusElement.textContent = normalizeText(message);
+    xhsOverlayStatusElement.dataset.state = state;
+    xhsOverlayStatusElement.hidden = !message;
+    if (message) {
+        xhsOverlayStatusTimer = setTimeout(() => {
+            if (!xhsOverlayStatusElement) return;
+            xhsOverlayStatusElement.textContent = '';
+            xhsOverlayStatusElement.hidden = true;
+        }, state === 'error' ? 3200 : 2200);
+    }
+}
+
+function setXhsDomStatus(container, message, state = 'idle') {
+    const statusEl = container?.querySelector?.('.redbox-xhs-status');
+    if (!statusEl) return;
+    clearTimeout(xhsDomStatusTimer);
+    statusEl.textContent = normalizeText(message);
+    statusEl.dataset.state = state;
+    statusEl.hidden = !message;
+    if (message) {
+        xhsDomStatusTimer = setTimeout(() => {
+            if (!statusEl.isConnected) return;
+            statusEl.textContent = '';
+            statusEl.hidden = true;
+        }, state === 'error' ? 3200 : 2200);
+    }
+}
+
+function summarizeActionResponse(response, fallback) {
+    if (response?.noteId) {
+        return response.duplicate ? '知识库中已存在' : '已保存到 RedBox';
+    }
+    if (response?.mode === 'xhs-link-batch') {
+        return `成功 ${Number(response.count || 0)} 条，失败 ${Number(response.failed || 0)} 条`;
+    }
+    if (response?.mode === 'xhs-blogger-notes') {
+        return `博主笔记 ${Number(response.count || 0)} 条，失败 ${Number(response.failed || 0)} 条`;
+    }
+    if (response?.mode === 'xhs-download') {
+        return `下载 ${Number(response.count || 0)} 个素材`;
+    }
+    if (response?.mode === 'xhs-comments') {
+        return `评论 ${Number(response.count || 0)} 条`;
+    }
+    if (/^(bilibili|kuaishou|tiktok|reddit|x|instagram)-/.test(String(response?.mode || ''))) {
+        return response.duplicate ? '知识库中已存在' : fallback;
+    }
+    return fallback;
+}
+
+async function runXhsDomAction(action, options = {}) {
+    const actionMap = {
+        save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 RedBox' },
+        download: { type: 'xhs:download-current-note', pending: '下载中...', done: '已创建下载任务' },
+        comments: { type: 'xhs:collect-current-comments', pending: '采集中...', done: '评论已写入知识库' },
+        blogger: { type: 'xhs:collect-current-blogger', pending: '采集中...', done: '已保存博主资料' },
+        bloggerNotes: { type: 'xhs:collect-blogger-notes', pending: '采集中...', done: '已采集主页笔记' },
+        exportJson: { type: 'xhs:export-current-note-json', pending: '导出中...', done: '已导出 JSON' },
+        collectLink: { type: 'xhs:collect-note-links', pending: '采集中...', done: '已采集' },
+        savePageAuto: { type: 'save-page-auto', pending: '保存中...', done: '已保存到 RedBox' },
+        savePageLink: { type: 'save-page-link', pending: '保存中...', done: '已保存到 RedBox' },
+        saveYoutube: { type: 'save-youtube', pending: '保存中...', done: '已保存 YouTube 视频' },
+        saveDouyin: { type: 'save-douyin', pending: '保存中...', done: '已保存抖音视频' },
+        saveBilibili: { type: 'save-bilibili', pending: '保存中...', done: '已保存 Bilibili 内容' },
+        saveKuaishou: { type: 'save-kuaishou', pending: '保存中...', done: '已保存快手内容' },
+        saveTiktok: { type: 'save-tiktok', pending: '保存中...', done: '已保存 TikTok 内容' },
+        saveReddit: { type: 'save-reddit', pending: '保存中...', done: '已保存 Reddit 内容' },
+        saveX: { type: 'save-x', pending: '保存中...', done: '已保存 X 内容' },
+        saveInstagram: { type: 'save-instagram', pending: '保存中...', done: '已保存 Instagram 内容' },
+    };
+    const config = actionMap[action];
+    if (!config) return;
+    const statusTarget = options.statusTarget || null;
+    if (statusTarget) {
+        setXhsDomStatus(statusTarget, config.pending, 'pending');
+    } else {
+        setXhsOverlayStatus(config.pending, 'pending');
+    }
+    try {
+        const message = action === 'collectLink'
+            ? {
+                type: config.type,
+                urls: [options.url].filter(Boolean),
+                options: { saveToRedBox: true, limit: 1 },
+            }
+            : { type: config.type };
+        const response = await chrome.runtime.sendMessage(message);
+        if (!response?.success) {
+            throw new Error(response?.error || '操作失败');
+        }
+        const doneText = summarizeActionResponse(response, config.done || '');
+        if (statusTarget) {
+            setXhsDomStatus(statusTarget, doneText, 'success');
+        } else {
+            setXhsOverlayStatus(doneText, 'success');
+        }
+    } catch (error) {
+        const message = String(error?.message || error || '操作失败');
+        console.warn('[redbox-plugin][page-observer] xhs dom action failed', action, message);
+        if (statusTarget) {
+            setXhsDomStatus(statusTarget, message, 'error');
+        } else {
+            setXhsOverlayStatus(message, 'error');
+        }
+    }
+}
+
+async function runXhsOverlayAction(action) {
+    await runXhsDomAction(action);
+}
+
+function removeXhsOverlay() {
+    clearTimeout(xhsOverlayStatusTimer);
+    xhsOverlayStatusTimer = null;
+    xhsOverlayStatusElement = null;
+    if (xhsOverlayHost?.isConnected) {
+        xhsOverlayHost.remove();
+    }
+    xhsOverlayHost = null;
+}
+
+function ensureXhsDomStyle() {
+    if (xhsDomStyleElement?.isConnected) return;
+    const style = document.createElement('style');
+    style.id = REDBOX_XHS_STYLE_ID;
+    style.textContent = `
+      .redbox-xhs-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 10px 0;
+        padding: 8px 0;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .redbox-xhs-profile-actions {
+        padding: 12px 0;
+        margin: 8px 0 12px;
+      }
+      .redbox-xhs-detail-actions {
+        margin: 0;
+        padding: 0 16px 16px !important;
+        gap: 12px;
+      }
+      @media (min-width: 1280px) {
+        .redbox-xhs-detail-actions {
+          padding: 0 24px 24px !important;
+          gap: 16px;
+        }
+      }
+      .redbox-xhs-btn,
+      .redbox-xhs-card-btn {
+        border: 1px solid rgba(194, 65, 12, 0.26);
+        border-radius: 8px;
+        background: #ffffff;
+        color: #9a3412;
+        cursor: pointer;
+        font: 650 12px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      .redbox-xhs-btn {
+        min-height: 30px;
+        padding: 7px 10px;
+      }
+      .redbox-xhs-btn.primary {
+        background: #c2410c;
+        border-color: #c2410c;
+        color: #fff7ed;
+      }
+      .redbox-xhs-btn:hover,
+      .redbox-xhs-card-btn:hover {
+        border-color: #9a3412;
+        box-shadow: 0 6px 18px rgba(154, 52, 18, 0.14);
+      }
+      .redbox-xhs-btn:disabled,
+      .redbox-xhs-card-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      .redbox-xhs-status {
+        min-width: 88px;
+        color: #166534;
+        font-size: 12px;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .redbox-xhs-status[data-state="pending"] {
+        color: #9a3412;
+      }
+      .redbox-xhs-status[data-state="error"] {
+        color: #b91c1c;
+      }
+      .redbox-xhs-card-btn {
+        position: absolute;
+        right: 8px;
+        top: 8px;
+        z-index: 8;
+        min-height: 28px;
+        padding: 6px 8px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+      }
+      .redbox-xhs-card-status {
+        position: absolute;
+        right: 8px;
+        top: 42px;
+        z-index: 8;
+        max-width: 150px;
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.96);
+        color: #166534;
+        box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1);
+        padding: 6px 8px;
+        font-size: 12px;
+        line-height: 1.3;
+        word-break: break-word;
+      }
+      .redbox-xhs-card-status[data-state="pending"] {
+        color: #9a3412;
+      }
+      .redbox-xhs-card-status[data-state="error"] {
+        color: #b91c1c;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+    xhsDomStyleElement = style;
+}
+
+function makeXhsDomButton(label, action, options = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `redbox-xhs-btn${options.primary ? ' primary' : ''}`;
+    button.textContent = label;
+    button.title = options.title || label;
+    button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void runXhsDomAction(action, { statusTarget: options.statusTarget, url: options.url });
+    });
+    return button;
+}
+
+function findXhsDetailActionMount(root) {
+    const scopes = [
+        root,
+        getActiveXhsDetailMask(),
+        document.querySelector('#noteContainer'),
+        document,
+    ].filter(Boolean);
+    const selectors = [
+        '#noteContainer div.interaction-container div.note-content',
+        '#noteContainer .interaction-container .note-content',
+        '#noteContainer .interaction-container',
+        '.note-detail-mask #noteContainer div.interaction-container div.note-content',
+        '.note-detail-mask #noteContainer .interaction-container .note-content',
+        '#noteContainer .interactions-container',
+        '#noteContainer .interactions',
+        '#noteContainer .bottom-container',
+        '#noteContainer .action-container',
+        '#noteContainer .engage-bar',
+        '#noteContainer .note-content',
+        '#noteContainer #detail-desc',
+        '#noteContainer #detail-title',
+        '.note-detail-mask #noteContainer .interactions-container',
+        '.note-detail-mask .interactions',
+        '.note-detail-mask #noteContainer .bottom-container',
+        '.note-detail-mask #noteContainer .action-container',
+        '.note-detail-mask .note-content',
+        '.interactions-container',
+        '.interactions',
+        '.bottom-container',
+        '.action-container',
+        '.engage-bar',
+        '.note-actions',
+        '.author-container',
+        '.note-scroller',
+        '.note-content',
+        '#detail-desc',
+        '#detail-title',
+    ];
+    for (const scope of scopes) {
+        for (const selector of selectors) {
+            const target = scope.querySelector?.(selector);
+            if (target && isNodeVisible(target)) {
+                return target;
+            }
+        }
+    }
+    if (root) return root;
+    const fallback =
+        document.querySelector('#noteContainer')
+        || document.querySelector('.note-detail-mask')
+        || document.querySelector('.note-container')
+        || document.querySelector('main')
+        || document.body;
+    return fallback instanceof Element ? fallback : null;
+}
+
+function findXhsReferenceDetailAnchor(root) {
+    const scopes = [
+        root,
+        getActiveXhsDetailMask(),
+        document,
+    ].filter(Boolean);
+    const selectors = [
+        '#noteContainer div.interaction-container div.note-content',
+        '#noteContainer .interaction-container .note-content',
+        '#noteContainer [class*="interaction-container"] [class*="note-content"]',
+        '#noteContainer [class*="interaction"] [class*="note-content"]',
+        '.note-detail-mask #noteContainer div.interaction-container div.note-content',
+        '.note-detail-mask #noteContainer .interaction-container .note-content',
+        '.note-detail-mask #noteContainer [class*="interaction-container"] [class*="note-content"]',
+    ];
+    for (const scope of scopes) {
+        const hasAuthorAvatar = scope.querySelector?.('#noteContainer div.interaction-container div.author-container .info img.avatar-item');
+        for (const selector of selectors) {
+            const target = scope.querySelector?.(selector);
+            if (target && (hasAuthorAvatar || target.querySelector?.('#detail-title, #detail-desc, .note-text') || target.closest?.('#noteContainer'))) {
+                return target;
+            }
+        }
+    }
+    return null;
+}
+
+function getXhsDetailInjectionKey() {
+    const openedNoteId = getCurrentOpenedXhsNoteId();
+    if (openedNoteId) return openedNoteId;
+    const pathNoteId = String(location.pathname || '').match(/\/(?:explore|discovery\/item)\/([A-Za-z0-9]+)/i)?.[1];
+    if (pathNoteId) return pathNoteId;
+    const stateNote = getCurrentXhsStateNote();
+    return normalizeText(stateNote?.noteId || stateNote?.id || stateNote?.note_id || '');
+}
+
+function isXhsNotePageInfo(pageInfo) {
+    return /^xhs-(?:note|image|video|article)$/i.test(String(pageInfo?.kind || ''));
+}
+
+function hasXhsDetailDom() {
+    return Boolean(
+        getActiveXhsDetailMask()
+        || document.querySelector('#noteContainer')
+        || document.querySelector('#detail-title')
+        || document.querySelector('#detail-desc')
+    );
+}
+
+function shouldInjectXhsDetailActions(pageInfo) {
+    return isXhsNoteDetailPath() || isXhsNotePageInfo(pageInfo) || hasXhsDetailDom();
+}
+
+function createXhsDetailHost(injectionKey) {
+    const host = document.createElement(REDBOX_XHS_DETAIL_HOST_TAG);
+    host.id = REDBOX_XHS_DETAIL_ACTIONS_ID;
+    host.dataset.redboxInjected = 'detail-actions';
+    if (injectionKey) {
+        host.dataset.redboxNoteKey = injectionKey;
+    }
+    host.style.display = 'block';
+    host.style.position = 'relative';
+    host.style.zIndex = '9';
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = `
+      :host {
+        all: initial;
+        display: block;
+        box-sizing: border-box;
+      }
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+      .redbox-xhs-actions {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 0 16px 16px;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      @media (min-width: 1280px) {
+        .redbox-xhs-actions {
+          gap: 16px;
+          padding: 0 24px 24px;
+        }
+      }
+      button {
+        min-height: 32px;
+        border: 1px solid #c2410c;
+        border-radius: 8px;
+        background: #c2410c;
+        color: #fff7ed;
+        cursor: pointer;
+        padding: 7px 14px;
+        font: 700 13px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+        white-space: nowrap;
+        box-shadow: 0 6px 18px rgba(194, 65, 12, 0.14);
+      }
+      button:hover {
+        background: #9a3412;
+        border-color: #9a3412;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+      .redbox-xhs-status {
+        color: #166534;
+        font-size: 12px;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .redbox-xhs-status[data-state="pending"] {
+        color: #9a3412;
+      }
+      .redbox-xhs-status[data-state="error"] {
+        color: #b91c1c;
+      }
+    `;
+    const actions = document.createElement('div');
+    actions.className = 'redbox-xhs-actions p-4 xl:p-6 !pt-0 flex gap-3 xl:gap-4 flex-wrap';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.redboxAction = 'save';
+    button.textContent = '保存笔记';
+    button.title = '保存当前小红书笔记到 RedBox';
+    const status = document.createElement('span');
+    status.className = 'redbox-xhs-status';
+    status.hidden = true;
+    button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void runXhsDomAction('save', { statusTarget: actions });
+    });
+    actions.append(button, status);
+    shadow.append(style, actions);
+    return host;
+}
+
+function injectXhsDetailActions(pageInfo) {
+    const root = getCurrentXhsNoteRoot();
+    const hasDetectedNote = shouldInjectXhsDetailActions(pageInfo);
+    if (!hasDetectedNote) return;
+    const injectionKey = getXhsDetailInjectionKey();
+    let container = document.getElementById(REDBOX_XHS_DETAIL_ACTIONS_ID);
+    if (container?.isConnected) {
+        if (injectionKey && container.dataset.redboxNoteKey !== injectionKey) {
+            container.remove();
+            container = null;
+        } else if (root && !root.contains(container)) {
+            const referenceAnchor = findXhsReferenceDetailAnchor(root);
+            const isPlacedBeforeReference = referenceAnchor
+                && (container.nextElementSibling === referenceAnchor || referenceAnchor.parentElement?.contains(container));
+            if (!isPlacedBeforeReference) {
+                container.remove();
+                container = null;
+            }
+        }
+    }
+    if (container?.isConnected) {
+        const saveButton = container.shadowRoot?.querySelector?.('[data-redbox-action="save"]')
+            || container.querySelector?.('[data-redbox-action="save"]');
+        if (saveButton) saveButton.disabled = false;
+        return;
+    }
+
+    const referenceAnchor = findXhsReferenceDetailAnchor(root);
+    const mount = referenceAnchor || findXhsDetailActionMount(root);
+    if (!mount) return;
+    container = createXhsDetailHost(injectionKey);
+
+    if (referenceAnchor) {
+        referenceAnchor.insertAdjacentElement('beforebegin', container);
+    } else if (mount.matches?.('#noteContainer div.interaction-container div.note-content, #noteContainer .interaction-container .note-content')) {
+        mount.insertAdjacentElement('beforebegin', container);
+    } else if (mount.id === 'detail-title' || mount.id === 'detail-desc') {
+        mount.insertAdjacentElement('afterend', container);
+    } else if (mount.classList?.contains('note-scroller')) {
+        mount.insertAdjacentElement('afterbegin', container);
+    } else {
+        mount.insertAdjacentElement('afterend', container);
+    }
+}
+
+function findXhsProfileActionMount() {
+    const selectors = [
+        '.user-page .user-info',
+        '.user-page .info-part',
+        '.user-page .user',
+        '.user-info',
+        '[class*="user-info"]',
+        '[class*="userInfo"]',
+        '[class*="profile"]',
+        'main',
+    ];
+    for (const selector of selectors) {
+        const target = document.querySelector(selector);
+        if (target instanceof Element && isNodeVisible(target)) {
+            return target;
+        }
+    }
+    return document.body;
+}
+
+function injectXhsProfileActions() {
+    if (!isXhsProfilePath()) return;
+    let container = document.getElementById(REDBOX_XHS_PROFILE_ACTIONS_ID);
+    if (container?.isConnected) return;
+    const mount = findXhsProfileActionMount();
+    if (!mount) return;
+    ensureXhsDomStyle();
+
+    container = document.createElement('div');
+    container.id = REDBOX_XHS_PROFILE_ACTIONS_ID;
+    container.className = 'redbox-xhs-actions redbox-xhs-profile-actions';
+    container.dataset.redboxInjected = 'profile-actions';
+    const status = document.createElement('span');
+    status.className = 'redbox-xhs-status';
+    status.hidden = true;
+    container.append(
+        makeXhsDomButton('保存博主', 'blogger', { primary: true, statusTarget: container, title: '保存当前小红书博主资料到 RedBox' }),
+        makeXhsDomButton('采集博主笔记', 'bloggerNotes', { statusTarget: container, title: '采集当前博主主页全部可加载笔记' }),
+        status,
+    );
+
+    if (mount === document.body) {
+        document.body.insertAdjacentElement('afterbegin', container);
+    } else {
+        mount.insertAdjacentElement('afterend', container);
+    }
+}
+
+function normalizeXhsNoteUrl(value) {
+    const raw = toAbsoluteUrl(value);
+    if (!isHttpUrl(raw)) return '';
+    try {
+        const parsed = new URL(raw);
+        if (!/xiaohongshu\.com|rednote\.com/i.test(parsed.hostname)) return '';
+        const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([A-Za-z0-9]+)/);
+        if (!match?.[1]) return '';
+        return `https://www.xiaohongshu.com/explore/${match[1]}`;
+    } catch {
+        return '';
+    }
+}
+
+function findXhsCardRoot(anchor) {
+    return anchor.closest('.note-item')
+        || anchor.closest('[class*="note-item"]')
+        || anchor.closest('.feed-card')
+        || anchor.closest('[class*="feed-card"]')
+        || anchor.closest('.cover')?.parentElement
+        || anchor.closest('[class*="cover"]')?.parentElement
+        || anchor.closest('article')
+        || anchor.parentElement;
+}
+
+function injectXhsCardButtons() {
+    ensureXhsDomStyle();
+    const anchors = Array.from(document.querySelectorAll('a[href*="/explore/"], a[href*="/discovery/item/"]'))
+        .filter((anchor) => isNodeVisible(anchor))
+        .slice(0, 80);
+    let injected = 0;
+    for (const anchor of anchors) {
+        if (injected >= 30) break;
+        const url = normalizeXhsNoteUrl(anchor.getAttribute('href') || anchor.href || '');
+        if (!url) continue;
+        const card = findXhsCardRoot(anchor);
+        if (!card || card.querySelector(':scope > .redbox-xhs-card-btn')) continue;
+        const style = window.getComputedStyle(card);
+        if (style.position === 'static') {
+            card.dataset.redboxPreviousPosition = 'static';
+            card.style.position = 'relative';
+        }
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'redbox-xhs-card-btn';
+        button.textContent = '采集';
+        button.title = '采集这条小红书笔记到 RedBox';
+        const status = document.createElement('span');
+        status.className = 'redbox-xhs-card-status redbox-xhs-status';
+        status.hidden = true;
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void runXhsDomAction('collectLink', { statusTarget: card, url });
+        });
+        card.append(button, status);
+        injected += 1;
+    }
+}
+
+function ensureXhsDomButtons(pageInfo) {
+    if (!isXhsHost()) {
+        removeXhsDomButtons();
+        return;
+    }
+    if (!xhsDomInjectionTimer) {
+        xhsDomInjectionTimer = setInterval(() => {
+            if (!isXhsHost() || observerStopped) {
+                removeXhsDomButtons();
+                return;
+            }
+            if (shouldInjectXhsDetailActions(latestPageInfo)) {
+                injectXhsDetailActions(latestPageInfo);
+            }
+        }, 500);
+    }
+    if (shouldInjectXhsDetailActions(pageInfo)) {
+        injectXhsDetailActions(pageInfo);
+    } else {
+        document.getElementById(REDBOX_XHS_DETAIL_ACTIONS_ID)?.remove();
+    }
+    if (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile') {
+        injectXhsProfileActions(pageInfo);
+    } else {
+        document.getElementById(REDBOX_XHS_PROFILE_ACTIONS_ID)?.remove();
+    }
+    injectXhsCardButtons();
+}
+
+function removeXhsDomButtons() {
+    clearTimeout(xhsDomStatusTimer);
+    xhsDomStatusTimer = null;
+    if (xhsDomInjectionTimer) {
+        clearInterval(xhsDomInjectionTimer);
+        xhsDomInjectionTimer = null;
+    }
+    document.getElementById(REDBOX_XHS_DETAIL_ACTIONS_ID)?.remove();
+    document.getElementById(REDBOX_XHS_PROFILE_ACTIONS_ID)?.remove();
+    document.querySelectorAll('.redbox-xhs-card-btn, .redbox-xhs-card-status').forEach((node) => node.remove());
+    document.querySelectorAll('[data-redbox-previous-position="static"]').forEach((node) => {
+        node.style.position = '';
+        delete node.dataset.redboxPreviousPosition;
+    });
+    if (xhsDomStyleElement?.isConnected) {
+        xhsDomStyleElement.remove();
+    }
+    xhsDomStyleElement = null;
+}
+
+function getRedboxOverlayConfig(pageInfo) {
+    if (isXhsProfilePath() || pageInfo?.kind === 'xhs-profile') {
+        return {
+            variant: 'profile',
+            title: 'RedBox 博主采集',
+            subtitle: '小红书博主页',
+            actions: [
+                { label: '保存博主', action: 'blogger', primary: true, title: '保存当前博主资料到 RedBox' },
+                { label: '采集博主笔记', action: 'bloggerNotes', title: '采集当前博主主页笔记' },
+            ],
+        };
+    }
+    if (isXhsNoteDetailPath() || /^xhs-(note|image|video)$/i.test(String(pageInfo?.kind || ''))) {
+        return {
+            variant: 'note',
+            title: 'RedBox 笔记采集',
+            subtitle: '小红书笔记页',
+            actions: [
+                { label: '保存笔记', action: 'save', primary: true, title: '保存当前笔记到 RedBox' },
+                { label: '下载素材', action: 'download', title: '下载当前笔记图片或视频' },
+                { label: '采集评论', action: 'comments', title: '采集当前笔记评论' },
+                { label: '导出 JSON', action: 'exportJson', title: '导出当前笔记原始 JSON' },
+            ],
+        };
+    }
+    if (isXhsHost()) {
+        return {
+            variant: 'xhs',
+            title: 'RedBox 小红书采集',
+            subtitle: '当前页面',
+            actions: [
+                { label: '保存网页', action: 'savePageLink', primary: true, title: '保存当前页面链接到 RedBox' },
+            ],
+        };
+    }
+    if (pageInfo?.kind === 'youtube') {
+        return {
+            variant: 'youtube',
+            title: 'RedBox 视频采集',
+            subtitle: 'YouTube',
+            actions: [
+                { label: '保存视频', action: 'saveYoutube', primary: true, title: '保存当前 YouTube 视频到 RedBox' },
+            ],
+        };
+    }
+    if (pageInfo?.kind === 'douyin-video') {
+        return {
+            variant: 'douyin',
+            title: 'RedBox 视频采集',
+            subtitle: '抖音',
+            actions: [
+                { label: '保存视频', action: 'saveDouyin', primary: true, title: '保存当前抖音视频到 RedBox' },
+            ],
+        };
+    }
+    const platformMap = {
+        'bilibili': { variant: 'bilibili', subtitle: 'Bilibili', label: '保存内容', action: 'saveBilibili', title: '保存当前 Bilibili 内容到 RedBox' },
+        'kuaishou': { variant: 'kuaishou', subtitle: '快手', label: '保存内容', action: 'saveKuaishou', title: '保存当前快手内容到 RedBox' },
+        'tiktok': { variant: 'tiktok', subtitle: 'TikTok', label: '保存内容', action: 'saveTiktok', title: '保存当前 TikTok 内容到 RedBox' },
+        'reddit': { variant: 'reddit', subtitle: 'Reddit', label: '保存内容', action: 'saveReddit', title: '保存当前 Reddit 内容到 RedBox' },
+        'x': { variant: 'x', subtitle: 'X', label: '保存内容', action: 'saveX', title: '保存当前 X 内容到 RedBox' },
+        'instagram': { variant: 'instagram', subtitle: 'Instagram', label: '保存内容', action: 'saveInstagram', title: '保存当前 Instagram 内容到 RedBox' },
+    };
+    const platformKey = String(pageInfo?.platform || pageInfo?.kind || '').split('-')[0];
+    if (platformMap[platformKey]) {
+        const platform = platformMap[platformKey];
+        return {
+            variant: platform.variant,
+            title: 'RedBox 页面采集',
+            subtitle: platform.subtitle,
+            actions: [
+                { label: platform.label, action: platform.action, primary: true, title: platform.title },
+            ],
+        };
+    }
+    if (pageInfo?.kind === 'wechat-article') {
+        return {
+            variant: 'wechat',
+            title: 'RedBox 文章采集',
+            subtitle: '微信公众号',
+            actions: [
+                { label: '保存文章', action: 'savePageLink', primary: true, title: '保存当前公众号文章到 RedBox' },
+            ],
+        };
+    }
+    return {
+        variant: 'generic',
+        title: 'RedBox 页面采集',
+        subtitle: pageInfo?.detected ? '当前页面' : '网页链接',
+        actions: [
+            { label: '保存网页', action: pageInfo?.action === 'save-page-auto' ? 'savePageAuto' : 'savePageLink', primary: true, title: '保存当前网页到 RedBox' },
+        ],
+    };
+}
+
+function renderXhsOverlay(pageInfo) {
+    if (!xhsOverlayHost?.shadowRoot) return;
+    const config = getRedboxOverlayConfig(pageInfo);
+    const shadow = xhsOverlayHost.shadowRoot;
+    const dock = shadow.querySelector('.dock');
+    if (!dock) return;
+    if (dock.dataset.variant === config.variant) {
+        const primaryButton = shadow.querySelector('[data-primary="true"]');
+        if (primaryButton) primaryButton.disabled = pageInfo?.primaryEnabled === false;
+        return;
+    }
+    dock.dataset.variant = config.variant;
+    dock.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'panel-head';
+    const mark = document.createElement('div');
+    mark.className = 'panel-mark';
+    mark.textContent = 'R';
+    const copy = document.createElement('div');
+    copy.className = 'panel-copy';
+    const title = document.createElement('div');
+    title.className = 'panel-title';
+    title.textContent = config.title;
+    const subtitle = document.createElement('div');
+    subtitle.className = 'panel-subtitle';
+    subtitle.textContent = config.subtitle;
+    copy.append(title, subtitle);
+    header.append(mark, copy);
+    dock.append(header);
+
+    const actions = document.createElement('div');
+    actions.className = 'panel-actions';
+    for (const item of config.actions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.action = item.action;
+        button.className = item.primary ? 'primary' : '';
+        button.title = item.title || item.label;
+        button.textContent = item.label;
+        if (item.primary) {
+            button.dataset.primary = 'true';
+            button.disabled = pageInfo?.primaryEnabled === false;
+        }
+        button.addEventListener('click', () => {
+            void runXhsOverlayAction(button.dataset.action);
+        });
+        actions.appendChild(button);
+    }
+    dock.appendChild(actions);
+
+    const status = document.createElement('div');
+    status.className = 'status';
+    status.dataset.state = 'idle';
+    status.hidden = true;
+    dock.appendChild(status);
+    xhsOverlayStatusElement = status;
+}
+
+function ensureXhsOverlay(pageInfo) {
+    if (xhsOverlayHost?.isConnected) {
+        renderXhsOverlay(pageInfo);
+        return;
+    }
+
+    const host = document.createElement('div');
+    host.id = 'redbox-page-overlay-host';
+    host.style.position = 'fixed';
+    host.style.right = '16px';
+    host.style.top = '112px';
+    host.style.zIndex = '2147483647';
+    host.style.pointerEvents = 'none';
+
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        :host {
+          all: initial;
+        }
+        .dock {
+          display: grid;
+          gap: 10px;
+          width: 148px;
+          border: 1px solid rgba(15, 23, 42, 0.12);
+          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.98);
+          box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
+          padding: 10px;
+          font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+          pointer-events: auto;
+        }
+        .panel-head {
+          display: grid;
+          grid-template-columns: 28px 1fr;
+          gap: 8px;
+          align-items: center;
+          min-width: 0;
+        }
+        .panel-mark {
+          display: grid;
+          place-items: center;
+          width: 28px;
+          height: 28px;
+          border-radius: 8px;
+          background: #c2410c;
+          color: #fff7ed;
+          font: 800 14px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+        }
+        .panel-copy {
+          min-width: 0;
+        }
+        .panel-title {
+          color: #171717;
+          font-size: 12px;
+          font-weight: 800;
+          line-height: 1.2;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .panel-subtitle {
+          margin-top: 2px;
+          color: #737373;
+          font-size: 11px;
+          line-height: 1.2;
+        }
+        .panel-actions {
+          display: grid;
+          gap: 7px;
+        }
+        button {
+          width: 100%;
+          min-height: 31px;
+          border: 1px solid rgba(15, 23, 42, 0.14);
+          border-radius: 7px;
+          background: rgba(255, 255, 255, 0.96);
+          color: #171717;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 700;
+          line-height: 1.1;
+        }
+        button:hover:not(:disabled) {
+          border-color: #c2410c;
+          color: #9a3412;
+        }
+        button.primary {
+          border-color: #c2410c;
+          background: #c2410c;
+          color: #fff7ed;
+        }
+        button:disabled {
+          cursor: not-allowed;
+          opacity: 0.55;
+        }
+        .status {
+          border: 1px solid rgba(15, 23, 42, 0.12);
+          border-radius: 8px;
+          background: #f0fdf4;
+          color: #166534;
+          padding: 8px;
+          font-size: 12px;
+          line-height: 1.35;
+          word-break: break-word;
+        }
+        .status[data-state="error"] {
+          color: #b91c1c;
+        }
+        .status[data-state="pending"] {
+          color: #9a3412;
+        }
+      </style>
+      <div class="dock" role="toolbar" aria-label="RedBox 页面采集">
+      </div>
+    `;
+
+    xhsOverlayHost = host;
+    (document.body || document.documentElement).appendChild(host);
+    renderXhsOverlay(pageInfo);
+}
+
 function handleWindowBlur() {
     if (dragSaveInFlight) return;
     hideDragZone(true);
@@ -1064,6 +2099,8 @@ function stopObservers() {
     if (dragOverlayHost?.isConnected) {
         dragOverlayHost.remove();
     }
+    removeXhsDomButtons();
+    removeXhsOverlay();
     dragOverlayHost = null;
     dragZoneElement = null;
     dragZoneTitleElement = null;
@@ -1078,6 +2115,8 @@ function isContextInvalidatedError(error) {
 function emitPageState() {
     if (observerStopped) return;
     latestPageInfo = detectPageInfo();
+    ensureXhsDomButtons(latestPageInfo);
+    ensureXhsOverlay(latestPageInfo);
     try {
         chrome.runtime.sendMessage({
             type: 'page-state:update',
