@@ -4,9 +4,11 @@ import process from 'node:process';
 
 import {
   artifactsRoot,
+  browserPluginSummaryPath,
   captureCommand,
   ensureCommandExists,
   logStep,
+  packageBrowserPluginArchive,
   parseArgs,
   readPackageJson,
   repoRoot,
@@ -17,6 +19,7 @@ const DEFAULT_REMOTE = 'export-sanitized';
 const MAC_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'mac-build-summary.json');
 const WINDOWS_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'windows-build-summary.json');
 const LINUX_SUMMARY_PATH = path.join(artifactsRoot, 'release', 'linux-build-summary.json');
+const BROWSER_PLUGIN_SUMMARY_PATH = browserPluginSummaryPath;
 const CHANGELOG_PATH = path.join(repoRoot, 'CHANGELOG.md');
 
 async function readJsonFile(filePath) {
@@ -189,7 +192,15 @@ async function collectReleaseAssets() {
     }
   };
 
-  for (const summaryPath of [MAC_SUMMARY_PATH, WINDOWS_SUMMARY_PATH, LINUX_SUMMARY_PATH]) {
+  logStep('Packaging browser plugin release asset');
+  await packageBrowserPluginArchive();
+
+  for (const summaryPath of [
+    MAC_SUMMARY_PATH,
+    WINDOWS_SUMMARY_PATH,
+    LINUX_SUMMARY_PATH,
+    BROWSER_PLUGIN_SUMMARY_PATH,
+  ]) {
     if (!(await pathExists(summaryPath))) {
       continue;
     }
@@ -203,6 +214,7 @@ async function collectReleaseAssets() {
         'portableExeArtifactPath',
         'portableZipArtifactPath',
         'debArtifactPath',
+        'zipPath',
       ]) {
         await registerAsset(artifact?.[key]);
       }
@@ -213,6 +225,7 @@ async function collectReleaseAssets() {
       'portableExeArtifactPath',
       'portableZipArtifactPath',
       'debArtifactPath',
+      'zipPath',
     ]) {
       await registerAsset(summary?.[key]);
     }

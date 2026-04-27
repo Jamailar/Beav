@@ -5,6 +5,7 @@ import process from 'node:process';
 import {
   artifactsRoot,
   assertBundledGuideResources,
+  assertDirectoryIncludesBrowserPlugin,
   browserPluginSourceDir,
   bundleRootForTarget,
   copyArtifactToDir,
@@ -74,7 +75,7 @@ async function resolveFetchedLinuxArtifactsForTarget(localDir, target) {
   };
 }
 
-async function buildLocalTarget(target) {
+async function buildLocalTarget(target, pluginInfo) {
   const tauriConfig = await readTauriConfig();
   assertBundledGuideResources(tauriConfig);
 
@@ -93,6 +94,16 @@ async function buildLocalTarget(target) {
       'pnpm',
       ['tauri', 'build', '--ci', '--config', tempConfig.configPath, '--target', target],
       { cwd: repoRoot },
+    );
+
+    const releaseRoot = path.join(repoRoot, 'src-tauri', 'target', target, 'release');
+    const bundledPlugin = await assertDirectoryIncludesBrowserPlugin(
+      releaseRoot,
+      pluginInfo,
+      `Linux ${target} release output`,
+    );
+    logStep(
+      `Verified Linux ${target} bundled browser plugin ${bundledPlugin.version} (${bundledPlugin.fileCount} files, ${bundledPlugin.digest.slice(0, 12)})`,
     );
 
     const bundleRoot = bundleRootForTarget(target);
@@ -133,7 +144,7 @@ async function buildLocally(targets) {
 
   const artifacts = [];
   for (const target of targets) {
-    artifacts.push(await buildLocalTarget(target));
+    artifacts.push(await buildLocalTarget(target, pluginInfo));
   }
 
   const packageJson = await readPackageJson();

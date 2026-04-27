@@ -5,6 +5,7 @@ import process from 'node:process';
 
 import {
   assertBundledGuideResources,
+  assertDirectoryIncludesBrowserPlugin,
   artifactsRoot,
   browserPluginSourceDir,
   bundleRootForTarget,
@@ -198,7 +199,7 @@ function prependPathEnv(env, extraDir) {
   };
 }
 
-async function buildLocalTarget({ target, runner, signCommand, hostIsWindows, buildEnv }) {
+async function buildLocalTarget({ target, runner, signCommand, hostIsWindows, buildEnv, pluginInfo }) {
   const tauriConfig = await readTauriConfig();
   assertBundledGuideResources(tauriConfig);
 
@@ -227,6 +228,16 @@ async function buildLocalTarget({ target, runner, signCommand, hostIsWindows, bu
 
     logStep(`Building Windows installer for ${target}`);
     await runCommand('pnpm', buildArgs, { cwd: repoRoot, env: buildEnv });
+
+    const releaseRoot = path.join(repoRoot, 'src-tauri', 'target', target, 'release');
+    const bundledPlugin = await assertDirectoryIncludesBrowserPlugin(
+      releaseRoot,
+      pluginInfo,
+      `Windows ${target} release output`,
+    );
+    logStep(
+      `Verified Windows ${target} bundled browser plugin ${bundledPlugin.version} (${bundledPlugin.fileCount} files, ${bundledPlugin.digest.slice(0, 12)})`,
+    );
 
     const bundleRoot = bundleRootForTarget(target);
     const { setupPath, portableExePath, portableZipPath } = await resolveWindowsArtifacts(bundleRoot);
@@ -330,6 +341,7 @@ async function buildLocally({ targets, runner, signCommand, requireSigning }) {
         signCommand,
         hostIsWindows,
         buildEnv,
+        pluginInfo,
       }));
     }
   } finally {
