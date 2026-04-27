@@ -468,23 +468,30 @@ mod tests {
             .join("lib");
         let homebrew_opt = root.join("homebrew").join("opt");
         let homebrew_etc = root.join("homebrew").join("etc");
+        let command_name = format!("redbox-lark-cli-{}", crate::now_i64());
         fs::create_dir_all(&script_bin).expect("script bin should be created");
         fs::create_dir_all(&node_bin).expect("node bin should be created");
         fs::create_dir_all(&node_lib).expect("node lib should be created");
         fs::create_dir_all(&homebrew_opt).expect("homebrew opt should be created");
         fs::create_dir_all(&homebrew_etc).expect("homebrew etc should be created");
         fs::write(
-            script_bin.join("lark-cli"),
-            "#!/usr/bin/env node\nconsole.log('ok')\n",
+            script_bin.join(&command_name),
+            format!("#!{}\nconsole.log('ok')\n", node_bin.join("node").display()),
         )
         .expect("script should be written");
         fs::write(node_bin.join("node"), "").expect("node shim should be written");
 
-        let env = BTreeMap::from([(
-            "PATH".to_string(),
-            format!("{}:{}", script_bin.display(), node_bin.display()),
-        )]);
-        let paths = host_tool_read_paths(&["lark-cli".to_string()], &env);
+        let env = BTreeMap::from([
+            (
+                "PATH".to_string(),
+                format!("{}:{}", script_bin.display(), node_bin.display()),
+            ),
+            (
+                "NVM_BIN".to_string(),
+                node_bin.to_string_lossy().to_string(),
+            ),
+        ]);
+        let paths = host_tool_read_paths(&[command_name], &env);
         let script_bin_text = script_bin.to_string_lossy().to_string();
         let node_bin_text = node_bin.to_string_lossy().to_string();
         let node_lib_text = node_lib.to_string_lossy().to_string();

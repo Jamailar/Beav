@@ -12,14 +12,15 @@ use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::cli_runtime::{
     append_execution_log_chunk, authorize_cli_execution, build_cli_sandbox_spec,
-    emit_cli_escalation_requested, emit_cli_execution_log, emit_cli_execution_started,
-    emit_cli_execution_status, emit_cli_verification_finished, execution_log_metadata,
-    execution_log_paths, find_cli_execution_by_id, initialize_execution_logs,
-    load_cli_execution_snapshot, load_host_shell_env, merge_execution_env, prepare_cli_launch,
-    resolve_cli_environment, run_cli_verification, sandbox_metadata, spawn_cli_terminal,
-    upsert_cli_execution_record, write_execution_logs, CliEnvironmentResolveRequest,
-    CliEscalationRequestRecord, CliExecuteRequest, CliExecutionMode, CliExecutionRecord,
-    CliExecutionSnapshot, CliExecutionStatus, CliVerificationStatus, CliVerifyRule,
+    build_effective_environment, emit_cli_escalation_requested, emit_cli_execution_log,
+    emit_cli_execution_started, emit_cli_execution_status, emit_cli_verification_finished,
+    execution_log_metadata, execution_log_paths, find_cli_execution_by_id,
+    initialize_execution_logs, load_cli_execution_snapshot, load_host_shell_snapshot,
+    prepare_cli_launch, resolve_cli_environment, run_cli_verification, sandbox_metadata,
+    spawn_cli_terminal, upsert_cli_execution_record, write_execution_logs,
+    CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest, CliExecutionMode,
+    CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus, CliVerificationStatus,
+    CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
 use crate::{make_id, now_i64, with_store, AppState};
@@ -489,9 +490,10 @@ pub fn execute_cli_command<RT: Runtime>(
     )?;
     let execution_id = make_id("cli-exec");
     let (stdout_path, stderr_path) = execution_log_paths(state, &execution_id)?;
-    let host_env = load_host_shell_env()
-        .unwrap_or_else(|_| std::env::vars().collect::<BTreeMap<String, String>>());
-    let merged_env = merge_execution_env(&host_env, &resolution.environment, Some(&request.env));
+    let host = load_host_shell_snapshot();
+    let effective =
+        build_effective_environment(&host, Some(&resolution.environment), Some(&request.env));
+    let merged_env = effective.env.clone();
     let cwd = normalize_cwd(&request, &resolution.environment.root_path);
     let session_id = request
         .session_id
@@ -544,14 +546,23 @@ pub fn execute_cli_command<RT: Runtime>(
     record.metadata = match record.metadata.take() {
         Some(Value::Object(mut object)) => {
             object.insert("sandbox".to_string(), sandbox_metadata(&sandbox));
+            object.insert(
+                "effectiveEnvironment".to_string(),
+                effective.metadata_value(),
+            );
+            object.insert("hostShell".to_string(), host.metadata_value());
             Some(Value::Object(object))
         }
         Some(other) => Some(json!({
             "log": other,
             "sandbox": sandbox_metadata(&sandbox),
+            "effectiveEnvironment": effective.metadata_value(),
+            "hostShell": host.metadata_value(),
         })),
         None => Some(json!({
             "sandbox": sandbox_metadata(&sandbox),
+            "effectiveEnvironment": effective.metadata_value(),
+            "hostShell": host.metadata_value(),
         })),
     };
     record = upsert_cli_execution_record(state, record)?;

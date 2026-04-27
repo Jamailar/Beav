@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use dirs::home_dir;
+use serde_json::{json, Value};
 
 use crate::cli_runtime::{CliEnvironmentRecord, CliRuntimeInventory};
 use crate::process_utils::configure_background_command;
@@ -60,25 +61,101 @@ fn shell_env_command() -> Option<(String, Vec<String>)> {
     }
 }
 
-pub fn load_host_shell_env() -> Result<BTreeMap<String, String>, String> {
+#[derive(Debug, Clone)]
+pub struct CliHostShellSnapshot {
+    pub env: BTreeMap<String, String>,
+    pub shell_path: Option<String>,
+    pub login_shell_loaded: bool,
+    pub fallback_used: bool,
+    pub error: Option<String>,
+}
+
+impl CliHostShellSnapshot {
+    pub fn metadata_value(&self) -> Value {
+        json!({
+            "path": self.shell_path,
+            "loginShellLoaded": self.login_shell_loaded,
+            "fallbackUsed": self.fallback_used,
+            "error": self.error,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CliEffectiveEnvironment {
+    pub env: BTreeMap<String, String>,
+    pub environment_id: Option<String>,
+    pub shell_path: Option<String>,
+    pub login_shell_loaded: bool,
+    pub fallback_used: bool,
+    pub host_path_entries_count: usize,
+    pub effective_path_preview: Vec<String>,
+}
+
+impl CliEffectiveEnvironment {
+    pub fn metadata_value(&self) -> Value {
+        json!({
+            "environmentId": self.environment_id,
+            "hostShell": self.shell_path,
+            "loginShellLoaded": self.login_shell_loaded,
+            "fallbackUsed": self.fallback_used,
+            "hostPathEntriesCount": self.host_path_entries_count,
+            "effectivePathPreview": self.effective_path_preview,
+        })
+    }
+}
+
+pub fn load_host_shell_snapshot() -> CliHostShellSnapshot {
     let mut merged = std::env::vars().collect::<BTreeMap<_, _>>();
     let Some((program, args)) = shell_env_command() else {
-        return Ok(merged);
+        return CliHostShellSnapshot {
+            env: merged,
+            shell_path: None,
+            login_shell_loaded: false,
+            fallback_used: true,
+            error: Some("host shell env command is unavailable".to_string()),
+        };
     };
 
-    let mut command = Command::new(program);
+    let mut command = Command::new(&program);
     command.args(args);
     configure_background_command(&mut command);
-    let output = command.output().map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Ok(merged);
+    match command.output() {
+        Ok(output) if output.status.success() => {
+            let parsed = parse_env_output(&String::from_utf8_lossy(&output.stdout));
+            for (key, value) in parsed {
+                merged.insert(key, value);
+            }
+            CliHostShellSnapshot {
+                env: merged,
+                shell_path: Some(program),
+                login_shell_loaded: true,
+                fallback_used: false,
+                error: None,
+            }
+        }
+        Ok(output) => CliHostShellSnapshot {
+            env: merged,
+            shell_path: Some(program),
+            login_shell_loaded: false,
+            fallback_used: true,
+            error: Some(format!(
+                "host shell env exited with status {}",
+                output.status
+            )),
+        },
+        Err(error) => CliHostShellSnapshot {
+            env: merged,
+            shell_path: Some(program),
+            login_shell_loaded: false,
+            fallback_used: true,
+            error: Some(error.to_string()),
+        },
     }
+}
 
-    let parsed = parse_env_output(&String::from_utf8_lossy(&output.stdout));
-    for (key, value) in parsed {
-        merged.insert(key, value);
-    }
-    Ok(merged)
+pub fn load_host_shell_env() -> Result<BTreeMap<String, String>, String> {
+    Ok(load_host_shell_snapshot().env)
 }
 
 pub fn discover_extra_bin_paths() -> Vec<String> {
@@ -225,6 +302,36 @@ pub fn merge_execution_env(
     merged
 }
 
+pub fn build_effective_environment(
+    host: &CliHostShellSnapshot,
+    environment: Option<&CliEnvironmentRecord>,
+    custom: Option<&BTreeMap<String, String>>,
+) -> CliEffectiveEnvironment {
+    let env = match environment {
+        Some(environment) => merge_execution_env(&host.env, environment, custom),
+        None => {
+            let mut merged = host.env.clone();
+            if let Some(custom) = custom {
+                for (key, value) in custom {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+            merged
+        }
+    };
+    let host_path_entries_count = env_path_entries(&host.env).len();
+    let effective_path_preview = env_path_entries(&env).into_iter().take(12).collect();
+    CliEffectiveEnvironment {
+        env,
+        environment_id: environment.map(|item| item.id.clone()),
+        shell_path: host.shell_path.clone(),
+        login_shell_loaded: host.login_shell_loaded,
+        fallback_used: host.fallback_used,
+        host_path_entries_count,
+        effective_path_preview,
+    }
+}
+
 pub fn default_environment_path_entries(root: &Path) -> Vec<String> {
     let mut items = Vec::<String>::new();
     push_unique_path(&mut items, root.join("bin").to_string_lossy().to_string());
@@ -289,5 +396,38 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert!(values[0].ends_with("/bin"));
         assert!(values[1].contains("node_modules"));
+    }
+
+    #[test]
+    fn build_effective_environment_preserves_shell_metadata_and_path_order() {
+        let host = CliHostShellSnapshot {
+            env: BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]),
+            shell_path: Some("/bin/zsh".to_string()),
+            login_shell_loaded: true,
+            fallback_used: false,
+            error: None,
+        };
+        let environment = CliEnvironmentRecord {
+            id: "env-1".to_string(),
+            scope: CliEnvironmentScope::AppGlobal,
+            root_path: "/tmp/redbox-env".to_string(),
+            path_entries: vec!["/tmp/redbox-env/bin".to_string()],
+            runtimes: CliRuntimeInventory::default(),
+            installed_tool_ids: Vec::new(),
+            created_at: 0,
+            updated_at: 0,
+            metadata: None,
+            workspace_root: None,
+        };
+
+        let effective = build_effective_environment(&host, Some(&environment), None);
+        assert_eq!(effective.environment_id.as_deref(), Some("env-1"));
+        assert_eq!(effective.shell_path.as_deref(), Some("/bin/zsh"));
+        assert!(effective.login_shell_loaded);
+        assert_eq!(effective.host_path_entries_count, 2);
+        assert_eq!(
+            effective.effective_path_preview.first().map(String::as_str),
+            Some("/tmp/redbox-env/bin")
+        );
     }
 }

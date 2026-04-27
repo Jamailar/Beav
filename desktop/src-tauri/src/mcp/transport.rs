@@ -1,9 +1,13 @@
 use crate::{run_curl_json, run_sse_mcp_method, slug_from_relative_path, McpServerRecord};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+
+use crate::cli_runtime::{build_effective_environment, load_host_shell_snapshot};
+use crate::process_utils::configure_background_command;
 
 use super::resources::McpCapabilitySnapshot;
 
@@ -85,16 +89,25 @@ impl StdioMcpTransport {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "缺少 stdio command".to_string())?;
+        let custom_env = mcp_server_env(&server);
+        let host = load_host_shell_snapshot();
+        let effective = build_effective_environment(&host, None, Some(&custom_env));
         let mut process = std::process::Command::new(command);
         process.args(server.args.clone().unwrap_or_default());
-        if let Some(env) = server.env.as_ref() {
-            process.envs(env);
-        }
+        process.env_clear();
+        process.envs(&effective.env);
+        configure_background_command(&mut process);
         let mut child = process
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                format!(
+                    "{}; effectiveEnvironment={}",
+                    error,
+                    effective.metadata_value()
+                )
+            })?;
         let stdin = child
             .stdin
             .take()
@@ -159,6 +172,25 @@ impl StdioMcpTransport {
         });
         write_stdio_message(&mut self.stdin, &notification)
     }
+}
+
+fn mcp_server_env(server: &McpServerRecord) -> BTreeMap<String, String> {
+    server.env.clone().unwrap_or_default().into_iter().collect()
+}
+
+pub fn mcp_stdio_effective_environment_metadata(server: &McpServerRecord) -> Option<Value> {
+    if server.transport != "stdio" {
+        return None;
+    }
+    let host = load_host_shell_snapshot();
+    let custom_env = mcp_server_env(server);
+    let effective = build_effective_environment(&host, None, Some(&custom_env));
+    Some(json!({
+        "hostShell": host.metadata_value(),
+        "effectiveEnvironment": effective.metadata_value(),
+        "command": server.command.clone(),
+        "args": server.args.clone(),
+    }))
 }
 
 impl Drop for StdioMcpTransport {

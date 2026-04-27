@@ -32,6 +32,8 @@ pub fn mcp_probe_value(
     state: &State<'_, AppState>,
     server: &McpServerRecord,
 ) -> Result<Value, String> {
+    let effective_environment =
+        crate::mcp::transport::mcp_stdio_effective_environment_metadata(server);
     match test_mcp_server(state, server) {
         Ok(result) => Ok(json!({
             "success": true,
@@ -39,8 +41,14 @@ pub fn mcp_probe_value(
             "detail": result.detail,
             "session": result.session,
             "capabilities": result.capabilities,
+            "effectiveEnvironment": effective_environment,
         })),
-        Err(error) => Ok(json!({ "success": false, "message": error.clone(), "detail": error })),
+        Err(error) => Ok(json!({
+            "success": false,
+            "message": error.clone(),
+            "detail": error,
+            "effectiveEnvironment": effective_environment,
+        })),
     }
 }
 
@@ -357,6 +365,7 @@ pub fn handle_mcp_tools_channel(
                                 "response": result.response,
                                 "session": result.session,
                                 "capabilities": result.capabilities,
+                                "effectiveEnvironment": crate::mcp::transport::mcp_stdio_effective_environment_metadata(&server),
                                 "executionSucceeded": true
                             })),
                             Err(error) => Ok(json!({
@@ -365,6 +374,7 @@ pub fn handle_mcp_tools_channel(
                                 "toolName": tool_name,
                                 "request": { "server": server, "method": "tools/list" },
                                 "error": error,
+                                "effectiveEnvironment": crate::mcp::transport::mcp_stdio_effective_environment_metadata(&server),
                                 "executionSucceeded": false
                             })),
                         };
