@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RedBox Capture</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="RedBox" class="brand-icon">
+        <div>
+          <h1>RedBox Capture</h1>
+          <div id="server-status" class="status">正在检测桌面端...</div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="open-settings" class="icon-btn" title="打开设置页" aria-label="设置">⚙</button>
+        <button id="refresh" class="icon-btn" title="刷新当前页面状态" aria-label="刷新">↻</button>
+      </div>
+    </header>
+
+    <section class="section page-recognition" aria-live="polite">
+      <div id="platform-logo" class="platform-logo platform-redbox">
+        <img id="platform-icon" class="platform-icon hidden" alt="">
+        <span id="platform-fallback" class="platform-fallback">R</span>
+      </div>
+      <div id="platform-name" class="platform-name">正在识别页面</div>
+      <div id="page-title" class="page-title">打开页面后自动识别平台</div>
+      <div id="page-detail" class="page-detail">采集按钮会显示在下方操作模块中</div>
+    </section>
+
+    <section id="capture-action-panel" class="section capture-action-panel hidden" aria-live="polite">
+      <div class="capture-head">
+        <div id="capture-mark" class="capture-mark">R</div>
+        <div class="capture-copy">
+          <div id="capture-title" class="capture-title">RedBox 页面采集</div>
+          <div id="capture-subtitle" class="capture-subtitle">当前页面</div>
+        </div>
+      </div>
+      <div id="capture-actions" class="capture-actions"></div>
+      <div id="capture-status" class="capture-status" hidden></div>
+    </section>
+
+    <section class="section task-panel">
+      <div class="section-row">
+        <div class="section-title">任务队列</div>
+        <div id="task-queue-badge" class="task-badge">空闲</div>
+      </div>
+      <div id="task-current" class="task-current">暂无执行任务</div>
+      <div id="task-queue-meta" class="task-meta">队列为空</div>
+    </section>
+
+    <section class="section task-log-panel">
+      <div class="section-row">
+        <div class="section-title">执行日志</div>
+        <div id="task-log-badge" class="log-badge">最近记录</div>
+      </div>
+      <div id="task-log-list" class="task-log-list">
+        <div class="log-empty">暂无执行日志</div>
+      </div>
+    </section>
+  </main>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

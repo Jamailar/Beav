@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RedBox Capture",
-  "description": "将网页、链接、选中文字、图片、小红书和 YouTube 内容直接保存到 RedBox 知识库或素材库。",
+  "description": "将网页、链接、选中文字、图片、小红书、抖音、Bilibili、快手、TikTok、Reddit、X、Instagram 和 YouTube 内容保存到 RedBox。",
   "version": "1.9.5",
   "icons": {
     "16": "icons/icon16.png",
@@ -13,21 +13,59 @@
     "activeTab",
     "alarms",
     "contextMenus",
+    "downloads",
     "scripting",
+    "sidePanel",
     "storage",
     "tabs"
   ],
   "host_permissions": [
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*",
     "http://127.0.0.1:31937/*",
     "http://localhost:31937/*",
     "http://127.0.0.1:23456/*",
     "http://localhost:23456/*",
+    "https://www.xiaohongshu.com/*",
+    "https://www.rednote.com/*",
+    "https://edith.xiaohongshu.com/*",
+    "https://pgy.xiaohongshu.com/*",
+    "https://www.douyin.com/*",
+    "https://www.kuaishou.com/*",
+    "https://live.kuaishou.com/*",
+    "https://www.tiktok.com/*",
+    "https://www.bilibili.com/*",
+    "https://space.bilibili.com/*",
+    "https://search.bilibili.com/*",
+    "https://b23.tv/*",
+    "https://reddit.com/*",
+    "https://www.reddit.com/*",
+    "https://old.reddit.com/*",
+    "https://x.com/*",
+    "https://www.x.com/*",
+    "https://mobile.x.com/*",
+    "https://twitter.com/*",
+    "https://www.twitter.com/*",
+    "https://mobile.twitter.com/*",
+    "https://instagram.com/*",
+    "https://www.instagram.com/*",
+    "https://*.xhscdn.com/*",
+    "https://*.rednotecdn.com/*",
     "https://raw.githubusercontent.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://www.xiaohongshu.com/*",
+        "https://www.rednote.com/*"
+      ],
+      "js": ["xhsBridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": ["<all_urls>"],
       "js": ["pageObserver.js"],
@@ -42,11 +80,14 @@
   ],
   "action": {
     "default_title": "RedBox Capture",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
       "48": "icons/icon48.png"
     }
+  },
+  "options_page": "settings.html",
+  "side_panel": {
+    "default_path": "sidepanel.html"
   }
 }
