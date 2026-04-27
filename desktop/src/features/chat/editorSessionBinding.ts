@@ -77,6 +77,9 @@ type BuildEditorSessionBindingParams = {
   editorBodyDirty: boolean;
 };
 
+const WRITING_EDITOR_ALLOWED_TOOLS = ['app_cli'];
+const WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS = ['manuscripts.writeCurrent'];
+
 function text(value: unknown): string {
   return String(value || '').trim();
 }
@@ -229,7 +232,8 @@ export function buildEditorSessionBinding(
     contextType: themeEditing ? 'richpost-theme-editing' : 'file',
     contextId: themeEditing ? `richpost-theme:${themeSessionId}` : editorFile,
     isContextBound: true,
-    allowedTools: themeEditing ? ['app_cli', 'redbox_fs'] : undefined,
+    allowedTools: themeEditing ? ['app_cli', 'redbox_fs'] : WRITING_EDITOR_ALLOWED_TOOLS,
+    allowedAppCliActions: themeEditing ? undefined : WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS,
     associatedFilePath,
     associatedPackageFilePath: editorFile,
     associatedPackageKind: draftType,

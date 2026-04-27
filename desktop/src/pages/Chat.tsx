@@ -94,6 +94,7 @@ interface ChatProps {
   showComposer?: boolean;
   showMessageAttachments?: boolean;
   collapseEmptyFixedSession?: boolean;
+  fixedSessionTaskHints?: unknown;
 }
 
 interface ChatContextUsage {
@@ -432,6 +433,7 @@ export function Chat({
   showComposer = true,
   showMessageAttachments = true,
   collapseEmptyFixedSession = false,
+  fixedSessionTaskHints,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -2662,11 +2664,12 @@ export function Chat({
     const normalizedContent = String(content || '').trim();
     const displayText = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
     if (!displayText) return;
+    const runtimeMessage = normalizedContent || displayText;
     const processingStartedAt = Date.now();
     const userMsg: Message = {
       id: processingStartedAt.toString(),
       role: 'user',
-      content: normalizedContent || displayText,
+      content: runtimeMessage,
       displayContent: displayText,
       attachment: attachment as unknown as Message['attachment'],
       tools: [],
@@ -2704,11 +2707,11 @@ export function Chat({
 
     dispatchChatSend({
       sessionId: currentSessionId || undefined,
-      message: normalizedContent || displayText,
+      message: runtimeMessage,
       displayContent: displayText,
       attachment: stripTransientAttachmentPreview(resolvedAttachment),
       modelConfig: resolvedModelConfig || getChatModelConfig(),
-      taskHints: undefined,
+      taskHints: fixedSessionTaskHints,
     });
   };
 

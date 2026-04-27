@@ -214,6 +214,9 @@ const RICHPOST_SHORTCUTS = [
   { label: '图文配合', text: '请根据当前稿件内容，建议每一段适合配什么图，并直接调整文案节奏。' },
 ];
 
+const EDITOR_AI_CONTEXT_MAX_CHARS = 80000;
+const WRITING_EDITOR_ALLOWED_TOOLS = ['app_cli'];
+const WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS = ['manuscripts.writeCurrent'];
 const RICHPOST_LAYOUT_SKILL_NAME = 'richpost-layout-designer';
 const RICHPOST_THEME_EDITOR_SKILL_NAME = 'richpost-theme-editor';
 const LONGFORM_LAYOUT_SKILL_NAME = 'longform-layout-designer';
@@ -230,6 +233,34 @@ const RICHPOST_PREVIEW_PAGE_WIDTH_COMPACT = 320;
 function clampScale(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return 1;
   return Math.min(max, Math.max(min, Number(value.toFixed(2))));
+}
+
+function buildWritingEditorAiContext({
+  title,
+  filePath,
+  draftType,
+  editorBody,
+}: {
+  title: string;
+  filePath: string;
+  draftType: WritingDraftType;
+  editorBody: string;
+}): string {
+  const body = String(editorBody || '');
+  const truncated = body.length > EDITOR_AI_CONTEXT_MAX_CHARS;
+  const bodyForContext = truncated ? body.slice(0, EDITOR_AI_CONTEXT_MAX_CHARS) : body;
+  return [
+    '当前对话嵌入在稿件编辑器里，只能围绕当前打开的稿件进行编辑。',
+    '不要调用读取、列出、搜索其他稿件或知识库的工具，除非用户明确要求比较外部材料。',
+    '如需落盘修改，直接使用当前稿件写入动作生成待审改稿提案。',
+    `当前稿件标题：${title || '未命名'}`,
+    `当前稿件路径：${filePath}`,
+    `当前稿件类型：${draftType}`,
+    truncated ? `当前稿件正文超过上下文限制，下面只包含前 ${EDITOR_AI_CONTEXT_MAX_CHARS} 个字符。` : '当前稿件正文如下。',
+    '```markdown',
+    bodyForContext,
+    '```',
+  ].join('\n');
 }
 
 type RichpostThemePreviewRecord = {
@@ -1639,6 +1670,12 @@ export function WritingDraftWorkbench({
     () => (isRichPost ? RICHPOST_SHORTCUTS : LONGFORM_SHORTCUTS),
     [isRichPost]
   );
+  const editorChatMessageContext = useMemo(() => buildWritingEditorAiContext({
+    title,
+    filePath,
+    draftType,
+    editorBody,
+  }), [draftType, editorBody, filePath, title]);
   const tabs = useMemo(() => {
     if (isRichPost) {
       return [
@@ -1734,6 +1771,16 @@ export function WritingDraftWorkbench({
     richpostThemeEditorThemeLabel,
     splitPreviewTab,
   ]);
+  const editorChatTaskHints = useMemo(() => ({
+    intent: 'manuscript_editing',
+    formatTarget: 'markdown',
+    sourceMode: 'current-editor',
+    sourceManuscriptPath: filePath,
+    allowedTools: WRITING_EDITOR_ALLOWED_TOOLS,
+    allowedAppCliActions: WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS,
+    activeSkills: aiWorkspaceMode.activeSkills,
+    initialContext: editorChatMessageContext,
+  }), [aiWorkspaceMode.activeSkills, editorChatMessageContext, filePath]);
 
   useEffect(() => {
     onAiWorkspaceModeChange?.(aiWorkspaceMode);
@@ -2831,6 +2878,7 @@ export function WritingDraftWorkbench({
                   welcomeSubtitle={isRichPost ? '围绕当前图文稿继续改标题、压缩段落、强化发布感。' : '围绕当前长文继续改结构、润色正文、生成发布版本。'}
                   shortcuts={shortcuts}
                   welcomeShortcuts={shortcuts}
+                  fixedSessionTaskHints={editorChatTaskHints}
                   fixedSessionBannerText={
                     aiWorkspaceMode.id === 'richpost-theme-editing'
                       ? `图文主题编辑 · ${aiWorkspaceMode.themeEditingLabel || '当前主题'}`

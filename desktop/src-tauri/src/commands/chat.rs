@@ -53,6 +53,7 @@ fn merge_task_hints_into_session_metadata(
                 "formatTarget",
                 "allowedTools",
                 "allowedAppCliActions",
+                "initialContext",
                 "saveSubdir",
                 "sourcePlatform",
                 "sourceNoteId",
