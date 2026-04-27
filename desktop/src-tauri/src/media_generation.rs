@@ -6,8 +6,7 @@ use std::thread;
 
 use crate::{
     decode_base64_bytes, format_http_error_message, http_error_details_from_value,
-    normalize_base_url, payload_field, payload_string, run_curl_bytes, run_curl_json,
-    run_curl_json_response,
+    normalize_base_url, payload_field, payload_string, run_curl_json, run_curl_json_response,
 };
 
 const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
@@ -599,14 +598,48 @@ fn normalize_media_value_for_remote(raw: &str) -> Result<String, String> {
     ))
 }
 
+fn download_http_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String> {
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client.get(url).send().map_err(|error| error.to_string())?;
+    let status = response.status();
+    let mime_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if !status.is_success() {
+        let body = response
+            .text()
+            .unwrap_or_default()
+            .chars()
+            .take(500)
+            .collect::<String>();
+        return Err(format!(
+            "HTTP GET failed status={} url={} body={}",
+            status.as_u16(),
+            url,
+            body
+        ));
+    }
+    let bytes = response.bytes().map_err(|error| error.to_string())?;
+    Ok((mime_type, bytes.to_vec()))
+}
+
 fn materialize_transport_value_to_temp_file(raw: &str, prefix: &str) -> Result<PathBuf, String> {
     let normalized = normalize_media_value_for_remote(raw)?;
     let (mime_type, bytes) = if let Some(decoded) = decode_data_url(&normalized) {
         decoded
     } else if is_http_url(&normalized) {
+        let (mime_type, bytes) = download_http_bytes(&normalized)?;
         (
-            "application/octet-stream".to_string(),
-            run_curl_bytes("GET", &normalized, None, &[], None)?,
+            mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+            bytes,
         )
     } else {
         let mime_type = infer_mime_type_from_path(raw).to_string();
@@ -1347,7 +1380,7 @@ pub(crate) fn write_generated_image_asset(
         return Ok(());
     }
     if let Some(url) = extract_media_url(response_item) {
-        let bytes = run_curl_bytes("GET", &url, None, &[], None)?;
+        let (_mime_type, bytes) = download_http_bytes(&url)?;
         if let Some(parent) = absolute_path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -2303,5 +2336,73 @@ mod tests {
         assert_eq!(request.matches("name=\"image\"").count(), 2);
         assert!(request.contains("name=\"prompt\""));
         assert!(!request.contains("name=\"image[]\""));
+    }
+
+    #[test]
+    fn materialize_http_reference_uses_builtin_downloader() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let url = format!("http://{}/template.png", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buffer = [0u8; 1024];
+            let read = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let response_body = b"PNG-REFERENCE";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
+                response_body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write headers");
+            stream.write_all(response_body).expect("write body");
+            request
+        });
+
+        let path =
+            materialize_transport_value_to_temp_file(&url, "http-ref").expect("materialize ref");
+        let bytes = fs::read(&path).expect("read materialized ref");
+        let _ = fs::remove_file(&path);
+        let request = server.join().expect("server join");
+
+        assert_eq!(bytes, b"PNG-REFERENCE");
+        assert_eq!(path.extension().and_then(|value| value.to_str()), Some("png"));
+        assert!(request.starts_with("GET /template.png "));
+    }
+
+    #[test]
+    fn write_generated_image_asset_downloads_url_without_external_curl() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let url = format!("http://{}/generated.png", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buffer = [0u8; 1024];
+            let read = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let response_body = b"PNG-GENERATED";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
+                response_body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write headers");
+            stream.write_all(response_body).expect("write body");
+            request
+        });
+
+        let path = std::env::temp_dir().join(format!(
+            "redbox-generated-test-{}.png",
+            crate::now_ms()
+        ));
+        write_generated_image_asset(&path, &json!({ "url": url })).expect("write asset");
+        let bytes = fs::read(&path).expect("read generated asset");
+        let _ = fs::remove_file(&path);
+        let request = server.join().expect("server join");
+
+        assert_eq!(bytes, b"PNG-GENERATED");
+        assert!(request.starts_with("GET /generated.png "));
     }
 }
