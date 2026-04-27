@@ -67,7 +67,25 @@ fn optional_note_asset_url(base_dir: &Path, raw: Option<&Value>) -> Option<Strin
                     || value.starts_with("https://")
                     || value.starts_with("data:")
                     || value.starts_with("blob:")
-                    || value.starts_with("file:")
+                {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+    })
+}
+
+fn local_or_remote_asset_url(base_dir: &Path, raw: Option<&Value>) -> Option<String> {
+    optional_note_asset_url(base_dir, raw).or_else(|| {
+        raw.and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| {
+                if value.starts_with("http://")
+                    || value.starts_with("https://")
+                    || value.starts_with("data:")
+                    || value.starts_with("blob:")
                 {
                     Some(value.to_string())
                 } else {
@@ -1061,19 +1079,19 @@ pub(crate) fn load_youtube_videos_from_fs(knowledge_root: &Path) -> Vec<YoutubeV
                     .get("summary")
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
-                thumbnail_url: meta
-                    .get("thumbnailUrl")
-                    .or_else(|| meta.get("thumbnail_url"))
-                    .and_then(|v| v.as_str())
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| {
-                        let thumb = path.join("thumbnail.jpg");
-                        if thumb.exists() {
-                            file_url_for_path(&thumb)
-                        } else {
-                            String::new()
-                        }
-                    }),
+                thumbnail_url: local_or_remote_asset_url(
+                    &path,
+                    meta.get("thumbnailUrl")
+                        .or_else(|| meta.get("thumbnail_url")),
+                )
+                .unwrap_or_else(|| {
+                    let thumb = path.join("thumbnail.jpg");
+                    if thumb.exists() {
+                        file_url_for_path(&thumb)
+                    } else {
+                        String::new()
+                    }
+                }),
                 has_subtitle: meta
                     .get("hasSubtitle")
                     .or_else(|| meta.get("has_subtitle"))
@@ -1588,4 +1606,201 @@ pub(crate) fn load_work_items_from_fs(redclaw_root: &Path) -> Vec<WorkItemRecord
     }
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_workspace_path(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("redbox-workspace-loader-{label}-{unique}"))
+    }
+
+    fn write_json(path: &Path, value: &Value) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("json parent");
+        }
+        fs::write(
+            path,
+            serde_json::to_string_pretty(value).expect("json fixture"),
+        )
+        .expect("write json fixture");
+    }
+
+    fn write_file(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("file parent");
+        }
+        fs::write(path, bytes).expect("write fixture file");
+    }
+
+    #[test]
+    fn knowledge_loaders_rebase_moved_windows_asset_paths() {
+        let root = temp_workspace_path("knowledge-rebase");
+        let knowledge_root = root.join("knowledge");
+        let note_dir = knowledge_root.join("redbook").join("note-1");
+        let note_image = note_dir.join("images").join("cover 1.png");
+        let note_video = note_dir.join("video.mp4");
+        write_file(&note_image, b"png");
+        write_file(&note_video, b"mp4");
+        write_json(
+            &note_dir.join("meta.json"),
+            &json!({
+                "id": "note-1",
+                "title": "Moved note",
+                "images": [
+                    "file:///D:/OldWorkspace/knowledge/redbook/note-1/images/cover%201.png"
+                ],
+                "cover": "file:D:\\OldWorkspace\\knowledge\\redbook\\note-1\\images\\cover%201.png",
+                "video": "D:\\OldWorkspace\\knowledge\\redbook\\note-1\\video.mp4",
+                "createdAt": "2026-04-27T00:00:00Z"
+            }),
+        );
+
+        let youtube_dir = knowledge_root.join("youtube").join("video-1");
+        let thumbnail = youtube_dir.join("thumbnail.jpg");
+        write_file(&thumbnail, b"jpg");
+        write_json(
+            &youtube_dir.join("meta.json"),
+            &json!({
+                "id": "video-1",
+                "videoId": "video-1",
+                "title": "Moved video",
+                "thumbnailUrl": "file:///D:/OldWorkspace/knowledge/youtube/video-1/thumbnail.jpg",
+                "createdAt": "2026-04-27T00:00:00Z"
+            }),
+        );
+
+        let notes = load_knowledge_notes_from_fs(&knowledge_root);
+        let note = notes
+            .iter()
+            .find(|item| item.id == "note-1")
+            .expect("note should load");
+        assert_eq!(note.images, vec![file_url_for_path(&note_image)]);
+        assert_eq!(
+            note.cover.as_deref(),
+            Some(file_url_for_path(&note_image).as_str())
+        );
+        assert_eq!(
+            note.video.as_deref(),
+            Some(file_url_for_path(&note_video).as_str())
+        );
+        assert!(!note.images[0].contains("OldWorkspace"));
+
+        let videos = load_youtube_videos_from_fs(&knowledge_root);
+        let video = videos
+            .iter()
+            .find(|item| item.id == "video-1")
+            .expect("youtube video should load");
+        assert_eq!(video.thumbnail_url, file_url_for_path(&thumbnail));
+        assert!(!video.thumbnail_url.contains("OldWorkspace"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn page_asset_loaders_use_current_workspace_root_after_move() {
+        let root = temp_workspace_path("page-assets");
+
+        let media_root = root.join("media");
+        let media_file = media_root.join("generated").join("media 1.png");
+        write_file(&media_file, b"png");
+        write_json(
+            &media_root.join("catalog.json"),
+            &json!({
+                "assets": [{
+                    "id": "media-1",
+                    "relativePath": "generated/media 1.png",
+                    "source": "generated",
+                    "createdAt": "2026-04-27T00:00:00Z",
+                    "updatedAt": "2026-04-27T00:00:00Z"
+                }]
+            }),
+        );
+
+        let cover_root = root.join("cover");
+        let cover_file = cover_root.join("generated").join("cover 1.png");
+        write_file(&cover_file, b"png");
+        write_json(
+            &cover_root.join("catalog.json"),
+            &json!({
+                "assets": [{
+                    "id": "cover-1",
+                    "relativePath": "generated/cover 1.png",
+                    "updatedAt": "2026-04-27T00:00:00Z"
+                }]
+            }),
+        );
+
+        let subjects_root = root.join("subjects");
+        let subject_dir = subjects_root.join("subject-1");
+        let portrait = subject_dir.join("portrait.png");
+        let voice = subject_dir.join("voice.wav");
+        write_file(&portrait, b"png");
+        write_file(&voice, b"wav");
+        write_json(
+            &subjects_root.join("catalog.json"),
+            &json!({
+                "subjects": [{
+                    "id": "subject-1",
+                    "name": "Subject",
+                    "imagePaths": ["portrait.png"],
+                    "voicePath": "voice.wav",
+                    "createdAt": "2026-04-27T00:00:00Z",
+                    "updatedAt": "2026-04-27T00:00:00Z"
+                }]
+            }),
+        );
+
+        let advisors_root = root.join("advisors");
+        let advisor_dir = advisors_root.join("advisor-1");
+        let avatar = advisor_dir.join("avatar.png");
+        write_file(&avatar, b"png");
+        write_json(
+            &advisor_dir.join("config.json"),
+            &json!({
+                "name": "Advisor",
+                "avatar": "avatar.png",
+                "createdAt": "2026-04-27T00:00:00Z",
+                "updatedAt": "2026-04-27T00:00:00Z"
+            }),
+        );
+
+        let media = load_media_assets_from_fs(&media_root);
+        assert_eq!(
+            media[0].preview_url.as_deref(),
+            Some(file_url_for_path(&media_file).as_str())
+        );
+        assert_eq!(
+            media[0].absolute_path.as_deref(),
+            Some(media_file.display().to_string().as_str())
+        );
+        assert!(media[0].exists);
+
+        let covers = load_cover_assets_from_fs(&cover_root);
+        assert_eq!(
+            covers[0].preview_url.as_deref(),
+            Some(file_url_for_path(&cover_file).as_str())
+        );
+        assert!(covers[0].exists);
+
+        let subjects = load_subjects_from_fs(&subjects_root);
+        assert_eq!(subjects[0].preview_urls, vec![file_url_for_path(&portrait)]);
+        assert_eq!(
+            subjects[0].voice_preview_url.as_deref(),
+            Some(file_url_for_path(&voice).as_str())
+        );
+
+        let advisors = load_advisors_from_fs(&advisors_root);
+        assert_eq!(advisors[0].avatar, file_url_for_path(&avatar));
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

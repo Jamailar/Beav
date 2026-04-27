@@ -26,7 +26,7 @@ export function isLikelyAbsoluteLocalPath(value: string): boolean {
 }
 
 export function isFileUrl(value: string): boolean {
-    return /^file:\/\//i.test(String(value || '').trim());
+    return /^file:/i.test(String(value || '').trim());
 }
 
 export function isLegacyLocalFileUrl(value: string): boolean {
@@ -60,6 +60,9 @@ function normalizeUriForParsing(raw: string): string {
         .replace(/^local-file:\/\/([a-zA-Z]:[\\/])/i, 'local-file:///$1')
         .replace(/^local-file:\/([a-zA-Z]:[\\/])/i, 'local-file:///$1')
         .replace(/^local-file:([a-zA-Z]:[\\/])/i, 'local-file:///$1')
+        .replace(/^file:\/\/([a-zA-Z]:[\\/])/i, 'file:///$1')
+        .replace(/^file:\/([a-zA-Z]:[\\/])/i, 'file:///$1')
+        .replace(/^file:([a-zA-Z]:[\\/])/i, 'file:///$1')
         .replace(/\\/g, '/');
 }
 
