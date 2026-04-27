@@ -2189,6 +2189,10 @@ fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<KnowledgeNoteRecor
     workspace_loaders::load_knowledge_notes_from_fs(knowledge_root)
 }
 
+fn load_knowledge_authors_from_fs(knowledge_root: &Path) -> Vec<KnowledgeAuthorRecord> {
+    workspace_loaders::load_knowledge_authors_from_fs(knowledge_root)
+}
+
 fn load_youtube_videos_from_fs(knowledge_root: &Path) -> Vec<YoutubeVideoRecord> {
     workspace_loaders::load_youtube_videos_from_fs(knowledge_root)
 }
@@ -2583,8 +2587,9 @@ fn redclaw_state_value(state: &RedclawStateRecord) -> Value {
 
 fn knowledge_version(store: &AppStore) -> String {
     format!(
-        "{}:{}:{}",
+        "{}:{}:{}:{}",
         store.knowledge_notes.len(),
+        store.knowledge_authors.len(),
         store.youtube_videos.len(),
         store.document_sources.len()
     )

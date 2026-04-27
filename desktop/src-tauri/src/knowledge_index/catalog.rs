@@ -17,6 +17,8 @@ pub(crate) struct KnowledgeCatalogSummary {
     pub capture_kind: Option<String>,
     pub title: String,
     pub author: String,
+    pub author_id: Option<String>,
+    pub author_url: Option<String>,
     pub site_name: Option<String>,
     pub source_url: Option<String>,
     pub folder_path: Option<String>,
@@ -65,6 +67,8 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<KnowledgeCatalogSummary, ru
         capture_kind: row.get("capture_kind")?,
         title: row.get("title")?,
         author: row.get("author")?,
+        author_id: row.get("author_id")?,
+        author_url: row.get("author_url")?,
         site_name: row.get("site_name")?,
         source_url: row.get("source_url")?,
         folder_path: row.get("folder_path")?,
@@ -134,6 +138,8 @@ pub(crate) fn list_page(
             ?3 IS NULL OR
             lower(title) LIKE ?3 OR
             lower(author) LIKE ?3 OR
+            lower(COALESCE(author_id, '')) LIKE ?3 OR
+            lower(COALESCE(author_url, '')) LIKE ?3 OR
             lower(COALESCE(site_name, '')) LIKE ?3 OR
             lower(COALESCE(source_url, '')) LIKE ?3 OR
             lower(COALESCE(root_path, '')) LIKE ?3 OR
@@ -219,7 +225,7 @@ pub(crate) fn upsert_summaries(
         tx.execute(
             r#"
             INSERT INTO knowledge_items (
-                item_id, workspace_id, kind, note_type, capture_kind, title, author, site_name,
+                item_id, workspace_id, kind, note_type, capture_kind, title, author, author_id, author_url, site_name,
                 source_url, folder_path, root_path, cover_url, thumbnail_url, preview_text,
                 scope, owner_type, owner_id, created_at, updated_at, language, has_video, has_transcript, tags_json, status,
                 item_hash, indexed_at, sample_files_json, file_count
@@ -227,7 +233,7 @@ pub(crate) fn upsert_summaries(
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
                 ?9, ?10, ?11, ?12, ?13, ?14,
                 ?15, ?16, ?17, ?18, ?19, ?20, ?21,
-                ?22, ?23, ?24, ?25, ?26, ?27, ?28
+                ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
             )
             ON CONFLICT(item_id) DO UPDATE SET
                 workspace_id = excluded.workspace_id,
@@ -236,6 +242,8 @@ pub(crate) fn upsert_summaries(
                 capture_kind = excluded.capture_kind,
                 title = excluded.title,
                 author = excluded.author,
+                author_id = excluded.author_id,
+                author_url = excluded.author_url,
                 site_name = excluded.site_name,
                 source_url = excluded.source_url,
                 folder_path = excluded.folder_path,
@@ -266,6 +274,8 @@ pub(crate) fn upsert_summaries(
                 item.capture_kind,
                 item.title,
                 item.author,
+                item.author_id,
+                item.author_url,
                 item.site_name,
                 item.source_url,
                 item.folder_path,

@@ -52,6 +52,8 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             capture_kind TEXT,
             title TEXT NOT NULL,
             author TEXT NOT NULL DEFAULT '',
+            author_id TEXT,
+            author_url TEXT,
             site_name TEXT,
             source_url TEXT,
             folder_path TEXT,
@@ -261,6 +263,8 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
     )?;
     ensure_column(&conn, "knowledge_items", "owner_type", "TEXT")?;
     ensure_column(&conn, "knowledge_items", "owner_id", "TEXT")?;
+    ensure_column(&conn, "knowledge_items", "author_id", "TEXT")?;
+    ensure_column(&conn, "knowledge_items", "author_url", "TEXT")?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_knowledge_items_owner_scope ON knowledge_items(workspace_id, scope, owner_type, owner_id, updated_at DESC)",
         [],

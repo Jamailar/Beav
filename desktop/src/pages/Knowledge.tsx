@@ -16,6 +16,10 @@ interface Note { type?: string; sourceUrl?: string;
     id: string;
     title: string;
     author: string;
+    authorId?: string;
+    authorUrl?: string;
+    authorAvatarUrl?: string;
+    authorDescription?: string;
     content: string;
     excerpt?: string;
     siteName?: string;
@@ -54,7 +58,23 @@ interface YouTubeVideo {
     folderPath?: string;
 }
 
-type KnowledgeTypeFilter = 'all' | 'xhs-image' | 'xhs-video' | 'douyin-video' | 'link-article' | 'wechat-article' | 'youtube' | 'docs';
+type KnowledgeTypeFilter =
+    | 'all'
+    | 'xhs-image'
+    | 'xhs-video'
+    | 'xhs-blogger'
+    | 'xhs-comments'
+    | 'douyin-video'
+    | 'bilibili'
+    | 'kuaishou'
+    | 'tiktok'
+    | 'reddit'
+    | 'x'
+    | 'instagram'
+    | 'link-article'
+    | 'wechat-article'
+    | 'youtube'
+    | 'docs';
 
 interface DocumentKnowledgeSource {
     id: string;
@@ -77,6 +97,8 @@ interface KnowledgeCatalogSummary {
     captureKind?: string;
     title: string;
     author: string;
+    authorId?: string;
+    authorUrl?: string;
     siteName?: string;
     sourceUrl?: string;
     folderPath?: string;
@@ -128,6 +150,32 @@ interface KnowledgeCardItem {
     doc?: DocumentKnowledgeSource;
 }
 
+const resolveNoteCardKind = (note: Note): KnowledgeCardItem['kind'] => {
+    const captureKind = note.captureKind || note.type || '';
+    if (captureKind.startsWith('bilibili-')) return 'bilibili';
+    if (captureKind.startsWith('kuaishou-')) return 'kuaishou';
+    if (captureKind.startsWith('tiktok-')) return 'tiktok';
+    if (captureKind.startsWith('reddit-')) return 'reddit';
+    if (captureKind.startsWith('x-')) return 'x';
+    if (captureKind.startsWith('instagram-')) return 'instagram';
+    if (captureKind === 'xhs-blogger') return 'xhs-blogger';
+    if (captureKind === 'xhs-comments') return 'xhs-comments';
+    if (note.type === 'link-article' || note.type === 'text') {
+        return note.captureKind === 'wechat-article' ? 'wechat-article' : 'link-article';
+    }
+    if (note.captureKind === 'douyin-video') return 'douyin-video';
+    if (note.captureKind === 'xhs-video' || note.video) return 'xhs-video';
+    return 'xhs-image';
+};
+
+interface KnowledgeAuthorView {
+    id?: string;
+    name: string;
+    profileUrl?: string;
+    avatarUrl?: string;
+    description?: string;
+}
+
 interface KnowledgeProps {
     isEmbedded?: boolean;
     isActive?: boolean;
@@ -153,6 +201,8 @@ const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     sourceUrl: item.sourceUrl,
     title: item.title,
     author: item.author || '原文链接',
+    authorId: item.authorId,
+    authorUrl: item.authorUrl,
     content: '',
     excerpt: item.previewText,
     siteName: item.siteName,
@@ -253,6 +303,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [documentSources, setDocumentSources] = useState<DocumentKnowledgeSource[]>([]);
     const [selectedNote, setSelectedNote] = useState<Note | null>(null);
     const [selectedVideo, setSelectedVideo] = useState<YouTubeVideo | null>(null);
+    const [selectedAuthor, setSelectedAuthor] = useState<KnowledgeAuthorView | null>(null);
     const [selectedImageIndex, setSelectedImageIndex] = useState(0);
     const [isImagePreviewOpen, setIsImagePreviewOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
@@ -716,6 +767,19 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         }
     }, [loadKnowledgeDetail]);
 
+    const openAuthorProfile = useCallback((note: Note) => {
+        const name = (note.author || '').trim();
+        if (!name || name === '原文链接' || name === '手动导入' || name === '文本摘录') return;
+        setSelectedNote(null);
+        setSelectedAuthor({
+            id: note.authorId,
+            name,
+            profileUrl: note.authorUrl,
+            avatarUrl: note.authorAvatarUrl,
+            description: note.authorDescription,
+        });
+    }, []);
+
     useEffect(() => {
         void loadAllKnowledge();
     }, [loadAllKnowledge]);
@@ -844,15 +908,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const knowledgeItems = useMemo<KnowledgeCardItem[]>(() => {
         const noteItems: KnowledgeCardItem[] = notes.map((note) => {
             const orderedImages = orderImages(note.images || []);
-            const kind: KnowledgeCardItem['kind'] = (note.type === 'link-article' || note.type === 'text')
-                ? note.captureKind === 'wechat-article'
-                    ? 'wechat-article'
-                    : 'link-article'
-                : note.captureKind === 'douyin-video'
-                    ? 'douyin-video'
-                    : (note.captureKind === 'xhs-video' || note.video)
-                    ? 'xhs-video'
-                    : 'xhs-image';
+            const kind = resolveNoteCardKind(note);
 
             return {
                 id: note.id,
@@ -863,6 +919,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 searchText: [
                     note.title,
                     note.author,
+                    note.authorUrl,
                     note.siteName,
                     note.excerpt,
                     note.sourceUrl,
@@ -900,11 +957,27 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         return [...noteItems, ...videoItems, ...docItems];
     }, [notes, youtubeVideos, documentSources]);
 
+    const selectedAuthorNotes = useMemo(() => {
+        if (!selectedAuthor) return [];
+        return notes.filter((note) => {
+            if (selectedAuthor.id && note.authorId === selectedAuthor.id) return true;
+            return (note.author || '').trim() === selectedAuthor.name;
+        });
+    }, [notes, selectedAuthor]);
+
     const typeFilters = useMemo(() => {
         const counts: Record<Exclude<KnowledgeTypeFilter, 'all'>, number> = {
             'xhs-image': 0,
             'xhs-video': 0,
+            'xhs-blogger': 0,
+            'xhs-comments': 0,
             'douyin-video': 0,
+            'bilibili': 0,
+            'kuaishou': 0,
+            'tiktok': 0,
+            'reddit': 0,
+            'x': 0,
+            'instagram': 0,
             'link-article': 0,
             'wechat-article': 0,
             'youtube': Number(kindCounts['youtube-video'] || 0),
@@ -920,7 +993,15 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             { key: 'all' as const, label: '全部', count: Number(kindCounts['redbook-note'] || 0) + counts.youtube + counts.docs },
             { key: 'xhs-image' as const, label: '小红书图文', count: counts['xhs-image'] },
             { key: 'xhs-video' as const, label: '小红书视频', count: counts['xhs-video'] },
+            { key: 'xhs-blogger' as const, label: '小红书博主', count: counts['xhs-blogger'] },
+            { key: 'xhs-comments' as const, label: '小红书评论', count: counts['xhs-comments'] },
             { key: 'douyin-video' as const, label: '抖音视频', count: counts['douyin-video'] },
+            { key: 'bilibili' as const, label: 'Bilibili', count: counts.bilibili },
+            { key: 'kuaishou' as const, label: '快手', count: counts.kuaishou },
+            { key: 'tiktok' as const, label: 'TikTok', count: counts.tiktok },
+            { key: 'reddit' as const, label: 'Reddit', count: counts.reddit },
+            { key: 'x' as const, label: 'X', count: counts.x },
+            { key: 'instagram' as const, label: 'Instagram', count: counts.instagram },
             { key: 'link-article' as const, label: '链接文章', count: counts['link-article'] },
             ...(SHOW_WECHAT_KNOWLEDGE_ACTIONS ? [{ key: 'wechat-article' as const, label: '公众号文章', count: counts['wechat-article'] }] : []),
             { key: 'youtube' as const, label: 'YouTube', count: counts.youtube },
@@ -1277,14 +1358,57 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         }
     };
 
+    const renderAuthorInline = (note: Note, className: string) => {
+        const label = note.author || 'SOURCE';
+        const canOpen = Boolean(note.author && !['原文链接', '手动导入', '文本摘录'].includes(note.author));
+        if (!canOpen) {
+            return <span className={className}>{label}</span>;
+        }
+        return (
+            <span
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    openAuthorProfile(note);
+                }}
+                onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openAuthorProfile(note);
+                }}
+                className={clsx(className, 'cursor-pointer hover:text-accent-primary hover:underline underline-offset-2')}
+            >
+                {label}
+            </span>
+        );
+    };
+
     const getKnowledgeKindLabel = (kind: KnowledgeCardItem['kind']) => {
         switch (kind) {
             case 'xhs-image':
                 return '小红书图文';
             case 'xhs-video':
                 return '小红书视频';
+            case 'xhs-blogger':
+                return '小红书博主';
+            case 'xhs-comments':
+                return '小红书评论';
             case 'douyin-video':
                 return '抖音视频';
+            case 'bilibili':
+                return 'Bilibili';
+            case 'kuaishou':
+                return '快手';
+            case 'tiktok':
+                return 'TikTok';
+            case 'reddit':
+                return 'Reddit';
+            case 'x':
+                return 'X';
+            case 'instagram':
+                return 'Instagram';
             case 'link-article':
                 return '链接文章';
             case 'wechat-article':
@@ -1304,8 +1428,24 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 return 'bg-rose-500/90 text-white';
             case 'xhs-video':
                 return 'bg-red-500/90 text-white';
+            case 'xhs-blogger':
+                return 'bg-pink-600/90 text-white';
+            case 'xhs-comments':
+                return 'bg-rose-400/90 text-white';
             case 'douyin-video':
                 return 'bg-neutral-900 text-white';
+            case 'bilibili':
+                return 'bg-sky-500/90 text-white';
+            case 'kuaishou':
+                return 'bg-orange-500/90 text-white';
+            case 'tiktok':
+                return 'bg-neutral-900 text-white';
+            case 'reddit':
+                return 'bg-orange-600/90 text-white';
+            case 'x':
+                return 'bg-slate-900 text-white';
+            case 'instagram':
+                return 'bg-fuchsia-600/90 text-white';
             case 'link-article':
                 return 'bg-sky-500/90 text-white';
             case 'wechat-article':
@@ -2052,7 +2192,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                             {note.sourceUrl && (
                                                                 <span className="flex items-center gap-1 max-w-full">
                                                                     <ExternalLink className="w-3 h-3 opacity-40" />
-                                                                    <span className="truncate max-w-[140px]">{note.author || 'SOURCE'}</span>
+                                                                    {renderAuthorInline(note, 'truncate max-w-[140px]')}
                                                                 </span>
                                                             )}
                                                             {note.tags?.slice(0, 2).map((tag) => (
@@ -2166,7 +2306,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                         {(item.kind === 'link-article' || item.kind === 'wechat-article') && note.sourceUrl && (
                                                             <span className="flex items-center gap-1 max-w-full">
                                                                 <ExternalLink className="w-3 h-3 opacity-40" />
-                                                                <span className="truncate max-w-[120px]">{note.author || 'SOURCE'}</span>
+                                                                {renderAuthorInline(note, 'truncate max-w-[120px]')}
                                                             </span>
                                                         )}
                                                     </div>
@@ -2229,7 +2369,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             <div className="min-w-0">
                                 <h1 className="text-xl font-extrabold text-text-primary tracking-tight line-clamp-2">{selectedNote.title}</h1>
                                 <div className="flex flex-wrap items-center gap-4 mt-2 text-[11px] font-bold text-text-tertiary uppercase tracking-wider">
-                                    <span className="flex items-center gap-1.5"><Users className="w-3.5 h-3.5 opacity-60" /> {selectedNote.author}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => openAuthorProfile(selectedNote)}
+                                        className="flex items-center gap-1.5 rounded-md transition-colors hover:text-accent-primary"
+                                    >
+                                        <Users className="w-3.5 h-3.5 opacity-60" /> {selectedNote.author}
+                                    </button>
                                     {selectedNote.siteName && (
                                         <span className="flex items-center gap-1.5"><ExternalLink className="w-3.5 h-3.5 opacity-60" /> {selectedNote.siteName}</span>
                                     )}
@@ -2427,6 +2573,98 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                         </>
                             );
                         })()}
+                    </div>
+                </div>
+            )}
+
+            {selectedAuthor && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
+                    onClick={() => setSelectedAuthor(null)}
+                >
+                    <div
+                        className="w-full max-w-[720px] mx-4 bg-white rounded-[24px] border border-white/20 shadow-[0_40px_100px_-24px_rgba(0,0,0,0.32)] overflow-hidden max-h-[86vh] flex flex-col"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="px-7 py-6 border-b border-black/[0.04] flex items-start justify-between gap-4">
+                            <div className="flex min-w-0 items-center gap-4">
+                                {selectedAuthor.avatarUrl ? (
+                                    <img
+                                        src={resolveAssetUrl(selectedAuthor.avatarUrl)}
+                                        alt={selectedAuthor.name}
+                                        className="h-14 w-14 rounded-full object-cover border border-black/[0.04]"
+                                    />
+                                ) : (
+                                    <div className="flex h-14 w-14 items-center justify-center rounded-full bg-accent-primary/10 text-accent-primary">
+                                        <Users className="h-6 w-6" />
+                                    </div>
+                                )}
+                                <div className="min-w-0">
+                                    <h2 className="text-lg font-extrabold text-text-primary tracking-tight truncate">{selectedAuthor.name}</h2>
+                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-bold text-text-tertiary">
+                                        <span>{selectedAuthorNotes.length} 篇已采集笔记</span>
+                                        {selectedAuthor.profileUrl && (
+                                            <button
+                                                type="button"
+                                                onClick={() => window.open(selectedAuthor.profileUrl, '_blank')}
+                                                className="inline-flex items-center gap-1 rounded-md text-accent-primary hover:underline underline-offset-2"
+                                            >
+                                                <ExternalLink className="h-3 w-3" />
+                                                原始主页
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setSelectedAuthor(null)}
+                                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.03] text-text-tertiary hover:bg-black/[0.06] transition-colors"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+                        {selectedAuthor.description && (
+                            <div className="px-7 py-4 border-b border-black/[0.04] text-[13px] leading-relaxed text-text-secondary">
+                                {selectedAuthor.description}
+                            </div>
+                        )}
+                        <div className="min-h-0 flex-1 overflow-y-auto p-4 custom-scrollbar">
+                            <div className="grid grid-cols-1 gap-2">
+                                {selectedAuthorNotes.map((note) => (
+                                    <button
+                                        key={note.id}
+                                        type="button"
+                                        onClick={() => {
+                                            setSelectedAuthor(null);
+                                            void openNoteDetail(note);
+                                        }}
+                                        className="group flex items-center gap-3 rounded-xl border border-black/[0.04] bg-white p-3 text-left transition-all hover:bg-black/[0.015] hover:border-accent-primary/20"
+                                    >
+                                        {getNoteCoverImage(note) ? (
+                                            <img
+                                                src={resolveAssetUrl(getNoteCoverImage(note))}
+                                                alt={note.title}
+                                                className="h-14 w-14 rounded-lg object-cover bg-black/[0.03]"
+                                            />
+                                        ) : (
+                                            <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-black/[0.03] text-text-tertiary">
+                                                <FileText className="h-5 w-5 opacity-50" />
+                                            </div>
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                            <div className="line-clamp-1 text-[13px] font-extrabold text-text-primary group-hover:text-accent-primary">{note.title}</div>
+                                            <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-text-tertiary">{note.excerpt || note.content || note.sourceUrl}</div>
+                                        </div>
+                                        <ChevronRight className="h-4 w-4 shrink-0 text-text-tertiary/50" />
+                                    </button>
+                                ))}
+                                {selectedAuthorNotes.length === 0 && (
+                                    <div className="rounded-xl border border-dashed border-black/[0.08] p-8 text-center text-[12px] font-bold text-text-tertiary">
+                                        暂时没有匹配到该作者的笔记
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

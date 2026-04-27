@@ -7,11 +7,11 @@ use crate::{
     extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path,
     normalize_timestamp_string, now_iso, optional_asset_url_from_note_path,
     read_text_file_or_empty, slug_from_relative_path, AdvisorRecord, ChatRoomMessageRecord,
-    ChatRoomRecord, CoverAssetRecord, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
-    KnowledgeNoteStatsRecord, MediaAssetRecord, MemoryHistoryRecord, RedclawLongCycleTaskRecord,
-    RedclawScheduledTaskRecord, RedclawStateRecord, SubjectAttribute, SubjectCategory,
-    SubjectRecord, UserMemoryRecord, WorkItemRecord, WorkRefsRecord, WorkScheduleRecord,
-    YoutubeVideoRecord,
+    ChatRoomRecord, CoverAssetRecord, DocumentKnowledgeSourceRecord, KnowledgeAuthorRecord,
+    KnowledgeNoteRecord, KnowledgeNoteStatsRecord, MediaAssetRecord, MemoryHistoryRecord,
+    RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord, RedclawStateRecord, SubjectAttribute,
+    SubjectCategory, SubjectRecord, UserMemoryRecord, WorkItemRecord, WorkRefsRecord,
+    WorkScheduleRecord, YoutubeVideoRecord,
 };
 
 pub(crate) fn read_json_file(path: &Path) -> Option<Value> {
@@ -968,6 +968,28 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
                     .and_then(|v| v.as_str())
                     .unwrap_or("原文链接")
                     .to_string(),
+                author_id: meta
+                    .get("authorId")
+                    .or_else(|| meta.get("author_id"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                author_url: meta
+                    .get("authorUrl")
+                    .or_else(|| meta.get("author_url"))
+                    .or_else(|| meta.get("authorProfileUrl"))
+                    .or_else(|| meta.get("author_profile_url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                author_avatar_url: meta
+                    .get("authorAvatarUrl")
+                    .or_else(|| meta.get("author_avatar_url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
+                author_description: meta
+                    .get("authorDescription")
+                    .or_else(|| meta.get("author_description"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 content: content_text,
                 excerpt: meta
                     .get("excerpt")
@@ -1017,6 +1039,116 @@ pub(crate) fn load_knowledge_notes_from_fs(knowledge_root: &Path) -> Vec<Knowled
     }
     notes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     notes
+}
+
+pub(crate) fn load_knowledge_authors_from_fs(knowledge_root: &Path) -> Vec<KnowledgeAuthorRecord> {
+    let mut authors = Vec::new();
+    let authors_root = knowledge_root.join("authors");
+    if let Ok(entries) = fs::read_dir(&authors_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(meta) = read_json_file(&path.join("meta.json")) else {
+                continue;
+            };
+            let entry_name = entry.file_name().to_string_lossy().to_string();
+            let linked_note_ids = meta
+                .get("linkedNoteIds")
+                .or_else(|| meta.get("linked_note_ids"))
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(ToString::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            authors.push(KnowledgeAuthorRecord {
+                id: meta
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(&entry_name)
+                    .to_string(),
+                r#type: meta
+                    .get("type")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("knowledge-author")
+                    .to_string(),
+                name: meta
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(&entry_name)
+                    .to_string(),
+                platform: meta
+                    .get("platform")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("web")
+                    .to_string(),
+                platform_user_id: meta
+                    .get("platformUserId")
+                    .or_else(|| meta.get("platform_user_id"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                handle: meta
+                    .get("handle")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                profile_url: meta
+                    .get("profileUrl")
+                    .or_else(|| meta.get("profile_url"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                avatar_url: meta
+                    .get("avatarUrl")
+                    .or_else(|| meta.get("avatar_url"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                description: meta
+                    .get("description")
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                source_domain: meta
+                    .get("sourceDomain")
+                    .or_else(|| meta.get("source_domain"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                note_count: meta
+                    .get("noteCount")
+                    .or_else(|| meta.get("note_count"))
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(linked_note_ids.len() as i64),
+                linked_note_ids,
+                first_seen_at: meta
+                    .get("firstSeenAt")
+                    .or_else(|| meta.get("first_seen_at"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                latest_note_at: meta
+                    .get("latestNoteAt")
+                    .or_else(|| meta.get("latest_note_at"))
+                    .and_then(|value| value.as_str())
+                    .map(ToString::to_string),
+                created_at: meta
+                    .get("createdAt")
+                    .or_else(|| meta.get("created_at"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                updated_at: meta
+                    .get("updatedAt")
+                    .or_else(|| meta.get("updated_at"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("0")
+                    .to_string(),
+                folder_path: Some(path.display().to_string()),
+            });
+        }
+    }
+    authors.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    authors
 }
 
 pub(crate) fn load_youtube_videos_from_fs(knowledge_root: &Path) -> Vec<YoutubeVideoRecord> {
