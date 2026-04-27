@@ -4,6 +4,7 @@ import process from 'node:process';
 
 import {
   assertBundledGuideResources,
+  assertMacAppIncludesBrowserPlugin,
   artifactsRoot,
   bundleRootForTarget,
   captureCommand,
@@ -12,6 +13,7 @@ import {
   ensureCommandExists,
   envFlag,
   findNewestFile,
+  getBrowserPluginInfo,
   installerArtifactsDir,
   logStep,
   parseTargetList,
@@ -210,6 +212,7 @@ async function buildTarget({
   notaryAuth,
   notaryRetries,
   notaryRetryDelayMs,
+  pluginInfo,
 }) {
   const buildArgs = ['tauri', 'build', '--ci', '--target', target];
 
@@ -220,6 +223,12 @@ async function buildTarget({
 
   logStep(`Generated app (${target}): ${path.relative(repoRoot, appPath)}`);
   logStep(`Generated dmg (${target}): ${path.relative(repoRoot, dmgPath)}`);
+
+  logStep(`Verifying bundled browser plugin for ${target}`);
+  const bundledPlugin = await assertMacAppIncludesBrowserPlugin(appPath, pluginInfo);
+  logStep(
+    `Bundled browser plugin ${bundledPlugin.version} (${bundledPlugin.fileCount} files, ${bundledPlugin.digest.slice(0, 12)})`,
+  );
 
   logStep(`Verifying code signature for ${target}`);
   await runCommand('codesign', ['--verify', '--deep', '--verbose=2', appPath], { cwd: repoRoot });
@@ -278,6 +287,7 @@ async function main() {
   const packageJson = await readPackageJson();
   const tauriConfig = await readTauriConfig();
   assertBundledGuideResources(tauriConfig);
+  const pluginInfo = await getBrowserPluginInfo();
   const productName = String(packageJson.productName || 'RedBox');
   const version = String(packageJson.version);
   const targets = parseTargetList(
@@ -328,6 +338,9 @@ async function main() {
   }
 
   const buildEnv = buildSigningOnlyEnv(signingIdentity);
+  logStep(
+    `Using browser plugin ${pluginInfo.version} (${pluginInfo.fileCount} files, ${pluginInfo.digest.slice(0, 12)})`,
+  );
   await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd: repoRoot });
   const artifacts = [];
   for (const target of targets) {
@@ -341,6 +354,7 @@ async function main() {
         notaryAuth,
         notaryRetries,
         notaryRetryDelayMs,
+        pluginInfo,
       }),
     );
   }

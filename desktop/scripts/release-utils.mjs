@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -9,10 +10,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const repoRoot = path.resolve(__dirname, '..');
+export const workspaceRoot = path.resolve(repoRoot, '..');
 export const artifactsRoot = path.join(repoRoot, 'artifacts');
-export const requiredBundledGuideResources = [
+export const browserPluginSourceDir = path.join(workspaceRoot, 'Plugin');
+export const bundledBrowserPluginResource = '../../Plugin';
+export const requiredBundledReleaseResources = [
   'resources/knowledge-api-guide.html',
   'resources/richpost-theme-guide.html',
+  bundledBrowserPluginResource,
+];
+export const requiredBrowserPluginFiles = [
+  'manifest.json',
+  'background.js',
+  'pageObserver.js',
+  'sidepanel.html',
+  'sidepanel.js',
+  'sidepanel.css',
 ];
 
 export function parseArgs(argv) {
@@ -102,18 +115,22 @@ export async function readTauriConfig(cwd = repoRoot) {
   return JSON.parse(raw);
 }
 
-export function assertBundledGuideResources(tauriConfig) {
+export function assertBundledReleaseResources(tauriConfig) {
   const resources = tauriConfig?.bundle?.resources;
   if (!Array.isArray(resources)) {
     throw new Error('src-tauri/tauri.conf.json is missing bundle.resources.');
   }
 
-  const missing = requiredBundledGuideResources.filter((resource) => !resources.includes(resource));
+  const missing = requiredBundledReleaseResources.filter((resource) => !resources.includes(resource));
   if (missing.length > 0) {
     throw new Error(
-      `src-tauri/tauri.conf.json is missing required bundled guide resources: ${missing.join(', ')}`,
+      `src-tauri/tauri.conf.json is missing required bundled release resources: ${missing.join(', ')}`,
     );
   }
+}
+
+export function assertBundledGuideResources(tauriConfig) {
+  assertBundledReleaseResources(tauriConfig);
 }
 
 export async function pathExists(targetPath) {
@@ -149,6 +166,106 @@ export async function listFilesRecursive(rootDir) {
   }
 
   return files;
+}
+
+async function hashDirectory(rootDir) {
+  const files = (await listFilesRecursive(rootDir))
+    .filter((filePath) => path.basename(filePath) !== '.DS_Store')
+    .sort((left, right) => left.localeCompare(right));
+  const hash = crypto.createHash('sha256');
+
+  for (const filePath of files) {
+    const relativePath = path.relative(rootDir, filePath).split(path.sep).join('/');
+    hash.update(relativePath);
+    hash.update('\0');
+    hash.update(await fs.readFile(filePath));
+    hash.update('\0');
+  }
+
+  return {
+    digest: hash.digest('hex'),
+    fileCount: files.length,
+  };
+}
+
+export async function readBrowserPluginManifest(sourceDir = browserPluginSourceDir) {
+  const manifestPath = path.join(sourceDir, 'manifest.json');
+  const raw = await fs.readFile(manifestPath, 'utf8');
+  return JSON.parse(raw);
+}
+
+export async function getBrowserPluginInfo(sourceDir = browserPluginSourceDir) {
+  if (!(await pathExists(sourceDir))) {
+    throw new Error(`Browser plugin source directory is missing: ${sourceDir}`);
+  }
+
+  const missing = [];
+  for (const relativePath of requiredBrowserPluginFiles) {
+    const absolutePath = path.join(sourceDir, relativePath);
+    if (!(await pathExists(absolutePath))) {
+      missing.push(relativePath);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Browser plugin source is missing required files: ${missing.join(', ')}`);
+  }
+
+  const manifest = await readBrowserPluginManifest(sourceDir);
+  const { digest, fileCount } = await hashDirectory(sourceDir);
+
+  return {
+    sourceDir,
+    manifestName: String(manifest.name || ''),
+    version: String(manifest.version || ''),
+    digest,
+    fileCount,
+  };
+}
+
+export async function findBundledBrowserPluginDir(appPath) {
+  const resourcesDir = path.join(appPath, 'Contents', 'Resources');
+  const candidates = [
+    path.join(resourcesDir, '_up_', '_up_', 'Plugin'),
+    path.join(resourcesDir, '_up_', 'Plugin'),
+    path.join(resourcesDir, 'Plugin'),
+  ];
+
+  for (const candidate of candidates) {
+    if (await pathExists(path.join(candidate, 'manifest.json'))) {
+      return candidate;
+    }
+  }
+
+  const files = await listFilesRecursive(resourcesDir);
+  const manifestPath = files.find((filePath) => {
+    const normalized = filePath.split(path.sep).join('/');
+    return normalized.endsWith('/Plugin/manifest.json');
+  });
+
+  return manifestPath ? path.dirname(manifestPath) : null;
+}
+
+export async function assertMacAppIncludesBrowserPlugin(appPath, expectedInfo) {
+  const pluginDir = await findBundledBrowserPluginDir(appPath);
+  if (!pluginDir) {
+    throw new Error(`macOS app bundle is missing bundled browser plugin: ${appPath}`);
+  }
+
+  const actualInfo = await getBrowserPluginInfo(pluginDir);
+  if (expectedInfo?.version && actualInfo.version !== expectedInfo.version) {
+    throw new Error(
+      `macOS app bundle contains browser plugin ${actualInfo.version}, expected ${expectedInfo.version}`,
+    );
+  }
+  if (expectedInfo?.digest && actualInfo.digest !== expectedInfo.digest) {
+    throw new Error('macOS app bundle browser plugin does not match the current Plugin directory.');
+  }
+
+  return {
+    ...actualInfo,
+    bundleDir: pluginDir,
+  };
 }
 
 export async function findNewestFile(rootDir, matcher) {
