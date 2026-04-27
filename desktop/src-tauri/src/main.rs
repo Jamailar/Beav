@@ -1528,6 +1528,7 @@ mod tests {
         interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
+        resolve_local_path,
         structured_tool_error_code, validate_runtime_tool_message_sequence, GeneratedMediaPreview,
         InteractiveExecutionContract, InteractiveExecutionProgress,
     };
@@ -1791,6 +1792,13 @@ mod tests {
             preview.as_deref(),
             Some("file:///C:/Users/Jam/.redconvert/spaces/default/media/generated/demo%201.png")
         );
+    }
+
+    #[test]
+    fn resolve_local_path_decodes_file_url_spaces() {
+        let path = resolve_local_path("file:///Users/Jam/My%20Images/demo%201.png")
+            .expect("file url path");
+        assert_eq!(path, std::path::PathBuf::from("/Users/Jam/My Images/demo 1.png"));
     }
 
     #[test]
@@ -8481,11 +8489,19 @@ fn resolve_local_path(source: &str) -> Option<PathBuf> {
         return None;
     }
     if let Some(rest) = trimmed.strip_prefix("file://") {
+        if let Ok(parsed) = url::Url::parse(trimmed) {
+            if let Ok(path) = parsed.to_file_path() {
+                return Some(path);
+            }
+        }
         #[cfg(target_os = "windows")]
         let normalized = rest.trim_start_matches('/');
         #[cfg(not(target_os = "windows"))]
         let normalized = rest;
-        return Some(PathBuf::from(normalized));
+        let decoded = urlencoding::decode(normalized)
+            .map(|value| value.into_owned())
+            .unwrap_or_else(|_| normalized.to_string());
+        return Some(PathBuf::from(decoded));
     }
     Some(PathBuf::from(trimmed))
 }

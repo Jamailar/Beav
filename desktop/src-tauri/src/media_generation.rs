@@ -583,6 +583,20 @@ fn normalize_media_value_for_remote(raw: &str) -> Result<String, String> {
     if is_http_url(trimmed) || trimmed.starts_with("data:") {
         return Ok(trimmed.to_string());
     }
+    if let Some(path) = crate::resolve_local_path(trimmed).filter(|path| path.exists()) {
+        let buffer = fs::read(&path).map_err(|error| error.to_string())?;
+        let mime_type = infer_mime_type_from_path(&path.to_string_lossy());
+        return Ok(format!(
+            "data:{mime_type};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(buffer)
+        ));
+    }
+    if trimmed.starts_with("file://") {
+        let path = crate::resolve_local_path(trimmed)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| trimmed.to_string());
+        return Err(format!("本地图片不存在或无法读取: {path}"));
+    }
     if trimmed.len() > 128
         && trimmed
             .chars()
@@ -2369,6 +2383,25 @@ mod tests {
         assert_eq!(bytes, b"PNG-REFERENCE");
         assert_eq!(path.extension().and_then(|value| value.to_str()), Some("png"));
         assert!(request.starts_with("GET /template.png "));
+    }
+
+    #[test]
+    fn materialize_file_url_reference_decodes_escaped_path() {
+        let source_path = std::env::temp_dir().join(format!(
+            "redbox file url ref {}.png",
+            crate::now_ms()
+        ));
+        fs::write(&source_path, b"PNG-FILE-URL").expect("write source image");
+        let source_url = crate::file_url_for_path(&source_path);
+
+        let path = materialize_transport_value_to_temp_file(&source_url, "file-url-ref")
+            .expect("materialize file url ref");
+        let bytes = fs::read(&path).expect("read materialized image");
+        let _ = fs::remove_file(&source_path);
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(bytes, b"PNG-FILE-URL");
+        assert_eq!(path.extension().and_then(|value| value.to_str()), Some("png"));
     }
 
     #[test]
