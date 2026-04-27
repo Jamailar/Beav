@@ -290,6 +290,7 @@ function attachmentVisualKind(
 function attachmentPreviewSrc(attachment: UploadedFileAttachment | null | undefined): string {
     const preferred = String(
         attachment?.thumbnailDataUrl
+        || attachment?.inlineDataUrl
         || attachment?.localUrl
         || attachment?.absolutePath
         || attachment?.originalAbsolutePath

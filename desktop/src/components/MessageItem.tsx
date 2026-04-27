@@ -168,6 +168,7 @@ export interface Message {
     ext?: string;
     size?: number;
     thumbnailDataUrl?: string;
+    inlineDataUrl?: string;
     workspaceRelativePath?: string;
     absolutePath?: string;
     originalAbsolutePath?: string;
@@ -499,7 +500,8 @@ export const MessageItem = memo(({
     const kind = String(attachment.kind || '').trim().toLowerCase();
     const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
     const source = String(
-      attachment.localUrl
+      attachment.inlineDataUrl
+        || attachment.localUrl
         || attachment.absolutePath
         || attachment.originalAbsolutePath
         || attachment.name
@@ -512,6 +514,7 @@ export const MessageItem = memo(({
   const resolveUploadedAttachmentSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const preferred = String(
       attachment.thumbnailDataUrl
+        || attachment.inlineDataUrl
         || attachment.localUrl
         || attachment.absolutePath
         || attachment.originalAbsolutePath
@@ -523,7 +526,8 @@ export const MessageItem = memo(({
 
   const resolveUploadedAttachmentActionSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => (
     String(
-      attachment.localUrl
+      attachment.inlineDataUrl
+        || attachment.localUrl
         || attachment.absolutePath
         || attachment.originalAbsolutePath
         || '',

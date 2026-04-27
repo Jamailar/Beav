@@ -83,6 +83,7 @@ export interface PendingChatMessage {
     ext?: string;
     size?: number;
     thumbnailDataUrl?: string;
+    inlineDataUrl?: string;
     workspaceRelativePath?: string;
     absolutePath?: string;
     originalAbsolutePath?: string;
