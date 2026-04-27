@@ -303,9 +303,6 @@ function getCaptureActionConfig(nextContext) {
       subtitle: '小红书笔记页',
       actions: [
         { label: '保存笔记', action: 'save', primary: true, title: '保存当前笔记到 RedBox' },
-        { label: '下载素材', action: 'download', title: '下载当前笔记图片或视频' },
-        { label: '采集评论', action: 'comments', title: '采集当前笔记评论' },
-        { label: '导出 JSON', action: 'exportJson', title: '导出当前笔记原始 JSON' },
       ],
     };
   }
