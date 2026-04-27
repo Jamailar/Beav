@@ -1,5 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import {
+  preflightGenerationMediaPayload,
+  preflightInlineAttachmentPayload,
+} from '../utils/mediaReferencePreflight';
 
 type Listener = (...args: any[]) => void;
 type GuardedFallbackValue<T> = T | null | (() => T | null);
@@ -1001,8 +1005,8 @@ function createIpcRenderer() {
     chat: {
       send: (data: Record<string, unknown>) => sendChannel('chat:send-message', data),
       pickAttachment: (payload?: { sessionId?: string }) => invokeChannel('chat:pick-attachment', payload || {}),
-      createInlineAttachment: (payload: { dataUrl: string; fileName?: string; sessionId?: string }) =>
-        invokeChannel('chat:create-inline-attachment', payload),
+      createInlineAttachment: async (payload: { dataUrl: string; fileName?: string; sessionId?: string }) =>
+        invokeChannel('chat:create-inline-attachment', await preflightInlineAttachmentPayload(payload)),
       transcribeAudio: (payload: Record<string, unknown>) => invokeChannel('chat:transcribe-audio', payload),
       cancel: (data?: { sessionId?: string } | string) => sendChannel('chat:cancel', data),
       confirmTool: (callId: string, confirmed: boolean) => sendChannel('chat:confirm-tool', { callId, confirmed }),
@@ -1028,8 +1032,10 @@ function createIpcRenderer() {
         invokeChannel('manuscripts:confirm-package-script', payload),
     },
     generation: {
-      submitImage: (payload: Record<string, unknown>) => invokeChannel('generation:submit-image', payload),
-      submitVideo: (payload: Record<string, unknown>) => invokeChannel('generation:submit-video', payload),
+      submitImage: async (payload: Record<string, unknown>) =>
+        invokeChannel('generation:submit-image', await preflightGenerationMediaPayload(payload)),
+      submitVideo: async (payload: Record<string, unknown>) =>
+        invokeChannel('generation:submit-video', await preflightGenerationMediaPayload(payload)),
       listJobSummaries: (payload?: Record<string, unknown>) => invokeChannel('generation:list-job-summaries', payload || {}),
       listJobs: (payload?: Record<string, unknown>) => invokeChannel('generation:list-jobs', payload || {}),
       getJob: (jobId: string) => invokeChannel('generation:get-job', { jobId }),
