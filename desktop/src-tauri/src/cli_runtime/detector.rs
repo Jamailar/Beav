@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use serde::Serialize;
 use serde_json::json;
 
 use crate::cli_runtime::{
@@ -166,6 +167,31 @@ struct CliExecutableResolution {
     searched_path_entries_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CliShellResolvedKind {
+    ExecutablePath,
+    ShellBuiltin,
+    ShellFunction,
+    Alias,
+    Unknown,
+    ProbeUnavailable,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliShellResolveProbe {
+    pub shell_path: Option<String>,
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub resolved_path: Option<String>,
+    pub resolved_kind: CliShellResolvedKind,
+    pub skipped: bool,
+    pub skip_reason: Option<String>,
+}
+
 fn resolve_executable(
     command: &str,
     env: &BTreeMap<String, String>,
@@ -226,12 +252,169 @@ fn resolve_executable(
     }
 }
 
+fn shell_probe_input_safe(command: &str) -> bool {
+    let trimmed = command.trim();
+    !trimmed.is_empty()
+        && !looks_like_path(trimmed)
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '+' | '@'))
+}
+
+fn classify_shell_resolution(output: &str) -> (CliShellResolvedKind, Option<String>) {
+    let line = output.lines().map(str::trim).find(|line| !line.is_empty());
+    let Some(line) = line else {
+        return (CliShellResolvedKind::Unknown, None);
+    };
+    let path = Path::new(line);
+    if path.is_absolute() && path.is_file() {
+        return (CliShellResolvedKind::ExecutablePath, Some(line.to_string()));
+    }
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("alias") {
+        return (CliShellResolvedKind::Alias, None);
+    }
+    if lower.contains("function") {
+        return (CliShellResolvedKind::ShellFunction, None);
+    }
+    if lower.contains("builtin") {
+        return (CliShellResolvedKind::ShellBuiltin, None);
+    }
+    (CliShellResolvedKind::Unknown, None)
+}
+
+pub fn probe_shell_command_resolution(
+    command: &str,
+    shell_path: Option<&str>,
+    env: &BTreeMap<String, String>,
+) -> CliShellResolveProbe {
+    let command = command.trim().to_string();
+    let Some(shell_path) = shell_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+    else {
+        return CliShellResolveProbe {
+            shell_path: None,
+            command,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            resolved_path: None,
+            resolved_kind: CliShellResolvedKind::ProbeUnavailable,
+            skipped: true,
+            skip_reason: Some("host shell path unavailable".to_string()),
+        };
+    };
+    if !shell_probe_input_safe(&command) {
+        return CliShellResolveProbe {
+            shell_path: Some(shell_path),
+            command,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            resolved_path: None,
+            resolved_kind: CliShellResolvedKind::ProbeUnavailable,
+            skipped: true,
+            skip_reason: Some("command is not safe for shell-native resolution probe".to_string()),
+        };
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        CliShellResolveProbe {
+            shell_path: Some(shell_path),
+            command,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            resolved_path: None,
+            resolved_kind: CliShellResolvedKind::ProbeUnavailable,
+            skipped: true,
+            skip_reason: Some(
+                "shell-native resolution probe is not implemented on Windows".to_string(),
+            ),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let script = r#"candidate=$(type -p -- "$1" 2>/dev/null || command -v -- "$1" 2>/dev/null); if [ -n "$candidate" ]; then printf '%s\n' "$candidate"; fi"#;
+        let mut process = Command::new(&shell_path);
+        process.args(["-lc", script, "_", &command]);
+        process.env_clear();
+        process.envs(env);
+        configure_background_command(&mut process);
+        match process.output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let (resolved_kind, resolved_path) = classify_shell_resolution(&stdout);
+                CliShellResolveProbe {
+                    shell_path: Some(shell_path),
+                    command,
+                    exit_code: output.status.code(),
+                    stdout,
+                    stderr,
+                    resolved_path,
+                    resolved_kind,
+                    skipped: false,
+                    skip_reason: None,
+                }
+            }
+            Err(error) => CliShellResolveProbe {
+                shell_path: Some(shell_path),
+                command,
+                exit_code: None,
+                stdout: String::new(),
+                stderr: error.to_string(),
+                resolved_path: None,
+                resolved_kind: CliShellResolvedKind::ProbeUnavailable,
+                skipped: false,
+                skip_reason: None,
+            },
+        }
+    }
+}
+
 pub fn find_executable(command: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
     resolve_executable(command, env, None).resolved_path
 }
 
 pub fn detect_tool(command: &str, env: &BTreeMap<String, String>) -> CliToolRecord {
     detect_tool_with_managed_paths(command, env, None, true)
+}
+
+pub fn detect_tool_with_shell_probe(
+    command: &str,
+    env: &BTreeMap<String, String>,
+    managed_path_entries: Option<&[String]>,
+    probe_version_enabled: bool,
+    shell_path: Option<&str>,
+) -> CliToolRecord {
+    let mut detected =
+        detect_tool_with_managed_paths(command, env, managed_path_entries, probe_version_enabled);
+    let path_scan = json!({
+        "resolvedPath": detected.resolved_path.clone(),
+        "resolvedFrom": detected.resolved_from.clone(),
+    });
+    let shell_probe = probe_shell_command_resolution(command, shell_path, env);
+    if detected.health != CliToolHealth::Ready {
+        if let Some(path) = shell_probe.resolved_path.as_deref() {
+            detected.health = CliToolHealth::Ready;
+            detected.resolved_path = Some(path.to_string());
+            detected.resolved_from = Some(CliResolvedFrom::HostShellPath);
+            if probe_version_enabled {
+                detected.version = probe_version(Path::new(path));
+            }
+        }
+    }
+    detected.metadata = Some(json!({
+        "versionProbeSucceeded": detected.version.is_some(),
+        "pathScan": path_scan,
+        "shellResolveProbe": shell_probe,
+    }));
+    detected
 }
 
 pub fn detect_tool_with_managed_paths(
@@ -487,5 +670,50 @@ mod tests {
         assert!(discovered.iter().any(|item| item.executable == "lark-cli"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_probe_can_upgrade_missing_path_scan_for_hyphenated_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("redbox-cli-shell-probe-{unique}"));
+        let bin = root.join("bin");
+        let command_name = format!("redbox-lark-cli-{unique}");
+        let command_path = bin.join(&command_name);
+        fs::create_dir_all(&bin).expect("create temp bin");
+        fs::write(&command_path, "#!/bin/sh\necho lark-cli-test\n").expect("write temp command");
+        let mut perms = fs::metadata(&command_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&command_path, perms).expect("chmod temp command");
+
+        let env = BTreeMap::from([("PATH".to_string(), bin.to_string_lossy().to_string())]);
+        let detected =
+            detect_tool_with_shell_probe(&command_name, &env, None, false, Some("/bin/sh"));
+        assert_eq!(detected.health, CliToolHealth::Ready);
+        assert_eq!(
+            detected.resolved_path.as_deref(),
+            Some(command_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(detected.resolved_from, Some(CliResolvedFrom::HostShellPath));
+        assert!(detected
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("shellResolveProbe"))
+            .is_some());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shell_probe_skips_unsafe_command_strings() {
+        let env = BTreeMap::new();
+        let probe = probe_shell_command_resolution("bad;command", Some("/bin/sh"), &env);
+        assert!(probe.skipped);
+        assert_eq!(probe.resolved_kind, CliShellResolvedKind::ProbeUnavailable);
     }
 }

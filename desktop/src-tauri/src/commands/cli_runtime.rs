@@ -7,27 +7,29 @@ use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
     add_installed_tool_to_environment, approve_cli_escalation, build_cli_sandbox_spec,
-    build_cli_tool_manifest, cancel_cli_execution, collect_cli_requested_permissions,
-    create_task_ephemeral_environment, default_cli_execution_mode, default_detect_commands,
-    deny_cli_escalation, detect_tool, detect_tool_with_managed_paths, discover_all_commands,
-    emit_cli_escalation_resolved, emit_cli_execution_status, emit_cli_install_finished,
-    emit_cli_install_started, emit_cli_verification_finished, ensure_app_global_environment,
-    ensure_workspace_environment, ensure_workspace_environment_for_active_space,
-    execute_cli_command, find_cli_environment_by_id, find_cli_execution_by_id,
-    find_cli_tool_by_command, find_cli_tool_by_id, find_cli_tool_manifest_by_tool_id,
-    list_cli_environments, list_cli_tool_records, load_cli_execution_snapshot, load_host_shell_env,
-    merge_execution_env, prepare_cli_install, refresh_cli_execution, resolve_cli_environment,
-    run_cli_verification, sandbox_metadata, upsert_cli_tool_manifest, upsert_cli_tool_record,
-    CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
-    CliDiscoverRequest, CliEnvironmentRecord, CliEnvironmentResolveRequest, CliEnvironmentScope,
-    CliExecuteRequest, CliExecutionMode, CliExecutionStatus, CliInstallRequest, CliInstallResult,
-    CliToolHealth, CliToolManifestRecord, CliToolRecord, CliToolSource, CliVerifyExecutionRequest,
+    build_cli_tool_manifest, build_effective_environment, cancel_cli_execution,
+    collect_cli_requested_permissions, create_task_ephemeral_environment,
+    default_cli_execution_mode, default_detect_commands, deny_cli_escalation, detect_tool,
+    detect_tool_with_shell_probe, discover_all_commands, emit_cli_escalation_resolved,
+    emit_cli_execution_status, emit_cli_install_finished, emit_cli_install_started,
+    emit_cli_verification_finished, ensure_app_global_environment, ensure_workspace_environment,
+    ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_environment_by_id,
+    find_cli_execution_by_id, find_cli_tool_by_command, find_cli_tool_by_id,
+    find_cli_tool_manifest_by_tool_id, list_cli_environments, list_cli_tool_records,
+    load_cli_execution_snapshot, load_host_shell_snapshot, prepare_cli_install,
+    refresh_cli_execution, resolve_cli_environment, run_cli_verification, sandbox_metadata,
+    upsert_cli_tool_manifest, upsert_cli_tool_record, CliApproveEscalationRequest,
+    CliCreateEnvironmentRequest, CliDenyEscalationRequest, CliDiscoverRequest,
+    CliEffectiveEnvironment, CliEnvironmentRecord, CliEnvironmentResolveRequest,
+    CliEnvironmentScope, CliExecuteRequest, CliExecutionMode, CliExecutionStatus,
+    CliHostShellSnapshot, CliInstallRequest, CliInstallResult, CliToolHealth,
+    CliToolManifestRecord, CliToolRecord, CliToolSource, CliVerifyExecutionRequest,
     CliVerifyResult,
 };
 use crate::{make_id, payload_string, AppState};
 
-fn load_host_env() -> std::collections::BTreeMap<String, String> {
-    load_host_shell_env().unwrap_or_else(|_| std::env::vars().collect())
+fn load_host_env() -> CliHostShellSnapshot {
+    load_host_shell_snapshot()
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -191,6 +193,21 @@ fn merge_tool_metadata(existing: Option<&Value>, generated: Option<Value>) -> Op
     }
 }
 
+fn attach_effective_environment_metadata(
+    mut tool: CliToolRecord,
+    host: &CliHostShellSnapshot,
+    effective: &CliEffectiveEnvironment,
+) -> CliToolRecord {
+    tool.metadata = merge_tool_metadata(
+        tool.metadata.as_ref(),
+        Some(json!({
+            "hostShell": host.metadata_value(),
+            "effectiveEnvironment": effective.metadata_value(),
+        })),
+    );
+    tool
+}
+
 fn manifest_metadata(manifest: &CliToolManifestRecord) -> Value {
     json!({
         "commandCount": manifest.commands.len(),
@@ -257,7 +274,7 @@ fn merge_detected_tool_with_stored(
 fn detect_tool_across_environments(
     state: &State<'_, AppState>,
     command: &str,
-    host_env: &BTreeMap<String, String>,
+    host: &CliHostShellSnapshot,
 ) -> Result<CliToolRecord, String> {
     let stored = find_cli_tool_by_command(state, command)?;
     let manifest = stored.as_ref().and_then(|tool| {
@@ -285,16 +302,17 @@ fn detect_tool_across_environments(
     });
 
     for environment in &environments {
-        let merged_env = merge_execution_env(host_env, environment, None);
-        let detected = detect_tool_with_managed_paths(
+        let effective = build_effective_environment(host, Some(environment), None);
+        let detected = detect_tool_with_shell_probe(
             command,
-            &merged_env,
+            &effective.env,
             Some(&environment.path_entries),
             true,
+            effective.shell_path.as_deref(),
         );
         if detected.health == CliToolHealth::Ready {
             return Ok(merge_detected_tool_with_stored(
-                detected,
+                attach_effective_environment_metadata(detected, host, &effective),
                 stored.as_ref(),
                 Some(environment),
                 manifest.as_ref(),
@@ -302,9 +320,16 @@ fn detect_tool_across_environments(
         }
     }
 
-    let detected = detect_tool(command, host_env);
+    let effective = build_effective_environment(host, None, None);
+    let detected = detect_tool_with_shell_probe(
+        command,
+        &effective.env,
+        None,
+        true,
+        effective.shell_path.as_deref(),
+    );
     Ok(merge_detected_tool_with_stored(
-        detected,
+        attach_effective_environment_metadata(detected, host, &effective),
         stored.as_ref(),
         None,
         manifest.as_ref(),
@@ -315,14 +340,14 @@ fn detect_registered_tools(
     state: &State<'_, AppState>,
     commands: &[String],
 ) -> Result<Vec<CliToolRecord>, String> {
-    let host_env = load_host_env();
+    let host = load_host_env();
     let mut records = BTreeMap::<String, CliToolRecord>::new();
     for command in commands {
         let trimmed = command.trim();
         if trimmed.is_empty() {
             continue;
         }
-        let detected = detect_tool_across_environments(state, trimmed, &host_env)?;
+        let detected = detect_tool_across_environments(state, trimmed, &host)?;
         records.insert(detected.id.clone(), detected);
     }
     Ok(records.into_values().collect())
@@ -330,7 +355,7 @@ fn detect_registered_tools(
 
 fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let request: CliDiscoverRequest = parse_cli_runtime_payload(payload)?;
-    let host_env = load_host_env();
+    let host = load_host_env();
     let query = request
         .query
         .as_deref()
@@ -340,8 +365,8 @@ fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<
     let mut discovered = Vec::<CliToolRecord>::new();
     let mut seen = BTreeSet::<String>::new();
     for environment in list_cli_environments(state)? {
-        let merged_env = merge_execution_env(&host_env, &environment, None);
-        for mut tool in discover_all_commands(&merged_env, query, limit) {
+        let effective = build_effective_environment(&host, Some(&environment), None);
+        for mut tool in discover_all_commands(&effective.env, query, limit) {
             let key = format!(
                 "{}:{}",
                 tool.executable,
@@ -352,6 +377,7 @@ fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<
             }
             tool.environment_id = Some(environment.id.clone());
             tool.source = tool_source_for_environment(&environment);
+            tool = attach_effective_environment_metadata(tool, &host, &effective);
             discovered.push(tool);
             if discovered.len() >= limit {
                 break;
@@ -362,7 +388,8 @@ fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<
         }
     }
     if discovered.len() < limit {
-        for tool in discover_all_commands(&host_env, query, limit) {
+        let effective = build_effective_environment(&host, None, None);
+        for mut tool in discover_all_commands(&effective.env, query, limit) {
             let key = format!(
                 "{}:{}",
                 tool.executable,
@@ -371,6 +398,7 @@ fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<
             if !seen.insert(key) {
                 continue;
             }
+            tool = attach_effective_environment_metadata(tool, &host, &effective);
             discovered.push(tool);
             if discovered.len() >= limit {
                 break;
@@ -417,7 +445,7 @@ fn inspect_tool_value(
         return Ok(None);
     }
 
-    let host_env = load_host_env();
+    let host = load_host_env();
     let requested_command = if requested.starts_with("cli-tool-") {
         find_cli_tool_by_id(state, &requested)?
             .map(|tool| tool.executable)
@@ -425,7 +453,7 @@ fn inspect_tool_value(
                 list_tool_commands(state).ok().and_then(|commands| {
                     commands
                         .into_iter()
-                        .find(|command| detect_tool(command, &host_env).id == requested)
+                        .find(|command| detect_tool(command, &host.env).id == requested)
                 })
             })
             .unwrap_or_default()
@@ -436,8 +464,8 @@ fn inspect_tool_value(
         return Ok(None);
     }
 
-    let mut tool = detect_tool_across_environments(state, &requested_command, &host_env)?;
-    if let Some(manifest) = build_cli_tool_manifest(&tool, &host_env) {
+    let mut tool = detect_tool_across_environments(state, &requested_command, &host)?;
+    if let Some(manifest) = build_cli_tool_manifest(&tool, &host.env) {
         let manifest = upsert_cli_tool_manifest(state, manifest)?;
         let environment = tool.environment_id.as_deref().and_then(|environment_id| {
             find_cli_environment_by_id(state, environment_id)
@@ -465,8 +493,8 @@ fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<V
             ..Default::default()
         },
     )?;
-    let host_env = load_host_env();
-    let merged_env = merge_execution_env(&host_env, &resolution.environment, None);
+    let host = load_host_env();
+    let effective = build_effective_environment(&host, Some(&resolution.environment), None);
     let cwd = request
         .cwd
         .as_deref()
@@ -474,11 +502,16 @@ fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<V
         .filter(|value| !value.is_empty())
         .unwrap_or(&resolution.environment.root_path)
         .to_string();
-    let tool = detect_tool_with_managed_paths(
-        command,
-        &merged_env,
-        Some(&resolution.environment.path_entries),
-        false,
+    let tool = attach_effective_environment_metadata(
+        detect_tool_with_shell_probe(
+            command,
+            &effective.env,
+            Some(&resolution.environment.path_entries),
+            false,
+            effective.shell_path.as_deref(),
+        ),
+        &host,
+        &effective,
     );
     let execution_request = CliExecuteRequest {
         environment_id: Some(resolution.environment.id.clone()),
@@ -503,7 +536,7 @@ fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<V
         &execution_request,
         &resolution.environment,
         Path::new(&cwd),
-        &merged_env,
+        &effective.env,
         &permissions,
     );
     let summary = if tool.health == CliToolHealth::Ready {
@@ -523,6 +556,8 @@ fn diagnose_tool_value(state: &State<'_, AppState>, payload: &Value) -> Result<V
         "cwd": cwd,
         "permissions": permissions,
         "sandbox": sandbox_metadata(&sandbox),
+        "effectiveEnvironment": effective.metadata_value(),
+        "hostShell": host.metadata_value(),
         "canResolve": tool.health == CliToolHealth::Ready,
         "willUseSandbox": sandbox.backend == "sandbox-exec",
         "summary": summary,
@@ -776,18 +811,24 @@ fn install_value(
         },
     )?;
 
-    let merged_env = merge_execution_env(&load_host_env(), &environment, Some(&execution_env));
-    let mut detected_tool = detect_tool_with_managed_paths(
-        &tool_name,
-        &merged_env,
-        Some(&environment.path_entries),
-        true,
+    let host = load_host_env();
+    let effective = build_effective_environment(&host, Some(&environment), Some(&execution_env));
+    let mut detected_tool = attach_effective_environment_metadata(
+        detect_tool_with_shell_probe(
+            &tool_name,
+            &effective.env,
+            Some(&environment.path_entries),
+            true,
+            effective.shell_path.as_deref(),
+        ),
+        &host,
+        &effective,
     );
     detected_tool.source = tool_source_for_environment(&environment);
     detected_tool.environment_id = Some(environment.id.clone());
     detected_tool.install_method = Some(request.install_method.clone());
     detected_tool.install_spec = Some(request.spec.trim().to_string());
-    if let Some(manifest) = build_cli_tool_manifest(&detected_tool, &merged_env) {
+    if let Some(manifest) = build_cli_tool_manifest(&detected_tool, &effective.env) {
         let manifest = upsert_cli_tool_manifest(state, manifest)?;
         detected_tool = merge_detected_tool_with_stored(detected_tool, None, None, Some(&manifest));
     }
