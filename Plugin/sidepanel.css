@@ -185,6 +185,77 @@ h1 {
   color: #404040;
 }
 
+.update-panel {
+  gap: 8px;
+}
+
+.update-badge {
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.update-badge.available {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.update-badge.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.update-summary {
+  color: #171717;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.update-meta {
+  color: #737373;
+  font-size: 12px;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.update-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.update-actions button {
+  min-height: 32px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 7px;
+  background: #ffffff;
+  color: #171717;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.15;
+}
+
+.update-actions button:hover:not(:disabled) {
+  border-color: #c2410c;
+  color: #9a3412;
+}
+
+.update-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .capture-action-panel {
   gap: 10px;
 }

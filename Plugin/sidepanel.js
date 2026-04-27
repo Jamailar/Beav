@@ -2,6 +2,11 @@ const elements = {
   serverStatus: document.getElementById('server-status'),
   refresh: document.getElementById('refresh'),
   openSettings: document.getElementById('open-settings'),
+  updateBadge: document.getElementById('update-badge'),
+  updateSummary: document.getElementById('update-summary'),
+  updateMeta: document.getElementById('update-meta'),
+  checkUpdate: document.getElementById('check-update'),
+  openUpdateSource: document.getElementById('open-update-source'),
   platformLogo: document.getElementById('platform-logo'),
   platformIcon: document.getElementById('platform-icon'),
   platformFallback: document.getElementById('platform-fallback'),
@@ -26,6 +31,7 @@ let refreshing = false;
 let capturePendingAction = '';
 let captureFeedback = null;
 let captureSignature = '';
+let updateChecking = false;
 
 init().catch((error) => {
   renderConnection(false, error instanceof Error ? error.message : String(error));
@@ -40,6 +46,7 @@ init().catch((error) => {
 
 async function init() {
   bindEvents();
+  await refreshUpdateStatus(false);
   await refreshContext();
   window.setInterval(() => void refreshTaskQueue(false), 1500);
 }
@@ -47,6 +54,8 @@ async function init() {
 function bindEvents() {
   elements.refresh.addEventListener('click', () => void refreshContext());
   elements.openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
+  elements.checkUpdate.addEventListener('click', () => void refreshUpdateStatus(true));
+  elements.openUpdateSource.addEventListener('click', () => void openUpdateSource());
   elements.captureActions.addEventListener('click', (event) => {
     const button = event.target?.closest?.('button[data-action]');
     if (!button) return;
@@ -76,6 +85,80 @@ async function sendMessage(message) {
     throw new Error(response?.error || '操作失败');
   }
   return response;
+}
+
+async function sendRawMessage(message) {
+  return await chrome.runtime.sendMessage(message);
+}
+
+async function refreshUpdateStatus(forceCheck) {
+  if (updateChecking) return;
+  updateChecking = true;
+  elements.checkUpdate.disabled = true;
+  elements.updateBadge.textContent = forceCheck ? '检查中' : '读取中';
+  elements.updateBadge.className = 'update-badge';
+  try {
+    const response = await sendRawMessage({
+      type: forceCheck ? 'plugin-update:check' : 'plugin-update:get-status',
+      refresh: false,
+    });
+    renderUpdateStatus(response?.update, response?.success === false ? response.error : '');
+  } catch (error) {
+    renderUpdateStatus(null, error instanceof Error ? error.message : String(error));
+  } finally {
+    updateChecking = false;
+    elements.checkUpdate.disabled = false;
+  }
+}
+
+async function openUpdateSource() {
+  elements.openUpdateSource.disabled = true;
+  try {
+    const response = await sendRawMessage({ type: 'plugin-update:open-source' });
+    if (!response?.success) {
+      renderUpdateStatus(null, response?.error || '无法打开更新页');
+    }
+  } catch (error) {
+    renderUpdateStatus(null, error instanceof Error ? error.message : String(error));
+  } finally {
+    elements.openUpdateSource.disabled = false;
+  }
+}
+
+function renderUpdateStatus(update, errorText = '') {
+  const currentVersion = update?.currentVersion || chrome.runtime.getManifest?.()?.version || '0.0.0';
+  const latestVersion = update?.latestVersion || currentVersion;
+  const lastCheckedAt = update?.lastCheckedAt ? formatTime(update.lastCheckedAt) : '';
+  const lastError = errorText || update?.lastError || '';
+
+  if (lastError) {
+    elements.updateBadge.textContent = '检查失败';
+    elements.updateBadge.className = 'update-badge error';
+    elements.updateSummary.textContent = `当前版本 ${currentVersion}`;
+    elements.updateMeta.textContent = lastError;
+    return;
+  }
+
+  if (update?.checkStatus === 'checking') {
+    elements.updateBadge.textContent = '检查中';
+    elements.updateBadge.className = 'update-badge';
+    elements.updateSummary.textContent = `当前版本 ${currentVersion}`;
+    elements.updateMeta.textContent = '正在检查远端版本';
+    return;
+  }
+
+  if (update?.hasUpdate) {
+    elements.updateBadge.textContent = '有新版本';
+    elements.updateBadge.className = 'update-badge available';
+    elements.updateSummary.textContent = `发现 ${latestVersion}，当前 ${currentVersion}`;
+    elements.updateMeta.textContent = lastCheckedAt ? `上次检查 ${lastCheckedAt}` : '点击打开更新页获取最新版本';
+    return;
+  }
+
+  elements.updateBadge.textContent = '已是最新';
+  elements.updateBadge.className = 'update-badge';
+  elements.updateSummary.textContent = `当前版本 ${currentVersion}`;
+  elements.updateMeta.textContent = lastCheckedAt ? `上次检查 ${lastCheckedAt}` : '尚未检查远端版本';
 }
 
 async function refreshContext() {
