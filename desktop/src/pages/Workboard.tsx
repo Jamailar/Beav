@@ -677,7 +677,7 @@ export function Workboard({ isActive = true }: { isActive?: boolean }) {
     }
 
     return (
-        <div className="h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
+        <div className="legacy-theme-panel h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
             <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>

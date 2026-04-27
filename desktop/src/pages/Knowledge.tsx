@@ -1867,8 +1867,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     className={clsx(
                                         'shrink-0 px-3 py-1 text-[11px] font-bold rounded-lg transition-all border uppercase tracking-wider inline-flex items-center gap-1.5',
                                         !selectedTag
-                                            ? 'bg-black/[0.04] text-text-primary border-transparent shadow-sm'
-                                            : 'bg-transparent text-text-tertiary border-transparent hover:bg-black/[0.03] hover:text-text-secondary'
+                                            ? 'bg-surface-secondary/80 text-text-primary border-transparent shadow-sm'
+                                            : 'bg-transparent text-text-tertiary border-transparent hover:bg-surface-secondary/70 hover:text-text-secondary'
                                     )}
                                 >
                                     <span>All Tags</span>
@@ -1876,8 +1876,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         className={clsx(
                                             'inline-flex items-center justify-center rounded-md px-1.5 py-0.5 text-[9px] font-bold',
                                             !selectedTag
-                                                ? 'bg-black/5 text-text-tertiary/80'
-                                                : 'bg-black/[0.04] text-text-tertiary/70'
+                                                ? 'bg-surface-tertiary/80 text-text-tertiary/80'
+                                                : 'bg-surface-secondary/80 text-text-tertiary/70'
                                         )}
                                     >
                                         {allTags.length}
@@ -1899,7 +1899,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                             'shrink-0 px-3 py-1 text-[11px] rounded-lg transition-all flex items-center gap-1.5 border font-bold',
                                             selectedTag === tag
                                                 ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
-                                                : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
+                                                : 'bg-surface-secondary/60 text-text-tertiary border-transparent hover:bg-surface-tertiary/70 hover:text-text-primary'
                                         )}
                                     >
                                         <span className="opacity-40">#</span>
@@ -1909,7 +1909,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                 'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
                                                 selectedTag === tag
                                                     ? 'bg-white/20 text-white'
-                                                    : 'bg-black/5 text-text-tertiary/60'
+                                                    : 'bg-surface-tertiary/70 text-text-tertiary/60'
                                             )}
                                         >
                                             {count}
@@ -1920,8 +1920,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
 
                             {!selectedTag && isAllTagsDrawerOpen && hasHiddenTags && (
                                 <div className="absolute left-0 right-0 top-full z-20 mt-3">
-                                    <div className="rounded-2xl border border-black/[0.05] bg-white/95 shadow-xl shadow-black/[0.08] backdrop-blur-xl">
-                                    <div className="flex items-center justify-between gap-3 border-b border-black/[0.04] px-4 py-3">
+                                    <div className="rounded-2xl border border-border/80 bg-surface-elevated/95 shadow-xl shadow-black/[0.18] backdrop-blur-xl">
+                                    <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
                                         <div className="min-w-0">
                                             <div className="text-[12px] font-extrabold text-text-primary tracking-tight">全部标签</div>
                                             <div className="mt-1 text-[10px] font-medium text-text-tertiary/70">
@@ -1930,7 +1930,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         </div>
                                         <button
                                             onClick={() => setIsAllTagsDrawerOpen(false)}
-                                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-text-tertiary hover:bg-black/[0.04] hover:text-text-primary transition-all active:scale-90"
+                                            className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary transition-all active:scale-90"
                                             title="收起标签抽屉"
                                         >
                                             <X className="w-3.5 h-3.5" />
@@ -1946,7 +1946,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                         'px-3 py-1.5 text-[11px] rounded-xl transition-all flex items-center gap-1.5 border font-bold',
                                                         selectedTag === tag
                                                             ? 'bg-accent-primary text-white border-transparent shadow-md shadow-accent-primary/20'
-                                                            : 'bg-black/[0.02] text-text-tertiary border-transparent hover:bg-black/[0.04] hover:text-text-primary'
+                                                            : 'bg-surface-secondary/60 text-text-tertiary border-transparent hover:bg-surface-tertiary/70 hover:text-text-primary'
                                                     )}
                                                 >
                                                     <span className="opacity-40">#</span>
@@ -1956,7 +1956,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                             'text-[9px] py-0.5 px-1.5 rounded-md font-bold',
                                                             selectedTag === tag
                                                                 ? 'bg-white/20 text-white'
-                                                                : 'bg-black/5 text-text-tertiary/60'
+                                                                : 'bg-surface-tertiary/70 text-text-tertiary/60'
                                                         )}
                                                     >
                                                         {count}

@@ -533,7 +533,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   }, [loadSnapshot, selectedTask]);
 
   return (
-    <div className="h-full min-h-0 bg-[#f8faf8] text-[#18211b]">
+    <div className="legacy-theme-panel h-full min-h-0 bg-[#f8faf8] text-[#18211b]">
       <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
