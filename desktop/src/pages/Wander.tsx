@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { RefreshCw, Sparkles, History, X, Trash2, Dices, Lightbulb, FileText, Play, MessageSquarePlus, Heart, ChevronLeft, ChevronRight } from 'lucide-react';
+import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, MessageSquarePlus, Search, Square, CheckSquare, Shuffle } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
@@ -19,6 +19,41 @@ interface WanderItem {
   content: string;
   cover?: string;
   meta?: Record<string, unknown>;
+}
+
+interface KnowledgeCatalogSummary {
+  itemId: string;
+  kind: 'redbook-note' | 'youtube-video' | 'document-source';
+  noteType?: string;
+  captureKind?: string;
+  title: string;
+  author?: string;
+  sourceUrl?: string;
+  folderPath?: string;
+  rootPath?: string;
+  coverUrl?: string;
+  thumbnailUrl?: string;
+  previewText?: string;
+  createdAt?: string;
+  tags?: string[];
+  hasVideo?: boolean;
+  hasTranscript?: boolean;
+  status?: string;
+  sampleFiles?: string[];
+  fileCount?: number;
+}
+
+interface KnowledgeListPageResponse {
+  items: KnowledgeCatalogSummary[];
+  nextCursor?: string | null;
+  total?: number;
+}
+
+interface GuidedWanderItemsResponse {
+  items?: WanderItem[];
+  warning?: string | null;
+  candidateCount?: number;
+  query?: string;
 }
 
 interface WanderMaterialRef {
@@ -92,6 +127,14 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
+  const [selectionMode, setSelectionMode] = useState<'random' | 'manual'>('random');
+  const [guidedSourceMode, setGuidedSourceMode] = useState<'topic' | 'anchor'>('topic');
+  const [guidedTopic, setGuidedTopic] = useState('');
+  const [anchorQuery, setAnchorQuery] = useState('');
+  const [anchorResults, setAnchorResults] = useState<WanderItem[]>([]);
+  const [selectedAnchor, setSelectedAnchor] = useState<WanderItem | null>(null);
+  const [anchorLoading, setAnchorLoading] = useState(false);
+  const [guidedWarning, setGuidedWarning] = useState<string | null>(null);
   const [parsedResult, setParsedResult] = useState<WanderResult | null>(null);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -108,6 +151,37 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
   const activeItemsRef = useRef<WanderItem[]>([]);
   const activeOption = parsedResult?.options?.[selectedOptionIndex];
   const activeDirectionFrame = activeOption?.direction_frame || parsedResult?.direction_frame;
+  const hasGuidedInput = guidedSourceMode === 'topic'
+    ? Boolean(guidedTopic.trim())
+    : Boolean(selectedAnchor);
+
+  function catalogSummaryToWanderItem(item: KnowledgeCatalogSummary): WanderItem {
+    const isVideo = item.kind === 'youtube-video' || Boolean(item.hasVideo);
+    const sourceType = item.kind === 'document-source'
+      ? 'document'
+      : item.kind === 'youtube-video'
+        ? 'youtube'
+        : (item.captureKind || item.noteType || 'note');
+    return {
+      id: item.itemId,
+      type: isVideo ? 'video' : 'note',
+      title: item.title || '未命名内容',
+      content: item.previewText || item.sourceUrl || '',
+      cover: item.coverUrl || item.thumbnailUrl || undefined,
+      meta: {
+        sourceType,
+        sourceName: item.title,
+        sourceKind: item.kind,
+        folderPath: item.folderPath || item.rootPath,
+        filePath: item.rootPath,
+        relativePath: item.sampleFiles?.[0] || '',
+        sourceUrl: item.sourceUrl,
+        tags: item.tags || [],
+        status: item.status,
+        hasTranscript: Boolean(item.hasTranscript),
+      },
+    };
+  }
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -608,6 +682,35 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     }
   };
 
+  const handleSelectionModeChange = (mode: 'random' | 'manual') => {
+    if (loading) return;
+    setSelectionMode(mode);
+    setParseError(null);
+    setValidationIssues([]);
+    setGuidedWarning(null);
+    if (phase !== 'running') {
+      setPhase('idle');
+      setShowFinal(false);
+      setParsedResult(null);
+      setSelectedOptionIndex(0);
+      setItems([]);
+      setCurrentHistoryId(null);
+      activeRequestIdRef.current = '';
+    }
+  };
+
+  const handleGuidedSourceModeChange = (mode: 'topic' | 'anchor') => {
+    setGuidedSourceMode(mode);
+    setParseError(null);
+    if (mode === 'topic') {
+      setSelectedAnchor(null);
+      setAnchorQuery('');
+      setAnchorResults([]);
+    } else {
+      setGuidedTopic('');
+    }
+  };
+
   // 加载历史记录列表
   const loadHistoryList = useCallback(async () => {
     try {
@@ -639,6 +742,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       setParsedResult(parsedRes);
       setSelectedOptionIndex(resolveSelectedOptionIndex(parsedRes));
       setParseError(null);
+      setGuidedWarning(null);
       setPhase('done');
       setShowFinal(true);
       setCurrentHistoryId(record.id);
@@ -715,6 +819,45 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       window.ipcRenderer.off('settings:updated', handleSettingsUpdated);
     };
   }, [isActive, syncWanderSettings]);
+
+  useEffect(() => {
+    if (!isActive || selectionMode !== 'manual' || guidedSourceMode !== 'anchor') return;
+    const query = anchorQuery.trim();
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setAnchorLoading(true);
+      const request: Record<string, unknown> = {
+        kind: 'redbook-note',
+        limit: 24,
+        sort: 'updated',
+      };
+      if (query) {
+        request.query = query;
+      }
+      window.ipcRenderer.knowledge.listPage<KnowledgeListPageResponse>(request)
+        .then((response) => {
+          if (cancelled) return;
+          const nextItems = Array.isArray(response?.items)
+            ? response.items.map(catalogSummaryToWanderItem)
+            : [];
+          setAnchorResults(nextItems);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          console.error('Failed to search wander anchor items:', error);
+          setAnchorResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setAnchorLoading(false);
+          }
+        });
+    }, 280);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [anchorQuery, guidedSourceMode, isActive, selectionMode]);
 
   useEffect(() => {
     const handleWanderProgress = (_event: unknown, payload?: unknown) => {
@@ -808,12 +951,13 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     activeRequestIdRef.current = requestId;
     setPhase('running');
     setLoading(true);
-    setLiveStatus(toStableTwoLineText('正在初始化漫步...'));
+    setLiveStatus(toStableTwoLineText(selectionMode === 'manual' ? '正在按方向选择素材...' : '正在初始化漫步...'));
     setProgressCards([]);
     setParsedResult(null);
     setSelectedOptionIndex(0);
     setParseError(null);
     setValidationIssues([]);
+    setGuidedWarning(null);
     setItems([]);
     setShowFinal(false);
     setCurrentHistoryId(null);
@@ -821,11 +965,45 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       await new Promise<void>((resolve) => {
         window.requestAnimationFrame(() => resolve());
       });
-      const randomItems = await window.ipcRenderer.invoke('wander:get-random') as WanderItem[];
-      setItems(randomItems);
-      activeItemsRef.current = randomItems;
-      if (randomItems.length === 0) {
-        setParseError('暂无足够内容，请先收集一些笔记、视频或文档。');
+      let nextItems: WanderItem[] = [];
+      if (selectionMode === 'manual') {
+        if (!hasGuidedInput) {
+          setParseError(guidedSourceMode === 'topic' ? '请先输入主题。' : '请先选择一篇锚点笔记。');
+          setPhase('done');
+          setShowFinal(true);
+          setLoading(false);
+          activeRequestIdRef.current = '';
+          return;
+        }
+        const guided = await window.ipcRenderer.invoke('wander:get-guided-items', {
+          topic: guidedSourceMode === 'topic' ? guidedTopic.trim() : '',
+          seedText: '',
+          anchorItem: guidedSourceMode === 'anchor' ? selectedAnchor : null,
+          targetCount: 3,
+        }) as GuidedWanderItemsResponse;
+        nextItems = Array.isArray(guided?.items) ? guided.items : [];
+        setGuidedWarning(typeof guided?.warning === 'string' ? guided.warning : null);
+        if (nextItems.length < 3) {
+          setItems(nextItems);
+          activeItemsRef.current = nextItems;
+          setParseError(typeof guided?.warning === 'string'
+            ? guided.warning
+            : '系统没有补齐到 3 篇方向相近的笔记，请换一个主题或选择信息更完整的锚点笔记。');
+          setPhase('done');
+          setShowFinal(true);
+          setLoading(false);
+          activeRequestIdRef.current = '';
+          return;
+        }
+      } else {
+        nextItems = await window.ipcRenderer.invoke('wander:get-random') as WanderItem[];
+      }
+      setItems(nextItems);
+      activeItemsRef.current = nextItems;
+      if (nextItems.length === 0) {
+        setParseError(selectionMode === 'manual'
+          ? '没有找到和当前方向相关的素材，请换一个主题或选择一篇锚点笔记。'
+          : '暂无足够内容，请先收集一些笔记、视频或文档。');
         setPhase('done');
         setShowFinal(true);
         setLoading(false);
@@ -834,10 +1012,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
       }
 
       window.ipcRenderer.send('wander:brainstorm', {
-        items: randomItems,
+        items: nextItems,
         options: {
           multiChoice: multiChoiceEnabled,
           requestId,
+          sourceMode: selectionMode === 'manual' ? 'guided' : 'random',
         },
       });
     } catch (error) {
@@ -901,6 +1080,27 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
             </>
           )}
+          <div className="flex h-8 items-center rounded-xl bg-black/[0.04] p-0.5">
+            {[
+              ['random', '随机'] as const,
+              ['manual', '手工'] as const,
+            ].map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => handleSelectionModeChange(mode)}
+                disabled={loading}
+                className={clsx(
+                  'h-7 rounded-lg px-3 text-[11px] font-black transition-all disabled:opacity-50',
+                  selectionMode === mode
+                    ? 'bg-white text-text-primary shadow-sm'
+                    : 'text-text-tertiary hover:text-text-primary'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="flex items-center gap-3">
             <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
               多选题
@@ -927,26 +1127,147 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
                 <div className="absolute top-1/4 left-1/3 w-32 h-32 bg-blue-500/5 rounded-full blur-[60px]" />
             </div>
 
-            <div className="relative flex flex-col items-center max-w-lg text-center animate-in fade-in zoom-in-95 duration-700">
+            <div className="relative flex flex-col items-center w-full max-w-3xl text-center animate-in fade-in zoom-in-95 duration-700">
                 <div className="relative mb-10">
                     <div className="absolute inset-0 bg-accent-primary/10 rounded-[32px] blur-2xl animate-pulse" />
                     <div className="relative flex h-24 w-24 items-center justify-center rounded-[32px] bg-white shadow-[0_24px_48px_-12px_rgba(0,0,0,0.12)] border border-white/60">
-                        <Dices className="w-10 h-10 text-accent-primary" />
+                        {selectionMode === 'manual' ? <Shuffle className="w-10 h-10 text-accent-primary" /> : <Dices className="w-10 h-10 text-accent-primary" />}
                     </div>
                 </div>
                 
-                <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">开启一次随机漫步</h2>
-                <p className="text-[15px] leading-relaxed text-text-tertiary font-medium mb-10 px-8">
-                    系统将从您的知识库中随机抽取内容，
-                    寻找它们之间的隐秘关联，激发前所未有的创作灵感。
-                </p>
+                <h2 className="text-2xl font-extrabold tracking-tight text-text-primary mb-4">
+                  {selectionMode === 'manual' ? '按方向漫步' : '开启一次随机漫步'}
+                </h2>
+                {selectionMode === 'manual' ? (
+                  <div className="w-full max-w-2xl mb-8 space-y-4 text-left">
+                      <div className="mx-auto flex w-fit rounded-xl bg-black/[0.04] p-0.5">
+                        {[
+                          ['topic', '输入主题'] as const,
+                          ['anchor', '选择锚点'] as const,
+                        ].map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => handleGuidedSourceModeChange(mode)}
+                            className={clsx(
+                              'h-8 rounded-lg px-4 text-[12px] font-black transition-all',
+                              guidedSourceMode === mode
+                                ? 'bg-white text-text-primary shadow-sm'
+                                : 'text-text-tertiary hover:text-text-primary'
+                            )}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+
+                      {guidedSourceMode === 'topic' ? (
+                        <label className="block">
+                          <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">主题</span>
+                          <input
+                            value={guidedTopic}
+                            onFocus={() => {
+                              if (guidedSourceMode !== 'topic') handleGuidedSourceModeChange('topic');
+                            }}
+                            onChange={(event) => {
+                              setGuidedSourceMode('topic');
+                              setSelectedAnchor(null);
+                              setAnchorQuery('');
+                              setAnchorResults([]);
+                              setGuidedTopic(event.target.value);
+                            }}
+                            placeholder="比如：轻断食反弹"
+                            className="h-11 w-full rounded-xl border border-black/[0.06] bg-white px-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
+                          />
+                        </label>
+                      ) : (
+                        <div className="space-y-3">
+                          <label className="block">
+                            <span className="mb-1.5 block text-[11px] font-black uppercase tracking-widest text-text-tertiary">锚点笔记</span>
+                            <div className="relative">
+                              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary/60" />
+                              <input
+                                value={anchorQuery}
+                                onFocus={() => {
+                                  if (guidedSourceMode !== 'anchor') handleGuidedSourceModeChange('anchor');
+                                }}
+                                onChange={(event) => {
+                                  setGuidedSourceMode('anchor');
+                                  setGuidedTopic('');
+                                  setAnchorQuery(event.target.value);
+                                }}
+                                placeholder="搜索知识库"
+                                className="h-11 w-full rounded-xl border border-black/[0.06] bg-white pl-9 pr-3 text-[14px] font-bold text-text-primary outline-none transition focus:border-accent-primary/40 focus:ring-2 focus:ring-accent-primary/10"
+                              />
+                            </div>
+                          </label>
+
+                          <div className="rounded-2xl border border-black/[0.05] bg-white/80 p-2 shadow-sm">
+                            {selectedAnchor && (
+                              <div className="mb-2 flex items-center justify-between gap-3 rounded-xl bg-accent-primary/5 px-3 py-2">
+                                <div className="min-w-0">
+                                  <div className="text-[11px] font-black uppercase tracking-widest text-accent-primary">已选锚点</div>
+                                  <div className="truncate text-[13px] font-extrabold text-text-primary">{selectedAnchor.title}</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedAnchor(null)}
+                                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-tertiary hover:bg-black/[0.05] hover:text-text-primary"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            )}
+                            <div className="max-h-72 overflow-y-auto custom-scrollbar">
+                              {anchorLoading ? (
+                                <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">加载知识库...</div>
+                              ) : anchorResults.length > 0 ? (
+                                anchorResults.map((item) => {
+                                  const selected = selectedAnchor?.id === item.id;
+                                  return (
+                                    <button
+                                      key={item.id}
+                                      type="button"
+                                      onClick={() => setSelectedAnchor(selected ? null : item)}
+                                      className={clsx(
+                                        'flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition',
+                                        selected ? 'bg-accent-primary/5' : 'hover:bg-black/[0.03]'
+                                      )}
+                                    >
+                                      <div className="mt-0.5 shrink-0 text-accent-primary">
+                                        {selected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-text-tertiary/60" />}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="truncate text-[13px] font-extrabold text-text-primary">{item.title}</div>
+                                        <div className="mt-0.5 line-clamp-2 text-[11px] font-bold leading-relaxed text-text-tertiary">{item.content || '暂无摘要'}</div>
+                                      </div>
+                                    </button>
+                                  );
+                                })
+                              ) : (
+                                <div className="px-3 py-8 text-center text-[12px] font-bold text-text-tertiary">
+                                  {anchorQuery.trim() ? '没有匹配的笔记' : '暂无可选知识库内容'}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                  </div>
+                ) : (
+                  <p className="text-[15px] leading-relaxed text-text-tertiary font-medium mb-10 px-8 max-w-lg">
+                      系统将从您的知识库中随机抽取内容，
+                      寻找它们之间的隐秘关联，激发前所未有的创作灵感。
+                  </p>
+                )}
 
                 <button
                     onClick={startWander}
-                    className="group px-8 py-3 bg-text-primary hover:bg-text-primary/90 text-white rounded-[20px] text-[15px] font-extrabold transition-all flex items-center gap-3 shadow-[0_20px_40px_-10px_rgba(0,0,0,0.2)] active:scale-95"
+                    disabled={selectionMode === 'manual' && !hasGuidedInput}
+                    className="group px-8 py-3 bg-text-primary hover:bg-text-primary/90 text-white rounded-[20px] text-[15px] font-extrabold transition-all flex items-center gap-3 shadow-[0_20px_40px_-10px_rgba(0,0,0,0.2)] active:scale-95 disabled:opacity-40"
                 >
                     <Sparkles className="w-5 h-5 text-accent-primary group-hover:animate-pulse" />
-                    <span>开始灵感碰撞</span>
+                    <span>{selectionMode === 'manual' ? '按方向漫步' : '开始灵感碰撞'}</span>
                 </button>
             </div>
         </div>
@@ -1023,6 +1344,11 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
 
               {showFinal && parsedResult && (
                 <div className="space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                  {guidedWarning && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] font-bold text-amber-700">
+                      {guidedWarning}
+                    </div>
+                  )}
                   {Array.isArray(parsedResult.options) && parsedResult.options.length > 1 && (
                     <div className="space-y-4">
                       <div className="text-[12px] font-black text-text-tertiary uppercase tracking-widest px-1">灵感候选方案 ({parsedResult.options.length})</div>
