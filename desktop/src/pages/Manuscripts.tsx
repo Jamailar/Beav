@@ -54,6 +54,7 @@ import {
     AUDIO_DRAFT_EXTENSION,
     ensureManuscriptFileName,
     POST_DRAFT_EXTENSION,
+    renameManuscriptKeepingExtension,
     stripManuscriptExtension,
     VIDEO_DRAFT_EXTENSION,
 } from '../../shared/manuscriptFiles';
@@ -565,6 +566,13 @@ function isInternalPackageFile(filePath: string): boolean {
     ));
 }
 
+function isPackageDraftPath(filePath: string): boolean {
+    return filePath.endsWith(ARTICLE_DRAFT_EXTENSION)
+        || filePath.endsWith(POST_DRAFT_EXTENSION)
+        || filePath.endsWith(VIDEO_DRAFT_EXTENSION)
+        || filePath.endsWith(AUDIO_DRAFT_EXTENSION);
+}
+
 function getFolderTrail(folderPath: string): Array<{ label: string; path: string }> {
     if (!folderPath) return [{ label: '全部草稿', path: '' }];
     const parts = folderPath.split('/').filter(Boolean);
@@ -922,6 +930,9 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [draftRenameOpen, setDraftRenameOpen] = useState(false);
     const [draftRenamePath, setDraftRenamePath] = useState('');
     const [draftRenameTitle, setDraftRenameTitle] = useState('');
+    const [isEditorTitleEditing, setIsEditorTitleEditing] = useState(false);
+    const [editorTitleDraft, setEditorTitleDraft] = useState('');
+    const [isEditorTitleSaving, setIsEditorTitleSaving] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
     const [folderContextMenu, setFolderContextMenu] = useState<FolderContextMenuState>({
         visible: false,
@@ -1016,6 +1027,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const deferredAssetsTimerRef = useRef<number | null>(null);
     const searchPopoverRef = useRef<HTMLDivElement | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const editorTitleInputRef = useRef<HTMLInputElement | null>(null);
     const folderContextMenuRef = useRef<HTMLDivElement | null>(null);
     const assetContextMenuRef = useRef<HTMLDivElement | null>(null);
     const draftContextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -1025,6 +1037,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const editorMetadataRef = useRef<Record<string, unknown>>({});
     const editorBodyDirtyRef = useRef(false);
     const editorSavePromiseRef = useRef<Promise<boolean> | null>(null);
+    const skipEditorTitleBlurCommitRef = useRef(false);
     const richpostTypographyRequestIdRef = useRef(0);
     const richpostAutoRenderRequestKeyRef = useRef<string | null>(null);
     const richpostPreviewGenerationRef = useRef<Set<string>>(new Set());
@@ -1044,6 +1057,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         () => (editorFile ? { source: 'manuscripts', manuscriptPath: editorFile, limit: 40 } : null),
         [editorFile],
     );
+
+    useEffect(() => {
+        if (isEditorTitleEditing) {
+            window.requestAnimationFrame(() => {
+                editorTitleInputRef.current?.focus();
+                editorTitleInputRef.current?.select();
+            });
+        }
+    }, [isEditorTitleEditing]);
+
+    useEffect(() => {
+        if (!isEditorTitleEditing) {
+            setEditorTitleDraft(editorDescriptor?.title || '');
+        }
+    }, [editorDescriptor?.title, isEditorTitleEditing]);
+
     const manuscriptMediaJobs = useMemo(
         () => sortMediaJobsByRecency(
             Object.values(trackedJobsById).filter((job) => (
@@ -1692,6 +1721,70 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setIsCreating(false);
         }
     }, [draftRenamePath, draftRenameTitle, editorFile, loadData]);
+
+    const handleStartEditorTitleEdit = useCallback(() => {
+        if (!editorDescriptor || isEditorTitleSaving) return;
+        skipEditorTitleBlurCommitRef.current = false;
+        setEditorTitleDraft(editorDescriptor.title);
+        setIsEditorTitleEditing(true);
+    }, [editorDescriptor, isEditorTitleSaving]);
+
+    const handleCancelEditorTitleEdit = useCallback(() => {
+        skipEditorTitleBlurCommitRef.current = true;
+        setEditorTitleDraft(editorDescriptor?.title || '');
+        setIsEditorTitleEditing(false);
+    }, [editorDescriptor?.title]);
+
+    const handleCommitEditorTitle = useCallback(async () => {
+        if (!editorFile || !editorDescriptor || isEditorTitleSaving) return;
+        const nextTitle = editorTitleDraft.trim();
+        if (!nextTitle) {
+            handleCancelEditorTitleEdit();
+            return;
+        }
+        if (nextTitle === editorDescriptor.title) {
+            setIsEditorTitleEditing(false);
+            return;
+        }
+
+        setIsEditorTitleSaving(true);
+        try {
+            const nextName = isPackageDraftPath(editorFile)
+                ? nextTitle
+                : renameManuscriptKeepingExtension(pathBasenameSafe(editorFile), normalizeDraftFileName(nextTitle));
+            const result = await window.ipcRenderer.invoke('manuscripts:rename', {
+                oldPath: editorFile,
+                newName: nextName,
+            }) as { success?: boolean; error?: string; newPath?: string };
+            if (!result?.success) throw new Error(result?.error || '重命名稿件失败');
+
+            const nextPath = String(result?.newPath || editorFile);
+            if (nextPath) {
+                editorFileRef.current = nextPath;
+                setEditorFile(nextPath);
+            }
+            setEditorDescriptor((current) => current ? { ...current, title: nextTitle } : current);
+            setEditorMetadata((current) => {
+                const nextMetadata = { ...current, title: nextTitle };
+                editorMetadataRef.current = nextMetadata;
+                return nextMetadata;
+            });
+            setEditorTitleDraft(nextTitle);
+            setIsEditorTitleEditing(false);
+            await loadData();
+        } catch (renameError) {
+            void appAlert(renameError instanceof Error ? renameError.message : '重命名稿件失败');
+        } finally {
+            setIsEditorTitleSaving(false);
+        }
+    }, [
+        editorDescriptor,
+        editorFile,
+        editorTitleDraft,
+        handleCancelEditorTitleEdit,
+        isEditorTitleSaving,
+        loadData,
+    ]);
 
     const handleDeleteDraft = useCallback(async (targetPath: string) => {
         setWorkingId(targetPath);
@@ -3170,7 +3263,51 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         </button>
                         <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2.5">
-                                <div className={clsx('text-[15px] font-extrabold tracking-tight truncate', isImmersiveWorkbench ? 'text-text-primary' : 'text-text-primary')}>{currentDescriptor.title}</div>
+                                {isEditorTitleEditing ? (
+                                    <input
+                                        ref={editorTitleInputRef}
+                                        value={editorTitleDraft}
+                                        onChange={(event) => setEditorTitleDraft(event.target.value)}
+                                        onBlur={() => {
+                                            if (skipEditorTitleBlurCommitRef.current) {
+                                                skipEditorTitleBlurCommitRef.current = false;
+                                                return;
+                                            }
+                                            void handleCommitEditorTitle();
+                                        }}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter') {
+                                                event.preventDefault();
+                                                event.currentTarget.blur();
+                                            } else if (event.key === 'Escape') {
+                                                event.preventDefault();
+                                                handleCancelEditorTitleEdit();
+                                            }
+                                        }}
+                                        disabled={isEditorTitleSaving}
+                                        className={clsx(
+                                            'h-7 min-w-[180px] max-w-[min(52vw,560px)] rounded-lg border px-2 text-[15px] font-extrabold tracking-tight outline-none transition-colors',
+                                            isImmersiveWorkbench
+                                                ? 'border-border bg-surface-secondary/70 text-text-primary focus:border-accent-primary'
+                                                : 'border-black/10 bg-white text-text-primary focus:border-accent-primary'
+                                        )}
+                                        aria-label="稿件标题"
+                                    />
+                                ) : (
+                                    <button
+                                        type="button"
+                                        onClick={handleStartEditorTitleEdit}
+                                        title="点击修改名字"
+                                        className={clsx(
+                                            'min-w-0 max-w-[min(52vw,620px)] rounded-lg px-1.5 py-0.5 text-left text-[15px] font-extrabold tracking-tight transition-colors',
+                                            isImmersiveWorkbench
+                                                ? 'text-text-primary hover:bg-surface-secondary/70'
+                                                : 'text-text-primary hover:bg-black/[0.04]'
+                                        )}
+                                    >
+                                        <span className="block truncate">{currentDescriptor.title}</span>
+                                    </button>
+                                )}
                                 <span className={clsx('rounded-lg px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest', draftTheme.chip)}>
                                     {resolveDraftTypeLabel(draftType)}
                                 </span>
