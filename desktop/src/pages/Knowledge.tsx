@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -38,6 +38,7 @@ interface Note { type?: string; sourceUrl?: string;
         collects?: number;
     };
     createdAt: string;
+    updatedAt?: string;
     folderPath?: string;
 }
 
@@ -55,6 +56,7 @@ interface YouTubeVideo {
     subtitleError?: string;
     status?: 'processing' | 'completed' | 'failed';
     createdAt: string;
+    updatedAt?: string;
     folderPath?: string;
 }
 
@@ -75,6 +77,8 @@ type KnowledgeTypeFilter =
     | 'wechat-article'
     | 'youtube'
     | 'docs';
+
+type KnowledgeSortOrder = 'updated-desc' | 'created-desc' | 'title-asc';
 
 interface DocumentKnowledgeSource {
     id: string;
@@ -142,6 +146,7 @@ interface KnowledgeCardItem {
     title: string;
     summary: string;
     createdAt: string;
+    updatedAt: string;
     searchText: string;
     cover?: string;
     tags: string[];
@@ -194,6 +199,8 @@ interface SettingsShape {
 
 const SHOW_WECHAT_KNOWLEDGE_ACTIONS = false;
 const INLINE_TAG_LIMIT = 8;
+const KNOWLEDGE_SEARCH_DEBOUNCE_MS = 500;
+const KNOWLEDGE_RENDER_BATCH_SIZE = 60;
 
 const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     id: item.itemId,
@@ -221,6 +228,7 @@ const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
         collects: undefined,
     },
     createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
     folderPath: item.folderPath,
 });
 
@@ -238,6 +246,7 @@ const catalogSummaryToVideo = (item: KnowledgeCatalogSummary): YouTubeVideo => (
     subtitleError: item.status === 'failed' ? item.previewText : undefined,
     status: item.status as YouTubeVideo['status'],
     createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
     folderPath: item.folderPath,
 });
 
@@ -307,8 +316,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [selectedImageIndex, setSelectedImageIndex] = useState(0);
     const [isImagePreviewOpen, setIsImagePreviewOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
     const [selectedTypeFilter, setSelectedTypeFilter] = useState<KnowledgeTypeFilter>('all');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
+    const [sortOrder, setSortOrder] = useState<KnowledgeSortOrder>('updated-desc');
+    const [visibleItemCount, setVisibleItemCount] = useState(KNOWLEDGE_RENDER_BATCH_SIZE);
     const [isAllTagsDrawerOpen, setIsAllTagsDrawerOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [imageAspectMap, setImageAspectMap] = useState<Record<string, 'portrait' | 'landscape'>>({});
@@ -340,6 +352,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const notesRef = useRef<Note[]>([]);
     const youtubeVideosRef = useRef<YouTubeVideo[]>([]);
     const documentSourcesRef = useRef<DocumentKnowledgeSource[]>([]);
+    const nextCursorRef = useRef<string | null>(null);
     const hasKnowledgeSnapshotRef = useRef(false);
     const loadAllKnowledgeRequestRef = useRef(0);
     const loadDetailRequestRef = useRef(0);
@@ -360,6 +373,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         documentSourcesRef.current = documentSources;
     }, [documentSources]);
 
+    useEffect(() => {
+        nextCursorRef.current = nextCursor;
+    }, [nextCursor]);
+
     const hasKnowledgeDataSnapshot = useCallback(() => {
         if (hasKnowledgeSnapshotRef.current) return true;
         return notesRef.current.length > 0 || youtubeVideosRef.current.length > 0 || documentSourcesRef.current.length > 0;
@@ -377,6 +394,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 e.preventDefault();
                 setIsSearchOpen(false);
                 setSearchQuery('');
+                setDebouncedSearchQuery('');
             }
         };
         window.addEventListener('keydown', handleKeyDown);
@@ -418,6 +436,13 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             window.removeEventListener('keydown', handleKeyDown);
         };
     }, [isAllTagsDrawerOpen]);
+
+    useEffect(() => {
+        const timeout = window.setTimeout(() => {
+            setDebouncedSearchQuery(searchQuery.trim());
+        }, KNOWLEDGE_SEARCH_DEBOUNCE_MS);
+        return () => window.clearTimeout(timeout);
+    }, [searchQuery]);
 
     const embeddedUsesSingleColumn = isEmbedded && embeddedViewportWidth > 0 && embeddedViewportWidth < 640;
     const embeddedUsesCompactCard = isEmbedded && embeddedViewportWidth > 0 && embeddedViewportWidth < 420;
@@ -687,16 +712,18 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         }
         try {
             const response = await window.ipcRenderer.knowledge.listPage<KnowledgeListPageResponse>({
-                cursor: reset ? null : nextCursor,
+                cursor: reset ? null : nextCursorRef.current,
                 limit: 200,
                 kind: resolveBackendKind(selectedTypeFilter),
-                query: searchQuery.trim() || undefined,
-                sort: 'updated-desc',
+                query: debouncedSearchQuery || undefined,
+                sort: sortOrder,
             });
             if (requestId !== loadAllKnowledgeRequestRef.current) return;
             const pageItems = Array.isArray(response?.items) ? response.items : [];
             applyCatalogPage(pageItems, !reset);
-            setNextCursor(typeof response?.nextCursor === 'string' ? response.nextCursor : null);
+            const nextCursorValue = typeof response?.nextCursor === 'string' ? response.nextCursor : null;
+            nextCursorRef.current = nextCursorValue;
+            setNextCursor(nextCursorValue);
             setKindCounts((response?.kindCounts && typeof response.kindCounts === 'object')
                 ? response.kindCounts
                 : {});
@@ -719,7 +746,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 setIsLoadingMore(false);
             }
         }
-    }, [applyCatalogPage, hasKnowledgeDataSnapshot, nextCursor, resolveBackendKind, searchQuery, selectedTypeFilter]);
+    }, [applyCatalogPage, debouncedSearchQuery, hasKnowledgeDataSnapshot, resolveBackendKind, selectedTypeFilter, sortOrder]);
 
     const loadAllKnowledge = useCallback(async () => {
         await Promise.all([refreshIndexStatus(), loadCatalogPage(true)]);
@@ -783,13 +810,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     useEffect(() => {
         void loadAllKnowledge();
     }, [loadAllKnowledge]);
-
-    useEffect(() => {
-        const timeout = window.setTimeout(() => {
-            void loadAllKnowledge();
-        }, 180);
-        return () => window.clearTimeout(timeout);
-    }, [searchQuery, selectedTypeFilter, loadAllKnowledge]);
 
     // 每次从其他页面切回知识库时，强制刷新当前列表，避免页面显示旧缓存。
     useEffect(() => {
@@ -916,6 +936,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 title: note.title || '未命名内容',
                 summary: note.excerpt || note.content || note.sourceUrl || '',
                 createdAt: note.createdAt,
+                updatedAt: note.updatedAt || note.createdAt,
                 searchText: [
                     note.title,
                     note.author,
@@ -937,6 +958,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             title: video.title || '未命名视频',
             summary: video.summary || video.description || '',
             createdAt: video.createdAt,
+            updatedAt: video.updatedAt || video.createdAt,
             searchText: [video.title, video.originalTitle, video.summary, video.description, video.videoUrl].join('\n').toLowerCase(),
             cover: video.thumbnailUrl || '',
             tags: [],
@@ -949,6 +971,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
             title: doc.name,
             summary: doc.rootPath,
             createdAt: doc.updatedAt || doc.createdAt,
+            updatedAt: doc.updatedAt || doc.createdAt,
             searchText: [doc.name, doc.rootPath, ...doc.sampleFiles].join('\n').toLowerCase(),
             tags: [],
             doc,
@@ -1013,6 +1036,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         return youtubeVideos.filter((video) => video.hasSubtitle && !String(video.summary || '').trim()).length;
     }, [youtubeVideos]);
 
+    const getSortTimestamp = (value: string | undefined) => {
+        const timestamp = new Date(value || '').getTime();
+        return Number.isFinite(timestamp) ? timestamp : 0;
+    };
+
     const filteredKnowledgeItems = useMemo(() => {
         const filtered = knowledgeItems.filter((item) => {
             if (selectedTypeFilter !== 'all' && item.kind !== selectedTypeFilter) {
@@ -1029,12 +1057,30 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 const orderA = similarityOrder.get(a.id) ?? Infinity;
                 const orderB = similarityOrder.get(b.id) ?? Infinity;
                 if (orderA !== orderB) return orderA - orderB;
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+                return getSortTimestamp(b.updatedAt) - getSortTimestamp(a.updatedAt);
             });
         }
 
-        return [...filtered].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    }, [knowledgeItems, searchQuery, selectedTypeFilter, selectedTag, similarityOrder]);
+        return [...filtered].sort((a, b) => {
+            if (sortOrder === 'created-desc') {
+                return getSortTimestamp(b.createdAt) - getSortTimestamp(a.createdAt);
+            }
+            if (sortOrder === 'title-asc') {
+                return a.title.localeCompare(b.title, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+            }
+            return getSortTimestamp(b.updatedAt) - getSortTimestamp(a.updatedAt);
+        });
+    }, [knowledgeItems, selectedTypeFilter, selectedTag, similarityOrder, sortOrder]);
+
+    const visibleKnowledgeItems = useMemo(() => {
+        return filteredKnowledgeItems.slice(0, visibleItemCount);
+    }, [filteredKnowledgeItems, visibleItemCount]);
+
+    useEffect(() => {
+        setVisibleItemCount(KNOWLEDGE_RENDER_BATCH_SIZE);
+    }, [debouncedSearchQuery, selectedTypeFilter, selectedTag, sortOrder]);
+
+    const hasMoreRenderedItems = visibleKnowledgeItems.length < filteredKnowledgeItems.length;
 
     const resolveAspectClass = (key: string) => {
         const aspect = imageAspectMap[key] || 'portrait';
@@ -1778,6 +1824,23 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             ))}
                         </div>
 
+                        {!isEmbedded && (
+                            <div className="relative shrink-0">
+                                <ArrowDownUp className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
+                                <select
+                                    value={sortOrder}
+                                    onChange={(event) => setSortOrder(event.target.value as KnowledgeSortOrder)}
+                                    className="h-9 appearance-none rounded-xl border border-border/70 bg-surface-secondary/70 pl-8 pr-8 text-[12px] font-bold text-text-primary outline-none transition-all hover:bg-surface-tertiary/70 focus:bg-surface-elevated focus:ring-2 focus:ring-accent-primary/10"
+                                    title="排序"
+                                >
+                                    <option value="updated-desc">最新采集</option>
+                                    <option value="created-desc">笔记时间</option>
+                                    <option value="title-asc">标题 A-Z</option>
+                                </select>
+                                <ChevronRight className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-text-tertiary/70" />
+                            </div>
+                        )}
+
                         {isSearchOpen ? (
                             <div className="flex items-center gap-2 shrink-0 animate-in fade-in slide-in-from-right-4 duration-300">
                                 <div className="relative w-[240px] sm:w-[300px]">
@@ -1793,7 +1856,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     />
                                     {searchQuery && (
                                         <button
-                                            onClick={() => setSearchQuery('')}
+                                            onClick={() => {
+                                                setSearchQuery('');
+                                                setDebouncedSearchQuery('');
+                                            }}
                                             className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-primary transition-colors"
                                         >
                                             <X className="w-3.5 h-3.5" />
@@ -1804,6 +1870,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     onClick={() => {
                                         setIsSearchOpen(false);
                                         setSearchQuery('');
+                                        setDebouncedSearchQuery('');
                                     }}
                                     className="rounded-xl px-3.5 py-2 text-[12px] font-bold text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary transition-all"
                                 >
@@ -2012,7 +2079,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             </div>
                         ) : (
                             <div className={knowledgeColumnsClass} style={{ columnGap: '0.75rem' }}>
-                                {filteredKnowledgeItems.map((item) => {
+                                {visibleKnowledgeItems.map((item) => {
                                     if (item.kind === 'docs' && item.doc) {
                                         const source = item.doc;
                                         return (
@@ -2089,6 +2156,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                             src={resolveAssetUrl(video.thumbnailUrl)}
                                                             alt={video.title}
                                                             className="w-full h-full object-cover transition-transform duration-500"
+                                                            loading="lazy"
+                                                            decoding="async"
 
                                                         />
                                                     ) : (
@@ -2217,6 +2286,8 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                         src={resolveAssetUrl(coverImage)}
                                                         alt={note.title}
                                                         className="w-full h-full object-cover transition-transform duration-500"
+                                                        loading="lazy"
+                                                        decoding="async"
 
                                                         onLoad={(event) => handleImageLoad(note.id, event)}
                                                     />
@@ -2334,15 +2405,21 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             </div>
                         )}
 
-                        {nextCursor && filteredKnowledgeItems.length > 0 && (
+                        {(hasMoreRenderedItems || nextCursor) && filteredKnowledgeItems.length > 0 && (
                             <div className="flex justify-center pt-2">
                                 <button
-                                    onClick={() => void loadMoreKnowledge()}
-                                    disabled={isLoadingMore}
+                                    onClick={() => {
+                                        if (hasMoreRenderedItems) {
+                                            setVisibleItemCount((prev) => prev + KNOWLEDGE_RENDER_BATCH_SIZE);
+                                            return;
+                                        }
+                                        void loadMoreKnowledge();
+                                    }}
+                                    disabled={!hasMoreRenderedItems && isLoadingMore}
                                     className="inline-flex items-center gap-2 rounded-xl border border-black/[0.06] bg-white px-4 py-2 text-[12px] font-bold text-text-primary shadow-sm hover:bg-black/[0.02] disabled:opacity-50"
                                 >
-                                    {isLoadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                                    {isLoadingMore ? '加载中...' : '加载更多'}
+                                    {!hasMoreRenderedItems && isLoadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                    {hasMoreRenderedItems ? '显示更多' : isLoadingMore ? '加载中...' : '加载更多'}
                                 </button>
                             </div>
                         )}
