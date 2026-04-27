@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use url::Url;
 
 use crate::{
     compatible_workspace_base_dir, configured_workspace_dir, copy_dir_recursive, file_url_for_path,
@@ -398,6 +399,105 @@ pub(crate) fn normalize_legacy_workspace_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+fn decode_url_path(value: &str) -> String {
+    urlencoding::decode(value)
+        .map(|decoded| decoded.into_owned())
+        .unwrap_or_else(|_| value.to_string())
+}
+
+fn is_windows_drive_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+        && bytes[0].is_ascii_alphabetic()
+}
+
+fn is_absolute_asset_path(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with('/')
+        || trimmed.starts_with("\\\\")
+        || trimmed.starts_with("//")
+        || is_windows_drive_path(trimmed)
+}
+
+fn path_from_local_asset_reference(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = trimmed.replace('\\', "/");
+    let parse_target = normalized
+        .strip_prefix("local-file:")
+        .map(|rest| format!("file:{rest}"))
+        .unwrap_or_else(|| normalized.clone());
+    if parse_target.starts_with("file:") {
+        if let Ok(parsed) = Url::parse(&parse_target) {
+            let host = parsed.host_str().unwrap_or("").trim();
+            let mut pathname = decode_url_path(parsed.path());
+            if pathname.starts_with('/') && is_windows_drive_path(&pathname[1..]) {
+                pathname = pathname[1..].to_string();
+            }
+            if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+                return Some(PathBuf::from(format!(
+                    "//{host}{}{}",
+                    if pathname.starts_with('/') { "" } else { "/" },
+                    pathname
+                )));
+            }
+            return Some(PathBuf::from(pathname));
+        }
+    }
+    Some(PathBuf::from(decode_url_path(trimmed)))
+}
+
+fn rebase_moved_asset_path(base_dir: &Path, candidate: &Path) -> Option<PathBuf> {
+    let normalized = normalize_legacy_workspace_path(candidate);
+    if normalized.exists() {
+        return Some(normalized);
+    }
+
+    let entry_name = base_dir.file_name()?.to_string_lossy();
+    if entry_name.is_empty() {
+        return None;
+    }
+    let normalized_text = candidate.to_string_lossy().replace('\\', "/");
+    let marker = format!("/{entry_name}/");
+    if let Some(index) = normalized_text.rfind(&marker) {
+        let relative = &normalized_text[index + marker.len()..];
+        let rebased = normalize_legacy_workspace_path(&base_dir.join(relative));
+        if rebased.exists() {
+            return Some(rebased);
+        }
+    }
+
+    let file_name = candidate.file_name()?.to_string_lossy();
+    if file_name.is_empty() {
+        return None;
+    }
+    let sibling = normalize_legacy_workspace_path(&base_dir.join(file_name.as_ref()));
+    if sibling.exists() {
+        Some(sibling)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn resolve_workspace_asset_path(base_dir: &Path, raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = path_from_local_asset_reference(trimmed)?;
+    let candidate_text = candidate.to_string_lossy();
+    let absolute = if is_absolute_asset_path(&candidate_text) || candidate.is_absolute() {
+        candidate
+    } else {
+        base_dir.join(candidate)
+    };
+    rebase_moved_asset_path(base_dir, &absolute)
+}
+
 pub(crate) fn optional_asset_url_from_note_path(
     base_dir: &Path,
     raw: Option<&Value>,
@@ -406,17 +506,7 @@ pub(crate) fn optional_asset_url_from_note_path(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|v| !v.is_empty())?;
-    let candidate = PathBuf::from(raw);
-    let absolute = if candidate.is_absolute() {
-        normalize_legacy_workspace_path(&candidate)
-    } else {
-        normalize_legacy_workspace_path(&base_dir.join(candidate))
-    };
-    if absolute.exists() {
-        Some(file_url_for_path(&absolute))
-    } else {
-        None
-    }
+    resolve_workspace_asset_path(base_dir, raw).map(|absolute| file_url_for_path(&absolute))
 }
 
 pub(crate) fn extract_tags_from_text(text: &str) -> Vec<String> {
@@ -1447,6 +1537,51 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("redbox-legacy-import-{label}-{unique}"))
+    }
+
+    #[test]
+    fn workspace_asset_path_rebases_moved_windows_file_url() {
+        let root = temp_dir_path("asset-rebase");
+        let entry_dir = root.join("knowledge").join("redbook").join("note-1");
+        let asset_path = entry_dir.join("images").join("cover 1.png");
+        fs::create_dir_all(asset_path.parent().expect("asset parent")).expect("asset dir");
+        fs::write(&asset_path, b"png").expect("asset file");
+
+        let resolved = resolve_workspace_asset_path(
+            &entry_dir,
+            "file:///D:/OldWorkspace/knowledge/redbook/note-1/images/cover%201.png",
+        )
+        .expect("moved asset should rebase to current entry");
+        let resolved_from_compact_file_url = resolve_workspace_asset_path(
+            &entry_dir,
+            "file:D:\\OldWorkspace\\knowledge\\redbook\\note-1\\images\\cover%201.png",
+        )
+        .expect("compact Windows file URL should rebase to current entry");
+
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(resolved, asset_path);
+        assert_eq!(resolved_from_compact_file_url, asset_path);
+    }
+
+    #[test]
+    fn optional_asset_url_from_note_path_rebases_moved_local_asset() {
+        let root = temp_dir_path("asset-url");
+        let entry_dir = root.join("knowledge").join("youtube").join("video-1");
+        let asset_path = entry_dir.join("thumbnail.jpg");
+        fs::create_dir_all(&entry_dir).expect("entry dir");
+        fs::write(&asset_path, b"jpg").expect("thumbnail file");
+
+        let url = optional_asset_url_from_note_path(
+            &entry_dir,
+            Some(&json!(
+                "C:\\OldWorkspace\\knowledge\\youtube\\video-1\\thumbnail.jpg"
+            )),
+        )
+        .expect("moved thumbnail should resolve to current entry");
+
+        let _ = fs::remove_dir_all(&root);
+        assert!(url.ends_with("/thumbnail.jpg"), "{url}");
+        assert!(!url.contains("OldWorkspace"), "{url}");
     }
 
     #[test]
