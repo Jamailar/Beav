@@ -3,6 +3,7 @@ import {
     Bot,
     BookOpen,
     Code2,
+    Download,
     GitFork,
     Github,
     PencilLine,
@@ -10,8 +11,18 @@ import {
     UsersRound,
 } from 'lucide-react';
 import { SiteHeader } from './components/SiteHeader';
+import { fetchGithubRepoStats } from './lib/github';
+import type { GithubRepoStats } from './lib/types';
 
-export const dynamic = 'force-dynamic';
+export const revalidate = 3600;
+
+const githubOwner = 'Jamailar';
+const githubRepo = 'RedBox';
+const fallbackGithubStats: GithubRepoStats = {
+    htmlUrl: 'https://github.com/Jamailar/RedBox',
+    stars: 824,
+    forks: 116,
+};
 
 const featureCards = [
     {
@@ -36,34 +47,126 @@ const featureCards = [
     },
 ];
 
-const stats = [
+const productScreenshots = [
     {
-        value: '10k+',
-        label: 'GitHub Stars',
-        icon: Star,
-        filled: true,
+        title: 'GPT-image-2 媒体套图',
+        summary: '围绕自媒体封面、插图与套图生成，把图片编排接进创作流程。',
+        src: '/screenshots/gpt-image-2-media-suite.jpg',
+        width: 1440,
+        height: 810,
+        featured: true,
     },
     {
-        value: '2k+',
-        label: 'GitHub Forks',
-        icon: GitFork,
-        filled: false,
+        title: '知识库',
+        summary: '统一管理采集内容、文档、素材与标签，作为 AI 创作的长期上下文。',
+        src: '/screenshots/knowledge.png',
+        width: 1920,
+        height: 1055,
     },
     {
-        value: '5k+',
-        label: '活跃用户',
-        icon: UsersRound,
-        filled: false,
+        title: '随机漫步',
+        summary: '从知识库素材里做灵感碰撞，生成选题方向并继续投喂给稿件或 RedClaw。',
+        src: '/screenshots/wander.png',
+        width: 1920,
+        height: 1046,
     },
     {
-        value: '持续更新',
-        label: '快速迭代，持续优化',
-        icon: Code2,
-        filled: false,
+        title: '稿件工作台',
+        summary: '管理图文稿、视频稿、文件夹与素材绑定，集中完成内容生产。',
+        src: '/screenshots/manuscripts.png',
+        width: 1920,
+        height: 1070,
+    },
+    {
+        title: '创作页',
+        summary: '在同一入口完成生图、生视频与素材生成，并绑定到后续发布链路。',
+        src: '/screenshots/creation-page.jpg',
+        width: 1600,
+        height: 943,
+    },
+    {
+        title: 'RedClaw',
+        summary: '把任务、技能调用、定时执行和后台 Runner 收束到持续运行的工作台。',
+        src: '/screenshots/Redclaw.png',
+        width: 1920,
+        height: 1053,
+    },
+    {
+        title: '主体库',
+        summary: '沉淀人物、商品、场景等创作主体，让写稿、生图和封面生成可复用参考。',
+        src: '/screenshots/subjects.png',
+        width: 1920,
+        height: 1059,
+    },
+    {
+        title: '团队协作',
+        summary: '管理成员画像、成员知识、单成员对话和多人群聊协作。',
+        src: '/screenshots/team.png',
+        width: 1920,
+        height: 1034,
+    },
+    {
+        title: '媒体库',
+        summary: '统一管理 AI 生成图、导入图和计划图，支持按项目、稿件、来源过滤。',
+        src: '/screenshots/media-library.png',
+        width: 1920,
+        height: 1036,
+    },
+    {
+        title: '封面图生成',
+        summary: '支持模板图、底图和标题组组合，也能让 AI 直接生成封面方向。',
+        src: '/screenshots/gen_cover.jpg',
+        width: 1366,
+        height: 768,
     },
 ];
 
-export default function HomePage() {
+function formatStatNumber(value: number) {
+    return new Intl.NumberFormat('en-US').format(value);
+}
+
+async function getGithubStats() {
+    try {
+        return await fetchGithubRepoStats(githubOwner, githubRepo, process.env.GITHUB_TOKEN);
+    } catch (error) {
+        console.warn(error);
+        return fallbackGithubStats;
+    }
+}
+
+function buildStats(githubStats: GithubRepoStats) {
+    return [
+        {
+            value: formatStatNumber(githubStats.stars),
+            label: 'GitHub Stars',
+            icon: Star,
+            filled: true,
+        },
+        {
+            value: formatStatNumber(githubStats.forks),
+            label: 'GitHub Forks',
+            icon: GitFork,
+            filled: false,
+        },
+        {
+            value: '5k+',
+            label: '活跃用户',
+            icon: UsersRound,
+            filled: false,
+        },
+        {
+            value: '持续更新',
+            label: '快速迭代，持续优化',
+            icon: Code2,
+            filled: false,
+        },
+    ];
+}
+
+export default async function HomePage() {
+    const githubStats = await getGithubStats();
+    const stats = buildStats(githubStats);
+
     return (
         <main id="top" className="min-h-screen bg-white text-[#171b22]">
             <SiteHeader />
@@ -85,12 +188,13 @@ export default function HomePage() {
                         <div className="mt-7 flex flex-wrap items-center gap-3 sm:mt-8 sm:gap-4">
                             <a
                                 href="/download"
-                                className="inline-flex h-11 w-full items-center justify-center rounded-lg bg-[#d51f2d] px-7 text-base font-bold text-white shadow-[0_14px_30px_rgba(213,31,45,0.22)] transition hover:bg-[#bd1725] sm:h-12 sm:w-auto sm:px-8"
+                                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[linear-gradient(135deg,#d82030,#b41422)] px-7 text-base font-black !text-white shadow-[0_14px_30px_rgba(213,31,45,0.24)] transition hover:bg-[#bd1725] sm:h-12 sm:w-auto sm:px-8"
                             >
+                                <Download className="h-4 w-4" strokeWidth={2.7} />
                                 立即体验
                             </a>
                             <a
-                                href="https://github.com/Jamailar/RedBox"
+                                href={githubStats.htmlUrl}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-[#e5e7eb] bg-white px-7 text-base font-semibold text-[#222830] shadow-[0_10px_24px_rgba(17,24,39,0.08)] transition hover:border-[#d51f2d]/40 hover:text-[#d51f2d] sm:h-12 sm:w-auto"
@@ -104,7 +208,7 @@ export default function HomePage() {
                             <span className="flex h-5 w-5 items-center justify-center rounded-full border border-[#d5dbe3] text-[11px] font-bold text-[#7a8491]">
                                 M
                             </span>
-                            开源项目 · MIT License
+                            开源项目 · MIT 非商用协议
                         </p>
                     </div>
 
@@ -116,12 +220,12 @@ export default function HomePage() {
                         <div className="absolute inset-x-0 bottom-0 mx-auto h-[46%] max-w-[680px] rounded-full bg-[radial-gradient(ellipse_at_center,rgba(213,31,45,0.28),transparent_68%)] blur-2xl" />
                         <div className="relative mx-auto flex h-full max-w-[720px] items-center justify-center">
                             <Image
-                                src="/Box.png"
-                                alt="RedBox 产品视觉"
-                                width={660}
-                                height={660}
+                                src="/redbox.png"
+                                alt="RedBox app 图标"
+                                width={520}
+                                height={520}
                                 priority
-                                className="h-auto w-full max-w-[330px] drop-shadow-[0_34px_42px_rgba(145,18,28,0.22)] sm:max-w-[480px] lg:max-w-[560px] xl:max-w-[620px]"
+                                className="h-auto w-full max-w-[220px] rounded-[28px] drop-shadow-[0_28px_38px_rgba(145,18,28,0.2)] sm:max-w-[300px] sm:rounded-[36px] lg:max-w-[360px] xl:max-w-[400px]"
                             />
                         </div>
                     </div>
@@ -174,6 +278,53 @@ export default function HomePage() {
                                 </div>
                             );
                         })}
+                    </div>
+                </div>
+            </section>
+
+            <section id="screenshots" className="bg-[#fbfbfc] px-5 py-14 sm:px-8 sm:py-16 lg:px-12">
+                <div className="mx-auto w-full max-w-[1180px]">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                        <div className="max-w-[720px]">
+                            <h2 className="text-3xl font-black leading-tight text-[#202733] sm:text-4xl">
+                                从采集到创作的完整工作台
+                            </h2>
+                            <p className="mt-3 text-base leading-7 text-[#6b7280]">
+                                README 里的核心功能截图已经同步到首页，直接展示桌面端真实工作流。
+                            </p>
+                        </div>
+                        <a
+                            href="https://github.com/Jamailar/RedBox#功能截图"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex h-10 items-center justify-center rounded-lg border border-[#e5e7eb] bg-white px-4 text-sm font-semibold text-[#222830] transition hover:border-[#d51f2d]/40 hover:text-[#d51f2d]"
+                        >
+                            查看 README
+                        </a>
+                    </div>
+
+                    <div className="mt-7 grid gap-5 lg:grid-cols-2">
+                        {productScreenshots.map((item) => (
+                            <article
+                                key={item.title}
+                                className={item.featured ? 'lg:col-span-2' : undefined}
+                            >
+                                <div className="overflow-hidden rounded-lg border border-[#e6e9ee] bg-white shadow-[0_18px_44px_rgba(17,24,39,0.08)]">
+                                    <Image
+                                        src={item.src}
+                                        alt={`${item.title} 功能截图`}
+                                        width={item.width}
+                                        height={item.height}
+                                        sizes={item.featured ? '(min-width: 1024px) 1180px, 100vw' : '(min-width: 1024px) 590px, 100vw'}
+                                        className="h-auto w-full"
+                                    />
+                                </div>
+                                <div className="mt-3">
+                                    <h3 className="text-lg font-black text-[#202733]">{item.title}</h3>
+                                    <p className="mt-1 text-sm leading-6 text-[#687281]">{item.summary}</p>
+                                </div>
+                            </article>
+                        ))}
                     </div>
                 </div>
             </section>
