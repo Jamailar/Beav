@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use crate::{
-    configure_background_command, decode_base64_bytes, format_http_error_message,
-    http_error_details_from_value, normalize_base_url, payload_field, payload_string,
-    run_curl_bytes, run_curl_json, run_curl_json_response, HTTP_STATUS_MARKER,
+    decode_base64_bytes, format_http_error_message, http_error_details_from_value,
+    normalize_base_url, payload_field, payload_string, run_curl_bytes, run_curl_json,
+    run_curl_json_response,
 };
 
 const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
@@ -628,7 +628,7 @@ fn materialize_transport_value_to_temp_file(raw: &str, prefix: &str) -> Result<P
     Ok(path)
 }
 
-fn run_curl_form_json(
+fn run_form_json(
     method: &str,
     url: &str,
     api_key: Option<&str>,
@@ -636,69 +636,48 @@ fn run_curl_form_json(
     fields: &[(String, String)],
     file_fields: &[(String, PathBuf)],
 ) -> Result<crate::HttpJsonResponse, String> {
-    let temp_field_paths = fields
-        .iter()
-        .enumerate()
-        .map(|(index, (_name, value))| {
-            let path = std::env::temp_dir().join(format!(
-                "redbox-form-field-{}-{}-{index}.txt",
-                std::process::id(),
-                crate::now_ms()
-            ));
-            fs::write(&path, value.as_bytes()).map_err(|error| error.to_string())?;
-            Ok(path)
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let mut command = std::process::Command::new("curl");
-    configure_background_command(&mut command);
-    command.arg("-sS").arg("-L").arg("-X").arg(method).arg(url);
-    if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
-        command
-            .arg("-H")
-            .arg(format!("Authorization: Bearer {key}"));
-    }
-    for (header, value) in extra_headers {
-        command.arg("-H").arg(format!("{header}: {value}"));
-    }
-    for ((name, _value), path) in fields.iter().zip(temp_field_paths.iter()) {
-        command.arg("-F").arg(format!("{name}=<{}", path.display()));
+    let method_name = method;
+    let method =
+        reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| error.to_string())?;
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut form = reqwest::blocking::multipart::Form::new();
+    for (name, value) in fields {
+        form = form.text(name.clone(), value.clone());
     }
     for (name, file_path) in file_fields {
-        command
-            .arg("-F")
-            .arg(format!("{name}=@{}", file_path.display()));
+        let bytes = fs::read(file_path).map_err(|error| error.to_string())?;
+        let file_name = file_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("image")
+            .to_string();
+        let mime_type = infer_mime_type_from_path(&file_path.to_string_lossy());
+        let part = reqwest::blocking::multipart::Part::bytes(bytes)
+            .file_name(file_name)
+            .mime_str(mime_type)
+            .map_err(|error| error.to_string())?;
+        form = form.part(name.clone(), part);
     }
-    command
-        .arg("-w")
-        .arg(format!("\n{HTTP_STATUS_MARKER}%{{http_code}}"));
-    let output_result = command.output().map_err(|error| error.to_string());
-    for path in temp_field_paths {
-        let _ = fs::remove_file(path);
+    let mut request = client.request(method.clone(), url).multipart(form);
+    if let Some(key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+        request = request.bearer_auth(key);
     }
-    let output = output_result?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("curl failed with status {}", output.status)
-        } else {
-            stderr
-        });
+    for (header, value) in extra_headers {
+        request = request.header(*header, value.as_str());
     }
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let (body_text, status_text) = stdout
-        .rsplit_once(HTTP_STATUS_MARKER)
-        .ok_or_else(|| "Invalid HTTP response trailer".to_string())?;
-    let status = status_text
-        .trim()
-        .parse::<u16>()
-        .map_err(|error| format!("Invalid HTTP status code: {error}"))?;
+    let response = request.send().map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let body_text = response.text().map_err(|error| error.to_string())?;
     let normalized_body = body_text.trim();
     if normalized_body.is_empty() {
         if !(200..300).contains(&status) {
             let details = crate::http_error_details_from_text(status, "");
             crate::append_debug_trace_global(crate::http_error_debug_line(
                 "http-form-json",
-                method,
+                method_name,
                 url,
                 &details,
             ));
@@ -716,8 +695,8 @@ fn run_curl_form_json(
             body_head
         };
         let line = format!(
-            "[http][curl-form-json] invalid_json method={} url={} status={} raw_body={} error={}",
-            method,
+            "[http][form-json] invalid_json method={} url={} status={} raw_body={} error={}",
+            method_name,
             url,
             status,
             raw_body_log.replace('\n', "\\n").replace('\r', "\\r"),
@@ -726,7 +705,7 @@ fn run_curl_form_json(
         eprintln!("{line}");
         crate::append_debug_trace_global(format!(
             "[image-http] invalid_json_for_response_body method={} url={} status={} raw_body={} error={}",
-            method,
+            method_name,
             url,
             status,
             raw_body_log.replace('\n', "\\n").replace('\r', "\\r"),
@@ -734,8 +713,8 @@ fn run_curl_form_json(
         ));
         let message = format!("Invalid JSON response: {error}");
         crate::append_debug_trace_global(format!(
-            "[http][curl-form-json] invalid_json_message method={} url={} status={} body={} error={}",
-            method, url, status, raw_body_log, message
+            "[http][form-json] invalid_json_message method={} url={} status={} body={} error={}",
+            method_name, url, status, raw_body_log, message
         ));
         message
     })?;
@@ -743,7 +722,7 @@ fn run_curl_form_json(
         let details = crate::http_error_details_from_text(status, normalized_body);
         crate::append_debug_trace_global(crate::http_error_debug_line(
             "http-form-json",
-            method,
+            method_name,
             url,
             &details,
         ));
@@ -846,7 +825,7 @@ fn run_openai_image_request(
         );
         let request_url = normalize_image_edit_url(endpoint);
 
-        let primary_response = run_curl_form_json(
+        let primary_response = run_form_json(
             "POST",
             &request_url,
             api_key,
@@ -864,7 +843,7 @@ fn run_openai_image_request(
                 primary_response.status,
                 &primary_response.body,
             );
-            let fallback_response = run_curl_form_json(
+            let fallback_response = run_form_json(
                 "POST",
                 &request_url,
                 api_key,
@@ -2237,5 +2216,92 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert!(fields.iter().all(|(key, _path)| key == "image"));
         assert!(!fields.iter().any(|(key, _path)| key == "image[]"));
+    }
+
+    #[test]
+    fn run_form_json_posts_multipart_without_external_curl() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let url = format!(
+            "http://{}/images/edits",
+            listener.local_addr().expect("listener addr")
+        );
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let mut expected_len = None;
+            loop {
+                let read = stream.read(&mut chunk).expect("read request");
+                assert!(read > 0, "connection closed before full request");
+                buffer.extend_from_slice(&chunk[..read]);
+                if expected_len.is_none() {
+                    if let Some(header_end) = buffer.windows(4).position(|item| item == b"\r\n\r\n")
+                    {
+                        let headers = String::from_utf8_lossy(&buffer[..header_end]);
+                        let content_length = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.split_once(':').and_then(|(name, value)| {
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                            })
+                            .expect("content-length");
+                        expected_len = Some(header_end + 4 + content_length);
+                    }
+                }
+                if expected_len
+                    .map(|total| buffer.len() >= total)
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+            }
+            let response_body = br#"{"ok":true}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                response_body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response headers");
+            stream
+                .write_all(response_body)
+                .expect("write response body");
+            String::from_utf8_lossy(&buffer).to_string()
+        });
+
+        let file_a =
+            std::env::temp_dir().join(format!("redbox-form-test-a-{}.png", crate::now_ms()));
+        let file_b =
+            std::env::temp_dir().join(format!("redbox-form-test-b-{}.png", crate::now_ms()));
+        fs::write(&file_a, b"PNG-A").expect("write file a");
+        fs::write(&file_b, b"PNG-B").expect("write file b");
+        let response = run_form_json(
+            "POST",
+            &url,
+            Some("test-key"),
+            &[],
+            &[("prompt".to_string(), "cover prompt".to_string())],
+            &[
+                ("image".to_string(), file_a.clone()),
+                ("image".to_string(), file_b.clone()),
+            ],
+        )
+        .expect("multipart response");
+        let _ = fs::remove_file(file_a);
+        let _ = fs::remove_file(file_b);
+        let request = server.join().expect("server join");
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body.get("ok").and_then(Value::as_bool), Some(true));
+        assert!(request.starts_with("POST /images/edits "));
+        assert_eq!(request.matches("name=\"image\"").count(), 2);
+        assert!(request.contains("name=\"prompt\""));
+        assert!(!request.contains("name=\"image[]\""));
     }
 }
