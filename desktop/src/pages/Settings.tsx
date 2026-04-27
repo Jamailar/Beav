@@ -128,6 +128,13 @@ type RedclawProfileDraft = {
   creatorProfile: string;
 };
 
+type WorkspaceSpace = {
+  id: string;
+  name: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 const EMPTY_REDCLAW_PROFILE_DRAFT: RedclawProfileDraft = {
   user: '',
   creatorProfile: '',
@@ -595,6 +602,7 @@ export function Settings({
   const [redclawProfileMessage, setRedclawProfileMessage] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
   const [redclawOnboardingState, setRedclawOnboardingState] = useState<RedclawOnboardingState>(null);
   const [currentSpaceId, setCurrentSpaceId] = useState(DEFAULT_SPACE_ID);
+  const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [assistantDaemonStatus, setAssistantDaemonStatus] = useState<AssistantDaemonStatus | null>(null);
   const [assistantDaemonDraft, setAssistantDaemonDraftState] = useState<AssistantDaemonDraft>(() => createDefaultAssistantDaemonDraft());
   const [assistantDaemonLogs, setAssistantDaemonLogs] = useState<string[]>([]);
@@ -612,6 +620,10 @@ export function Settings({
   const redclawOnboardingCompleted = useMemo(
     () => isRedClawOnboardingCompleted(redclawOnboardingState),
     [redclawOnboardingState],
+  );
+  const currentSpaceName = useMemo(
+    () => spaces.find((space) => space.id === currentSpaceId)?.name || currentSpaceId,
+    [currentSpaceId, spaces],
   );
 
   const updateRuntimePerfRun = useCallback((runId: string, updater: (run: RuntimePerfRunResult) => RuntimePerfRunResult) => {
@@ -681,6 +693,19 @@ export function Settings({
     setCurrentSpaceId(normalized);
     return normalized;
   }, []);
+
+  const loadSpaceContext = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.spaces.list() as { spaces?: WorkspaceSpace[]; activeSpaceId?: string } | null;
+      const nextSpaces = Array.isArray(result?.spaces) ? result.spaces : [];
+      setSpaces(nextSpaces);
+      if (result?.activeSpaceId) {
+        setCurrentSpaceState(result.activeSpaceId);
+      }
+    } catch (error) {
+      console.error('Failed to load settings spaces:', error);
+    }
+  }, [setCurrentSpaceState]);
 
   const resetRedclawProfileState = useCallback(() => {
     redclawProfileLoadRequestRef.current += 1;
@@ -3828,17 +3853,20 @@ export function Settings({
     if (!force && baseSettingsLoadedRef.current) return;
     baseSettingsInFlightRef.current = true;
     try {
-      await loadSettings({
-        preserveViewState: true,
-        preserveRemoteModels: true,
-      });
+      await Promise.all([
+        loadSettings({
+          preserveViewState: true,
+          preserveRemoteModels: true,
+        }),
+        loadSpaceContext(),
+      ]);
       baseSettingsLoadedRef.current = true;
       setBaseSettingsLoadedRevision((prev) => prev + 1);
       tabWarmRef.current.ai = true;
     } finally {
       baseSettingsInFlightRef.current = false;
     }
-  }, [loadSettings]);
+  }, [loadSettings, loadSpaceContext]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
@@ -3963,8 +3991,13 @@ export function Settings({
 
   useEffect(() => {
     if (!isActive) return;
-    const handleSpaceChanged = (payload?: { spaceId?: string; activeSpaceId?: string }) => {
+    const handleSpaceChanged = (payload?: { spaceId?: string; activeSpaceId?: string; changeType?: string }) => {
+      const previousSpaceId = currentSpaceIdRef.current;
       const nextSpaceId = setCurrentSpaceState(payload?.activeSpaceId || payload?.spaceId);
+      void loadSpaceContext();
+      if (payload?.changeType === 'rename' && nextSpaceId === previousSpaceId) {
+        return;
+      }
       tabWarmRef.current.profile = false;
       resetRedclawProfileState();
       if (activeTab === 'profile') {
@@ -3975,7 +4008,7 @@ export function Settings({
     return () => {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
-  }, [activeTab, isActive, loadRedclawProfileBundle, resetRedclawProfileState, setCurrentSpaceState]);
+  }, [activeTab, isActive, loadRedclawProfileBundle, loadSpaceContext, resetRedclawProfileState, setCurrentSpaceState]);
 
   useEffect(() => {
     if (!redclawOnboardingVersion) return;
@@ -5264,10 +5297,10 @@ export function Settings({
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-xs text-text-tertiary">
                         <span
-                          className="rounded-full bg-surface-secondary px-2 py-1 font-mono"
+                          className="rounded-full bg-surface-secondary px-2 py-1"
                           title={redclawProfileRoot || undefined}
                         >
-                          空间：{currentSpaceId}
+                          空间：{currentSpaceName}
                         </span>
                         <span className={clsx(
                           'rounded-full px-2 py-1',

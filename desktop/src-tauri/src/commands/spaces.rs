@@ -6,7 +6,7 @@ use crate::persistence::{
     with_store_mut,
 };
 use crate::{
-    active_space_workspace_root_from_store, emit_space_changed,
+    active_space_workspace_root_from_store, emit_space_changed, emit_space_renamed,
     ensure_redclaw_space_writing_style_skill, make_id, now_iso, payload_string,
     payload_value_as_string, update_workspace_root_cache, AppState, SpaceRecord,
 };
@@ -120,7 +120,12 @@ pub fn handle_spaces_channel(
                     if let Some(active_space_id) =
                         result.get("activeSpaceId").and_then(|value| value.as_str())
                     {
-                        emit_space_changed(app, active_space_id);
+                        let space_name = result
+                            .get("space")
+                            .and_then(|value| value.get("name"))
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(active_space_id);
+                        emit_space_renamed(app, active_space_id, space_name);
                     }
                 }
                 Ok(result)

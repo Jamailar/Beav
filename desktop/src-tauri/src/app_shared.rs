@@ -98,6 +98,18 @@ pub(crate) fn emit_space_changed(app: &AppHandle, active_space_id: &str) {
     );
 }
 
+pub(crate) fn emit_space_renamed(app: &AppHandle, active_space_id: &str, space_name: &str) {
+    let _ = app.emit(
+        "space:changed",
+        json!({
+            "spaceId": active_space_id,
+            "activeSpaceId": active_space_id,
+            "spaceName": space_name,
+            "changeType": "rename",
+        }),
+    );
+}
+
 pub(crate) fn subject_record_from_input(
     input: SubjectMutationInput,
     existing: Option<SubjectRecord>,
