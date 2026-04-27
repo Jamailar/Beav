@@ -1092,22 +1092,31 @@ fn cli_runtime_discover_input_schema() -> Value {
 fn cli_runtime_inspect_input_schema() -> Value {
     object_schema(
         &[
-            ("toolId", string_schema("CLI tool id or executable name.")),
+            (
+                "toolId",
+                string_schema("CLI tool id or exact executable name to inspect."),
+            ),
             (
                 "id",
-                string_schema("Compatibility alias for toolId or command."),
+                string_schema(
+                    "Compatibility alias for toolId or command. Preserve the exact user-provided executable, for example lark-cli; do not shorten it to lark.",
+                ),
             ),
             (
                 "command",
-                string_schema("Direct command/executable to inspect."),
+                string_schema(
+                    "Exact command/executable to inspect. Preserve hyphenated names such as lark-cli.",
+                ),
             ),
             (
                 "executable",
-                string_schema("Compatibility alias for the command/executable to inspect."),
+                string_schema(
+                    "Compatibility alias for the exact command/executable to inspect.",
+                ),
             ),
             (
                 "name",
-                string_schema("Compatibility alias for the command/executable to inspect."),
+                string_schema("Compatibility alias for the exact command/executable to inspect."),
             ),
         ],
         &[],
@@ -1198,11 +1207,15 @@ fn cli_runtime_install_input_schema() -> Value {
             ),
             (
                 "spec",
-                string_schema("Install spec passed to the package manager."),
+                string_schema(
+                    "Install spec passed to the package manager, for example a package name or binary URL.",
+                ),
             ),
             (
                 "toolName",
-                string_schema("Expected executable name after installation."),
+                string_schema(
+                    "Expected exact executable name after installation, for example lark-cli.",
+                ),
             ),
             (
                 "executionMode",
@@ -2690,7 +2703,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "cli_runtime.inspect",
         namespace: "cli_runtime",
-        description: "Inspect one host CLI executable and refresh its detection record. Use this instead of bash which/type/command -v.",
+        description: "Inspect one host CLI executable and refresh its detection record. Preserve the exact executable the user named, for example lark-cli, and use this instead of bash which/type/command -v.",
         input_schema: cli_runtime_inspect_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -2734,7 +2747,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "cli_runtime.install",
         namespace: "cli_runtime",
-        description: "Install one CLI tool into a managed environment.",
+        description: "Install one CLI tool into a managed environment when the user asked to make a missing CLI usable. Use toolName for the exact expected executable, for example lark-cli.",
         input_schema: cli_runtime_install_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -4078,6 +4091,7 @@ mod tests {
             "cli_runtime.inspect",
             "cli_runtime.diagnose",
             "cli_runtime.discover",
+            "cli_runtime.install",
             "cli_runtime.execute",
             "cli_runtime.execution.get",
             "mcp.list",

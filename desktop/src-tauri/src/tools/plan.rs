@@ -439,6 +439,7 @@ fn pinned_direct_app_cli_actions(
             "cli_runtime.inspect",
             "cli_runtime.diagnose",
             "cli_runtime.discover",
+            "cli_runtime.install",
             "cli_runtime.execute",
             "cli_runtime.execution.get",
             "mcp.list",
@@ -701,6 +702,7 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.discover"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.install"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("image.generate"));
@@ -717,6 +719,7 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.discover"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.install"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
     }

@@ -125,19 +125,21 @@ pub fn discover_extra_bin_paths_with_env(env: &BTreeMap<String, String>) -> Vec<
         items.push(home.join(".bun").join("bin"));
         items.push(home.join(".deno").join("bin"));
         items.push(home.join("go").join("bin"));
-        let nvm_versions_dir = home.join(".nvm").join("versions").join("node");
-        if let Ok(entries) = fs::read_dir(&nvm_versions_dir) {
-            for entry in entries.flatten() {
-                items.push(entry.path().join("bin"));
-            }
-        }
-
         if let Some(nvm_dir) = env
             .get("NVM_BIN")
             .filter(|value| !value.trim().is_empty())
             .map(PathBuf::from)
         {
             items.push(nvm_dir);
+        }
+        let nvm_versions_dir = home.join(".nvm").join("versions").join("node");
+        if let Ok(entries) = fs::read_dir(&nvm_versions_dir) {
+            let mut entries = entries.flatten().collect::<Vec<_>>();
+            entries.sort_by_key(|entry| entry.file_name());
+            entries.reverse();
+            for entry in entries {
+                items.push(entry.path().join("bin"));
+            }
         }
         if let Some(volta_home) = env
             .get("VOLTA_HOME")
