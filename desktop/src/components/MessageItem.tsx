@@ -206,6 +206,8 @@ interface MessageItemProps {
   workflowVariant?: 'default' | 'compact';
   workflowEmphasis?: 'default' | 'thoughts-first';
   workflowDisplayMode?: 'all' | 'thoughts-only';
+  workflowAutoHideWhenComplete?: boolean;
+  workflowFailureTone?: 'danger' | 'neutral';
   showAttachments?: boolean;
 }
 
@@ -333,6 +335,8 @@ export const MessageItem = memo(({
   workflowVariant = 'default',
   workflowEmphasis = 'default',
   workflowDisplayMode = 'all',
+  workflowAutoHideWhenComplete = false,
+  workflowFailureTone = 'danger',
   showAttachments = true,
 }: MessageItemProps) => {
   const isUser = msg.role === 'user';
@@ -369,6 +373,7 @@ export const MessageItem = memo(({
   const hasRenderableMessageContent = isUser
     ? Boolean(msg.displayContent || msg.content || (msg.isStreaming && !msg.thinking))
     : hasAssistantResponseContent || showPendingThinkingIndicator;
+  const shouldAutoHideWorkflow = workflowAutoHideWhenComplete && !msg.isStreaming && hasAssistantResponseContent;
   const showWorkflowOnTop = workflowPlacement === 'top';
   const latestTimelineThought = !isUser
     ? [...(msg.timeline || [])]
@@ -388,9 +393,10 @@ export const MessageItem = memo(({
       timestamp: msg.processingStartedAt || 0,
     }, ...filteredTimeline];
   }, [activeThoughtContent, filteredTimeline, msg.id, msg.isStreaming, msg.processingStartedAt, timelineHasThought]);
-  const showTimeline = !isUser && !isThinkingMessage && displayTimeline.length > 0;
+  const showTimeline = !shouldAutoHideWorkflow && !isUser && !isThinkingMessage && displayTimeline.length > 0;
   const showLegacyWorkflow = !isUser
     && !isThinkingMessage
+    && !shouldAutoHideWorkflow
     && displayTimeline.length === 0
     && (msg.thinking || (showWorkflowDetails && (msg.tools.length > 0 || msg.activatedSkill)));
 
@@ -661,6 +667,7 @@ export const MessageItem = memo(({
           items={group}
           isStreaming={!!msg.isStreaming}
           variant={workflowVariant}
+          failureTone={workflowFailureTone}
         />,
       );
     };
@@ -703,6 +710,10 @@ export const MessageItem = memo(({
       </div>
     </div>
   );
+
+  if (workflowAutoHideWhenComplete && isThinkingMessage && !msg.isStreaming) {
+    return null;
+  }
 
   return (
     <div className={clsx('chat-message-row', isUser ? 'chat-message-row-user' : 'chat-message-row-ai')}>
@@ -928,6 +939,8 @@ export const MessageItem = memo(({
     prevProps.workflowVariant !== nextProps.workflowVariant ||
     prevProps.workflowEmphasis !== nextProps.workflowEmphasis ||
     prevProps.workflowDisplayMode !== nextProps.workflowDisplayMode ||
+    prevProps.workflowAutoHideWhenComplete !== nextProps.workflowAutoHideWhenComplete ||
+    prevProps.workflowFailureTone !== nextProps.workflowFailureTone ||
     prevProps.showAttachments !== nextProps.showAttachments;
 
   return !msgChanged && !copyStatusChanged && !workflowStyleChanged;

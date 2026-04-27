@@ -51,6 +51,7 @@ interface ProcessTimelineProps {
   items: ProcessItem[];
   isStreaming?: boolean;
   variant?: 'default' | 'compact';
+  failureTone?: 'danger' | 'neutral';
 }
 
 type StatusLine = {
@@ -322,10 +323,11 @@ const buildStatusLine = (item: ProcessItem): StatusLine | null => {
   return null;
 };
 
-export function ProcessTimeline({ items, isStreaming, variant = 'default' }: ProcessTimelineProps) {
+export function ProcessTimeline({ items, isStreaming, variant = 'default', failureTone = 'danger' }: ProcessTimelineProps) {
   if (!items || items.length === 0) return null;
 
   const isCompact = variant === 'compact';
+  const failedTextClass = failureTone === 'neutral' ? 'text-text-tertiary/70' : 'text-red-500/80';
   const statusLines = useMemo(
     () => items.map(buildStatusLine).filter((item): item is StatusLine => Boolean(item)),
     [items],
@@ -364,7 +366,7 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default' }: Pro
           {activeText}
         </div>
       ) : failedCount > 0 ? (
-        <div className="font-medium text-red-500/80">
+        <div className={clsx('font-medium', failedTextClass)}>
           有 {failedCount} 个步骤失败
         </div>
       ) : null}
@@ -377,7 +379,7 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default' }: Pro
               'min-w-0 truncate',
               item.status === 'running' && 'text-text-tertiary/85',
               item.status === 'done' && 'text-text-tertiary/70',
-              item.status === 'failed' && 'text-red-500/80',
+              item.status === 'failed' && failedTextClass,
             )}
             title={[item.text, item.detail].filter(Boolean).join(' · ')}
           >
