@@ -11,13 +11,25 @@ export interface ReleaseAsset {
     publicUrl: string;
 }
 
+export interface BrowserPluginAsset {
+    filename: string;
+    size: number;
+    contentType: string;
+    ossKey: string;
+    publicUrl: string;
+    sourcePath: string;
+    sourceRef: string;
+}
+
 export interface ReleaseManifest {
     tag: string;
     publishedAt: string;
     releaseName: string;
     releaseUrl: string;
     notes: string;
+    releaseNotes: ReleaseNotesEntry[];
     assets: ReleaseAsset[];
+    plugin?: BrowserPluginAsset | null;
 }
 
 export interface GithubReleaseAsset {
@@ -39,8 +51,31 @@ export interface GithubRelease {
     assets: GithubReleaseAsset[];
 }
 
+export interface ReleaseNotesEntry {
+    tag: string;
+    releaseName: string;
+    releaseUrl: string;
+    publishedAt: string;
+    notes: string;
+}
+
+export interface GithubRepoStats {
+    htmlUrl: string;
+    stars: number;
+    forks: number;
+}
+
 export interface ParsedReleaseAsset extends ReleaseAsset {
     downloadUrl: string;
+}
+
+export interface GithubSourceFile {
+    path: string;
+    body: Buffer;
+}
+
+export interface ParsedBrowserPluginAsset extends BrowserPluginAsset {
+    body: Buffer;
 }
 
 export interface SyncResult {
@@ -55,8 +90,11 @@ export interface OssLikeClient {
 
 export interface ReleaseSyncDependencies {
     fetchLatestRelease: () => Promise<GithubRelease>;
+    fetchReleaseNotes: () => Promise<GithubRelease[]>;
+    fetchPluginFiles: (ref: string) => Promise<GithubSourceFile[]>;
     readCurrentManifest: () => Promise<ReleaseManifest | null>;
     uploadRemoteAsset: (key: string, downloadUrl: string, contentType: string) => Promise<void>;
+    uploadBufferAsset: (key: string, body: Buffer, contentType: string) => Promise<void>;
     uploadManifest: (key: string, body: Buffer, contentType: string) => Promise<void>;
     buildPublicUrl: (key: string) => string;
 }
