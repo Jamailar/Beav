@@ -458,6 +458,24 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
     if let Some(id) = object.get("id").cloned() {
         input.entry("id".to_string()).or_insert(id);
     }
+    let nested_action = input
+        .get("action")
+        .or_else(|| object.get("action"))
+        .and_then(Value::as_str)
+        .map(normalize_action_token);
+    if resource == "cli_runtime" {
+        if let Some(action) = nested_action.as_deref() {
+            if action.starts_with("cli_runtime.") {
+                input.remove("action");
+                return app_cli_action_call(
+                    action,
+                    Value::Object(input),
+                    Some("Redbox"),
+                    Some(&format!("cli_runtime.{operation}")),
+                );
+            }
+        }
+    }
     let payload = Value::Object(input);
     match (resource.as_str(), operation.as_str()) {
         ("manuscript" | "manuscripts", "list") => app_cli_action_call(
@@ -626,6 +644,18 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ),
         ("mcp", "list") => {
             app_cli_action_call("mcp.list", payload, Some("Redbox"), Some("mcp.list"))
+        }
+        ("mcp", "get") => app_cli_action_call(
+            "mcp.sessions",
+            payload,
+            Some("Redbox"),
+            Some("mcp.sessions"),
+        ),
+        ("mcp", "verify") => {
+            app_cli_action_call("mcp.test", payload, Some("Redbox"), Some("mcp.test"))
+        }
+        ("mcp", "install" | "create" | "update") => {
+            app_cli_action_call("mcp.save", payload, Some("Redbox"), Some("mcp.save"))
         }
         ("mcp", "run" | "call") => {
             app_cli_action_call("mcp.call", payload, Some("Redbox"), Some("mcp.call"))
@@ -1118,10 +1148,18 @@ fn mcp_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         .unwrap_or_default();
     let translated_action = match action {
         "list" => Some("mcp.list"),
+        "sessions" => Some("mcp.sessions"),
+        "oauth_status" | "oauth-status" => Some("mcp.oauthStatus"),
+        "save" => Some("mcp.save"),
+        "test" | "probe" => Some("mcp.test"),
         "call" => Some("mcp.call"),
         "list_tools" => Some("mcp.listTools"),
         "list_resources" => Some("mcp.listResources"),
+        "list_resource_templates" => Some("mcp.listResourceTemplates"),
         "disconnect" => Some("mcp.disconnect"),
+        "disconnect_all" | "disconnect-all" => Some("mcp.disconnectAll"),
+        "discover_local" | "discover-local" => Some("mcp.discoverLocal"),
+        "import_local" | "import-local" => Some("mcp.importLocal"),
         _ => None,
     };
     match translated_action {
@@ -1494,8 +1532,8 @@ mod tests {
 
         assert_eq!(normalized.name, "app_cli");
         assert_eq!(
-            normalized.arguments.get("command"),
-            Some(&json!("mcp oauth-status"))
+            normalized.arguments.get("action"),
+            Some(&json!("mcp.oauthStatus"))
         );
     }
 
@@ -1837,6 +1875,66 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("command")),
             Some(&json!("lark-cli"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_cli_runtime_run_with_nested_action_to_that_action() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "cli_runtime",
+                "operation": "run",
+                "input": {
+                    "action": "cli_runtime.inspect",
+                    "command": "lark-cli"
+                }
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("cli_runtime.inspect"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("command")),
+            Some(&json!("lark-cli"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("action")),
+            None
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_cli_runtime_run_with_argv_to_execute() {
+        let normalized = normalize_tool_call(
+            "Redbox",
+            &json!({
+                "resource": "cli_runtime",
+                "operation": "run",
+                "input": {
+                    "argv": ["lark-cli", "--version"]
+                }
+            }),
+        );
+        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("cli_runtime.execute"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("argv")),
+            Some(&json!(["lark-cli", "--version"]))
         );
     }
 

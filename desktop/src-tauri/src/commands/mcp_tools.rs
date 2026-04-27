@@ -121,6 +121,19 @@ pub fn mcp_list_resource_templates_value(
 }
 
 pub fn mcp_save_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    if let Some(server_value) = payload_field(payload, "server").cloned() {
+        let server: McpServerRecord =
+            serde_json::from_value(server_value).map_err(|error| error.to_string())?;
+        let next = with_store_mut(state, |store| {
+            store
+                .mcp_servers
+                .retain(|item| item.id != server.id && item.name != server.name);
+            store.mcp_servers.push(server.clone());
+            Ok(store.mcp_servers.clone())
+        })?;
+        state.mcp_manager.sync_servers(&next)?;
+        return Ok(json!({ "success": true, "mode": "upsert", "server": server, "servers": next }));
+    }
     let servers = payload_field(payload, "servers")
         .and_then(|value| value.as_array())
         .cloned()

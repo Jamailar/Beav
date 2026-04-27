@@ -538,6 +538,39 @@ mod tests {
     }
 
     #[test]
+    fn redclaw_session_schema_exposes_cli_runtime_and_web_resources() {
+        let store = crate::AppStore::default();
+        let schemas = openai_schemas_for_session(&store, "redclaw", None);
+        let redbox = schemas
+            .as_array()
+            .expect("schemas")
+            .iter()
+            .find(|item| item.pointer("/function/name").and_then(Value::as_str) == Some("Redbox"))
+            .expect("redbox schema");
+        let resources = redbox
+            .pointer("/function/parameters/properties/resource/enum")
+            .and_then(Value::as_array)
+            .expect("redbox resource enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        let operations = redbox
+            .pointer("/function/parameters/properties/operation/enum")
+            .and_then(Value::as_array)
+            .expect("redbox operation enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(resources.contains(&"web"));
+        assert!(resources.contains(&"cli_runtime"));
+        assert!(operations.contains(&"get"));
+        assert!(operations.contains(&"run"));
+        assert!(operations.contains(&"verify"));
+        assert!(operations.contains(&"search"));
+    }
+
+    #[test]
     fn openai_schemas_for_session_with_mcp_exposes_direct_mcp_tools() {
         let store = crate::AppStore::default();
         let inventory = McpToolInventorySnapshot {

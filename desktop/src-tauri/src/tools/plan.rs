@@ -16,7 +16,7 @@ use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_ru
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{AppStore, ChatSessionRecord};
 
-pub const DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS: usize = 14;
+pub const DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS: usize = 16;
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolRegistryPlanParams<'a> {
@@ -372,8 +372,14 @@ fn select_direct_app_cli_actions(
     let preferred_namespaces = direct_namespaces_from_metadata(metadata)
         .filter(|items| !items.is_empty())
         .unwrap_or(preferred_namespaces);
+    let pinned_actions = pinned_direct_app_cli_actions(runtime_mode, task_intent);
+    let max_direct_actions = if pinned_actions.is_empty() {
+        max_direct_actions
+    } else {
+        max_direct_actions.max(22)
+    };
     let mut selected = Vec::<ActionDescriptor>::new();
-    for action in pinned_direct_app_cli_actions(runtime_mode, task_intent) {
+    for action in pinned_actions {
         if selected.len() >= max_direct_actions {
             return selected;
         }
@@ -429,10 +435,18 @@ fn pinned_direct_app_cli_actions(
         || (!media_intent && matches!(runtime_mode, "chatroom" | "redclaw" | "knowledge"))
     {
         &[
+            "web.fetch",
             "cli_runtime.inspect",
             "cli_runtime.diagnose",
+            "cli_runtime.discover",
             "cli_runtime.execute",
             "cli_runtime.execution.get",
+            "mcp.list",
+            "mcp.discoverLocal",
+            "mcp.importLocal",
+            "mcp.save",
+            "mcp.test",
+            "mcp.listTools",
         ]
     } else {
         &[]
@@ -683,11 +697,43 @@ mod tests {
             ..ToolRegistryPlanParams::default()
         });
 
+        assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.discover"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("image.generate"));
+    }
+
+    #[test]
+    fn chatroom_runtime_pins_web_and_core_cli_runtime_actions() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "chatroom",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("web.fetch"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.discover"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
+        assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+    }
+
+    #[test]
+    fn chatroom_runtime_pins_mcp_setup_actions() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "chatroom",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("mcp.list"));
+        assert!(plan.has_direct_app_cli_action("mcp.discoverLocal"));
+        assert!(plan.has_direct_app_cli_action("mcp.importLocal"));
+        assert!(plan.has_direct_app_cli_action("mcp.save"));
+        assert!(plan.has_direct_app_cli_action("mcp.test"));
+        assert!(plan.has_direct_app_cli_action("mcp.listTools"));
     }
 
     #[test]

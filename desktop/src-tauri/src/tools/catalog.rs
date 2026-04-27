@@ -1353,10 +1353,65 @@ fn mcp_list_input_schema() -> Value {
     no_payload_schema()
 }
 
+fn mcp_server_target_input_schema() -> Value {
+    object_schema(
+        &[
+            ("serverId", string_schema("Target MCP server id.")),
+            ("id", string_schema("Alias for serverId.")),
+            (
+                "server",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Inline MCP server record when it is not saved yet."
+                }),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
+fn mcp_save_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "server",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Single MCP server record to add or update without removing other saved servers."
+                }),
+            ),
+            (
+                "servers",
+                json!({
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "description": "Complete MCP server records to save as the active RedBox MCP configuration."
+                }),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
 fn mcp_call_input_schema() -> Value {
     object_schema(
         &[
             ("serverId", string_schema("Target MCP server id.")),
+            (
+                "server",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Inline MCP server record when it is not saved yet."
+                }),
+            ),
             ("method", string_schema("Method name.")),
             (
                 "params",
@@ -1365,16 +1420,12 @@ fn mcp_call_input_schema() -> Value {
                     "additionalProperties": true,
                 }),
             ),
+            (
+                "sessionId",
+                string_schema("Optional RedBox runtime session id."),
+            ),
         ],
-        &["serverId", "method"],
-        None,
-    )
-}
-
-fn mcp_named_server_input_schema() -> Value {
-    object_schema(
-        &[("serverId", string_schema("Target MCP server id."))],
-        &["serverId"],
+        &["method"],
         None,
     )
 }
@@ -1933,19 +1984,22 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
         "list" => Some("list"),
         "search" => Some("search"),
         "get" | "read" | "fetch" | "readCurrent" | "bundle" | "stats" | "query"
-        | "getCheckpoints" | "getToolResults" => Some("get"),
+        | "getCheckpoints" | "getToolResults" | "sessions" | "oauthStatus" => Some("get"),
         "create" | "createProject" | "preview" | "add" | "spawn" | "send" | "request" => {
             Some("create")
         }
         "update" | "writeCurrent" | "submit" => Some("update"),
-        "delete" | "disconnect" | "deny" => Some("delete"),
+        "delete" | "disconnect" | "disconnectAll" | "deny" => Some("delete"),
         "cancel" => Some("cancel"),
         "resume" => Some("resume"),
         "confirm" | "approve" => Some("confirm"),
         "invoke" | "call" | "execute" => Some("run"),
         "generate" => Some("generate"),
-        "install" => Some("install"),
-        "verify" | "diagnose" | "inspect" | "detect" | "discover" => Some("verify"),
+        "install" | "save" | "importLocal" => Some("install"),
+        "verify" | "diagnose" | "inspect" | "detect" | "discover" | "discoverLocal" | "test" => {
+            Some("verify")
+        }
+        "listTools" | "listResources" | "listResourceTemplates" => Some("list"),
         _ => None,
     }
 }
@@ -2042,7 +2096,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "web.fetch",
         namespace: "web",
-        description: "Fetch a user-provided public http/https URL and return readable page text. This does not search the web.",
+        description: "Fetch a user-provided public http/https URL and return readable page text. Use this for explicit URLs instead of bash curl. This does not search the web.",
         input_schema: web_fetch_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -2636,7 +2690,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "cli_runtime.inspect",
         namespace: "cli_runtime",
-        description: "Inspect one CLI executable and refresh its detection record.",
+        description: "Inspect one host CLI executable and refresh its detection record. Use this instead of bash which/type/command -v.",
         input_schema: cli_runtime_inspect_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -2691,7 +2745,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "cli_runtime.execute",
         namespace: "cli_runtime",
-        description: "Execute one CLI command through the managed runtime control plane.",
+        description: "Execute one real host CLI command through the managed runtime control plane. Use argv as an array, for example {\"argv\":[\"lark-cli\",\"--version\"]}. Do not use bash for this.",
         input_schema: cli_runtime_execute_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2746,56 +2800,144 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "mcp.list",
         namespace: "mcp",
-        description: "List MCP server records.",
+        description: "List saved MCP server records and active sessions. Use this first when the user asks whether MCP is configured.",
         input_schema: mcp_list_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.sessions",
+        namespace: "mcp",
+        description: "List active MCP transport sessions.",
+        input_schema: mcp_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.discoverLocal",
+        namespace: "mcp",
+        description: "Discover MCP server configs already present on this computer, such as Codex or Claude Desktop config files.",
+        input_schema: mcp_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.importLocal",
+        namespace: "mcp",
+        description: "Import locally discovered MCP server configs into RedBox and sync the MCP manager.",
+        input_schema: mcp_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.save",
+        namespace: "mcp",
+        description: "Save MCP server configuration. Pass server to add/update one record, or servers to replace the complete active list.",
+        input_schema: mcp_save_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.test",
+        namespace: "mcp",
+        description: "Probe one MCP server by initializing it and checking basic connectivity.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "mcp.call",
         namespace: "mcp",
-        description: "Call one MCP tool or method.",
+        description: "Call an allowed low-level MCP diagnostic method such as tools/list, resources/list, resources/read, or tools/call.",
         input_schema: mcp_call_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "mcp.listTools",
         namespace: "mcp",
         description: "List tools exposed by one MCP server.",
-        input_schema: mcp_named_server_input_schema,
+        input_schema: mcp_server_target_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "mcp.listResources",
         namespace: "mcp",
         description: "List resources exposed by one MCP server.",
-        input_schema: mcp_named_server_input_schema,
+        input_schema: mcp_server_target_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.listResourceTemplates",
+        namespace: "mcp",
+        description: "List resource templates exposed by one MCP server.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
         action: "mcp.disconnect",
         namespace: "mcp",
         description: "Disconnect one MCP server session.",
-        input_schema: mcp_named_server_input_schema,
+        input_schema: mcp_server_target_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.disconnectAll",
+        namespace: "mcp",
+        description: "Disconnect all active MCP server sessions.",
+        input_schema: mcp_list_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.oauthStatus",
+        namespace: "mcp",
+        description: "Read OAuth connection metadata for one MCP server.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -3262,7 +3404,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "bash" => Some(ToolDescriptor {
             name: "bash",
-            description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands.",
+            description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for real host CLI execution, PATH checks, curl, which, type, command -v, node, npm, pnpm, or tool-specific CLIs; use app_cli(action=\"cli_runtime.inspect\"|\"cli_runtime.diagnose\"|\"cli_runtime.execute\") instead.",
             kind: ToolKind::Bash,
             requires_approval: false,
             concurrency_safe: true,
@@ -3736,7 +3878,39 @@ mod tests {
         assert!(actions.contains(&"cli_runtime.discover"));
         assert!(actions.contains(&"cli_runtime.execution.get"));
         assert!(actions.contains(&"mcp.list"));
+        assert!(actions.contains(&"mcp.discoverLocal"));
+        assert!(actions.contains(&"mcp.importLocal"));
+        assert!(actions.contains(&"mcp.save"));
+        assert!(actions.contains(&"mcp.test"));
+        assert!(actions.contains(&"mcp.listResourceTemplates"));
         assert!(!actions.contains(&"manuscripts.writeCurrent"));
+    }
+
+    #[test]
+    fn chatroom_schema_exposes_mcp_setup_actions() {
+        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("chatroom"))
+            .expect("chatroom schema should exist");
+        let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        for action in [
+            "mcp.list",
+            "mcp.discoverLocal",
+            "mcp.importLocal",
+            "mcp.save",
+            "mcp.test",
+            "mcp.listTools",
+            "mcp.listResources",
+            "mcp.listResourceTemplates",
+            "mcp.sessions",
+            "mcp.oauthStatus",
+        ] {
+            assert!(actions.contains(&action), "{action}");
+        }
     }
 
     #[test]
@@ -3886,6 +4060,32 @@ mod tests {
             "team.report.submit",
             "team.artifact.attach",
             "team.blocker.raise",
+        ] {
+            assert!(actions.iter().any(|item| item == action), "{action}");
+        }
+    }
+
+    #[test]
+    fn redclaw_schema_exposes_web_fetch_and_core_cli_runtime_actions() {
+        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
+            .expect("app_cli schema should exist");
+        let actions = schema
+            .pointer("/function/parameters/properties/action/enum")
+            .and_then(Value::as_array)
+            .expect("action enum should exist");
+        for action in [
+            "web.fetch",
+            "cli_runtime.inspect",
+            "cli_runtime.diagnose",
+            "cli_runtime.discover",
+            "cli_runtime.execute",
+            "cli_runtime.execution.get",
+            "mcp.list",
+            "mcp.discoverLocal",
+            "mcp.importLocal",
+            "mcp.save",
+            "mcp.test",
+            "mcp.listTools",
         ] {
             assert!(actions.iter().any(|item| item == action), "{action}");
         }
