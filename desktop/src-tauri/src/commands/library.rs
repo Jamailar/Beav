@@ -452,6 +452,8 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     let mut parts = vec![
         "你要生成一张适合中文内容平台信息流点击的封面图。".to_string(),
         "画面比例固定为 3:4，标题区域必须清晰、可读、适合直接作为封面文案。".to_string(),
+        "参考图顺序必须按以下规则理解：图1是我想学习的封面图风格，图2是需要被改造成封面的底图。".to_string(),
+        "请保留图2的核心主体、真实内容和空间关系，把图2做成和图1一样风格的中文封面图。".to_string(),
         "不要出现提示词原文、排版说明、水印、AI 字样或调试文字。".to_string(),
     ];
 
@@ -523,7 +525,7 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
 
 fn extract_cover_generation_reference_images(payload: &Value) -> Vec<String> {
     let mut reference_images = Vec::new();
-    for key in ["baseImage", "templateImage"] {
+    for key in ["templateImage", "baseImage"] {
         if let Some(value) = payload_string(payload, key)
             .map(|item| item.trim().to_string())
             .filter(|item| !item.is_empty())
@@ -1843,12 +1845,13 @@ pub fn handle_library_channel(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_cover_generation_request_payload, extract_cover_generation_reference_images,
+        build_cover_generation_prompt, build_cover_generation_request_payload,
+        extract_cover_generation_reference_images,
     };
     use serde_json::json;
 
     #[test]
-    fn cover_generation_request_uses_base_and_template_images_as_references() {
+    fn cover_generation_request_orders_template_as_image_one_and_base_as_image_two() {
         let payload = json!({
             "templateImage": "data:image/png;base64,TEMPLATE",
             "baseImage": "data:image/png;base64,BASE",
@@ -1859,8 +1862,8 @@ mod tests {
         assert_eq!(
             reference_images,
             vec![
-                "data:image/png;base64,BASE".to_string(),
-                "data:image/png;base64,TEMPLATE".to_string()
+                "data:image/png;base64,TEMPLATE".to_string(),
+                "data:image/png;base64,BASE".to_string()
             ]
         );
 
@@ -1868,8 +1871,8 @@ mod tests {
         assert_eq!(
             request_payload.get("referenceImages"),
             Some(&json!([
-                "data:image/png;base64,BASE",
-                "data:image/png;base64,TEMPLATE"
+                "data:image/png;base64,TEMPLATE",
+                "data:image/png;base64,BASE"
             ]))
         );
         assert_eq!(
@@ -1884,5 +1887,19 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("3:4")
         );
+    }
+
+    #[test]
+    fn cover_generation_prompt_labels_reference_image_roles() {
+        let payload = json!({
+            "templateImage": "data:image/png;base64,TEMPLATE",
+            "baseImage": "data:image/png;base64,BASE",
+            "titles": [{ "type": "main", "text": "测试标题" }],
+        });
+
+        let prompt = build_cover_generation_prompt(&payload, &[]);
+        assert!(prompt.contains("图1是我想学习的封面图风格"));
+        assert!(prompt.contains("图2是需要被改造成封面的底图"));
+        assert!(prompt.contains("把图2做成和图1一样风格的中文封面图"));
     }
 }
