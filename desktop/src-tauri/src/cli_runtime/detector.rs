@@ -107,6 +107,29 @@ fn preview_path_entries(entries: &[String], max_items: usize) -> Vec<String> {
     entries.iter().take(max_items).cloned().collect()
 }
 
+fn push_unique_path(paths: &mut Vec<String>, candidate: impl Into<String>) {
+    let candidate = candidate.into();
+    if candidate.trim().is_empty() {
+        return;
+    }
+    if paths.iter().any(|item| item == &candidate) {
+        return;
+    }
+    paths.push(candidate);
+}
+
+fn effective_path_entries(env: &BTreeMap<String, String>) -> (Vec<String>, Vec<String>) {
+    let extra_paths = discover_extra_bin_paths_with_env(env);
+    let mut entries = Vec::<String>::new();
+    for entry in &extra_paths {
+        push_unique_path(&mut entries, entry.clone());
+    }
+    for entry in env_path_entries(env) {
+        push_unique_path(&mut entries, entry);
+    }
+    (entries, extra_paths)
+}
+
 #[cfg(unix)]
 fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -149,7 +172,7 @@ fn resolve_executable(
     managed_path_entries: Option<&[String]>,
 ) -> CliExecutableResolution {
     let trimmed = command.trim();
-    let path_entries = env_path_entries(env);
+    let (path_entries, extra_paths) = effective_path_entries(env);
     let effective_path_preview = preview_path_entries(&path_entries, 12);
     if trimmed.is_empty() {
         return CliExecutableResolution {
@@ -175,7 +198,6 @@ fn resolve_executable(
     } else {
         vec![trimmed.to_string()]
     };
-    let extra_paths = discover_extra_bin_paths_with_env(env);
     let managed_path_entries = managed_path_entries.unwrap_or(&[]);
 
     for root in &path_entries {
@@ -298,8 +320,7 @@ pub fn discover_all_commands(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase());
-    let path_entries = env_path_entries(env);
-    let extra_paths = discover_extra_bin_paths_with_env(env);
+    let (path_entries, extra_paths) = effective_path_entries(env);
     let capped_limit = limit.clamp(1, 500);
     let mut discovered = Vec::<CliToolRecord>::new();
     let mut seen = std::collections::BTreeSet::<String>::new();
@@ -426,5 +447,45 @@ mod tests {
         );
 
         let _ = fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detects_tools_from_extra_bin_paths_not_present_in_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("redbox-cli-extra-bin-{unique}"));
+        let bin = root.join("bin");
+        let command_path = bin.join("lark-cli");
+        fs::create_dir_all(&bin).expect("create temp bin");
+        fs::write(&command_path, "#!/bin/sh\necho lark-cli-test\n").expect("write temp command");
+        let mut perms = fs::metadata(&command_path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&command_path, perms).expect("chmod temp command");
+
+        let env = BTreeMap::from([
+            ("NVM_BIN".to_string(), bin.to_string_lossy().to_string()),
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+        ]);
+        let detected = detect_tool_with_managed_paths("lark-cli", &env, None, false);
+        assert_eq!(detected.health, CliToolHealth::Ready);
+        assert_eq!(detected.resolved_from, Some(CliResolvedFrom::ExtraBinPath));
+        assert_eq!(
+            detected.resolved_path.as_deref(),
+            Some(command_path.to_string_lossy().as_ref())
+        );
+        assert!(detected
+            .effective_path_preview
+            .iter()
+            .any(|item| item == bin.to_string_lossy().as_ref()));
+
+        let discovered = discover_all_commands(&env, Some("lark-cli"), 10);
+        assert!(discovered.iter().any(|item| item.executable == "lark-cli"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }
