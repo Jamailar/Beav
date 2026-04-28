@@ -874,15 +874,69 @@ fn update_wechat_login_snapshot(settings: &mut Value, session_id: &str, status: 
     write_settings_json_value(settings, "redbox_auth_wechat_login_json", &snapshot);
 }
 
-fn merge_official_settings(settings: &mut Value, source: &Value) {
-    let Some(target) = settings.as_object_mut() else {
-        *settings = source.clone();
+fn default_route_uses_custom_ai_source(settings: &Value) -> bool {
+    let source_id = payload_string(settings, "default_ai_source_id").unwrap_or_default();
+    let source_id = source_id.trim();
+    !source_id.is_empty() && source_id != "redbox_official_auto"
+}
+
+fn merge_official_ai_source(settings: &mut Value, source: &Value) {
+    let source_sources = payload_string(source, "ai_sources_json")
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+        .unwrap_or_default();
+    let Some(official_source) = source_sources
+        .into_iter()
+        .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
+    else {
         return;
     };
+
+    let mut target_sources = payload_string(settings, "ai_sources_json")
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+        .unwrap_or_default();
+    target_sources
+        .retain(|item| payload_string(item, "id").as_deref() != Some("redbox_official_auto"));
+    target_sources.insert(0, official_source);
+
+    if let Some(target) = settings.as_object_mut() {
+        target.insert(
+            "ai_sources_json".to_string(),
+            json!(serde_json::to_string(&target_sources).unwrap_or_else(|_| "[]".to_string())),
+        );
+    }
+}
+
+fn merge_official_settings(settings: &mut Value, source: &Value) {
+    if !settings.is_object() {
+        *settings = source.clone();
+        return;
+    }
+    let preserve_custom_route = default_route_uses_custom_ai_source(settings);
     let source_object = source.as_object().cloned().unwrap_or_default();
     for key in OFFICIAL_SETTINGS_SYNC_KEYS {
+        if key == "ai_sources_json" {
+            merge_official_ai_source(settings, source);
+            continue;
+        }
+        if preserve_custom_route
+            && matches!(
+                key,
+                "default_ai_source_id"
+                    | "api_endpoint"
+                    | "api_key"
+                    | "model_name"
+                    | "model_name_wander"
+                    | "model_name_chatroom"
+                    | "model_name_knowledge"
+                    | "model_name_redclaw"
+            )
+        {
+            continue;
+        }
         if let Some(value) = source_object.get(key) {
-            target.insert(key.to_string(), value.clone());
+            if let Some(target) = settings.as_object_mut() {
+                target.insert(key.to_string(), value.clone());
+            }
         }
     }
 }
@@ -2998,6 +3052,116 @@ mod tests {
                 .and_then(|item| payload_string(item, "apiKey"))
                 .as_deref(),
             Some("rbx-live-1")
+        );
+    }
+
+    #[test]
+    fn merge_official_settings_preserves_custom_default_route_from_stale_update() {
+        let mut settings = json!({
+            "default_ai_source_id": "custom-source",
+            "api_endpoint": "https://custom.example/v1",
+            "api_key": "custom-key",
+            "model_name": "custom-model",
+            "model_name_wander": "custom-wander",
+            "ai_sources_json": serde_json::to_string(&vec![
+                json!({
+                    "id": "redbox_official_auto",
+                    "name": "RedBox Official",
+                    "presetId": "redbox-official",
+                    "baseURL": "https://api.ziz.hk/redbox/v1",
+                    "apiKey": "",
+                    "model": "qwen3.5-plus",
+                    "models": ["qwen3.5-plus"],
+                    "protocol": "openai",
+                }),
+                json!({
+                    "id": "custom-source",
+                    "name": "Custom",
+                    "presetId": "custom",
+                    "baseURL": "https://custom.example/v1",
+                    "apiKey": "custom-key",
+                    "model": "custom-model",
+                    "models": ["custom-model"],
+                    "protocol": "openai",
+                }),
+            ])
+            .unwrap(),
+        });
+        let stale_official_update = json!({
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "access-2",
+                "apiKey": "official-key",
+            }))
+            .unwrap(),
+            "default_ai_source_id": "redbox_official_auto",
+            "api_endpoint": "https://api.ziz.hk/redbox/v1",
+            "api_key": "official-key",
+            "model_name": "gpt-5.5",
+            "model_name_wander": "",
+            "video_api_key": "official-key",
+            "redbox_official_models_json": serde_json::to_string(&vec![json!({
+                "id": "gpt-5.5",
+                "capabilities": ["chat"],
+            })])
+            .unwrap(),
+            "ai_sources_json": serde_json::to_string(&vec![json!({
+                "id": "redbox_official_auto",
+                "name": "RedBox Official",
+                "presetId": "redbox-official",
+                "baseURL": "https://api.ziz.hk/redbox/v1",
+                "apiKey": "official-key",
+                "model": "gpt-5.5",
+                "models": ["gpt-5.5"],
+                "protocol": "openai",
+            })])
+            .unwrap(),
+        });
+
+        merge_official_settings(&mut settings, &stale_official_update);
+
+        assert_eq!(
+            payload_string(&settings, "default_ai_source_id").as_deref(),
+            Some("custom-source")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_endpoint").as_deref(),
+            Some("https://custom.example/v1")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_key").as_deref(),
+            Some("custom-key")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name").as_deref(),
+            Some("custom-model")
+        );
+        assert_eq!(
+            payload_string(&settings, "model_name_wander").as_deref(),
+            Some("custom-wander")
+        );
+        assert_eq!(
+            payload_string(&settings, "video_api_key").as_deref(),
+            Some("official-key")
+        );
+
+        let sources = payload_string(&settings, "ai_sources_json")
+            .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+            .unwrap_or_default();
+        assert!(sources
+            .iter()
+            .any(|item| payload_string(item, "id").as_deref() == Some("custom-source")));
+        let official_source = sources
+            .iter()
+            .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        assert_eq!(
+            payload_string(&official_source, "apiKey").as_deref(),
+            Some("official-key")
+        );
+        assert_eq!(
+            payload_string(&official_source, "model").as_deref(),
+            Some("gpt-5.5")
         );
     }
 
