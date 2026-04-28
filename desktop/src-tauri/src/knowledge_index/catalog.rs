@@ -125,6 +125,23 @@ pub(crate) fn count_items(state: &State<'_, AppState>) -> Result<i64, String> {
     .map_err(|error| error.to_string())
 }
 
+pub(crate) fn delete_item(state: &State<'_, AppState>, item_id: &str) -> Result<(), String> {
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let workspace_id = workspace_id(state)?;
+    tx.execute(
+        "DELETE FROM knowledge_files WHERE item_id = ?1",
+        params![item_id],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute(
+        "DELETE FROM knowledge_items WHERE workspace_id = ?1 AND item_id = ?2",
+        params![workspace_id, item_id],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
 pub(crate) fn list_page(
     state: &State<'_, AppState>,
     cursor: Option<&str>,
