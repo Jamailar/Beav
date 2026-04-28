@@ -1,5 +1,11 @@
 # IPC Inventory
 
+## Contract Notes
+
+- `knowledge:rebuild-catalog` full/canonical reparse confirmation uses `includeVisualIndex`.
+- Visual image and scanned-PDF indexing settings use `visual_index_enabled`, `visual_index_provider`, `visual_index_endpoint`, `visual_index_api_key`, `visual_index_model`, `visual_index_timeout_seconds`, `visual_index_max_image_edge`, `visual_index_pdf_max_pages`, `visual_index_pdf_render_dpi`, and `visual_index_skip_small_images`.
+- New visual search hits may include `visualSource.unitId`, `visualSource.sourceDocumentId`, `visualSource.pageNumber`, and `visualSource.evidenceRefs`.
+
 ## Frontend referenced channels
 
 | Channel | References |

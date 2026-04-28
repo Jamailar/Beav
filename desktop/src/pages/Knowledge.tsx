@@ -201,6 +201,12 @@ const SHOW_WECHAT_KNOWLEDGE_ACTIONS = false;
 const INLINE_TAG_LIMIT = 8;
 const KNOWLEDGE_SEARCH_DEBOUNCE_MS = 500;
 const KNOWLEDGE_RENDER_BATCH_SIZE = 60;
+const VISUAL_INDEX_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'tif', 'tiff', 'heic', 'bmp', 'webp', 'pdf']);
+
+const isVisualIndexFilePath = (path: string) => {
+    const extension = path.split('.').pop()?.toLowerCase() || '';
+    return VISUAL_INDEX_EXTENSIONS.has(extension);
+};
 
 const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     id: item.itemId,
@@ -2082,6 +2088,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                 {visibleKnowledgeItems.map((item) => {
                                     if (item.kind === 'docs' && item.doc) {
                                         const source = item.doc;
+                                        const hasVisualIndexSamples = source.sampleFiles.some(isVisualIndexFilePath);
                                         return (
                                             <div
                                                 key={item.id}
@@ -2097,6 +2104,12 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                             {source.locked && (
                                                                 <span className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-lg bg-amber-50 text-amber-600 border border-amber-100">
                                                                     LOCKED
+                                                                </span>
+                                                            )}
+                                                            {hasVisualIndexSamples && (
+                                                                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-lg bg-sky-50 text-sky-600 border border-sky-100">
+                                                                    <Image className="w-3 h-3" />
+                                                                    VISUAL
                                                                 </span>
                                                             )}
                                                         </div>
@@ -2119,15 +2132,24 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                 </div>
                                                 {source.sampleFiles.length > 0 && (
                                                     <div className="mt-3.5 flex flex-wrap gap-1.5">
-                                                        {source.sampleFiles.slice(0, 6).map((file) => (
-                                                            <span
-                                                                key={`${source.id}-${file}`}
-                                                                className="inline-flex max-w-full items-start gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg bg-black/[0.02] text-text-tertiary border border-black/[0.01]"
-                                                            >
-                                                                <FileText className="w-3 h-3 shrink-0 mt-0.5 opacity-40" />
-                                                                <span className="min-w-0 break-all leading-relaxed line-clamp-1">{file}</span>
-                                                            </span>
-                                                        ))}
+                                                        {source.sampleFiles.slice(0, 6).map((file) => {
+                                                            const isVisualFile = isVisualIndexFilePath(file);
+                                                            const FileIcon = isVisualFile ? Image : FileText;
+                                                            return (
+                                                                <span
+                                                                    key={`${source.id}-${file}`}
+                                                                    className={clsx(
+                                                                        'inline-flex max-w-full items-start gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg border',
+                                                                        isVisualFile
+                                                                            ? 'bg-sky-50 text-sky-700 border-sky-100'
+                                                                            : 'bg-black/[0.02] text-text-tertiary border-black/[0.01]',
+                                                                    )}
+                                                                >
+                                                                    <FileIcon className="w-3 h-3 shrink-0 mt-0.5 opacity-60" />
+                                                                    <span className="min-w-0 break-all leading-relaxed line-clamp-1">{file}</span>
+                                                                </span>
+                                                            );
+                                                        })}
                                                     </div>
                                                 )}
                                             </div>

@@ -664,7 +664,7 @@ function createIpcRenderer() {
           },
         },
       ),
-      rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeOcr?: boolean }) => invokeCommandGuarded(
+      rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => invokeCommandGuarded(
         'knowledge_rebuild_catalog',
         payload ? { payload } : undefined,
         {

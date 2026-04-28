@@ -35,7 +35,7 @@ pub struct KnowledgeItemDetailRequest {
 pub struct KnowledgeRebuildCatalogRequest {
     pub mode: Option<String>,
     pub source_id: Option<String>,
-    pub include_ocr: Option<bool>,
+    pub include_visual_index: Option<bool>,
 }
 
 fn builtin_animation_elements() -> Vec<Value> {
@@ -452,7 +452,8 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     let mut parts = vec![
         "你要生成一张适合中文内容平台信息流点击的封面图。".to_string(),
         "画面比例固定为 3:4，标题区域必须清晰、可读、适合直接作为封面文案。".to_string(),
-        "参考图顺序必须按以下规则理解：图1是我想学习的封面图风格，图2是需要被改造成封面的底图。".to_string(),
+        "参考图顺序必须按以下规则理解：图1是我想学习的封面图风格，图2是需要被改造成封面的底图。"
+            .to_string(),
         "请保留图2的核心主体、真实内容和空间关系，把图2做成和图1一样风格的中文封面图。".to_string(),
         "不要出现提示词原文、排版说明、水印、AI 字样或调试文字。".to_string(),
     ];
@@ -812,7 +813,7 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "fts",
                 "sourceId": source_id,
-                "ocrIncluded": false
+                "visualIndexIncluded": false
             }))
         }
         "canonicalblocks" | "canonical_blocks" | "blocks" | "block_anchor_rebuild" => {
@@ -821,13 +822,13 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "canonicalBlocks",
                 "sourceId": source_id,
-                "ocrIncluded": false
+                "visualIndexIncluded": false
             }))
         }
         "canonicalreparse" | "canonical_reparse" => {
-            if request.include_ocr != Some(true) {
+            if request.include_visual_index != Some(true) {
                 return Err(
-                    "canonical reparse may trigger OCR; pass includeOcr=true after user confirmation"
+                    "canonical reparse may call the visual index model; pass includeVisualIndex=true after user confirmation"
                         .to_string(),
                 );
             }
@@ -836,14 +837,14 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "canonicalReparse",
                 "sourceId": Value::Null,
-                "ocrIncluded": request.include_ocr.unwrap_or(false),
-                "ocrPolicy": "uses configured OCR provider only when parser needs OCR"
+                "visualIndexIncluded": request.include_visual_index.unwrap_or(false),
+                "visualIndexPolicy": "uses the configured multimodal visual index model for images and scanned PDF pages"
             }))
         }
         "full" | "catalog" | "full_rebuild" => {
-            if request.include_ocr != Some(true) {
+            if request.include_visual_index != Some(true) {
                 return Err(
-                    "full rebuild may trigger OCR; pass includeOcr=true after user confirmation"
+                    "full rebuild may call the visual index model; pass includeVisualIndex=true after user confirmation"
                         .to_string(),
                 );
             }
@@ -852,8 +853,8 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "full",
                 "sourceId": Value::Null,
-                "ocrIncluded": request.include_ocr.unwrap_or(false),
-                "ocrPolicy": "uses configured OCR provider only when parser needs OCR"
+                "visualIndexIncluded": request.include_visual_index.unwrap_or(false),
+                "visualIndexPolicy": "uses the configured multimodal visual index model for images and scanned PDF pages"
             }))
         }
         _ => Err(format!(

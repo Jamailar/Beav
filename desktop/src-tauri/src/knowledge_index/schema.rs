@@ -116,6 +116,9 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             text TEXT NOT NULL,
             normalized_text TEXT NOT NULL,
             semantic_vector_json TEXT NOT NULL DEFAULT '[]',
+            visual_unit_id TEXT,
+            source_document_id TEXT,
+            evidence_refs_json TEXT NOT NULL DEFAULT '[]',
             updated_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_document_blocks_source_path
@@ -224,6 +227,39 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             message TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS knowledge_visual_units (
+            unit_id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL,
+            source_document_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            absolute_path TEXT NOT NULL,
+            unit_kind TEXT NOT NULL,
+            page_number INTEGER,
+            page_count INTEGER,
+            mime_type TEXT,
+            content_hash TEXT NOT NULL DEFAULT '',
+            rendered_image_hash TEXT,
+            manifest_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_visual_units_source
+            ON knowledge_visual_units(source_id, source_document_id, page_number);
+        CREATE TABLE IF NOT EXISTS knowledge_visual_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            unit_id TEXT NOT NULL,
+            source_document_id TEXT NOT NULL,
+            document_id TEXT NOT NULL,
+            block_id TEXT,
+            projection_id TEXT,
+            page_number INTEGER,
+            bbox_json TEXT,
+            label TEXT,
+            text TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_visual_evidence_unit
+            ON knowledge_visual_evidence(unit_id, page_number);
         "#,
     )
     .map_err(|error| error.to_string())?;
@@ -244,6 +280,19 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         &conn,
         "knowledge_document_blocks",
         "semantic_vector_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(&conn, "knowledge_document_blocks", "visual_unit_id", "TEXT")?;
+    ensure_column(
+        &conn,
+        "knowledge_document_blocks",
+        "source_document_id",
+        "TEXT",
+    )?;
+    ensure_column(
+        &conn,
+        "knowledge_document_blocks",
+        "evidence_refs_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     ensure_column(

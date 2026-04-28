@@ -44,12 +44,18 @@ type SettingsFormData = {
     proxy_enabled: boolean;
     proxy_url: string;
     proxy_bypass: string;
-    ocr_provider: string;
-    ocr_endpoint: string;
-    ocr_api_key: string;
-    ocr_model: string;
-    ocr_timeout_seconds: string;
-    ocr_local_fallback: boolean;
+    visual_index_enabled: boolean;
+    visual_index_provider: string;
+    visual_index_endpoint: string;
+    visual_index_api_key: string;
+    visual_index_model: string;
+    visual_index_prompt_version: string;
+    visual_index_timeout_seconds: string;
+    visual_index_max_image_edge: string;
+    visual_index_skip_small_images: boolean;
+    visual_index_pdf_max_pages: string;
+    visual_index_pdf_render_dpi: string;
+    visual_index_concurrency: string;
     docling_endpoint: string;
     tika_endpoint: string;
     unstructured_endpoint: string;
@@ -604,33 +610,32 @@ function GeneralSettingsSectionInner({
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-4">
                     <div>
-                        <h3 className="text-sm font-medium text-text-primary">文件检索 OCR</h3>
+                        <h3 className="text-sm font-medium text-text-primary">知识库视觉索引</h3>
                         <p className="text-xs text-text-tertiary mt-1">
-                            用于扫描 PDF 和图片入库。默认 auto：配置远程接口时优先网络 OCR，仅允许回退到 macOS Apple Vision。
+                            用于图片和扫描型 PDF 入库，由多模态模型生成可检索的视觉语义结构。
                         </p>
                     </div>
                     <label className="flex items-center gap-2 text-xs text-text-secondary">
                         <input
                             type="checkbox"
-                            checked={formData.ocr_local_fallback}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_local_fallback: e.target.checked }))}
+                            checked={formData.visual_index_enabled}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_enabled: e.target.checked }))}
                             className="rounded border-border"
                         />
-                        远程失败回退 Apple Vision
+                        启用
                     </label>
                 </div>
                 <div className="grid gap-4 md:grid-cols-2">
                     <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">OCR Provider</label>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">视觉模型 Provider</label>
                         <select
-                            value={formData.ocr_provider}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_provider: e.target.value }))}
+                            value={formData.visual_index_provider}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_provider: e.target.value }))}
                             className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
                         >
-                            <option value="auto">auto：远程优先，Apple Vision 兜底</option>
-                            <option value="api">api：远程 OCR，按 fallback 设置兜底</option>
-                            <option value="local">local：仅 Apple Vision</option>
-                            <option value="disabled">disabled：禁用 OCR</option>
+                            <option value="openai-compatible">OpenAI Compatible</option>
+                            <option value="custom">Custom Endpoint</option>
+                            <option value="disabled">Disabled</option>
                         </select>
                     </div>
                     <div>
@@ -639,19 +644,19 @@ function GeneralSettingsSectionInner({
                             type="number"
                             min={10}
                             max={300}
-                            value={formData.ocr_timeout_seconds}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_timeout_seconds: e.target.value }))}
+                            value={formData.visual_index_timeout_seconds}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_timeout_seconds: e.target.value }))}
                             className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
                         />
                     </div>
                 </div>
                 <div>
-                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">远程 OCR Endpoint</label>
+                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">多模态 Endpoint</label>
                     <input
                         type="text"
-                        value={formData.ocr_endpoint}
-                        onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_endpoint: e.target.value }))}
-                        placeholder="https://ocr.example.com/v1/recognize"
+                        value={formData.visual_index_endpoint}
+                        onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_endpoint: e.target.value }))}
+                        placeholder="https://api.example.com/v1"
                         className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
                     />
                 </div>
@@ -659,26 +664,67 @@ function GeneralSettingsSectionInner({
                     <div>
                         <label className="mb-1.5 block text-xs font-medium text-text-secondary">API Key</label>
                         <PasswordInput
-                            value={formData.ocr_api_key}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_api_key: e.target.value }))}
+                            value={formData.visual_index_api_key}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_api_key: e.target.value }))}
                             placeholder="Bearer token，可留空"
                             className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
                         />
                     </div>
                     <div>
-                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">模型 / 引擎名</label>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">模型名</label>
                         <input
                             type="text"
-                            value={formData.ocr_model}
-                            onChange={(e) => setFormData((prev: any) => ({ ...prev, ocr_model: e.target.value }))}
-                            placeholder="例如 paddleocr-v4、docling-ocr、vision-ocr"
+                            value={formData.visual_index_model}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_model: e.target.value }))}
+                            placeholder="例如 gpt-4o-mini、qwen-vl-plus"
                             className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
                         />
                     </div>
                 </div>
-                <p className="text-[10px] text-text-tertiary">
-                    远程接口接收页图 base64、sourceType 和 model；返回可用 `pages/results/data/items` 或顶层 `text/output_text/markdown` 字段。
-                </p>
+                <div className="grid gap-4 md:grid-cols-3">
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">最长边</label>
+                        <input
+                            type="number"
+                            min={512}
+                            max={4096}
+                            value={formData.visual_index_max_image_edge}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_max_image_edge: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">PDF 页数上限</label>
+                        <input
+                            type="number"
+                            min={1}
+                            max={200}
+                            value={formData.visual_index_pdf_max_pages}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_pdf_max_pages: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1.5 block text-xs font-medium text-text-secondary">PDF 渲染 DPI</label>
+                        <input
+                            type="number"
+                            min={72}
+                            max={300}
+                            value={formData.visual_index_pdf_render_dpi}
+                            onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_pdf_render_dpi: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                        />
+                    </div>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-text-secondary">
+                    <input
+                        type="checkbox"
+                        checked={formData.visual_index_skip_small_images}
+                        onChange={(e) => setFormData((prev: any) => ({ ...prev, visual_index_skip_small_images: e.target.checked }))}
+                        className="rounded border-border"
+                    />
+                    跳过 64px 以下的小图标
+                </label>
             </div>
 
             <div className={clsx(
