@@ -1,11 +1,24 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clsx } from 'clsx';
 import { Components, UrlTransform } from 'react-markdown';
-import { Copy, Check } from 'lucide-react';
+import {
+  Archive,
+  Check,
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  File,
+  FileText,
+  Globe,
+  Image as ImageIcon,
+  Music,
+  Video,
+} from 'lucide-react';
 import { ProcessTimeline, ProcessItem } from './ProcessTimeline';
 import { SkillActivatedBadge, ThinkingIndicator } from './ThinkingBubble';
 import { TodoList, PlanStep } from './TodoList';
 import { resolveAssetUrl, isLocalAssetUrl } from '../utils/pathManager';
+import { extractLocalAssetPathCandidate, isLocalAssetSource } from '../../shared/localAsset';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
 import { StreamingMarkdown } from './chat/StreamingMarkdown';
 import './chat-message.css';
@@ -198,6 +211,30 @@ export interface Message {
   suppressPendingIndicator?: boolean;
 }
 
+export type ChatMessageLinkKind =
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'pdf'
+  | 'html'
+  | 'text'
+  | 'archive'
+  | 'web'
+  | 'unknown';
+
+export interface ChatMessageLinkTarget {
+  href: string;
+  label: string;
+  kind: ChatMessageLinkKind;
+  resolvedUrl: string;
+  isLocal: boolean;
+  localPathCandidate?: string;
+  extension?: string;
+  sourceMessageId: string;
+}
+
+export type ChatMessageLinkRenderMode = 'default' | 'preview-card';
+
 interface MessageItemProps {
   msg: Message;
   copiedMessageId: string | null;
@@ -209,6 +246,9 @@ interface MessageItemProps {
   workflowAutoHideWhenComplete?: boolean;
   workflowFailureTone?: 'danger' | 'neutral';
   showAttachments?: boolean;
+  linkRenderMode?: ChatMessageLinkRenderMode;
+  onPreviewLink?: (target: ChatMessageLinkTarget) => void;
+  activePreviewHref?: string | null;
 }
 
 interface ImageContextMenuState {
@@ -285,6 +325,238 @@ const transformMarkdownUrl: UrlTransform = (url) => {
   return '';
 };
 
+const transformMarkdownUrlForPreviewCards: UrlTransform = (url, key, node) => {
+  const value = String(url || '').trim();
+  if (!value) return '';
+  if (isLocalAssetUrl(value)) return value;
+  return transformMarkdownUrl(value, key, node);
+};
+
+const IMAGE_LINK_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'avif']);
+const VIDEO_LINK_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi']);
+const AUDIO_LINK_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg']);
+const TEXT_LINK_EXTENSIONS = new Set([
+  'md',
+  'markdown',
+  'txt',
+  'json',
+  'csv',
+  'yaml',
+  'yml',
+  'xml',
+  'log',
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'rs',
+  'py',
+  'go',
+  'java',
+  'c',
+  'cpp',
+  'h',
+  'hpp',
+  'css',
+  'scss',
+  'doc',
+  'docx',
+  'ppt',
+  'pptx',
+  'xls',
+  'xlsx',
+]);
+const ARCHIVE_LINK_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'tgz']);
+
+const safeDecodeLabel = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+const stripQueryAndHash = (value: string): string => {
+  const hashIndex = value.indexOf('#');
+  const queryIndex = value.indexOf('?');
+  const indexes = [hashIndex, queryIndex].filter((index) => index >= 0);
+  if (indexes.length === 0) return value;
+  return value.slice(0, Math.min(...indexes));
+};
+
+const getPathFilename = (value: string): string => {
+  const clean = stripQueryAndHash(value).replace(/\\/g, '/').replace(/\/+$/, '');
+  const segment = clean.split('/').filter(Boolean).pop() || clean;
+  return safeDecodeLabel(segment);
+};
+
+const getUrlFilename = (value: string): string => {
+  try {
+    const parsed = new URL(value);
+    return getPathFilename(parsed.pathname) || parsed.hostname;
+  } catch {
+    return getPathFilename(value);
+  }
+};
+
+const getExtension = (value: string): string | undefined => {
+  const filename = getPathFilename(value);
+  const match = /\.([a-zA-Z0-9]{1,12})$/.exec(filename);
+  return match?.[1]?.toLowerCase();
+};
+
+const inferMessageLinkKind = (href: string, localPathCandidate?: string): ChatMessageLinkKind => {
+  const source = localPathCandidate || href;
+  const extension = getExtension(source);
+  if (!extension) return /^https?:\/\//i.test(href) ? 'web' : 'unknown';
+  if (IMAGE_LINK_EXTENSIONS.has(extension)) return 'image';
+  if (VIDEO_LINK_EXTENSIONS.has(extension)) return 'video';
+  if (AUDIO_LINK_EXTENSIONS.has(extension)) return 'audio';
+  if (extension === 'pdf') return 'pdf';
+  if (extension === 'html' || extension === 'htm') return 'html';
+  if (TEXT_LINK_EXTENSIONS.has(extension)) return 'text';
+  if (ARCHIVE_LINK_EXTENSIONS.has(extension)) return 'archive';
+  return /^https?:\/\//i.test(href) ? 'web' : 'unknown';
+};
+
+const getMessageLinkKindLabel = (target: ChatMessageLinkTarget): string => {
+  const base = (() => {
+    switch (target.kind) {
+      case 'image':
+        return '图片';
+      case 'video':
+        return '视频';
+      case 'audio':
+        return '音频';
+      case 'web':
+      case 'html':
+        return '网页';
+      case 'archive':
+        return '压缩包';
+      case 'pdf':
+      case 'text':
+        return '文档';
+      default:
+        return '文件';
+    }
+  })();
+  return target.extension ? `${base} · ${target.extension.toUpperCase()}` : base;
+};
+
+const getMessageLinkIcon = (kind: ChatMessageLinkKind) => {
+  switch (kind) {
+    case 'image':
+      return ImageIcon;
+    case 'video':
+      return Video;
+    case 'audio':
+      return Music;
+    case 'web':
+    case 'html':
+      return Globe;
+    case 'archive':
+      return Archive;
+    case 'pdf':
+    case 'text':
+      return FileText;
+    default:
+      return File;
+  }
+};
+
+const isPreviewCardCandidate = (href: string): boolean => {
+  const value = String(href || '').trim();
+  if (!value) return false;
+  if (/^(mailto:|tel:|javascript:|vbscript:)/i.test(value)) return false;
+  if (isLocalAssetSource(value)) return true;
+  if (/^https?:\/\//i.test(value)) return true;
+  return false;
+};
+
+const buildMessageLinkTarget = (
+  href: string | undefined,
+  children: React.ReactNode,
+  sourceMessageId: string,
+): ChatMessageLinkTarget | null => {
+  const rawHref = String(href || '').trim();
+  if (!isPreviewCardCandidate(rawHref)) return null;
+  const localPathCandidate = isLocalAssetSource(rawHref)
+    ? extractLocalAssetPathCandidate(rawHref)
+    : '';
+  const resolvedUrl = localPathCandidate ? resolveAssetUrl(rawHref) : rawHref;
+  if (!resolvedUrl) return null;
+  const kind = inferMessageLinkKind(rawHref, localPathCandidate || undefined);
+  const extension = getExtension(localPathCandidate || rawHref);
+  const explicitLabel = extractNodeText(children).trim();
+  const fallbackLabel = localPathCandidate ? getPathFilename(localPathCandidate) : getUrlFilename(rawHref);
+  const label = explicitLabel && explicitLabel !== rawHref ? explicitLabel : (fallbackLabel || rawHref);
+  return {
+    href: rawHref,
+    label,
+    kind,
+    resolvedUrl,
+    isLocal: Boolean(localPathCandidate),
+    localPathCandidate: localPathCandidate || undefined,
+    extension,
+    sourceMessageId,
+  };
+};
+
+function MessageLinkPreviewCard({
+  target,
+  isActive,
+  onOpen,
+}: {
+  target: ChatMessageLinkTarget;
+  isActive: boolean;
+  onOpen: (target: ChatMessageLinkTarget) => void;
+}) {
+  const Icon = getMessageLinkIcon(target.kind);
+  const meta = getMessageLinkKindLabel(target);
+
+  const handleOpen = () => {
+    onOpen(target);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLSpanElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    handleOpen();
+  };
+
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={handleOpen}
+      onKeyDown={handleKeyDown}
+      title={target.localPathCandidate || target.href}
+      className={clsx(
+        'my-2 flex w-full max-w-[760px] cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-left shadow-sm transition-colors',
+        'border-border/80 bg-surface-primary/85 hover:border-accent-primary/30 hover:bg-surface-primary',
+        isActive && 'border-accent-primary/45 bg-accent-primary/5',
+      )}
+    >
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-secondary/80 text-text-tertiary">
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[15px] font-semibold leading-5 text-text-primary">
+          {target.label}
+        </span>
+        <span className="mt-1 block truncate text-xs font-medium text-text-tertiary">
+          {meta}
+        </span>
+      </span>
+      <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-border/70 bg-surface-primary/90 px-3 py-2 text-sm font-semibold text-text-secondary">
+        <ExternalLink className="h-4 w-4" />
+        <span>打开</span>
+        <ChevronDown className="h-4 w-4 text-text-tertiary" />
+      </span>
+    </span>
+  );
+}
+
 const MARKDOWN_COMPONENTS: Components = {
   code({ node, inline, className, children, ...props }: any) {
     return inline ? (
@@ -338,6 +610,9 @@ export const MessageItem = memo(({
   workflowAutoHideWhenComplete = false,
   workflowFailureTone = 'danger',
   showAttachments = true,
+  linkRenderMode = 'default',
+  onPreviewLink,
+  activePreviewHref = null,
 }: MessageItemProps) => {
   const isUser = msg.role === 'user';
   const isThinkingMessage = !isUser && msg.messageType === 'thinking';
@@ -473,6 +748,24 @@ export const MessageItem = memo(({
 
   const markdownComponents = useMemo<Components>(() => ({
     ...MARKDOWN_COMPONENTS,
+    a({ children, href }: any) {
+      const target = linkRenderMode === 'preview-card' && !isUser && onPreviewLink
+        ? buildMessageLinkTarget(href, children, msg.id)
+        : null;
+      if (target) {
+        const isActive = activePreviewHref === target.href
+          || activePreviewHref === target.resolvedUrl
+          || (!!target.localPathCandidate && activePreviewHref === target.localPathCandidate);
+        return (
+          <MessageLinkPreviewCard
+            target={target}
+            isActive={isActive}
+            onOpen={onPreviewLink}
+          />
+        );
+      }
+      return <a href={href} className="text-accent-primary hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>;
+    },
     img({ src, alt }: any) {
       const rawSource = String(src || '').trim();
       const mediaUrl = resolveAssetUrl(rawSource);
@@ -500,7 +793,10 @@ export const MessageItem = memo(({
         />
       );
     },
-  }), [handleImageContextMenu, handleMediaContextMenu]);
+  }), [activePreviewHref, handleImageContextMenu, handleMediaContextMenu, isUser, linkRenderMode, msg.id, onPreviewLink]);
+  const markdownUrlTransform = linkRenderMode === 'preview-card'
+    ? transformMarkdownUrlForPreviewCards
+    : transformMarkdownUrl;
 
   const isUploadedImageAttachment = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const kind = String(attachment.kind || '').trim().toLowerCase();
@@ -704,7 +1000,7 @@ export const MessageItem = memo(({
           content={content}
           isStreaming={msg.isStreaming}
           components={markdownComponents}
-          urlTransform={transformMarkdownUrl}
+          urlTransform={markdownUrlTransform}
           className="chat-markdown-body text-text-secondary"
         />
       </div>
@@ -811,7 +1107,7 @@ export const MessageItem = memo(({
                     content={sanitizedAssistantContent}
                     isStreaming={msg.isStreaming}
                     components={markdownComponents}
-                    urlTransform={transformMarkdownUrl}
+                    urlTransform={markdownUrlTransform}
                   />
                 )}
                 {msg.isStreaming && !showPendingThinkingIndicator && (
@@ -941,7 +1237,10 @@ export const MessageItem = memo(({
     prevProps.workflowDisplayMode !== nextProps.workflowDisplayMode ||
     prevProps.workflowAutoHideWhenComplete !== nextProps.workflowAutoHideWhenComplete ||
     prevProps.workflowFailureTone !== nextProps.workflowFailureTone ||
-    prevProps.showAttachments !== nextProps.showAttachments;
+    prevProps.showAttachments !== nextProps.showAttachments ||
+    prevProps.linkRenderMode !== nextProps.linkRenderMode ||
+    prevProps.onPreviewLink !== nextProps.onPreviewLink ||
+    prevProps.activePreviewHref !== nextProps.activePreviewHref;
 
   return !msgChanged && !copyStatusChanged && !workflowStyleChanged;
 });
