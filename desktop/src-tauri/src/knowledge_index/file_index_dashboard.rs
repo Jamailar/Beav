@@ -104,9 +104,10 @@ pub(crate) fn dashboard(state: &State<'_, AppState>) -> Result<FileIndexDashboar
             .unwrap_or(false))
     })?;
 
-    let mut scopes = load_scope_seeds(state, &conn)?;
     let source_stats = load_source_stats(&conn)?;
     let workspace_stats = load_workspace_stats(&conn)?;
+    let prefer_cached_visual_counts = !runtime.is_building;
+    let mut scopes = load_scope_seeds(state, &conn, prefer_cached_visual_counts)?;
     if let Some(scope) = scopes
         .iter_mut()
         .find(|scope| scope.scope_id == "workspace")
@@ -171,7 +172,9 @@ pub(crate) fn dashboard(state: &State<'_, AppState>) -> Result<FileIndexDashboar
 fn load_scope_seeds(
     state: &State<'_, AppState>,
     conn: &Connection,
+    prefer_cached_visual_counts: bool,
 ) -> Result<Vec<ScopeSeed>, String> {
+    let cached_workspace_visual_count = cached_workspace_visual_unit_count(conn).unwrap_or(0);
     let mut scopes = vec![ScopeSeed {
         scope_id: "workspace".to_string(),
         source_id: None,
@@ -180,7 +183,12 @@ fn load_scope_seeds(
         owner_id: None,
         owner_name: None,
         file_count: 0,
-        visual_candidate_count: workspace_visual_candidate_count(state)?,
+        visual_candidate_count: if prefer_cached_visual_counts && cached_workspace_visual_count > 0
+        {
+            cached_workspace_visual_count
+        } else {
+            workspace_visual_candidate_count(state)?
+        },
         source_failed_count: 0,
         updated_at: None,
     }];
@@ -199,13 +207,20 @@ fn load_scope_seeds(
         .query_map([], |row| {
             let status: Option<String> = row.get(3)?;
             let root_path: Option<String> = row.get(5)?;
-            let visual_candidate_count = root_path
-                .as_deref()
-                .map(|value| count_visual_candidates_under(Path::new(value)))
-                .unwrap_or(0);
+            let source_id: String = row.get(0)?;
+            let cached_visual_count =
+                cached_source_visual_unit_count(conn, &source_id).unwrap_or(0);
+            let visual_candidate_count = if prefer_cached_visual_counts && cached_visual_count > 0 {
+                cached_visual_count
+            } else {
+                root_path
+                    .as_deref()
+                    .map(|value| count_visual_candidates_under(Path::new(value)))
+                    .unwrap_or(0)
+            };
             Ok(ScopeSeed {
-                scope_id: row.get(0)?,
-                source_id: Some(row.get(0)?),
+                scope_id: source_id.clone(),
+                source_id: Some(source_id),
                 name: row.get(1)?,
                 scope_type: "document_source".to_string(),
                 owner_id: None,
@@ -228,10 +243,16 @@ fn load_scope_seeds(
     let advisors = with_store(state, |store| Ok(store.advisors.clone()))?;
     for advisor in advisors {
         let root_path = crate::advisor_knowledge_dir(state, &advisor.id)?;
-        let visual_candidate_count = count_visual_candidates_under(&root_path);
+        let source_id = advisor_source_id(&advisor.id);
+        let cached_visual_count = cached_source_visual_unit_count(conn, &source_id).unwrap_or(0);
+        let visual_candidate_count = if prefer_cached_visual_counts && cached_visual_count > 0 {
+            cached_visual_count
+        } else {
+            count_visual_candidates_under(&root_path)
+        };
         scopes.push(ScopeSeed {
             scope_id: format!("advisor:{}", advisor.id),
-            source_id: Some(advisor_source_id(&advisor.id)),
+            source_id: Some(source_id),
             name: format!("{} 知识库", advisor.name),
             scope_type: "advisor".to_string(),
             owner_id: Some(advisor.id),
@@ -244,6 +265,33 @@ fn load_scope_seeds(
     }
 
     Ok(scopes)
+}
+
+fn cached_workspace_visual_unit_count(conn: &Connection) -> Result<i64, String> {
+    conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM knowledge_visual_units
+        WHERE source_id NOT IN (
+            SELECT item_id
+            FROM knowledge_items
+            WHERE kind = 'document-source'
+        )
+          AND source_id NOT LIKE 'advisor:%'
+        "#,
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn cached_source_visual_unit_count(conn: &Connection, source_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM knowledge_visual_units WHERE source_id = ?1",
+        params![source_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn workspace_visual_candidate_count(state: &State<'_, AppState>) -> Result<i64, String> {
