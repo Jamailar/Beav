@@ -90,6 +90,7 @@ export type FileIndexLaneStatus = {
     done: number;
     total: number;
     failed: number;
+    metadataOnly?: number;
     lastUpdatedAt?: string | null;
     nextRetryAt?: string | null;
 };
@@ -440,10 +441,25 @@ function FileIndexStatusBadge({ status }: { status?: string | null }) {
     );
 }
 
-function FileIndexProgressText({ done, total }: { done: number; total: number }) {
+function FileIndexProgressText({
+    done,
+    total,
+    failed = 0,
+    metadataOnly = 0,
+}: {
+    done: number;
+    total: number;
+    failed?: number;
+    metadataOnly?: number;
+}) {
+    const details = [
+        metadataOnly > 0 ? `元数据 ${metadataOnly}` : '',
+        failed > 0 ? `失败 ${failed}` : '',
+    ].filter(Boolean).join(' · ');
     return (
-        <span className="font-mono text-[11px] text-text-tertiary">
-            {Math.max(0, done)}/{Math.max(0, total)}
+        <span className="text-right font-mono text-[11px] leading-4 text-text-tertiary">
+            <span>{Math.max(0, done)}/{Math.max(0, total)}</span>
+            {details ? <span className="block font-sans text-[10px]">{details}</span> : null}
         </span>
     );
 }
@@ -462,7 +478,7 @@ function FileIndexSettingsPanel({
     const scopes = dashboard?.scopes || [];
     const visualLane = lanes.find((lane) => lane.lane === 'visual_index');
     const summaryText = overall
-        ? `已索引 ${overall.indexedFiles}/${overall.totalFiles} 个文件 · 视觉索引 ${visualLane?.done || 0}/${visualLane?.total || 0} · ${overall.failedFiles} 个失败`
+        ? `已索引 ${overall.indexedFiles}/${overall.totalFiles} 个文件 · 视觉索引 ${visualLane?.done || 0}/${visualLane?.total || 0} · 元数据 ${visualLane?.metadataOnly || 0} · ${overall.failedFiles} 个失败`
         : '索引状态未加载';
 
     return (
@@ -491,7 +507,7 @@ function FileIndexSettingsPanel({
 
             <div className="mt-4 grid gap-4">
                 <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
-                    <div className="grid grid-cols-[minmax(0,1fr)_80px_72px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                    <div className="grid grid-cols-[minmax(0,1fr)_80px_120px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
                         <span>索引类型</span>
                         <span>状态</span>
                         <span className="text-right">进度</span>
@@ -500,11 +516,16 @@ function FileIndexSettingsPanel({
                         <div className="px-3 py-3 text-xs text-text-tertiary">暂无索引记录</div>
                     ) : (
                         lanes.map((lane) => (
-                            <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_72px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                            <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_120px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
                                 <span className="truncate text-xs text-text-primary">{lane.label}</span>
                                 <FileIndexStatusBadge status={lane.status} />
                                 <span className="text-right">
-                                    <FileIndexProgressText done={lane.done} total={lane.total} />
+                                    <FileIndexProgressText
+                                        done={lane.done}
+                                        total={lane.total}
+                                        failed={lane.failed}
+                                        metadataOnly={lane.metadataOnly || 0}
+                                    />
                                 </span>
                             </div>
                         ))

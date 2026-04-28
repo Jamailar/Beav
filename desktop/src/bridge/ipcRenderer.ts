@@ -703,7 +703,7 @@ function createIpcRenderer() {
         'knowledge_get_file_index_dashboard',
         undefined,
         {
-          timeoutMs: 2200,
+          timeoutMs: 8000,
           fallbackChannel: 'knowledge:get-file-index-dashboard',
           normalize: (value) => (value && typeof value === 'object') ? value as T : {
             overall: {
