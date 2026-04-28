@@ -3,9 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::{
-    make_id, now_iso, payload_string, workspace_root, AppState, SubjectMutationInput, SubjectRecord,
-};
+use crate::{payload_string, workspace_root, AppState};
 
 pub(crate) fn collect_json_files(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     if depth == 0 || !root.exists() {
@@ -108,76 +106,4 @@ pub(crate) fn emit_space_renamed(app: &AppHandle, active_space_id: &str, space_n
             "changeType": "rename",
         }),
     );
-}
-
-pub(crate) fn subject_record_from_input(
-    input: SubjectMutationInput,
-    existing: Option<SubjectRecord>,
-) -> SubjectRecord {
-    let created_at = existing
-        .as_ref()
-        .map(|item| item.created_at.clone())
-        .unwrap_or_else(now_iso);
-    let images = input.images.unwrap_or_default();
-    let image_paths: Vec<String> = images
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            item.relative_path
-                .clone()
-                .or_else(|| {
-                    item.name
-                        .clone()
-                        .map(|name| format!("inline:{index}:{name}"))
-                })
-                .unwrap_or_else(|| format!("inline:{index}"))
-        })
-        .collect();
-    let preview_urls: Vec<String> = images
-        .iter()
-        .map(|item| {
-            item.data_url
-                .clone()
-                .or_else(|| item.relative_path.clone())
-                .unwrap_or_default()
-        })
-        .collect();
-    let voice_preview_url = input.voice.as_ref().and_then(|voice| {
-        voice
-            .data_url
-            .clone()
-            .or_else(|| voice.relative_path.clone())
-            .filter(|item| !item.is_empty())
-    });
-    let voice_path = input.voice.as_ref().and_then(|voice| {
-        voice.relative_path.clone().or_else(|| {
-            voice
-                .name
-                .clone()
-                .map(|name| format!("inline-voice:{name}"))
-        })
-    });
-    let voice_script = input
-        .voice
-        .as_ref()
-        .and_then(|voice| voice.script_text.clone());
-
-    SubjectRecord {
-        id: input.id.unwrap_or_else(|| make_id("subject")),
-        name: input.name,
-        category_id: input.category_id.filter(|item| !item.is_empty()),
-        description: input.description.filter(|item| !item.trim().is_empty()),
-        tags: input.tags.unwrap_or_default(),
-        attributes: input.attributes.unwrap_or_default(),
-        image_paths: image_paths.clone(),
-        voice_path: voice_path.clone(),
-        voice_script,
-        created_at,
-        updated_at: now_iso(),
-        absolute_image_paths: image_paths.clone(),
-        preview_urls: preview_urls.clone(),
-        primary_preview_url: preview_urls.first().cloned(),
-        absolute_voice_path: voice_path,
-        voice_preview_url,
-    }
 }

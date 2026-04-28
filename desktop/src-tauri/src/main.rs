@@ -1522,18 +1522,22 @@ mod tests {
     use super::{
         append_generated_media_markdown, asset_preview_url_from_result,
         clear_interactive_execution_contract_metadata, decode_command_json_stdout,
-        guess_mime_and_kind, interactive_attachment_inline_data_url,
-        interactive_base64_payload_size, interactive_execution_progress_observe_success,
+        build_subject_record_for_workspace, guess_mime_and_kind,
+        interactive_attachment_inline_data_url, interactive_base64_payload_size,
+        interactive_execution_progress_observe_success,
         interactive_skill_activation_continuation, interactive_skill_activations,
         interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result,
         normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
-        resolve_local_path,
-        structured_tool_error_code, validate_runtime_tool_message_sequence, GeneratedMediaPreview,
-        InteractiveExecutionContract, InteractiveExecutionProgress,
+        persist_subjects_workspace, resolve_local_path, structured_tool_error_code,
+        validate_runtime_tool_message_sequence, GeneratedMediaPreview, InteractiveExecutionContract,
+        InteractiveExecutionProgress, SubjectAttribute, SubjectCategory, SubjectMediaInput,
+        SubjectMutationInput, SubjectRecord, SubjectVoiceInput,
     };
     use serde_json::json;
+    use std::fs;
     use std::path::Path;
+    use std::time::Instant;
 
     #[test]
     fn guess_mime_and_kind_uses_svg_xml_mime() {
@@ -1567,6 +1571,161 @@ mod tests {
             "scope": "workspace",
             "path": "notes/demo.md"
         })));
+    }
+
+    #[test]
+    fn subjects_workspace_roundtrip_persists_catalog_categories_and_assets() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-subjects-roundtrip-{}", crate::now_ms()));
+        let subjects_root = root.join("subjects");
+        let category = SubjectCategory {
+            id: "category-test".to_string(),
+            name: "测试分类".to_string(),
+            created_at: "2026-04-28T00:00:00Z".to_string(),
+            updated_at: "2026-04-28T00:00:00Z".to_string(),
+        };
+        let input = SubjectMutationInput {
+            id: Some("subject-test".to_string()),
+            name: "测试主体".to_string(),
+            category_id: Some(category.id.clone()),
+            description: Some("描述".to_string()),
+            tags: Some(vec!["标签".to_string()]),
+            attributes: Some(vec![SubjectAttribute {
+                key: "颜色".to_string(),
+                value: "红色".to_string(),
+            }]),
+            images: Some(vec![SubjectMediaInput {
+                relative_path: None,
+                data_url: Some("data:image/png;base64,aGVsbG8=".to_string()),
+                name: Some("portrait.png".to_string()),
+            }]),
+            voice: Some(SubjectVoiceInput {
+                relative_path: None,
+                data_url: Some("data:audio/webm;base64,aGVsbG8=".to_string()),
+                name: Some("voice.webm".to_string()),
+                script_text: Some("声音脚本".to_string()),
+            }),
+        };
+        let subject =
+            build_subject_record_for_workspace(&subjects_root, input, None).expect("build subject");
+
+        persist_subjects_workspace(&subjects_root, &[category.clone()], &[subject.clone()])
+            .expect("persist subjects workspace");
+
+        let categories = crate::workspace_loaders::load_subject_categories_from_fs(&subjects_root);
+        let subjects = crate::workspace_loaders::load_subjects_from_fs(&subjects_root);
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].name, "测试分类");
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].name, "测试主体");
+        assert_eq!(subjects[0].category_id.as_deref(), Some("category-test"));
+        assert_eq!(subjects[0].image_paths.len(), 1);
+        assert!(subjects_root
+            .join("subject-test")
+            .join(&subjects[0].image_paths[0])
+            .exists());
+        assert!(subjects[0].voice_path.is_some());
+        assert!(subjects[0].primary_preview_url.is_some());
+        assert!(subjects[0].voice_preview_url.is_some());
+
+        let updated = SubjectRecord {
+            name: "更新主体".to_string(),
+            image_paths: Vec::new(),
+            absolute_image_paths: Vec::new(),
+            preview_urls: Vec::new(),
+            primary_preview_url: None,
+            voice_path: None,
+            absolute_voice_path: None,
+            voice_preview_url: None,
+            ..subject
+        };
+        persist_subjects_workspace(&subjects_root, &[category], &[updated])
+            .expect("persist updated subjects workspace");
+        let subjects = crate::workspace_loaders::load_subjects_from_fs(&subjects_root);
+        assert_eq!(subjects.len(), 1);
+        assert_eq!(subjects[0].name, "更新主体");
+        assert!(subjects[0].image_paths.is_empty());
+
+        persist_subjects_workspace(&subjects_root, &[], &[])
+            .expect("persist empty subjects workspace");
+        let categories = crate::workspace_loaders::load_subject_categories_from_fs(&subjects_root);
+        let subjects = crate::workspace_loaders::load_subjects_from_fs(&subjects_root);
+        assert!(categories.is_empty());
+        assert!(subjects.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn subjects_workspace_bench_persists_and_loads_large_catalog() {
+        let root =
+            std::env::temp_dir().join(format!("redbox-subjects-bench-{}", crate::now_ms()));
+        let subjects_root = root.join("subjects");
+        let categories = (0..25)
+            .map(|index| SubjectCategory {
+                id: format!("category-{index}"),
+                name: format!("分类 {index}"),
+                created_at: "2026-04-28T00:00:00Z".to_string(),
+                updated_at: "2026-04-28T00:00:00Z".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let subjects = (0..1000)
+            .map(|index| {
+                let record = SubjectRecord {
+                    id: format!("subject-{index}"),
+                    name: format!("主体 {index}"),
+                    category_id: Some(format!("category-{}", index % categories.len())),
+                    description: Some(format!("主体描述 {index}")),
+                    tags: vec!["bench".to_string(), format!("tag-{}", index % 10)],
+                    attributes: vec![SubjectAttribute {
+                        key: "序号".to_string(),
+                        value: index.to_string(),
+                    }],
+                    image_paths: Vec::new(),
+                    voice_path: None,
+                    voice_script: None,
+                    created_at: "2026-04-28T00:00:00Z".to_string(),
+                    updated_at: "2026-04-28T00:00:00Z".to_string(),
+                    absolute_image_paths: Vec::new(),
+                    preview_urls: Vec::new(),
+                    primary_preview_url: None,
+                    absolute_voice_path: None,
+                    voice_preview_url: None,
+                };
+                super::hydrated_subject_record(&subjects_root, record)
+            })
+            .collect::<Vec<_>>();
+
+        let persist_start = Instant::now();
+        persist_subjects_workspace(&subjects_root, &categories, &subjects)
+            .expect("persist large subjects workspace");
+        let persist_elapsed = persist_start.elapsed();
+
+        let load_start = Instant::now();
+        let loaded_categories =
+            crate::workspace_loaders::load_subject_categories_from_fs(&subjects_root);
+        let loaded_subjects = crate::workspace_loaders::load_subjects_from_fs(&subjects_root);
+        let load_elapsed = load_start.elapsed();
+
+        eprintln!(
+            "subjects bench: persist={}ms load={}ms subjects={} categories={}",
+            persist_elapsed.as_millis(),
+            load_elapsed.as_millis(),
+            loaded_subjects.len(),
+            loaded_categories.len()
+        );
+        assert_eq!(loaded_categories.len(), categories.len());
+        assert_eq!(loaded_subjects.len(), subjects.len());
+        assert!(
+            persist_elapsed.as_millis() < 3000,
+            "persisting 1000 subjects should stay comfortably interactive"
+        );
+        assert!(
+            load_elapsed.as_millis() < 1000,
+            "loading 1000 subjects should stay fast for refresh"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -8506,26 +8665,319 @@ fn resolve_local_path(source: &str) -> Option<PathBuf> {
     Some(PathBuf::from(trimmed))
 }
 
+fn subjects_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let root = workspace_root(state)?.join("subjects");
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok(root)
+}
+
+fn subject_data_url_extension(meta: &str, fallback: &str) -> String {
+    let mime = meta
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match mime.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/svg+xml" => "svg",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/wav" | "audio/wave" | "audio/x-wav" => "wav",
+        "audio/mp4" | "audio/m4a" => "m4a",
+        "audio/webm" => "webm",
+        "audio/ogg" => "ogg",
+        _ => fallback,
+    }
+    .to_string()
+}
+
+fn subject_input_file_extension(name: Option<&str>, fallback: &str) -> String {
+    name.and_then(|value| Path::new(value).extension())
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().trim_start_matches('.').to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn safe_subject_relative_path(raw: &str) -> Option<String> {
+    let normalized = normalize_relative_path(raw);
+    if normalized.is_empty()
+        || normalized
+            .split('/')
+            .any(|segment| segment == ".." || segment.contains(':') || segment.contains('\\'))
+    {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn subject_asset_file_name(
+    prefix: &str,
+    index: usize,
+    name: Option<&str>,
+    extension: &str,
+) -> String {
+    let stem = name
+        .and_then(|value| Path::new(value).file_stem())
+        .and_then(|value| value.to_str())
+        .map(storage_safe_file_stem)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("{prefix}-{}", index + 1));
+    format!("{prefix}-{}-{}.{}", index + 1, stem, extension)
+}
+
+fn materialize_subject_data_url(
+    subject_dir: &Path,
+    data_url: &str,
+    file_name: &str,
+) -> Result<String, String> {
+    let data = data_url
+        .trim()
+        .strip_prefix("data:")
+        .ok_or_else(|| "主体素材 data URL 无效".to_string())?;
+    let (meta, encoded) = data
+        .split_once(',')
+        .ok_or_else(|| "主体素材 data URL 无效".to_string())?;
+    if !meta
+        .split(';')
+        .any(|part| part.trim().eq_ignore_ascii_case("base64"))
+    {
+        return Err("主体素材 data URL 必须是 base64".to_string());
+    }
+    let bytes = decode_base64_bytes(encoded)?;
+    fs::create_dir_all(subject_dir).map_err(|error| error.to_string())?;
+    let relative_path = safe_subject_relative_path(file_name)
+        .ok_or_else(|| format!("主体素材文件名无效: {file_name}"))?;
+    fs::write(subject_dir.join(&relative_path), bytes).map_err(|error| error.to_string())?;
+    Ok(relative_path)
+}
+
+fn materialize_subject_image_paths(
+    subject_dir: &Path,
+    images: &[SubjectMediaInput],
+) -> Result<Vec<String>, String> {
+    if images.len() > 5 {
+        return Err("主体最多只能保存 5 张图片".to_string());
+    }
+    let mut paths = Vec::new();
+    for (index, image) in images.iter().enumerate() {
+        if let Some(relative_path) = image
+            .relative_path
+            .as_deref()
+            .and_then(safe_subject_relative_path)
+        {
+            paths.push(relative_path);
+            continue;
+        }
+        let Some(data_url) = image.data_url.as_deref().filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        let meta = data_url
+            .trim()
+            .strip_prefix("data:")
+            .and_then(|value| value.split_once(',').map(|(meta, _)| meta))
+            .unwrap_or("");
+        let fallback_extension = subject_input_file_extension(image.name.as_deref(), "png");
+        let extension = subject_data_url_extension(meta, &fallback_extension);
+        let file_name = subject_asset_file_name("image", index, image.name.as_deref(), &extension);
+        paths.push(materialize_subject_data_url(subject_dir, data_url, &file_name)?);
+    }
+    Ok(paths)
+}
+
+fn materialize_subject_voice_path(
+    subject_dir: &Path,
+    voice: Option<&SubjectVoiceInput>,
+) -> Result<Option<String>, String> {
+    let Some(voice) = voice else {
+        return Ok(None);
+    };
+    if let Some(relative_path) = voice
+        .relative_path
+        .as_deref()
+        .and_then(safe_subject_relative_path)
+    {
+        return Ok(Some(relative_path));
+    }
+    let Some(data_url) = voice.data_url.as_deref().filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let meta = data_url
+        .trim()
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(',').map(|(meta, _)| meta))
+        .unwrap_or("");
+    let fallback_extension = subject_input_file_extension(voice.name.as_deref(), "webm");
+    let extension = subject_data_url_extension(meta, &fallback_extension);
+    let file_name = subject_asset_file_name("voice", 0, voice.name.as_deref(), &extension);
+    materialize_subject_data_url(subject_dir, data_url, &file_name).map(Some)
+}
+
+fn hydrated_subject_record(subjects_root: &Path, mut record: SubjectRecord) -> SubjectRecord {
+    let subject_dir = subjects_root.join(&record.id);
+    record.absolute_image_paths = record
+        .image_paths
+        .iter()
+        .map(|relative| {
+            normalize_legacy_workspace_path(&subject_dir.join(relative))
+                .display()
+                .to_string()
+        })
+        .collect();
+    record.preview_urls = record
+        .absolute_image_paths
+        .iter()
+        .map(|absolute| file_url_for_path(Path::new(absolute)))
+        .collect();
+    record.primary_preview_url = record.preview_urls.first().cloned();
+    record.absolute_voice_path = record.voice_path.as_ref().map(|relative| {
+        normalize_legacy_workspace_path(&subject_dir.join(relative))
+            .display()
+            .to_string()
+    });
+    record.voice_preview_url = record
+        .absolute_voice_path
+        .as_ref()
+        .map(|absolute| file_url_for_path(Path::new(absolute)));
+    record
+}
+
+fn subject_catalog_item(record: &SubjectRecord) -> Value {
+    json!({
+        "id": record.id,
+        "name": record.name,
+        "categoryId": record.category_id,
+        "description": record.description,
+        "tags": record.tags,
+        "attributes": record.attributes,
+        "imagePaths": record.image_paths,
+        "voicePath": record.voice_path,
+        "voiceScript": record.voice_script,
+        "createdAt": record.created_at,
+        "updatedAt": record.updated_at,
+    })
+}
+
+fn persist_subjects_workspace(
+    subjects_root: &Path,
+    categories: &[SubjectCategory],
+    subjects: &[SubjectRecord],
+) -> Result<(), String> {
+    fs::create_dir_all(subjects_root).map_err(|error| error.to_string())?;
+    for subject in subjects {
+        fs::create_dir_all(subjects_root.join(&subject.id)).map_err(|error| error.to_string())?;
+    }
+    write_json_value(
+        &subjects_root.join("categories.json"),
+        &json!({ "categories": categories }),
+    )?;
+    let catalog_subjects = subjects.iter().map(subject_catalog_item).collect::<Vec<_>>();
+    write_json_value(
+        &subjects_root.join("catalog.json"),
+        &json!({ "subjects": catalog_subjects }),
+    )
+}
+
+fn build_subject_record_for_workspace(
+    subjects_root: &Path,
+    input: SubjectMutationInput,
+    existing: Option<SubjectRecord>,
+) -> Result<SubjectRecord, String> {
+    let subject_id = input
+        .id
+        .clone()
+        .unwrap_or_else(|| make_id("subject"));
+    let subject_dir = subjects_root.join(&subject_id);
+    let images = input.images.as_deref().unwrap_or(&[]);
+    let image_paths = materialize_subject_image_paths(&subject_dir, images)?;
+    let voice_path = materialize_subject_voice_path(&subject_dir, input.voice.as_ref())?;
+    let voice_script = input
+        .voice
+        .as_ref()
+        .and_then(|voice| voice.script_text.clone())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let created_at = existing
+        .as_ref()
+        .map(|item| item.created_at.clone())
+        .unwrap_or_else(now_iso);
+    let record = SubjectRecord {
+        id: subject_id,
+        name: input.name.trim().to_string(),
+        category_id: input.category_id.filter(|item| !item.trim().is_empty()),
+        description: input
+            .description
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty()),
+        tags: input
+            .tags
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect(),
+        attributes: input
+            .attributes
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|item| !item.key.trim().is_empty() || !item.value.trim().is_empty())
+            .map(|item| SubjectAttribute {
+                key: item.key.trim().to_string(),
+                value: item.value.trim().to_string(),
+            })
+            .collect(),
+        image_paths,
+        voice_path,
+        voice_script,
+        created_at,
+        updated_at: now_iso(),
+        absolute_image_paths: Vec::new(),
+        preview_urls: Vec::new(),
+        primary_preview_url: None,
+        absolute_voice_path: None,
+        voice_preview_url: None,
+    };
+    Ok(hydrated_subject_record(subjects_root, record))
+}
+
 fn handle_subject_category_create(
     payload: Value,
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
+    persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectCategoryMutationInput =
         serde_json::from_value(payload).map_err(|error| format!("分类参数无效: {error}"))?;
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Ok(json!({ "success": false, "error": "分类名称不能为空" }));
     }
-
+    let subjects_root = subjects_root(state)?;
+    let (mut categories, subjects) =
+        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    if categories
+        .iter()
+        .any(|item| item.name.eq_ignore_ascii_case(&name))
+    {
+        return Ok(json!({ "success": false, "error": "分类名称已存在" }));
+    }
+    let timestamp = now_iso();
+    let category = SubjectCategory {
+        id: make_id("category"),
+        name,
+        created_at: timestamp.clone(),
+        updated_at: timestamp,
+    };
+    categories.push(category.clone());
+    persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        let timestamp = now_iso();
-        let category = SubjectCategory {
-            id: make_id("category"),
-            name,
-            created_at: timestamp.clone(),
-            updated_at: timestamp,
-        };
-        store.categories.push(category.clone());
+        store.categories = categories;
+        store.subjects = subjects;
         Ok(json!({ "success": true, "category": category }))
     })
 }
@@ -8534,6 +8986,7 @@ fn handle_subject_category_update(
     payload: Value,
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
+    persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectCategoryMutationInput =
         serde_json::from_value(payload).map_err(|error| format!("分类参数无效: {error}"))?;
     let Some(id) = input.id else {
@@ -8543,14 +8996,26 @@ fn handle_subject_category_update(
     if next_name.is_empty() {
         return Ok(json!({ "success": false, "error": "分类名称不能为空" }));
     }
-
+    let subjects_root = subjects_root(state)?;
+    let (mut categories, subjects) =
+        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    if categories
+        .iter()
+        .any(|item| item.id != id && item.name.eq_ignore_ascii_case(&next_name))
+    {
+        return Ok(json!({ "success": false, "error": "分类名称已存在" }));
+    }
+    let Some(index) = categories.iter().position(|item| item.id == id) else {
+        return Ok(json!({ "success": false, "error": "分类不存在" }));
+    };
+    categories[index].name = next_name;
+    categories[index].updated_at = now_iso();
+    let category = categories[index].clone();
+    persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        let Some(category) = store.categories.iter_mut().find(|item| item.id == id) else {
-            return Ok(json!({ "success": false, "error": "分类不存在" }));
-        };
-        category.name = next_name;
-        category.updated_at = now_iso();
-        Ok(json!({ "success": true, "category": category.clone() }))
+        store.categories = categories;
+        store.subjects = subjects;
+        Ok(json!({ "success": true, "category": category }))
     })
 }
 
@@ -8558,70 +9023,115 @@ fn handle_subject_category_delete(
     payload: Value,
     state: &State<'_, AppState>,
 ) -> Result<Value, String> {
+    persistence::ensure_store_hydrated_for_subjects(state)?;
     let Some(id) = payload_string(&payload, "id") else {
         return Ok(json!({ "success": false, "error": "缺少分类 id" }));
     };
-
+    let subjects_root = subjects_root(state)?;
+    let (mut categories, subjects) =
+        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    if subjects
+        .iter()
+        .any(|subject| subject.category_id.as_deref() == Some(id.as_str()))
+    {
+        return Ok(json!({ "success": false, "error": "仍有主体使用该分类，无法删除" }));
+    }
+    let before = categories.len();
+    categories.retain(|item| item.id != id);
+    if categories.len() == before {
+        return Ok(json!({ "success": false, "error": "分类不存在" }));
+    }
+    persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        if store
-            .subjects
-            .iter()
-            .any(|subject| subject.category_id.as_deref() == Some(id.as_str()))
-        {
-            return Ok(json!({ "success": false, "error": "仍有主体使用该分类，无法删除" }));
-        }
-        let before = store.categories.len();
-        store.categories.retain(|item| item.id != id);
-        if store.categories.len() == before {
-            return Ok(json!({ "success": false, "error": "分类不存在" }));
-        }
+        store.categories = categories;
+        store.subjects = subjects;
         Ok(json!({ "success": true }))
     })
 }
 
 fn handle_subject_create(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
+    persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectMutationInput =
         serde_json::from_value(payload).map_err(|error| format!("主体参数无效: {error}"))?;
     if input.name.trim().is_empty() {
         return Ok(json!({ "success": false, "error": "主体名称不能为空" }));
     }
-
+    let subjects_root = subjects_root(state)?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    if let Some(id) = input.id.as_deref() {
+        if subjects.iter().any(|item| item.id == id) {
+            return Ok(json!({ "success": false, "error": "主体已存在" }));
+        }
+    }
+    if let Some(category_id) = input.category_id.as_deref().filter(|value| !value.is_empty()) {
+        if !categories.iter().any(|item| item.id == category_id) {
+            return Ok(json!({ "success": false, "error": "分类不存在" }));
+        }
+    }
+    let record = build_subject_record_for_workspace(&subjects_root, input, None)?;
+    subjects.push(record.clone());
+    persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        let record = subject_record_from_input(input, None);
-        store.subjects.push(record.clone());
+        store.categories = categories;
+        store.subjects = subjects;
         Ok(json!({ "success": true, "subject": record }))
     })
 }
 
 fn handle_subject_update(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
+    persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectMutationInput =
         serde_json::from_value(payload).map_err(|error| format!("主体参数无效: {error}"))?;
     let Some(id) = input.id.clone() else {
         return Ok(json!({ "success": false, "error": "缺少主体 id" }));
     };
-
+    if input.name.trim().is_empty() {
+        return Ok(json!({ "success": false, "error": "主体名称不能为空" }));
+    }
+    let subjects_root = subjects_root(state)?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    if let Some(category_id) = input.category_id.as_deref().filter(|value| !value.is_empty()) {
+        if !categories.iter().any(|item| item.id == category_id) {
+            return Ok(json!({ "success": false, "error": "分类不存在" }));
+        }
+    }
+    let Some(index) = subjects.iter().position(|item| item.id == id) else {
+        return Ok(json!({ "success": false, "error": "主体不存在" }));
+    };
+    let existing = subjects.get(index).cloned();
+    let record = build_subject_record_for_workspace(&subjects_root, input, existing)?;
+    subjects[index] = record.clone();
+    persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     with_store_mut(state, |store| {
-        let Some(index) = store.subjects.iter().position(|item| item.id == id) else {
-            return Ok(json!({ "success": false, "error": "主体不存在" }));
-        };
-        let existing = store.subjects.get(index).cloned();
-        let record = subject_record_from_input(input, existing);
-        store.subjects[index] = record.clone();
+        store.categories = categories;
+        store.subjects = subjects;
         Ok(json!({ "success": true, "subject": record }))
     })
 }
 
 fn handle_subject_delete(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
+    persistence::ensure_store_hydrated_for_subjects(state)?;
     let Some(id) = payload_string(&payload, "id") else {
         return Ok(json!({ "success": false, "error": "缺少主体 id" }));
     };
-
+    let subjects_root = subjects_root(state)?;
+    let (categories, mut subjects) =
+        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    let before = subjects.len();
+    subjects.retain(|item| item.id != id);
+    if subjects.len() == before {
+        return Ok(json!({ "success": false, "error": "主体不存在" }));
+    }
+    persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
+    let subject_dir = subjects_root.join(&id);
+    if subject_dir.exists() {
+        fs::remove_dir_all(&subject_dir).map_err(|error| error.to_string())?;
+    }
     with_store_mut(state, |store| {
-        let before = store.subjects.len();
-        store.subjects.retain(|item| item.id != id);
-        if store.subjects.len() == before {
-            return Ok(json!({ "success": false, "error": "主体不存在" }));
-        }
+        store.categories = categories;
+        store.subjects = subjects;
         Ok(json!({ "success": true }))
     })
 }
