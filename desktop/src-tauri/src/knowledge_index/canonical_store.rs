@@ -282,56 +282,101 @@ pub(crate) fn replace_documents(
         .map_err(|error| error.to_string())?;
     tx.execute("DELETE FROM knowledge_canonical_documents", [])
         .map_err(|error| error.to_string())?;
-    {
-        let mut stmt = tx
-            .prepare(
-                r#"
-                INSERT INTO knowledge_canonical_documents (
-                    document_id, source_id, absolute_path, relative_path, file_extension,
-                    source_type, content_hash, parser_name, parser_version, language, title,
-                    content_origin, ocr_average_confidence, jurisdiction, authority,
-                    authority_level, effective_date, expiry_date, document_type,
-                    is_superseded, canonical_json, updated_at
-                ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5,
-                    ?6, ?7, ?8, ?9, ?10, ?11,
-                    ?12, ?13, ?14, ?15, ?16,
-                    ?17, ?18, ?19, ?20, ?21,
-                    ?22
-                )
-                "#,
-            )
-            .map_err(|error| error.to_string())?;
-        for row in rows {
-            stmt.execute(params![
-                row.document_id,
-                row.source_id,
-                row.absolute_path,
-                row.relative_path,
-                row.file_extension,
-                row.source_type,
-                row.content_hash,
-                row.parser_name,
-                row.parser_version,
-                row.language,
-                row.title,
-                row.content_origin,
-                row.ocr_average_confidence,
-                row.jurisdiction,
-                row.authority,
-                row.authority_level,
-                row.effective_date,
-                row.expiry_date,
-                row.document_type,
-                row.is_superseded,
-                row.canonical_json,
-                row.updated_at
-            ])
-            .map_err(|error| error.to_string())?;
-        }
-    }
+    insert_canonical_rows(&tx, rows)?;
     sync_visual_rows(&tx, rows, &previous_visual_states)?;
     tx.commit().map_err(|error| error.to_string())
+}
+
+pub(crate) fn upsert_documents(
+    state: &State<'_, AppState>,
+    rows: &[CanonicalDocumentRow],
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut conn = connection(state)?;
+    let previous_visual_states = load_previous_visual_states(&conn)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    delete_visual_rows_for_documents(&tx, rows)?;
+    insert_canonical_rows(&tx, rows)?;
+    sync_visual_rows(&tx, rows, &previous_visual_states)?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
+fn insert_canonical_rows(conn: &Connection, rows: &[CanonicalDocumentRow]) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            INSERT OR REPLACE INTO knowledge_canonical_documents (
+                document_id, source_id, absolute_path, relative_path, file_extension,
+                source_type, content_hash, parser_name, parser_version, language, title,
+                content_origin, ocr_average_confidence, jurisdiction, authority,
+                authority_level, effective_date, expiry_date, document_type,
+                is_superseded, canonical_json, updated_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9, ?10, ?11,
+                ?12, ?13, ?14, ?15, ?16,
+                ?17, ?18, ?19, ?20, ?21,
+                ?22
+            )
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        stmt.execute(params![
+            row.document_id,
+            row.source_id,
+            row.absolute_path,
+            row.relative_path,
+            row.file_extension,
+            row.source_type,
+            row.content_hash,
+            row.parser_name,
+            row.parser_version,
+            row.language,
+            row.title,
+            row.content_origin,
+            row.ocr_average_confidence,
+            row.jurisdiction,
+            row.authority,
+            row.authority_level,
+            row.effective_date,
+            row.expiry_date,
+            row.document_type,
+            row.is_superseded,
+            row.canonical_json,
+            row.updated_at
+        ])
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn delete_visual_rows_for_documents(
+    conn: &Connection,
+    rows: &[CanonicalDocumentRow],
+) -> Result<(), String> {
+    for row in rows {
+        conn.execute(
+            r#"
+            DELETE FROM knowledge_visual_evidence
+            WHERE unit_id IN (
+                SELECT unit_id
+                FROM knowledge_visual_units
+                WHERE source_id = ?1 AND absolute_path = ?2
+            )
+            "#,
+            params![row.source_id, row.absolute_path],
+        )
+        .map_err(|error| error.to_string())?;
+        conn.execute(
+            "DELETE FROM knowledge_visual_units WHERE source_id = ?1 AND absolute_path = ?2",
+            params![row.source_id, row.absolute_path],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default)]

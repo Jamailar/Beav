@@ -1151,7 +1151,8 @@ fn build_blocks_for_file(
         parsed
     };
 
-    canonical_rows.push(CanonicalDocumentRow {
+    let has_visual_manifest = canonical.visual_manifest.is_some();
+    let canonical_row = CanonicalDocumentRow {
         document_id: canonical.document_id.clone(),
         source_id: canonical.source_id.clone(),
         absolute_path: canonical.absolute_path.clone(),
@@ -1177,7 +1178,15 @@ fn build_blocks_for_file(
         is_superseded: canonical.legal_metadata.is_superseded,
         canonical_json: serde_json::to_string(&canonical).map_err(|error| error.to_string())?,
         updated_at: updated_at.to_string(),
-    });
+    };
+    if has_visual_manifest {
+        canonical_store::upsert_documents(state, std::slice::from_ref(&canonical_row))?;
+        crate::append_debug_trace_global(format!(
+            "[visual-index] persisted_progress source={} path={}",
+            canonical_row.source_id, canonical_row.relative_path
+        ));
+    }
+    canonical_rows.push(canonical_row);
     blocks.extend(block_records_from_document(
         &canonical,
         source_name,
