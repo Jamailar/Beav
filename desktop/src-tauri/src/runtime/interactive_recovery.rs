@@ -96,7 +96,10 @@ pub fn runtime_error_envelope_from_error(
         .windows(2)
         .find_map(|items| {
             if items[0].eq_ignore_ascii_case("http") {
-                items[1].parse::<u16>().ok()
+                items[1]
+                    .trim_matches(|ch: char| !ch.is_ascii_digit())
+                    .parse::<u16>()
+                    .ok()
             } else {
                 None
             }
@@ -120,6 +123,13 @@ pub fn runtime_error_envelope_from_error(
             RuntimeErrorLayer::Auth,
             false,
             "登录失效，请重新登录".to_string(),
+        )
+    } else if http_status == Some(403) {
+        (
+            RuntimeErrorCategory::Auth,
+            RuntimeErrorLayer::Auth,
+            false,
+            "API 权限受限，请检查密钥、额度或模型权限".to_string(),
         )
     } else if http_status == Some(429)
         || lower.contains("rate limit")
@@ -329,5 +339,33 @@ mod tests {
         assert_eq!(envelope.category, RuntimeErrorCategory::ProtocolMismatch);
         assert_eq!(envelope.title, "模型协议不兼容");
         assert!(!envelope.retryable);
+    }
+
+    #[test]
+    fn runtime_error_envelope_preserves_forbidden_api_status() {
+        let envelope = runtime_error_envelope_from_error(
+            "AI request failed: HTTP 403 [code=insufficient_quota] Your account is not active",
+            Some(&openai_profile()),
+            Some("gpt-5"),
+        );
+        assert_eq!(envelope.http_status, Some(403));
+        assert_eq!(envelope.layer, RuntimeErrorLayer::Auth);
+        assert_eq!(envelope.category, RuntimeErrorCategory::Auth);
+        assert_eq!(envelope.title, "API 权限受限，请检查密钥、额度或模型权限");
+        assert!(!envelope.retryable);
+    }
+
+    #[test]
+    fn runtime_error_envelope_preserves_rate_limit_status() {
+        let envelope = runtime_error_envelope_from_error(
+            "AI request failed: HTTP 429 [code=rate_limit_exceeded] Too many requests",
+            Some(&openai_profile()),
+            Some("gpt-5"),
+        );
+        assert_eq!(envelope.http_status, Some(429));
+        assert_eq!(envelope.layer, RuntimeErrorLayer::RateLimit);
+        assert_eq!(envelope.category, RuntimeErrorCategory::RateLimit);
+        assert_eq!(envelope.title, "请求频率受限");
+        assert!(envelope.retryable);
     }
 }

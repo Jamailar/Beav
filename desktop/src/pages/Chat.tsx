@@ -398,6 +398,35 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
   };
 }
 
+function truncateErrorDetail(value: string, maxLength = 900): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}...`;
+}
+
+function buildChatErrorTimelineItem(
+  payload: ChatErrorEventPayload | string,
+  notice: StructuredChatErrorNotice,
+): ProcessItem {
+  const rawDetail = typeof payload === 'string'
+    ? payload
+    : String(payload.detail || payload.raw || payload.message || '').trim();
+  const detailParts = [
+    notice.metaParts?.join(' · ') || '',
+    notice.hint || '',
+    rawDetail,
+  ].filter(Boolean);
+  const now = Date.now();
+  return {
+    id: `chat-error_${now}_${Math.random().toString(36).slice(2, 8)}`,
+    type: 'error',
+    title: notice.title || 'AI 请求失败',
+    content: truncateErrorDetail(detailParts.join(' · ')),
+    status: 'failed',
+    timestamp: now,
+  };
+}
+
 export function Chat({
   isActive = true,
   onExecutionStateChange,
@@ -2341,6 +2370,7 @@ export function Chat({
       suppressComposerFocus('error', 3000);
       blurComposer('error');
       const notice = normalizeChatErrorNotice(error);
+      const errorTimelineItem = buildChatErrorTimelineItem(error, notice);
       debugUi('response_error', {
         sessionId: currentSessionIdRef.current,
         error: typeof error === 'string' ? error : error?.message || 'unknown',
@@ -2370,6 +2400,7 @@ export function Chat({
                 duration: now - item.timestamp,
               } as ProcessItem;
             });
+            timeline.push(errorTimelineItem);
             const next = [...prev];
             next[lastReplyIndex] = {
               ...lastMsg,
