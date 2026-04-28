@@ -4,6 +4,7 @@ pub mod citation_anchors;
 pub mod document_blocks;
 #[cfg(test)]
 pub mod evaluation;
+pub mod file_index_dashboard;
 pub mod fingerprint;
 pub mod hybrid;
 pub mod indexer;

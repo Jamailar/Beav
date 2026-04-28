@@ -9551,6 +9551,7 @@ fn main() {
             commands::library::knowledge_list_page,
             commands::library::knowledge_get_item_detail,
             commands::library::knowledge_get_index_status,
+            commands::library::knowledge_get_file_index_dashboard,
             commands::library::knowledge_rebuild_catalog,
             commands::library::knowledge_open_index_root,
             commands::notifications::notifications_permission_state,

@@ -1318,6 +1318,7 @@ declare global {
         listPage: <T = Record<string, unknown>>(payload?: Record<string, unknown>) => Promise<T>;
         getItemDetail: <T = Record<string, unknown>>(payload: Record<string, unknown>) => Promise<T | null>;
         getIndexStatus: <T = Record<string, unknown>>() => Promise<T>;
+        getFileIndexDashboard: <T = Record<string, unknown>>() => Promise<T>;
         rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => Promise<unknown>;
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;

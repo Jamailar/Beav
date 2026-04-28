@@ -83,6 +83,41 @@ type BrowserPluginStatus = {
     error?: string;
 } | null;
 
+export type FileIndexLaneStatus = {
+    lane: string;
+    label: string;
+    status: 'done' | 'indexing' | 'pending' | 'partial_failed' | 'disabled' | 'waiting' | string;
+    done: number;
+    total: number;
+    failed: number;
+    lastUpdatedAt?: string | null;
+    nextRetryAt?: string | null;
+};
+
+export type FileIndexScopeStatus = {
+    scopeId: string;
+    name: string;
+    scopeType: 'workspace' | 'document_source' | 'advisor' | 'member' | 'system' | string;
+    ownerId?: string | null;
+    ownerName?: string | null;
+    fileCount: number;
+    status: 'done' | 'indexing' | 'pending' | 'partial_failed' | 'disabled' | 'waiting' | string;
+    failedCount: number;
+    lanes: FileIndexLaneStatus[];
+};
+
+export type FileIndexDashboard = {
+    overall: {
+        status: 'idle' | 'indexing' | 'pending' | 'partial_failed' | string;
+        indexedFiles: number;
+        totalFiles: number;
+        failedFiles: number;
+        lastIndexedAt?: string | null;
+    };
+    lanes: FileIndexLaneStatus[];
+    scopes: FileIndexScopeStatus[];
+};
+
 type McpOauthState = Record<string, { connected?: boolean; tokenPath?: string } | undefined>;
 
 type RuntimeDiagnosticsSummary = {
@@ -321,6 +356,9 @@ interface GeneralSettingsSectionProps {
     handleTestNotificationSound: () => Promise<void>;
     handlePickWorkspaceDir: () => Promise<void>;
     handleResetWorkspaceDir: () => void;
+    fileIndexDashboard: FileIndexDashboard | null;
+    fileIndexLoading: boolean;
+    handleRefreshFileIndexDashboard: () => Promise<void>;
     handleOpenKnowledgeApiGuide: () => Promise<void>;
     recentDebugLogs: string[];
     isDebugLogsLoading: boolean;
@@ -352,6 +390,154 @@ interface RemoteConnectionSettingsSectionProps {
     handleClearAssistantDaemonWeixinLogin: () => void;
 }
 
+const FILE_INDEX_STATUS_LABELS: Record<string, string> = {
+    idle: '空闲',
+    done: '完成',
+    indexing: '索引中',
+    pending: '等待',
+    waiting: '等待',
+    partial_failed: '部分失败',
+    disabled: '未启用',
+};
+
+const FILE_INDEX_SCOPE_LABELS: Record<string, string> = {
+    workspace: '全局',
+    document_source: '文档源',
+    advisor: '成员',
+    member: '成员',
+    system: '系统',
+};
+
+function fileIndexStatusLabel(status?: string | null): string {
+    return FILE_INDEX_STATUS_LABELS[status || ''] || '未知';
+}
+
+function fileIndexScopeLabel(scopeType?: string | null): string {
+    return FILE_INDEX_SCOPE_LABELS[scopeType || ''] || '知识库';
+}
+
+function fileIndexStatusClass(status?: string | null): string {
+    if (status === 'partial_failed') {
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+    if (status === 'indexing') {
+        return 'border-blue-200 bg-blue-50 text-blue-700';
+    }
+    if (status === 'pending' || status === 'waiting') {
+        return 'border-border bg-surface-secondary text-text-secondary';
+    }
+    if (status === 'disabled') {
+        return 'border-border bg-surface-secondary/60 text-text-tertiary';
+    }
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+}
+
+function FileIndexStatusBadge({ status }: { status?: string | null }) {
+    return (
+        <span className={clsx('inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium', fileIndexStatusClass(status))}>
+            {fileIndexStatusLabel(status)}
+        </span>
+    );
+}
+
+function FileIndexProgressText({ done, total }: { done: number; total: number }) {
+    return (
+        <span className="font-mono text-[11px] text-text-tertiary">
+            {Math.max(0, done)}/{Math.max(0, total)}
+        </span>
+    );
+}
+
+function FileIndexSettingsPanel({
+    dashboard,
+    loading,
+    onRefresh,
+}: {
+    dashboard: FileIndexDashboard | null;
+    loading: boolean;
+    onRefresh: () => Promise<void>;
+}) {
+    const overall = dashboard?.overall;
+    const lanes = dashboard?.lanes || [];
+    const scopes = dashboard?.scopes || [];
+    const visualLane = lanes.find((lane) => lane.lane === 'visual_index');
+    const summaryText = overall
+        ? `已索引 ${overall.indexedFiles}/${overall.totalFiles} 个文件 · 视觉索引 ${visualLane?.done || 0}/${visualLane?.total || 0} · ${overall.failedFiles} 个失败`
+        : '索引状态未加载';
+
+    return (
+        <div className="rounded-lg border border-border bg-surface-secondary/30 p-4">
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <h3 className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                        <Database className="h-4 w-4" />
+                        文件索引
+                    </h3>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
+                        <FileIndexStatusBadge status={overall?.status || 'idle'} />
+                        <span>{summaryText}</span>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => void onRefresh()}
+                    disabled={loading}
+                    className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
+                    刷新
+                </button>
+            </div>
+
+            <div className="mt-4 grid gap-4">
+                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                    <div className="grid grid-cols-[minmax(0,1fr)_80px_72px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                        <span>索引类型</span>
+                        <span>状态</span>
+                        <span className="text-right">进度</span>
+                    </div>
+                    {lanes.length === 0 ? (
+                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无索引记录</div>
+                    ) : (
+                        lanes.map((lane) => (
+                            <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_72px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                <span className="truncate text-xs text-text-primary">{lane.label}</span>
+                                <FileIndexStatusBadge status={lane.status} />
+                                <span className="text-right">
+                                    <FileIndexProgressText done={lane.done} total={lane.total} />
+                                </span>
+                            </div>
+                        ))
+                    )}
+                </div>
+
+                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                    <div className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                        <span>知识库</span>
+                        <span>类型</span>
+                        <span className="text-right">文件</span>
+                        <span className="text-right">状态</span>
+                    </div>
+                    {scopes.length === 0 ? (
+                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无知识库索引记录</div>
+                    ) : (
+                        scopes.map((scope) => (
+                            <div key={scope.scopeId} className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                <span className="truncate text-xs text-text-primary" title={scope.name}>{scope.name}</span>
+                                <span className="text-[11px] text-text-tertiary">{fileIndexScopeLabel(scope.scopeType)}</span>
+                                <span className="text-right font-mono text-[11px] text-text-tertiary">{scope.fileCount}</span>
+                                <span className="text-right">
+                                    <FileIndexStatusBadge status={scope.status} />
+                                </span>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function GeneralSettingsSectionInner({
     appVersion,
     formData,
@@ -361,6 +547,9 @@ function GeneralSettingsSectionInner({
     handleTestNotificationSound,
     handlePickWorkspaceDir,
     handleResetWorkspaceDir,
+    fileIndexDashboard,
+    fileIndexLoading,
+    handleRefreshFileIndexDashboard,
     handleOpenKnowledgeApiGuide,
     recentDebugLogs,
     isDebugLogsLoading,
@@ -452,6 +641,12 @@ function GeneralSettingsSectionInner({
                     不要直接选择现有的稿件目录、<code className="bg-surface-secondary px-1 rounded">manuscripts</code> 目录或 <code className="bg-surface-secondary px-1 rounded">documents</code> 目录，否则应用会在其中创建 <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> 等完整工作区结构。
                 </p>
             </div>
+
+            <FileIndexSettingsPanel
+                dashboard={fileIndexDashboard}
+                loading={fileIndexLoading}
+                onRefresh={handleRefreshFileIndexDashboard}
+            />
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-3">

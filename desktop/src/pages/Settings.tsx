@@ -85,6 +85,7 @@ import {
   ExperimentalSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
+  type FileIndexDashboard,
 } from './settings/SettingsSections';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playTestNotificationSound } from '../notifications/audio';
@@ -561,6 +562,8 @@ export function Settings({
   const [imageModelStatus, setImageModelStatus] = useState('');
   const [recentDebugLogs, setRecentDebugLogs] = useState<string[]>([]);
   const [isDebugLogsLoading, setIsDebugLogsLoading] = useState(false);
+  const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(null);
+  const [isFileIndexDashboardLoading, setIsFileIndexDashboardLoading] = useState(false);
   const [logStatus, setLogStatus] = useState<DiagnosticsLogStatus | null>(null);
   const [pendingDiagnosticReports, setPendingDiagnosticReports] = useState<DiagnosticsPendingReport[]>([]);
   const [diagnosticsActionBusy, setDiagnosticsActionBusy] = useState<string | null>(null);
@@ -2136,6 +2139,19 @@ export function Settings({
       if (requestId === debugLogsLoadRequestRef.current) {
         setIsDebugLogsLoading(false);
       }
+    }
+  }, []);
+
+  const loadFileIndexDashboard = useCallback(async () => {
+    setIsFileIndexDashboardLoading(true);
+    try {
+      const dashboard = await window.ipcRenderer.knowledge.getFileIndexDashboard<FileIndexDashboard>();
+      setFileIndexDashboard(dashboard);
+    } catch (error) {
+      console.error('Failed to load file index dashboard:', error);
+      setFileIndexDashboard(null);
+    } finally {
+      setIsFileIndexDashboardLoading(false);
     }
   }, []);
 
@@ -3890,6 +3906,7 @@ export function Settings({
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
+          loadFileIndexDashboard(),
           loadLoggingStatus(),
           loadPendingDiagnosticReports(),
         ]);
@@ -3934,6 +3951,7 @@ export function Settings({
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
+    loadFileIndexDashboard,
     loadLoggingStatus,
     loadMcpRuntimeData,
     loadPendingDiagnosticReports,
@@ -4049,11 +4067,15 @@ export function Settings({
     }
     let runtimePollTimer: number | null = null;
     let backgroundTaskPollTimer: number | null = null;
+    let fileIndexPollTimer: number | null = null;
     if (activeTab === 'remote') {
       scheduleRemoteTabWarmup();
     }
     if (activeTab === 'general') {
       void ensureTabResourcesLoaded('general');
+      fileIndexPollTimer = window.setInterval(() => {
+        void loadFileIndexDashboard();
+      }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
     }
     if (activeTab === 'profile') {
       void ensureTabResourcesLoaded('profile');
@@ -4091,6 +4113,9 @@ export function Settings({
       if (backgroundTaskPollTimer) {
         window.clearInterval(backgroundTaskPollTimer);
       }
+      if (fileIndexPollTimer) {
+        window.clearInterval(fileIndexPollTimer);
+      }
       if (remoteTabWarmTimerRef.current != null) {
         window.clearTimeout(remoteTabWarmTimerRef.current);
         remoteTabWarmTimerRef.current = null;
@@ -4104,6 +4129,7 @@ export function Settings({
     isActive,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
+    loadFileIndexDashboard,
     loadRuntimeSessions,
     loadRuntimeTasks,
     runtimeSessions.length,
@@ -4494,6 +4520,9 @@ export function Settings({
                 handleTestNotificationSound={handleTestNotificationSound}
                 handlePickWorkspaceDir={handlePickWorkspaceDir}
                 handleResetWorkspaceDir={handleResetWorkspaceDir}
+                fileIndexDashboard={fileIndexDashboard}
+                fileIndexLoading={isFileIndexDashboardLoading}
+                handleRefreshFileIndexDashboard={loadFileIndexDashboard}
                 handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
                 recentDebugLogs={recentDebugLogs}
                 isDebugLogsLoading={isDebugLogsLoading}

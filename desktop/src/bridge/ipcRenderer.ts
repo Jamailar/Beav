@@ -29,6 +29,7 @@ const explicitCommandRoutes: Record<string, string> = {
   'knowledge:list-page': 'knowledge_list_page',
   'knowledge:get-item-detail': 'knowledge_get_item_detail',
   'knowledge:get-index-status': 'knowledge_get_index_status',
+  'knowledge:get-file-index-dashboard': 'knowledge_get_file_index_dashboard',
   'knowledge:rebuild-catalog': 'knowledge_rebuild_catalog',
   'knowledge:open-index-root': 'knowledge_open_index_root',
   'redclaw:runner-status': 'redclaw_runner_status',
@@ -252,6 +253,19 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
         migrationStatus: null,
         pendingRebuildReason: null,
       };
+  }
+  if (channel === 'knowledge:get-file-index-dashboard') {
+    return {
+      overall: {
+        status: 'idle',
+        indexedFiles: 0,
+        totalFiles: 0,
+        failedFiles: 0,
+        lastIndexedAt: null,
+      },
+      lanes: [],
+      scopes: [],
+    };
   }
   if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
     return [];
@@ -683,6 +697,25 @@ function createIpcRenderer() {
               pendingRebuildReason: typeof raw.pendingRebuildReason === 'string' ? raw.pendingRebuildReason : null,
             } as T;
           },
+        },
+      ),
+      getFileIndexDashboard: <T = Record<string, unknown>>() => invokeCommandGuarded<T>(
+        'knowledge_get_file_index_dashboard',
+        undefined,
+        {
+          timeoutMs: 2200,
+          fallbackChannel: 'knowledge:get-file-index-dashboard',
+          normalize: (value) => (value && typeof value === 'object') ? value as T : {
+            overall: {
+              status: 'idle',
+              indexedFiles: 0,
+              totalFiles: 0,
+              failedFiles: 0,
+              lastIndexedAt: null,
+            },
+            lanes: [],
+            scopes: [],
+          } as T,
         },
       ),
       rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => invokeCommandGuarded(
