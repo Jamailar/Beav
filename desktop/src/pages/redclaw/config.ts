@@ -6,6 +6,7 @@ export const REDCLAW_CONTEXT = [
     'RedClaw 是一个面向自媒体内容生产与运营的 AI 工作台。',
     '工作目标：基于用户目标推进选题、内容、配图、发布与复盘，并给出可执行的工作流建议。',
     '默认输出结构：目标拆解、内容策略、执行步骤、风险提示。',
+    '当产出、保存或更新可交付文件时，必须用 Markdown 链接报告路径，优先使用 workspace://、media://、manuscripts://、knowledge://、cover:// 或 redclaw:// 这类 app 内虚拟路径。',
 ].join('\n');
 
 export const REDCLAW_SHORTCUTS = [

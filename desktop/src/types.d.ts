@@ -1344,6 +1344,23 @@ declare global {
       files: {
         showInFolder: (payload: { source: string }) => Promise<unknown>;
         copyImage: (payload: { source: string }) => Promise<unknown>;
+        saveAs: (payload: { source: string; defaultName?: string }) => Promise<unknown>;
+        resolvePreview: (payload: { source: string }) => Promise<{
+          success: boolean;
+          error?: string;
+          isLocal?: boolean;
+          exists?: boolean;
+          isDirectory?: boolean;
+          absolutePath?: string | null;
+          localPathCandidate?: string | null;
+          resolvedUrl?: string | null;
+          title?: string | null;
+          extension?: string | null;
+          kind?: string | null;
+          mimeType?: string | null;
+          sizeBytes?: number | null;
+          previewText?: string | null;
+        }>;
       };
       notifications: {
         getPermissionState: () => Promise<NotificationPermissionState>;
