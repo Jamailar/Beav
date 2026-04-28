@@ -148,10 +148,93 @@ fn debug_request_headers(api_key: Option<&str>, extra_headers: &[(&str, String)]
 }
 
 fn debug_request_body(serialized_body: Option<&[u8]>) -> String {
-    serialized_body
-        .map(|payload| String::from_utf8_lossy(payload).trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "<empty>".to_string())
+    let Some(payload) = serialized_body.filter(|value| !value.is_empty()) else {
+        return "<empty>".to_string();
+    };
+    if let Ok(mut value) = serde_json::from_slice::<Value>(payload) {
+        redact_debug_json_value(&mut value);
+        return serde_json::to_string(&value).unwrap_or_else(|_| "<invalid-json>".to_string());
+    }
+    let redacted = redact_data_urls_in_text(&String::from_utf8_lossy(payload));
+    let trimmed = redacted.trim();
+    if trimmed.is_empty() {
+        "<empty>".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn redact_debug_json_value(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            if let Some(redacted) = redact_debug_data_url(text) {
+                *text = redacted;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_debug_json_value(item);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                redact_debug_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn redact_debug_data_url(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let (metadata, encoded) = trimmed.split_once(";base64,")?;
+    if !metadata.starts_with("data:") {
+        return None;
+    }
+    Some(format!(
+        "{metadata};base64,<redacted encodedChars={} approxBytes={}>",
+        encoded.chars().count(),
+        approximate_base64_decoded_len(encoded)
+    ))
+}
+
+fn approximate_base64_decoded_len(encoded: &str) -> usize {
+    let normalized = encoded
+        .chars()
+        .filter(|value| !value.is_whitespace())
+        .collect::<String>();
+    let padding = normalized
+        .chars()
+        .rev()
+        .take_while(|value| *value == '=')
+        .count()
+        .min(2);
+    normalized
+        .len()
+        .saturating_mul(3)
+        .saturating_div(4)
+        .saturating_sub(padding)
+}
+
+fn redact_data_urls_in_text(raw: &str) -> String {
+    let Ok(pattern) = Regex::new(r"data:([^,;\s]+);base64,([A-Za-z0-9+/_=-]{128,})") else {
+        return raw.to_string();
+    };
+    pattern
+        .replace_all(raw, |captures: &regex::Captures<'_>| {
+            let mime = captures.get(1).map(|value| value.as_str()).unwrap_or("");
+            let encoded = captures.get(2).map(|value| value.as_str()).unwrap_or("");
+            format!(
+                "data:{mime};base64,<redacted encodedChars={} approxBytes={}>",
+                encoded.chars().count(),
+                approximate_base64_decoded_len(encoded)
+            )
+        })
+        .into_owned()
+}
+
+pub(crate) fn redact_debug_data_urls(raw: &str) -> String {
+    redact_data_urls_in_text(raw)
 }
 
 fn redact_http_debug_text(raw: &str, api_key: Option<&str>) -> String {
@@ -950,6 +1033,27 @@ mod tests {
             .map(|value| value.to_string_lossy().to_string())
             .collect::<Vec<_>>();
         assert!(args.iter().any(|value| value == "--http1.1"));
+    }
+
+    #[test]
+    fn debug_request_body_redacts_embedded_data_urls() {
+        let encoded = "QUJDREVGR0hJSktMTU5PUA==";
+        let body = json!({
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:image/png;base64,{encoded}")
+                    }
+                }]
+            }]
+        });
+        let serialized = serde_json::to_vec(&body).expect("serialize body");
+        let debug_body = debug_request_body(Some(&serialized));
+
+        assert!(debug_body.contains("data:image/png;base64,<redacted"));
+        assert!(!debug_body.contains(encoded));
     }
 
     #[test]
