@@ -630,6 +630,25 @@ fn redbook_entry_dir(state: &State<'_, AppState>, entry_id: &str) -> Result<Path
     Ok(root)
 }
 
+fn safe_existing_entry_id(raw: &str) -> Option<String> {
+    normalize_string(Some(raw.to_string()))
+        .map(|value| storage_safe_file_stem(&value))
+        .filter(|value| !value.is_empty())
+}
+
+fn entry_leaf_from_path(raw: &str) -> Option<&str> {
+    raw.trim()
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.trim().is_empty())
+}
+
+fn existing_entry_id_from_record(id: &str, folder_path: Option<&str>) -> Option<String> {
+    folder_path
+        .and_then(entry_leaf_from_path)
+        .and_then(safe_existing_entry_id)
+        .or_else(|| safe_existing_entry_id(id))
+}
+
 fn youtube_entry_id(seed: &str) -> String {
     let slug = storage_safe_file_stem(seed);
     if slug.is_empty() {
@@ -1351,9 +1370,9 @@ fn find_redbook_entry_id_by_meta_field(
             continue;
         };
         if value == expected {
-            let entry_id = metadata_string(&meta_path, "id")
-                .unwrap_or_else(|| entry.file_name().to_string_lossy().to_string());
-            return Ok(Some(entry_id));
+            let meta_id = metadata_string(&meta_path, "id").unwrap_or_default();
+            let entry_name = entry.file_name().to_string_lossy().to_string();
+            return Ok(existing_entry_id_from_record(&meta_id, Some(&entry_name)));
         }
     }
     Ok(None)
@@ -1500,7 +1519,9 @@ fn find_existing_note_entry_id(
                 .knowledge_notes
                 .iter()
                 .find(|item| item.source_url.as_deref() == Some(source_url.as_str()))
-                .map(|item| item.id.clone()))
+                .and_then(|item| {
+                    existing_entry_id_from_record(&item.id, item.folder_path.as_deref())
+                }))
         })?;
         if existing.is_some() {
             return Ok(existing);
@@ -1576,6 +1597,10 @@ fn ingest_youtube_entry(
     let summary = normalize_string(request.content.summary.clone())
         .or_else(|| existing.as_ref().and_then(|item| item.summary.clone()))
         .unwrap_or_else(|| "RedBox captured this video for later migration work.".to_string());
+    let entry_id = existing
+        .as_ref()
+        .and_then(|item| existing_entry_id_from_record(&item.id, item.folder_path.as_deref()))
+        .unwrap_or(entry_id);
     let entry_dir = youtube_entry_dir(state, &entry_id)?;
     let transcript = normalize_string(request.content.transcript.clone());
     let existing_meta = existing
@@ -2564,10 +2589,10 @@ pub(crate) fn persist_note_transcript(
 #[cfg(test)]
 mod tests {
     use super::{
-        author_entry_id, decode_embedded_js_string, extract_css_url_near,
-        extract_html_attribute_near, extract_json_string_values, is_supported_social_entry_kind,
-        maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
-        youtube_entry_id, KnowledgeEntryAssetsInput,
+        author_entry_id, decode_embedded_js_string, existing_entry_id_from_record,
+        extract_css_url_near, extract_html_attribute_near, extract_json_string_values,
+        is_supported_social_entry_kind, maybe_backfill_xiaohongshu_assets, note_entry_id,
+        note_transcript_file_from_meta, youtube_entry_id, KnowledgeEntryAssetsInput,
     };
     use serde_json::json;
 
@@ -2671,5 +2696,22 @@ mod tests {
             assert!(!id.ends_with('.'), "{id} should not end with dot");
             assert!(!id.ends_with(' '), "{id} should not end with space");
         }
+    }
+
+    #[test]
+    fn existing_entry_ids_are_sanitized_before_reuse() {
+        let id = existing_entry_id_from_record(
+            "knowledge-https:--www.xiaohongshu.com-explore-note?id=1",
+            None,
+        )
+        .expect("id should be derived");
+        assert_eq!(id, "knowledge-https-www-xiaohongshu-com-explore-note-id=1");
+
+        let id = existing_entry_id_from_record(
+            "knowledge-https:--www.xiaohongshu.com-explore-note?id=1",
+            Some(r"C:\Users\Jam\RedBox\workspace\knowledge\redbook\CON"),
+        )
+        .expect("folder id should be derived");
+        assert_eq!(id, "item-CON");
     }
 }

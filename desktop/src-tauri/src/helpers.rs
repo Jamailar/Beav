@@ -582,10 +582,45 @@ pub(crate) fn storage_safe_file_stem(value: &str) -> String {
     let trimmed = sanitized
         .trim_matches(|ch: char| ch == '-' || ch == ' ' || ch == '.')
         .to_string();
-    if trimmed.is_empty() {
+    let reserved = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let normalized = if trimmed.is_empty() {
         "root".to_string()
+    } else if reserved
+        .iter()
+        .any(|reserved_name| trimmed.eq_ignore_ascii_case(reserved_name))
+    {
+        format!("item-{trimmed}")
     } else {
         trimmed
+    };
+    normalized.chars().take(120).collect()
+}
+
+#[cfg(test)]
+mod storage_path_tests {
+    use super::storage_safe_file_stem;
+
+    #[test]
+    fn storage_safe_file_stem_strips_windows_reserved_filename_chars() {
+        assert_eq!(
+            storage_safe_file_stem("context-session:wechat-article:foo/bar?.md"),
+            "context-session-wechat-article-foo-bar-md"
+        );
+    }
+
+    #[test]
+    fn storage_safe_file_stem_avoids_windows_device_names() {
+        assert_eq!(storage_safe_file_stem("CON"), "item-CON");
+        assert_eq!(storage_safe_file_stem("lpt1"), "item-lpt1");
+    }
+
+    #[test]
+    fn storage_safe_file_stem_caps_long_components() {
+        let stem = storage_safe_file_stem(&"a".repeat(300));
+        assert_eq!(stem.len(), 120);
     }
 }
 
