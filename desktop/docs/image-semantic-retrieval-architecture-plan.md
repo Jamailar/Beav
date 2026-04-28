@@ -30,7 +30,7 @@ success_metrics:
 
 # 图片语义检索架构计划
 
-Status: Planned
+Status: Completed
 
 ## Scope
 
