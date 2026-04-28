@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use crate::{
     document_parse::{
         CanonicalBlock, CanonicalDocument, LegalMetadata, ParserInfo, ParserProviderConfig,
-        VisualIndexConfig, PARSER_NAME, PARSER_VERSION,
+        VisualIndexConfig, PARSER_NAME, PARSER_VERSION, VISUAL_SCHEMA_VERSION,
     },
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
@@ -1089,7 +1089,7 @@ fn build_blocks_for_file(
             cache_policy,
             CanonicalCachePolicy::RefreshIncompleteVisualIndex
         ) && visual_config.enabled
-            && canonical_needs_visual_backfill(&cached)
+            && canonical_needs_visual_backfill_for_config(&cached, &visual_config)
         {
             let parser_config = resolve_parser_provider_config(state)?;
             let Some(parsed) = crate::document_parse::parse_path(
@@ -1174,20 +1174,47 @@ fn load_cached_for_policy(
     Ok(cached.map(normalize_cached_canonical_parser_info))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn canonical_needs_visual_backfill(document: &CanonicalDocument) -> bool {
+    visual_backfill_candidate_unit_ids(document, None).is_some()
+}
+
+pub(crate) fn canonical_needs_visual_backfill_for_config(
+    document: &CanonicalDocument,
+    config: &VisualIndexConfig,
+) -> bool {
+    visual_backfill_candidate_unit_ids(document, Some(config)).is_some()
+}
+
+pub(crate) fn visual_backfill_candidate_unit_ids(
+    document: &CanonicalDocument,
+    config: Option<&VisualIndexConfig>,
+) -> Option<Vec<String>> {
     if !document_requires_visual_index(document) {
-        return false;
+        return None;
     }
     let Some(manifest) = document.visual_manifest.as_ref() else {
-        return true;
+        return Some(Vec::new());
     };
     let manifests = visual_manifest_items(manifest);
     if manifests.is_empty() {
-        return true;
+        return Some(Vec::new());
     }
-    manifests
-        .iter()
-        .any(|manifest| visual_manifest_processing_mode(manifest) != Some("visual_llm"))
+    let mut unit_ids = Vec::new();
+    let mut needs_backfill = false;
+    for manifest in manifests {
+        if visual_manifest_needs_backfill(manifest, config) {
+            needs_backfill = true;
+            if let Some(unit_id) = manifest
+                .get("source")
+                .and_then(|source| source.get("unitId"))
+                .and_then(Value::as_str)
+            {
+                unit_ids.push(unit_id.to_string());
+            }
+        }
+    }
+    needs_backfill.then_some(unit_ids)
 }
 
 fn document_requires_visual_index(document: &CanonicalDocument) -> bool {
@@ -1216,6 +1243,35 @@ fn visual_manifest_processing_mode(manifest: &Value) -> Option<&str> {
         .get("analysis")
         .and_then(|analysis| analysis.get("processingMode"))
         .and_then(Value::as_str)
+}
+
+fn visual_manifest_needs_backfill(manifest: &Value, config: Option<&VisualIndexConfig>) -> bool {
+    let Some(config) = config else {
+        return visual_manifest_processing_mode(manifest) != Some("visual_llm");
+    };
+    if !config.has_callable_model() {
+        return false;
+    }
+    if visual_manifest_processing_mode(manifest) != Some("visual_llm") {
+        return true;
+    }
+    let analysis = manifest.get("analysis");
+    let expected_signature = config.config_signature();
+    let model_matches = analysis
+        .and_then(|value| value.get("model"))
+        .and_then(Value::as_str)
+        == config.model_name();
+    let prompt_matches = analysis
+        .and_then(|value| value.get("promptVersion"))
+        .and_then(Value::as_str)
+        == Some(config.prompt_version.as_str());
+    let schema_matches =
+        manifest.get("schemaVersion").and_then(Value::as_str) == Some(VISUAL_SCHEMA_VERSION);
+    let signature_matches = analysis
+        .and_then(|value| value.get("configSignature"))
+        .and_then(Value::as_str)
+        == Some(expected_signature.as_str());
+    !(model_matches && prompt_matches && schema_matches && signature_matches)
 }
 
 fn normalize_cached_canonical_parser_info(mut document: CanonicalDocument) -> CanonicalDocument {
@@ -1258,7 +1314,9 @@ fn resolve_parser_provider_config(
     })
 }
 
-fn resolve_visual_index_config(state: &State<'_, AppState>) -> Result<VisualIndexConfig, String> {
+pub(crate) fn resolve_visual_index_config(
+    state: &State<'_, AppState>,
+) -> Result<VisualIndexConfig, String> {
     let settings = with_store(state, |store| Ok(store.settings.clone()))?;
     let timeout_seconds = payload_field(&settings, "visual_index_timeout_seconds")
         .and_then(|value| {
@@ -2263,6 +2321,62 @@ mod tests {
         );
 
         assert!(canonical_needs_visual_backfill(&document));
+    }
+
+    fn callable_visual_config(model: &str) -> VisualIndexConfig {
+        VisualIndexConfig {
+            enabled: true,
+            endpoint: Some("https://vision.example.com/v1".to_string()),
+            model: Some(model.to_string()),
+            ..VisualIndexConfig::default()
+        }
+    }
+
+    #[test]
+    fn visual_backfill_detects_model_config_signature_drift() {
+        let old_config = callable_visual_config("vision-small");
+        let new_config = callable_visual_config("vision-large");
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "schemaVersion": VISUAL_SCHEMA_VERSION,
+                "analysis": {
+                    "processingMode": "visual_llm",
+                    "model": "vision-small",
+                    "promptVersion": old_config.prompt_version,
+                    "configSignature": old_config.config_signature()
+                },
+                "source": { "unitId": "source-1:file.png#image=abc" }
+            })),
+        );
+
+        assert!(canonical_needs_visual_backfill_for_config(
+            &document,
+            &new_config
+        ));
+    }
+
+    #[test]
+    fn visual_backfill_waits_when_model_config_is_not_callable() {
+        let config = VisualIndexConfig {
+            enabled: true,
+            endpoint: None,
+            model: Some("vision-small".to_string()),
+            ..VisualIndexConfig::default()
+        };
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "analysis": { "processingMode": "metadata_only" },
+                "source": { "unitId": "source-1:file.png#image=abc" }
+            })),
+        );
+
+        assert!(!canonical_needs_visual_backfill_for_config(
+            &document, &config
+        ));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use base64::Engine;
 use image::codecs::jpeg::JpegEncoder;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
@@ -41,27 +42,83 @@ impl Default for VisualIndexConfig {
     }
 }
 
+impl VisualIndexConfig {
+    pub(crate) fn has_callable_model(&self) -> bool {
+        self.enabled
+            && self
+                .endpoint
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+            && self
+                .model
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+    }
+
+    pub(crate) fn endpoint_hash(&self) -> Option<String> {
+        self.endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(stable_hash)
+    }
+
+    pub(crate) fn model_name(&self) -> Option<&str> {
+        self.model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub(crate) fn payload_policy_version(&self) -> String {
+        format!(
+            "visual-payload-v1-edge-{}-pdfdpi-{}-pdfpages-{}-skip-small-{}",
+            self.max_image_edge, self.pdf_render_dpi, self.pdf_max_pages, self.skip_small_images
+        )
+    }
+
+    pub(crate) fn config_signature(&self) -> String {
+        stable_hash(&format!(
+            "endpoint={};model={};prompt={};payload={}",
+            self.endpoint_hash().unwrap_or_default(),
+            self.model_name().unwrap_or_default(),
+            self.prompt_version,
+            self.payload_policy_version()
+        ))
+    }
+}
+
 pub(super) fn analyze_visual_source(
     image_path: &Path,
     unit: &VisualSourceUnit,
     config: &VisualIndexConfig,
 ) -> Result<Value, String> {
     if !config.enabled {
-        return Ok(metadata_only_manifest(
-            unit,
-            config.model.as_deref(),
-            &config.prompt_version,
-            Some("visual index is disabled".to_string()),
+        return Ok(stamp_manifest_config(
+            metadata_only_manifest(
+                unit,
+                config.model.as_deref(),
+                &config.prompt_version,
+                Some("visual index is disabled".to_string()),
+            ),
+            config,
+            config.model_name(),
         ));
     }
     if config.skip_small_images {
         if let (Some(width), Some(height)) = (unit.width, unit.height) {
             if width < 64 || height < 64 {
-                return Ok(metadata_only_manifest(
-                    unit,
-                    config.model.as_deref(),
-                    &config.prompt_version,
-                    Some("image is below visual index size threshold".to_string()),
+                return Ok(stamp_manifest_config(
+                    metadata_only_manifest(
+                        unit,
+                        config.model.as_deref(),
+                        &config.prompt_version,
+                        Some("image is below visual index size threshold".to_string()),
+                    ),
+                    config,
+                    config.model_name(),
                 ));
             }
         }
@@ -72,11 +129,15 @@ pub(super) fn analyze_visual_source(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(metadata_only_manifest(
-            unit,
-            config.model.as_deref(),
-            &config.prompt_version,
-            Some("visual index endpoint is not configured".to_string()),
+        return Ok(stamp_manifest_config(
+            metadata_only_manifest(
+                unit,
+                config.model.as_deref(),
+                &config.prompt_version,
+                Some("visual index endpoint is not configured".to_string()),
+            ),
+            config,
+            config.model_name(),
         ));
     };
     let Some(model) = config
@@ -85,14 +146,32 @@ pub(super) fn analyze_visual_source(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(metadata_only_manifest(
-            unit,
+        return Ok(stamp_manifest_config(
+            metadata_only_manifest(
+                unit,
+                None,
+                &config.prompt_version,
+                Some("visual index model is not configured".to_string()),
+            ),
+            config,
             None,
-            &config.prompt_version,
-            Some("visual index model is not configured".to_string()),
         ));
     };
-    let payload = visual_payload_for_model(image_path, unit, config.max_image_edge)?;
+    let payload = match visual_payload_for_model(image_path, unit, config.max_image_edge) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return Ok(stamp_manifest_config(
+                metadata_only_manifest(
+                    unit,
+                    Some(model),
+                    &config.prompt_version,
+                    Some(format!("visual payload preparation failed: {error}")),
+                ),
+                config,
+                Some(model),
+            ));
+        }
+    };
     let data_url = format!(
         "data:{};base64,{}",
         payload.mime_type,
@@ -146,18 +225,49 @@ pub(super) fn analyze_visual_source(
             )
         }),
         Err(error) => {
-            return Ok(metadata_only_manifest(
-                unit,
+            return Ok(stamp_manifest_config(
+                metadata_only_manifest(
+                    unit,
+                    Some(model),
+                    &config.prompt_version,
+                    Some(format!("visual model request failed: {error}")),
+                ),
+                config,
                 Some(model),
-                &config.prompt_version,
-                Some(format!("visual model request failed: {error}")),
             ));
         }
     };
-    let mut manifest = normalize_manifest(value, unit);
-    manifest["analysis"]["model"] = json!(model);
+    let manifest = normalize_manifest(value, unit);
+    Ok(stamp_manifest_config(manifest, config, Some(model)))
+}
+
+fn stamp_manifest_config(
+    mut manifest: Value,
+    config: &VisualIndexConfig,
+    model: Option<&str>,
+) -> Value {
+    if !manifest.get("analysis").is_some_and(Value::is_object) {
+        manifest["analysis"] = json!({});
+    }
+    if let Some(model) = model {
+        manifest["analysis"]["model"] = json!(model);
+    }
     manifest["analysis"]["promptVersion"] = json!(config.prompt_version);
-    Ok(manifest)
+    manifest["analysis"]["provider"] = json!("openai-compatible-chat-completions");
+    manifest["analysis"]["endpointHash"] = json!(config.endpoint_hash());
+    manifest["analysis"]["payloadPolicyVersion"] = json!(config.payload_policy_version());
+    manifest["analysis"]["configSignature"] = json!(config.config_signature());
+    manifest
+}
+
+fn stable_hash(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    let hash = hasher.finalize();
+    hash[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -310,6 +420,14 @@ mod tests {
                 .and_then(|warnings| warnings.first())
                 .and_then(Value::as_str),
             Some("visual index is disabled")
+        );
+        let expected_signature = VisualIndexConfig::default().config_signature();
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("configSignature"))
+                .and_then(Value::as_str),
+            Some(expected_signature.as_str())
         );
     }
 

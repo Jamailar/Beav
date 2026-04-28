@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::{detect_language, mime_type_for_path, ParsedSection};
 
-pub(super) const VISUAL_SCHEMA_VERSION: &str = "redbox.visual_manifest.v1";
+pub(crate) const VISUAL_SCHEMA_VERSION: &str = "redbox.visual_manifest.v1";
 pub(super) const VISUAL_PARSER_NAME: &str = "redbox-visual-llm-indexer";
 pub(super) const VISUAL_PARSER_VERSION: &str = "v1";
 pub(super) const DEFAULT_PROMPT_VERSION: &str = "visual-manifest-v1";

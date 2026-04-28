@@ -234,6 +234,15 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (channel === 'knowledge:get-index-status') {
       return {
         indexedCount: 0,
+        visualIndex: {
+          totalUnits: 0,
+          indexedUnits: 0,
+          metadataOnlyUnits: 0,
+          failedUnits: 0,
+          retryDeferredUnits: 0,
+          retryReadyUnits: 0,
+          lastAttemptedAt: null,
+        },
         pendingCount: 0,
         failedCount: 0,
         rebuildProgress: null,
@@ -650,8 +659,20 @@ function createIpcRenderer() {
           fallbackChannel: 'knowledge:get-index-status',
           normalize: (value) => {
             const raw = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+            const visualRaw = (raw.visualIndex && typeof raw.visualIndex === 'object')
+              ? raw.visualIndex as Record<string, unknown>
+              : {};
             return {
               indexedCount: typeof raw.indexedCount === 'number' ? raw.indexedCount : 0,
+              visualIndex: {
+                totalUnits: typeof visualRaw.totalUnits === 'number' ? visualRaw.totalUnits : 0,
+                indexedUnits: typeof visualRaw.indexedUnits === 'number' ? visualRaw.indexedUnits : 0,
+                metadataOnlyUnits: typeof visualRaw.metadataOnlyUnits === 'number' ? visualRaw.metadataOnlyUnits : 0,
+                failedUnits: typeof visualRaw.failedUnits === 'number' ? visualRaw.failedUnits : 0,
+                retryDeferredUnits: typeof visualRaw.retryDeferredUnits === 'number' ? visualRaw.retryDeferredUnits : 0,
+                retryReadyUnits: typeof visualRaw.retryReadyUnits === 'number' ? visualRaw.retryReadyUnits : 0,
+                lastAttemptedAt: typeof visualRaw.lastAttemptedAt === 'string' ? visualRaw.lastAttemptedAt : null,
+              },
               pendingCount: typeof raw.pendingCount === 'number' ? raw.pendingCount : 0,
               failedCount: typeof raw.failedCount === 'number' ? raw.failedCount : 0,
               rebuildProgress: typeof raw.rebuildProgress === 'number' ? raw.rebuildProgress : null,
