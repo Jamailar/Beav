@@ -1,12 +1,15 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
 use crate::{
-    knowledge_index::{advisor_source_id, catalog_db_path, schema::ensure_catalog_ready},
-    with_store, AppState,
+    knowledge_index::{
+        advisor_source_id, catalog_db_path, document_blocks::is_visual_candidate_path,
+        schema::ensure_catalog_ready,
+    },
+    with_store, workspace_root, AppState,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +67,7 @@ struct ScopeSeed {
     owner_id: Option<String>,
     owner_name: Option<String>,
     file_count: i64,
+    visual_candidate_count: i64,
     source_failed_count: i64,
     updated_at: Option<String>,
 }
@@ -107,7 +111,9 @@ pub(crate) fn dashboard(state: &State<'_, AppState>) -> Result<FileIndexDashboar
         .iter_mut()
         .find(|scope| scope.scope_id == "workspace")
     {
-        scope.file_count = workspace_stats.discovered_files;
+        scope.file_count = workspace_stats
+            .discovered_files
+            .max(scope.visual_candidate_count);
         scope.updated_at = workspace_stats.last_updated_at.clone();
     }
 
@@ -174,6 +180,7 @@ fn load_scope_seeds(
         owner_id: None,
         owner_name: None,
         file_count: 0,
+        visual_candidate_count: workspace_visual_candidate_count(state)?,
         source_failed_count: 0,
         updated_at: None,
     }];
@@ -181,7 +188,7 @@ fn load_scope_seeds(
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT item_id, title, file_count, status, updated_at
+            SELECT item_id, title, file_count, status, updated_at, root_path
             FROM knowledge_items
             WHERE kind = 'document-source'
             ORDER BY title COLLATE NOCASE
@@ -191,6 +198,11 @@ fn load_scope_seeds(
     let document_sources = stmt
         .query_map([], |row| {
             let status: Option<String> = row.get(3)?;
+            let root_path: Option<String> = row.get(5)?;
+            let visual_candidate_count = root_path
+                .as_deref()
+                .map(|value| count_visual_candidates_under(Path::new(value)))
+                .unwrap_or(0);
             Ok(ScopeSeed {
                 scope_id: row.get(0)?,
                 source_id: Some(row.get(0)?),
@@ -199,6 +211,7 @@ fn load_scope_seeds(
                 owner_id: None,
                 owner_name: None,
                 file_count: row.get(2)?,
+                visual_candidate_count,
                 source_failed_count: status
                     .as_deref()
                     .filter(|value| !value.trim().is_empty() && *value != "indexing")
@@ -214,6 +227,8 @@ fn load_scope_seeds(
 
     let advisors = with_store(state, |store| Ok(store.advisors.clone()))?;
     for advisor in advisors {
+        let root_path = crate::advisor_knowledge_dir(state, &advisor.id)?;
+        let visual_candidate_count = count_visual_candidates_under(&root_path);
         scopes.push(ScopeSeed {
             scope_id: format!("advisor:{}", advisor.id),
             source_id: Some(advisor_source_id(&advisor.id)),
@@ -221,13 +236,52 @@ fn load_scope_seeds(
             scope_type: "advisor".to_string(),
             owner_id: Some(advisor.id),
             owner_name: Some(advisor.name),
-            file_count: advisor.knowledge_files.len() as i64,
+            file_count: (advisor.knowledge_files.len() as i64).max(visual_candidate_count),
+            visual_candidate_count,
             source_failed_count: 0,
             updated_at: Some(advisor.updated_at),
         });
     }
 
     Ok(scopes)
+}
+
+fn workspace_visual_candidate_count(state: &State<'_, AppState>) -> Result<i64, String> {
+    let root = workspace_root(state)?;
+    let knowledge_root = root.join("knowledge");
+    let mut total = 0;
+    for path in [
+        knowledge_root.join("redbook"),
+        knowledge_root.join("youtube"),
+        root.join("media"),
+    ] {
+        total += count_visual_candidates_under(&path);
+    }
+    Ok(total)
+}
+
+fn count_visual_candidates_under(root: &Path) -> i64 {
+    count_visual_candidates_under_inner(root).unwrap_or(0)
+}
+
+fn count_visual_candidates_under_inner(root: &Path) -> Result<i64, String> {
+    if !root.exists() {
+        return Ok(0);
+    }
+    if root.is_file() {
+        return Ok(if is_visual_candidate_path(root) { 1 } else { 0 });
+    }
+    let mut total = 0;
+    let entries = std::fs::read_dir(root).map_err(|error| error.to_string())?;
+    for entry in entries {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.is_dir() {
+            total += count_visual_candidates_under_inner(&path)?;
+        } else if path.is_file() && is_visual_candidate_path(&path) {
+            total += 1;
+        }
+    }
+    Ok(total)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -522,6 +576,7 @@ fn build_scope_status(
         .unwrap_or(0);
     let text_total = stats.canonical_documents.max(stats.indexed_documents);
     let anchor_total = stats.blocks;
+    let visual_total = stats.visual_total.max(scope.visual_candidate_count);
     let retry_total = stats.visual_failed;
     let retry_ready = stats.visual_retry_ready;
 
@@ -581,13 +636,13 @@ fn build_scope_status(
             label: "视觉索引".to_string(),
             status: lane_status(
                 stats.visual_indexed,
-                stats.visual_total,
+                visual_total,
                 stats.visual_failed,
                 is_building,
-                !visual_enabled && stats.visual_total == 0,
+                !visual_enabled && visual_total == 0,
             ),
             done: stats.visual_indexed,
-            total: stats.visual_total,
+            total: visual_total,
             failed: stats.visual_failed,
             metadata_only: stats.visual_metadata_only,
             last_updated_at: stats.last_visual_attempted_at.clone(),

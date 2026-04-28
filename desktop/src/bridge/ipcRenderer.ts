@@ -699,25 +699,10 @@ function createIpcRenderer() {
           },
         },
       ),
-      getFileIndexDashboard: <T = Record<string, unknown>>() => invokeCommandGuarded<T>(
-        'knowledge_get_file_index_dashboard',
-        undefined,
-        {
-          timeoutMs: 8000,
-          fallbackChannel: 'knowledge:get-file-index-dashboard',
-          normalize: (value) => (value && typeof value === 'object') ? value as T : {
-            overall: {
-              status: 'idle',
-              indexedFiles: 0,
-              totalFiles: 0,
-              failedFiles: 0,
-              lastIndexedAt: null,
-            },
-            lanes: [],
-            scopes: [],
-          } as T,
-        },
-      ),
+      getFileIndexDashboard: async <T = Record<string, unknown>>() => {
+        const value = await invokeCommand('knowledge_get_file_index_dashboard');
+        return (value && typeof value === 'object') ? value as T : null as T;
+      },
       rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => invokeCommandGuarded(
         'knowledge_rebuild_catalog',
         payload ? { payload } : undefined,
