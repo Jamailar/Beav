@@ -559,6 +559,7 @@ export function Settings({
   const [createAiSourceDraft, setCreateAiSourceDraft] = useState<CreateAiSourceDraft>(() => createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
   const [transcriptionSourceId, setTranscriptionSourceId] = useState('');
   const [embeddingSourceId, setEmbeddingSourceId] = useState('');
+  const [visualIndexSourceId, setVisualIndexSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
   const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
   const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
@@ -918,6 +919,33 @@ export function Settings({
     return String(matchingModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
   }, [getSourceModelList]);
 
+  const filterVisualIndexModels = useCallback((models: AiModelDescriptor[]): AiModelDescriptor[] => {
+    const multimodalChatModels = models.filter((model) => (
+      model.capabilities.includes('chat') && model.inputCapabilities.includes('image')
+    ));
+    if (multimodalChatModels.length > 0) return multimodalChatModels;
+    const chatModels = filterAiModelsByCapability(models, 'chat');
+    return chatModels.length > 0 ? chatModels : models;
+  }, []);
+
+  const pickBestVisualIndexModelForSource = useCallback((
+    source: AiSourceConfig | null,
+    preferredModel?: string,
+  ): string => {
+    if (!source) return '';
+    const normalizedPreferredModel = String(preferredModel || '').trim();
+    const sourceModels = getSourceModelList(source);
+    const visualModels = filterVisualIndexModels(sourceModels);
+    if (normalizedPreferredModel && visualModels.some((item) => item.id === normalizedPreferredModel)) {
+      return normalizedPreferredModel;
+    }
+    const currentDefault = String(source.model || '').trim();
+    if (currentDefault && visualModels.some((item) => item.id === currentDefault)) {
+      return currentDefault;
+    }
+    return String(visualModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
+  }, [filterVisualIndexModels, getSourceModelList]);
+
   const resolveLinkedSourceId = useCallback((options: {
     endpoint?: string;
     apiKey?: string;
@@ -971,12 +999,13 @@ export function Settings({
     return { provider: 'openai-compatible', template: 'openai-images' };
   }, []);
 
-  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'image' | 'video', nextSourceId: string) => {
+  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'visual' | 'image' | 'video', nextSourceId: string) => {
     const source = getAiSourceById(nextSourceId);
     if (!source) return;
 
     if (feature === 'transcription') setTranscriptionSourceId(nextSourceId);
     if (feature === 'embedding') setEmbeddingSourceId(nextSourceId);
+    if (feature === 'visual') setVisualIndexSourceId(nextSourceId);
     if (feature === 'image') setImageSourceId(nextSourceId);
     setFormData((prev) => {
       if (feature === 'transcription') {
@@ -993,6 +1022,15 @@ export function Settings({
           embedding_endpoint: String(source.baseURL || '').trim(),
           embedding_key: String(source.apiKey || '').trim(),
           embedding_model: pickBestModelForSource(source, prev.embedding_model, 'embedding'),
+        };
+      }
+      if (feature === 'visual') {
+        return {
+          ...prev,
+          visual_index_provider: 'openai-compatible',
+          visual_index_endpoint: String(source.baseURL || '').trim(),
+          visual_index_api_key: String(source.apiKey || '').trim(),
+          visual_index_model: pickBestVisualIndexModelForSource(source, prev.visual_index_model),
         };
       }
       if (feature === 'video') {
@@ -1014,7 +1052,7 @@ export function Settings({
         image_model: nextModel,
       };
     });
-  }, [getAiSourceById, inferImageRoutingFromSource, pickBestModelForSource]);
+  }, [getAiSourceById, inferImageRoutingFromSource, pickBestModelForSource, pickBestVisualIndexModelForSource]);
 
   const selectedTranscriptionSource = useMemo(() => {
     return getAiSourceById(transcriptionSourceId);
@@ -1023,6 +1061,10 @@ export function Settings({
   const selectedEmbeddingSource = useMemo(() => {
     return getAiSourceById(embeddingSourceId);
   }, [embeddingSourceId, getAiSourceById]);
+
+  const selectedVisualIndexSource = useMemo(() => {
+    return getAiSourceById(visualIndexSourceId);
+  }, [getAiSourceById, visualIndexSourceId]);
 
   const selectedImageSource = useMemo(() => {
     return getAiSourceById(imageSourceId);
@@ -1035,6 +1077,10 @@ export function Settings({
   const embeddingSourceModels = useMemo(() => {
     return selectedEmbeddingSource ? filterAiModelsByCapability(getSourceModelList(selectedEmbeddingSource), 'embedding') : [];
   }, [getSourceModelList, selectedEmbeddingSource]);
+
+  const visualIndexSourceModels = useMemo(() => {
+    return selectedVisualIndexSource ? filterVisualIndexModels(getSourceModelList(selectedVisualIndexSource)) : [];
+  }, [filterVisualIndexModels, getSourceModelList, selectedVisualIndexSource]);
 
   const imageSourceModels = useMemo(() => {
     return selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
@@ -3116,6 +3162,12 @@ export function Settings({
           model: String(settings.embedding_model || '').trim(),
           fallbackId: normalizedDefaultId,
         });
+        const resolvedVisualIndexSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.visual_index_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.visual_index_api_key || settings.api_key || '').trim(),
+          model: String(settings.visual_index_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
         const resolvedImageSourceId = resolveLinkedSourceIdFromList({
           endpoint: String(settings.image_endpoint || settings.api_endpoint || '').trim(),
           apiKey: String(settings.image_api_key || settings.api_key || '').trim(),
@@ -3174,6 +3226,7 @@ export function Settings({
         setCliRuntimeExecutionMode(loadedCliRuntimeExecutionMode);
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
+        setVisualIndexSourceId(resolvedVisualIndexSourceId);
         setImageSourceId(resolvedImageSourceId);
         setNotificationSettings(parseNotificationSettings(settings.notifications_json));
         clearAiSourceDraftDirty();
@@ -3182,6 +3235,7 @@ export function Settings({
           defaultAiSourceId: normalizedDefaultId,
           transcriptionSourceId: resolvedTranscriptionSourceId,
           embeddingSourceId: resolvedEmbeddingSourceId,
+          visualIndexSourceId: resolvedVisualIndexSourceId,
           imageSourceId: resolvedImageSourceId,
         });
 
@@ -4325,9 +4379,11 @@ export function Settings({
       }
       const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || defaultSource || null;
       const resolvedEmbeddingSource = getAiSourceById(embeddingSourceId) || defaultSource || null;
+      const resolvedVisualIndexSource = getAiSourceById(visualIndexSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
+      const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
       const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
       const resolvedVideoModel = REDBOX_OFFICIAL_VIDEO_MODEL_LIST.includes(String(formData.video_model || '').trim() as typeof REDBOX_OFFICIAL_VIDEO_MODEL_LIST[number])
         ? String(formData.video_model || '').trim()
@@ -4350,9 +4406,7 @@ export function Settings({
       ));
       const releaseLogRetentionDays = Math.max(1, Number(formData.release_log_retention_days || 7) || 7);
       const releaseLogMaxFileMb = Math.max(1, Number(formData.release_log_max_file_mb || 10) || 10);
-      const normalizedVisualIndexProvider = ['openai-compatible', 'custom', 'disabled'].includes(String(formData.visual_index_provider || '').trim())
-        ? String(formData.visual_index_provider || '').trim()
-        : 'openai-compatible';
+      const normalizedVisualIndexProvider = formData.visual_index_enabled ? 'openai-compatible' : 'disabled';
       const parsedVisualIndexTimeoutSeconds = Number(formData.visual_index_timeout_seconds);
       const visualIndexTimeoutSeconds = Number.isFinite(parsedVisualIndexTimeoutSeconds)
         ? Math.min(300, Math.max(10, Math.floor(parsedVisualIndexTimeoutSeconds)))
@@ -4373,8 +4427,9 @@ export function Settings({
       const visualIndexConcurrency = Number.isFinite(parsedVisualIndexConcurrency)
         ? Math.min(4, Math.max(1, Math.floor(parsedVisualIndexConcurrency)))
         : 1;
-      const normalizedVisualIndexEndpoint = String(formData.visual_index_endpoint || '').trim();
-      const normalizedVisualIndexModel = String(formData.visual_index_model || '').trim();
+      const normalizedVisualIndexEndpoint = String(resolvedVisualIndexSource?.baseURL || formData.visual_index_endpoint || resolvedApiEndpoint).trim();
+      const normalizedVisualIndexApiKey = String(resolvedVisualIndexSource?.apiKey || formData.visual_index_api_key || '').trim();
+      const normalizedVisualIndexModel = resolvedVisualIndexModel;
       if (formData.visual_index_enabled && normalizedVisualIndexProvider !== 'disabled' && (!normalizedVisualIndexEndpoint || !normalizedVisualIndexModel)) {
         throw new Error('启用知识库视觉索引时必须填写多模态 Endpoint 和模型名');
       }
@@ -4411,7 +4466,7 @@ export function Settings({
         visual_index_enabled: Boolean(formData.visual_index_enabled) && normalizedVisualIndexProvider !== 'disabled',
         visual_index_provider: normalizedVisualIndexProvider,
         visual_index_endpoint: normalizedVisualIndexEndpoint,
-        visual_index_api_key: String(formData.visual_index_api_key || '').trim(),
+        visual_index_api_key: normalizedVisualIndexApiKey,
         visual_index_model: normalizedVisualIndexModel,
         visual_index_prompt_version: String(formData.visual_index_prompt_version || 'visual-manifest-v1').trim() || 'visual-manifest-v1',
         visual_index_timeout_seconds: visualIndexTimeoutSeconds,
@@ -5177,6 +5232,137 @@ export function Settings({
                       <p className="text-[11px] text-text-tertiary">
                         Embedding 会自动复用所选 AI 源的 Endpoint 与 API Key。
                       </p>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-medium text-text-primary">知识库视觉索引模型</h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const source = getAiSourceById(visualIndexSourceId);
+                          setFormData((d) => {
+                            const nextEnabled = !d.visual_index_enabled;
+                            return {
+                              ...d,
+                              visual_index_enabled: nextEnabled,
+                              visual_index_provider: nextEnabled ? 'openai-compatible' : 'disabled',
+                              visual_index_endpoint: nextEnabled ? String(source?.baseURL || d.visual_index_endpoint || '').trim() : d.visual_index_endpoint,
+                              visual_index_api_key: nextEnabled ? String(source?.apiKey || d.visual_index_api_key || '').trim() : d.visual_index_api_key,
+                              visual_index_model: nextEnabled ? String(d.visual_index_model || pickBestVisualIndexModelForSource(source) || '').trim() : d.visual_index_model,
+                            };
+                          });
+                        }}
+                        className="ui-switch-track shrink-0"
+                        data-size="md"
+                        data-state={formData.visual_index_enabled ? 'on' : 'off'}
+                        aria-label="启用知识库视觉索引"
+                      >
+                        <span className="ui-switch-thumb" />
+                      </button>
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            视觉索引 AI 源
+                          </label>
+                          <AiSourceSelect
+                            value={visualIndexSourceId}
+                            sources={aiSources}
+                            onChange={(nextSourceId) => handleLinkedSourceChange('visual', nextSourceId)}
+                            className="w-full"
+                          />
+                        </div>
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            视觉索引模型
+                          </label>
+                          <AiModelSelect
+                            value={formData.visual_index_model}
+                            onChange={(modelId) => setFormData((d) => ({ ...d, visual_index_model: modelId }))}
+                            className="w-full"
+                            disabled={!visualIndexSourceModels.length}
+                            placeholder="请先在该源中添加支持图片输入的模型"
+                            options={visualIndexSourceModels.map((model) => ({
+                              id: model.id,
+                              label: model.id,
+                              badges: buildModelCapabilityBadges(model.capabilities),
+                              inputIcons: buildModelInputIcons(model.inputCapabilities),
+                            }))}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">超时秒数</label>
+                          <input
+                            type="number"
+                            min={10}
+                            max={300}
+                            value={formData.visual_index_timeout_seconds}
+                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_timeout_seconds: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">并发数</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={4}
+                            value={formData.visual_index_concurrency}
+                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_concurrency: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">最长边</label>
+                          <input
+                            type="number"
+                            min={512}
+                            max={4096}
+                            value={formData.visual_index_max_image_edge}
+                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_max_image_edge: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">PDF 页数</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={200}
+                            value={formData.visual_index_pdf_max_pages}
+                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_pdf_max_pages: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">PDF DPI</label>
+                          <input
+                            type="number"
+                            min={72}
+                            max={300}
+                            value={formData.visual_index_pdf_render_dpi}
+                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_pdf_render_dpi: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 text-xs text-text-secondary">
+                        <input
+                          type="checkbox"
+                          checked={formData.visual_index_skip_small_images}
+                          onChange={(e) => setFormData((d) => ({ ...d, visual_index_skip_small_images: e.target.checked }))}
+                          className="rounded border-border"
+                        />
+                        跳过 64px 以下的小图标
+                      </label>
                     </div>
                   </div>
 
