@@ -890,7 +890,15 @@ redbox-visual-llm-indexer:v1
 - 用户显式选择重建图片语义索引。
 - 图片 content hash 变化。
 - `schemaVersion/parserVersion/promptVersion/model` 变化。
-- 原 canonical 是 `content_origin=ocr`，且用户启用新的 visual index。
+- 原 canonical 是 `content_origin=visual_llm` 但 manifest 缺失、仅为 `metadata_only`，或扫描 PDF 的任意页仍未完成 `visual_llm` 分析，且用户启用新的 visual index。
+
+当前实现增加了 visual backfill 巡检：
+
+- app 初始化时，如果 visual index 已启用且 canonical cache 中存在不完整视觉 manifest，会自动调度 `visual_backfill`。
+- 设置保存时，如果 `visual_index_enabled=true`，会自动检查并调度 `visual_backfill`。
+- full rebuild / watcher rebuild 使用同一套 incomplete-visual refresh policy，因此文件内容变更和已有 metadata-only 视觉索引都会被补齐。
+- backfill 使用 `RefreshIncompleteVisualIndex` cache policy，只重新解析视觉索引不完整的图片/扫描 PDF；完整 visual manifest 和普通 native PDF 继续复用 canonical cache。
+- 文件 watcher 仍负责新文件和内容变更；backfill 负责“旧文件未完成视觉索引”的完整性补齐。
 
 ### Rebuild Planner
 
@@ -1137,6 +1145,7 @@ redbox-visual-llm-indexer:v1
 - 设置页不再出现 OCR 模型、远程 OCR、Apple Vision fallback 文案。
 - 保存设置 payload 不再写 `ocr_*`。
 - full/canonical reparse 文案提示 visual LLM 可能产生费用，而不是 OCR。
+- 启用 visual index 后会自动检查已有 canonical 中的 `metadata_only` 图片/扫描 PDF，并调度 backfill。
 
 ### Task 7: Search Result, Tools, And Audit Output
 
@@ -1188,6 +1197,7 @@ redbox-visual-llm-indexer:v1
 
 - projection-only 变化不触发 LLM 重跑。
 - prompt/schema 变化需要用户确认 canonical reparse。
+- visual backfill 不重跑完整视觉 manifest，只补齐缺失或 `metadata_only` manifest。
 - fixture gate 可在本地稳定运行。
 - `rg "OCR|ocr_|includeOcr"` 只剩 legacy migration/历史兼容/测试说明允许项。
 

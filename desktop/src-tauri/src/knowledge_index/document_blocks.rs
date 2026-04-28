@@ -133,8 +133,8 @@ pub(crate) struct BuildSourceBlocksResult {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CanonicalCachePolicy {
-    CurrentParserOnly,
     ReuseUnchangedFingerprint,
+    RefreshIncompleteVisualIndex,
 }
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
@@ -1078,15 +1078,35 @@ fn build_blocks_for_file(
     }
     let absolute_path = file_path.display().to_string();
     let fingerprint = fingerprint_file(file_path)?;
+    let visual_config = resolve_visual_index_config(state)?;
     let canonical = if let Some(cached) = load_cached_for_policy(
         state,
         &absolute_path,
         &fingerprint.content_hash,
         cache_policy,
     )? {
-        cached
+        if matches!(
+            cache_policy,
+            CanonicalCachePolicy::RefreshIncompleteVisualIndex
+        ) && visual_config.enabled
+            && canonical_needs_visual_backfill(&cached)
+        {
+            let parser_config = resolve_parser_provider_config(state)?;
+            let Some(parsed) = crate::document_parse::parse_path(
+                source_id,
+                root_path,
+                file_path,
+                &visual_config,
+                &parser_config,
+            )?
+            else {
+                return Ok(());
+            };
+            parsed
+        } else {
+            cached
+        }
     } else {
-        let visual_config = resolve_visual_index_config(state)?;
         let parser_config = resolve_parser_provider_config(state)?;
         let Some(parsed) = crate::document_parse::parse_path(
             source_id,
@@ -1144,7 +1164,7 @@ fn load_cached_for_policy(
     cache_policy: CanonicalCachePolicy,
 ) -> Result<Option<CanonicalDocument>, String> {
     let cached = match cache_policy {
-        CanonicalCachePolicy::CurrentParserOnly => {
+        CanonicalCachePolicy::RefreshIncompleteVisualIndex => {
             canonical_store::load_cached_document(state, absolute_path, content_hash)?
         }
         CanonicalCachePolicy::ReuseUnchangedFingerprint => {
@@ -1152,6 +1172,50 @@ fn load_cached_for_policy(
         }
     };
     Ok(cached.map(normalize_cached_canonical_parser_info))
+}
+
+pub(crate) fn canonical_needs_visual_backfill(document: &CanonicalDocument) -> bool {
+    if !document_requires_visual_index(document) {
+        return false;
+    }
+    let Some(manifest) = document.visual_manifest.as_ref() else {
+        return true;
+    };
+    let manifests = visual_manifest_items(manifest);
+    if manifests.is_empty() {
+        return true;
+    }
+    manifests
+        .iter()
+        .any(|manifest| visual_manifest_processing_mode(manifest) != Some("visual_llm"))
+}
+
+fn document_requires_visual_index(document: &CanonicalDocument) -> bool {
+    is_visual_image_source_type(&document.source_type)
+        || document.content_origin == "visual_llm"
+        || document.visual_manifest.is_some()
+}
+
+fn is_visual_image_source_type(source_type: &str) -> bool {
+    matches!(
+        source_type.trim().to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" | "webp"
+    )
+}
+
+fn visual_manifest_items(manifest: &Value) -> Vec<&Value> {
+    manifest
+        .get("pages")
+        .and_then(Value::as_array)
+        .map(|pages| pages.iter().collect())
+        .unwrap_or_else(|| vec![manifest])
+}
+
+fn visual_manifest_processing_mode(manifest: &Value) -> Option<&str> {
+    manifest
+        .get("analysis")
+        .and_then(|analysis| analysis.get("processingMode"))
+        .and_then(Value::as_str)
 }
 
 fn normalize_cached_canonical_parser_info(mut document: CanonicalDocument) -> CanonicalDocument {
@@ -2112,6 +2176,93 @@ mod tests {
     fn low_confidence_ocr_is_penalized() {
         assert!(confidence_score("ocr", Some(0.52)) < confidence_score("ocr", Some(0.92)));
         assert_eq!(confidence_score("native", None), 0.0);
+    }
+
+    fn test_canonical_document(
+        source_type: &str,
+        content_origin: &str,
+        visual_manifest: Option<Value>,
+    ) -> CanonicalDocument {
+        CanonicalDocument {
+            document_id: format!("source-1:file.{source_type}"),
+            source_id: "source-1".to_string(),
+            absolute_path: format!("/tmp/file.{source_type}"),
+            relative_path: format!("file.{source_type}"),
+            source_type: source_type.to_string(),
+            title: Some("file".to_string()),
+            language: Some("zh".to_string()),
+            content_origin: content_origin.to_string(),
+            ocr_average_confidence: None,
+            legal_metadata: LegalMetadata::default(),
+            parser_info: ParserInfo {
+                parser_name: "test".to_string(),
+                parser_version: "test".to_string(),
+                strategy: "test".to_string(),
+                fallback_used: false,
+            },
+            blocks: vec![CanonicalBlock {
+                block_type: "image.scene".to_string(),
+                section_path: vec!["visual".to_string()],
+                page: None,
+                line_start: 1,
+                line_end: 1,
+                text: "视觉内容".to_string(),
+                language: Some("zh".to_string()),
+                content_origin: content_origin.to_string(),
+                ocr_confidence: None,
+            }],
+            attachments: Vec::new(),
+            visual_manifest,
+        }
+    }
+
+    #[test]
+    fn visual_backfill_detects_metadata_only_image_manifest() {
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "analysis": { "processingMode": "metadata_only" }
+            })),
+        );
+
+        assert!(canonical_needs_visual_backfill(&document));
+    }
+
+    #[test]
+    fn visual_backfill_skips_complete_visual_image_manifest() {
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "analysis": { "processingMode": "visual_llm" }
+            })),
+        );
+
+        assert!(!canonical_needs_visual_backfill(&document));
+    }
+
+    #[test]
+    fn visual_backfill_skips_native_pdf_without_visual_manifest() {
+        let document = test_canonical_document("pdf", "native", None);
+
+        assert!(!canonical_needs_visual_backfill(&document));
+    }
+
+    #[test]
+    fn visual_backfill_detects_incomplete_scanned_pdf_page_manifest() {
+        let document = test_canonical_document(
+            "pdf",
+            "visual_llm",
+            Some(json!({
+                "pages": [
+                    { "analysis": { "processingMode": "visual_llm" } },
+                    { "analysis": { "processingMode": "metadata_only" } }
+                ]
+            })),
+        );
+
+        assert!(canonical_needs_visual_backfill(&document));
     }
 
     #[test]

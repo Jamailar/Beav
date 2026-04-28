@@ -11,14 +11,15 @@ use crate::{
         catalog::{replace_catalog, KnowledgeCatalogSummary},
         citation_anchors::{build_anchors_for_blocks, replace_anchors, replace_anchors_for_source},
         document_blocks::{
-            block_records_from_document, build_blocks_for_source_with_cache_policy, replace_blocks,
-            replace_blocks_for_source, CanonicalCachePolicy,
+            block_records_from_document, build_blocks_for_source_with_cache_policy,
+            canonical_needs_visual_backfill, replace_blocks, replace_blocks_for_source,
+            CanonicalCachePolicy,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
-    now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
-    YoutubeVideoRecord,
+    now_iso, payload_field, workspace_root, AppState, DocumentKnowledgeSourceRecord,
+    KnowledgeNoteRecord, YoutubeVideoRecord,
 };
 
 type IndexedFileRow = (String, String, i64, i64, String, String);
@@ -331,7 +332,11 @@ fn finalize_item_hash(items: &mut [KnowledgeCatalogSummary], rows: &[IndexedFile
 }
 
 pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
-    rebuild_catalog_with_cache_policy(app, state, CanonicalCachePolicy::CurrentParserOnly)
+    rebuild_catalog_with_cache_policy(
+        app,
+        state,
+        CanonicalCachePolicy::RefreshIncompleteVisualIndex,
+    )
 }
 
 pub(crate) fn refresh_catalog_summaries(
@@ -370,6 +375,41 @@ pub(crate) fn rebuild_catalog_reusing_unchanged_canonical(
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
     rebuild_catalog_with_cache_policy(app, state, CanonicalCachePolicy::ReuseUnchangedFingerprint)
+}
+
+pub(crate) fn backfill_incomplete_visual_index(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    if !visual_backfill_needed(state)? {
+        return Ok(());
+    }
+    rebuild_catalog_with_cache_policy(
+        app,
+        state,
+        CanonicalCachePolicy::RefreshIncompleteVisualIndex,
+    )
+}
+
+pub(crate) fn visual_backfill_needed(state: &State<'_, AppState>) -> Result<bool, String> {
+    if !visual_index_enabled(state)? {
+        return Ok(false);
+    }
+    for row in load_document_rows(state, None)? {
+        let canonical: crate::document_parse::CanonicalDocument =
+            serde_json::from_str(&row.canonical_json).map_err(|error| error.to_string())?;
+        if canonical_needs_visual_backfill(&canonical) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn visual_index_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
+    let settings = crate::with_store(state, |store| Ok(store.settings.clone()))?;
+    Ok(payload_field(&settings, "visual_index_enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false))
 }
 
 fn rebuild_catalog_with_cache_policy(
