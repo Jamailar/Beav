@@ -29,6 +29,7 @@ import {
 import { RedClawHistoryDrawer } from './redclaw/RedClawHistoryDrawer';
 import {
     isRedClawOnboardingCompleted,
+    type RedclawOnboardingState,
 } from './redclaw/onboardingState';
 import { RedClawSidebar } from './redclaw/RedClawSidebar';
 import type {
@@ -125,7 +126,7 @@ export function RedClaw({
     const [runnerStatus, setRunnerStatus] = useState<RunnerStatus | null>(null);
     const [automationLoading, setAutomationLoading] = useState(false);
     const [automationMessage, setAutomationMessage] = useState('');
-    const [onboardingState, setOnboardingState] = useState<Record<string, unknown> | null>(null);
+    const [onboardingState, setOnboardingState] = useState<RedclawOnboardingState | undefined>(undefined);
     const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
     const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
 
@@ -458,9 +459,16 @@ export function RedClaw({
                 onboardingState?: Record<string, unknown>;
             } | null;
             if (requestId !== onboardingRequestIdRef.current) return;
-            setOnboardingState(bundle?.onboardingState || null);
+            setOnboardingState(
+                bundle?.onboardingState && typeof bundle.onboardingState === 'object'
+                    ? bundle.onboardingState
+                    : null
+            );
         } catch (error) {
             console.error('Failed to load RedClaw onboarding bundle:', error);
+            if (requestId === onboardingRequestIdRef.current) {
+                setOnboardingState(null);
+            }
         }
     }, []);
 
@@ -501,6 +509,7 @@ export function RedClaw({
     useEffect(() => {
         if (!isActive) return;
         const onSpaceChanged = () => {
+            setOnboardingState(undefined);
             void initSession();
             void loadRunnerStatus(true);
             void loadSkills();
@@ -514,6 +523,7 @@ export function RedClaw({
     }, [initSession, isActive, loadOnboardingBundle, loadRunnerStatus, loadSkills]);
 
     useEffect(() => {
+        setOnboardingState(undefined);
         setHideOnboardingPrompt(false);
     }, [activeSpaceId]);
 
@@ -1060,18 +1070,22 @@ export function RedClaw({
         }
     }, [loadRunnerStatus]);
 
-    const onboardingCompleted = useMemo(() => isRedClawOnboardingCompleted(onboardingState), [onboardingState]);
+    const onboardingKnown = onboardingState !== undefined;
+    const onboardingCompleted = useMemo(
+        () => onboardingState !== undefined && isRedClawOnboardingCompleted(onboardingState),
+        [onboardingState],
+    );
 
     const welcomeActions = useMemo(() => {
         const actions = [];
-        if (!onboardingCompleted) {
+        if (onboardingKnown && !onboardingCompleted) {
             actions.push({
                 label: '定义这个空间',
                 onClick: () => onOpenRedClawOnboarding?.(),
                 icon: <Sparkles className="w-5 h-5" />,
                 color: 'text-amber-500',
             });
-        } else {
+        } else if (onboardingKnown) {
             actions.push({
                 label: '重新定义空间风格',
                 onClick: () => onOpenRedClawOnboarding?.(),
@@ -1093,7 +1107,7 @@ export function RedClaw({
             }
         );
         return actions;
-    }, [onOpenRedClawOnboarding, onboardingCompleted]);
+    }, [onOpenRedClawOnboarding, onboardingCompleted, onboardingKnown]);
 
 
     return (
@@ -1109,7 +1123,7 @@ export function RedClaw({
                 ) : activeSessionId ? (
                     <div className="h-full min-h-0 flex flex-col">
                         <div className="relative min-h-0 flex-1 overflow-hidden">
-                            {!onboardingCompleted && !hideOnboardingPrompt && (
+                            {onboardingKnown && !onboardingCompleted && !hideOnboardingPrompt && (
                                 <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center px-4">
                                     <div className="pointer-events-auto w-full max-w-2xl rounded-[28px] border border-amber-300/20 bg-[linear-gradient(135deg,rgba(24,18,14,0.96),rgba(17,13,15,0.94))] p-5 text-white shadow-[0_30px_80px_rgba(0,0,0,0.28)] backdrop-blur-xl">
                                         <div className="flex items-start justify-between gap-4">
