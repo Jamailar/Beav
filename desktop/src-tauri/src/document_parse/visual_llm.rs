@@ -160,6 +160,14 @@ pub(super) fn analyze_visual_source(
     let payload = match visual_payload_for_model(image_path, unit, config.max_image_edge) {
         Ok(payload) => payload,
         Err(error) => {
+            visual_index_log(format!(
+                "payload_failed unit={} kind={} source={} path={} error={}",
+                unit.unit_id,
+                unit.unit_kind,
+                unit.source_id,
+                unit.relative_path,
+                truncate_log_value(&error, 320)
+            ));
             return Ok(stamp_manifest_config(
                 metadata_only_manifest(
                     unit,
@@ -172,6 +180,26 @@ pub(super) fn analyze_visual_source(
             ));
         }
     };
+    let timeout_seconds = config.timeout_seconds.clamp(10, 300);
+    let endpoint_url = normalize_chat_completions_endpoint(endpoint);
+    let payload_hash = stable_hash_bytes(&payload.bytes);
+    visual_index_log(format!(
+        "request_start unit={} kind={} source={} path={} page={} model={} endpointHash={} mime={} bytes={} payloadHash={} size={} timeout={}s",
+        unit.unit_id,
+        unit.unit_kind,
+        unit.source_id,
+        unit.relative_path,
+        unit.page_number
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        model,
+        config.endpoint_hash().unwrap_or_else(|| "-".to_string()),
+        payload.mime_type,
+        payload.bytes.len(),
+        payload_hash,
+        format_unit_size(unit),
+        timeout_seconds
+    ));
     let data_url = format!(
         "data:{};base64,{}",
         payload.mime_type,
@@ -207,24 +235,34 @@ pub(super) fn analyze_visual_source(
             }
         ]
     });
-    let response = crate::run_curl_json_with_timeout(
+    let response = crate::run_curl_json_response(
         "POST",
-        &normalize_chat_completions_endpoint(endpoint),
+        &endpoint_url,
         config.api_key.as_deref(),
         &[],
         Some(body),
-        Some(config.timeout_seconds.clamp(10, 300)),
+        Some(timeout_seconds),
     );
-    let value = match response {
-        Ok(response) => extract_manifest_json(&response).unwrap_or_else(|| {
-            metadata_only_manifest(
-                unit,
-                Some(model),
-                &config.prompt_version,
-                Some("visual model response did not contain JSON manifest".to_string()),
-            )
-        }),
+    let response = match response {
+        Ok(response) => {
+            visual_index_log(format!(
+                "request_done unit={} status={} responseBytes={} responsePreview={}",
+                unit.unit_id,
+                response.status,
+                json_text_len(&response.body),
+                json_preview(&response.body, 420)
+            ));
+            response
+        }
         Err(error) => {
+            visual_index_log(format!(
+                "request_failed unit={} kind={} source={} path={} error={}",
+                unit.unit_id,
+                unit.unit_kind,
+                unit.source_id,
+                unit.relative_path,
+                truncate_log_value(&error, 420)
+            ));
             return Ok(stamp_manifest_config(
                 metadata_only_manifest(
                     unit,
@@ -237,7 +275,57 @@ pub(super) fn analyze_visual_source(
             ));
         }
     };
+    if !(200..300).contains(&response.status) {
+        let preview = json_preview(&response.body, 420);
+        visual_index_log(format!(
+            "request_http_error unit={} status={} responsePreview={}",
+            unit.unit_id, response.status, preview
+        ));
+        return Ok(stamp_manifest_config(
+            metadata_only_manifest(
+                unit,
+                Some(model),
+                &config.prompt_version,
+                Some(format!(
+                    "visual model request failed: HTTP {}; body: {}",
+                    response.status, preview
+                )),
+            ),
+            config,
+            Some(model),
+        ));
+    }
+    let value = extract_manifest_json(&response.body).unwrap_or_else(|| {
+        visual_index_log(format!(
+            "manifest_missing unit={} status={} responsePreview={}",
+            unit.unit_id,
+            response.status,
+            json_preview(&response.body, 420)
+        ));
+        metadata_only_manifest(
+            unit,
+            Some(model),
+            &config.prompt_version,
+            Some(format!(
+                "visual model response did not contain JSON manifest; HTTP {}",
+                response.status
+            )),
+        )
+    });
     let manifest = normalize_manifest(value, unit);
+    visual_index_log(format!(
+        "manifest_ready unit={} status={} facts={} retrieval={} warnings={}",
+        unit.unit_id,
+        response.status,
+        array_len_at(&manifest, "factBlocks"),
+        array_len_at(&manifest, "retrievalProjection"),
+        manifest
+            .get("analysis")
+            .and_then(|analysis| analysis.get("warnings"))
+            .and_then(Value::as_array)
+            .map(|value| value.len())
+            .unwrap_or(0)
+    ));
     Ok(stamp_manifest_config(manifest, config, Some(model)))
 }
 
@@ -268,6 +356,57 @@ fn stable_hash(value: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn stable_hash_bytes(value: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value);
+    let hash = hasher.finalize();
+    hash[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn visual_index_log(message: impl Into<String>) {
+    let line = format!("[visual-index] {}", message.into());
+    eprintln!("{line}");
+    crate::append_debug_trace_global(line);
+}
+
+fn format_unit_size(unit: &VisualSourceUnit) -> String {
+    match (unit.width, unit.height) {
+        (Some(width), Some(height)) => format!("{width}x{height}"),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn json_text_len(value: &Value) -> usize {
+    serde_json::to_string(value)
+        .map(|text| text.chars().count())
+        .unwrap_or(0)
+}
+
+fn json_preview(value: &Value, limit: usize) -> String {
+    let raw = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+    truncate_log_value(&crate::redact_debug_data_urls(&raw), limit)
+}
+
+fn truncate_log_value(raw: &str, limit: usize) -> String {
+    let trimmed = raw.trim();
+    if trimmed.chars().count() <= limit {
+        return trimmed.to_string();
+    }
+    let prefix = trimmed.chars().take(limit).collect::<String>();
+    format!("{prefix}...")
+}
+
+fn array_len_at(value: &Value, key: &str) -> usize {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone)]
