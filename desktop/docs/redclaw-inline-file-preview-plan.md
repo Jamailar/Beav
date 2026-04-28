@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: not_started
+execution_status: completed
 last_updated: 2026-04-28
 owner: redclaw-platform
 scope: desktop
@@ -10,19 +10,21 @@ target_files:
   - desktop/src/components/MessageItem.tsx
   - desktop/src/pages/redclaw/RedClawFilePreviewPane.tsx
   - desktop/src/utils/pathManager.ts
+  - desktop/shared/localAsset.ts
 success_metrics:
-  - AI 消息中的 Markdown 链接和裸 URL 在 RedClaw 中渲染为可点击预览按钮
-  - 点击链接后不离开 RedClaw 页面，聊天区域左移，右侧显示文件预览区域
+  - AI 消息中的 Markdown 链接和裸 URL 在 RedClaw 中渲染为文件预览卡片
+  - 点击文件卡片后不离开 RedClaw 页面，聊天区域左移，右侧显示文件预览区域
   - 关闭预览后聊天区域恢复全宽，当前对话和输入草稿不丢失
   - 普通 Chat、KnowledgeChatModal 和其他复用 Chat 的页面不改变链接行为
   - 本地图片、视频、音频、PDF、HTML 和外部网页至少各有明确预览或恢复动作
+  - Windows 盘符路径、UNC 路径、file URL、redbox-asset URL、local-file URL、POSIX 绝对路径、普通 http(s) URL 均能被正确识别、归一化和预览或恢复
 ---
 
 # RedClaw Inline File Preview Plan
 
 ## 1. Goal
 
-在 `RedClaw` 页面内增加一个内嵌文件预览工作区：当 AI 回复中出现链接、文件路径或可渲染资源链接时，消息内不再只显示普通蓝色外链，而是渲染成一个按钮。用户点击按钮后，当前 `RedClaw` 页面切换为左右分栏：
+在 `RedClaw` 页面内增加一个内嵌文件预览工作区：当 AI 回复中出现链接、文件路径或可渲染资源链接时，消息内不再只显示普通蓝色外链，而是渲染成文件卡片。用户点击卡片里的 `打开` 后，当前 `RedClaw` 页面切换为左右分栏：
 
 - 左侧继续显示聊天内容、工作流和输入框。
 - 右侧显示当前链接对应的文件或网页预览。
@@ -34,7 +36,7 @@ success_metrics:
 
 本次不做以下事情：
 
-- 不把所有聊天页面的链接都改成按钮。
+- 不把所有聊天页面的链接都改成文件卡片。
 - 不 fork 一套 RedClaw 专用消息渲染组件。
 - 不新增顶层 tool 或 AI runtime 能力。
 - 不让 `MessageItem` 负责文件读取、侧栏布局或 RedClaw 状态。
@@ -70,9 +72,11 @@ RedClaw.tsx
 
 - `react-markdown` + `remark-gfm` 已经负责 Markdown 链接、裸 URL autolink、表格和代码块渲染。
 - `resolveAssetUrl` 已经负责把本地资源转成 Tauri 可渲染 asset URL。
+- `desktop/shared/localAsset.ts` 已经提供 `isWindowsAbsoluteLocalPath`、`isUncLocalPath`、`isLocalAssetSource`、`extractLocalAssetPathCandidate`、`toRedboxAssetUrl` 等本地资源识别能力。
 - `app:open-path` 已存在，可用于系统打开路径或 URL。
 - `file:show-in-folder` 已存在，可用于本地文件的文件夹显示。
 - `MessageItem` 已经有图片和视频的内联渲染经验，可以复用类型判断思路。
+- Rust 侧 `file_url_for_path`、`asset_preview_url_from_result` 已经有 Windows drive path 相关测试，计划实现必须沿用这些语义，不要在 renderer 单独发明另一套路径格式。
 
 ## 4. Recommended Architecture
 
@@ -87,7 +91,7 @@ RedClaw.tsx
 │                                                             │
 │ ┌───────────────────────────────┬─────────────────────────┐ │
 │ │ Chat.tsx                       │ RedClawFilePreviewPane  │ │
-│ │ linkRenderMode=preview-button  │ target=previewTarget    │ │
+│ │ linkRenderMode=preview-card    │ target=previewTarget    │ │
 │ │ onMessageLinkPreview=handler   │                         │ │
 │ └───────────────────────────────┴─────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
@@ -97,7 +101,7 @@ RedClaw.tsx
 
 | Layer | Responsibility | Must Not Do |
 | --- | --- | --- |
-| `MessageItem` | 把链接渲染为按钮，点击时上抛结构化 target | 不管理侧栏、不读取文件、不知道 RedClaw 布局 |
+| `MessageItem` | 把链接渲染为文件卡片，点击时上抛结构化 target | 不管理侧栏、不读取文件、不知道 RedClaw 布局 |
 | `Chat` | 透传链接渲染模式和点击回调 | 不保存预览状态、不改变其他页面行为 |
 | `RedClaw` | 保存当前预览对象，切换左右分栏，协调技能面板/历史抽屉 | 不解析 Markdown、不读取大文件 |
 | `RedClawFilePreviewPane` | 根据 target 渲染预览、操作栏、错误态 | 不影响聊天消息状态、不触发 AI runtime |
@@ -120,7 +124,7 @@ RedClaw.tsx
 
 ### 5.2 Preview State
 
-点击 AI 消息中的链接按钮后：
+点击 AI 消息中的文件卡片后：
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
@@ -135,7 +139,7 @@ RedClaw.tsx
 
 交互要求：
 
-1. 点击链接按钮后右侧预览区域出现，聊天区域左移。
+1. 点击文件卡片里的 `打开` 后右侧预览区域出现，聊天区域左移。
 2. 输入框仍然可用，不能被右侧区域遮挡。
 3. 用户连续点击不同链接时，右侧区域直接替换内容。
 4. 关闭右侧区域后，聊天区域恢复全宽。
@@ -143,28 +147,44 @@ RedClaw.tsx
 6. 右侧预览区域打开时，如果技能面板抽屉已打开，应自动收起技能面板，避免两个右侧面板竞争。
 7. 历史抽屉仍可打开，但历史抽屉是临时覆盖层；关闭后预览状态保留。
 
-### 5.3 Link Button Behavior
+### 5.3 File Link Card Behavior
 
-只在 `RedClaw` 的 AI 消息中启用按钮化链接：
+只在 `RedClaw` 的 AI 消息中启用文件链接卡片：
 
-- AI 消息中的 Markdown 链接：`[文件名](path-or-url)` 渲染为按钮。
-- AI 消息中的裸 URL：由 `remark-gfm` autolink 后同样渲染为按钮。
+- AI 消息中的 Markdown 链接：`[文件名](path-or-url)` 渲染为文件卡片。
+- AI 消息中的裸 URL：由 `remark-gfm` autolink 后同样渲染为文件/网页卡片。
 - 用户消息中的链接默认保持普通链接，避免用户输入内容被过度转义成工作台动作。
-- 思考内容中的链接是否按钮化可保持与 AI 正文一致，因为 `MessageItem` 目前也用同一 Markdown 渲染链路展示 thought。
+- 思考内容中的链接是否卡片化可保持与 AI 正文一致，因为 `MessageItem` 目前也用同一 Markdown 渲染链路展示 thought。
 
-按钮内容优先级：
+卡片内容优先级：
 
 1. Markdown 链接文本。
 2. URL 的文件名部分。
 3. 域名。
 4. `打开链接`。
 
-按钮视觉：
+卡片视觉必须接近用户给出的文件卡片截图，而不是一个小型 inline pill：
 
-- 使用紧凑 inline-flex button，不撑高段落。
-- 左侧用 lucide 图标表达类型：`Image`, `Video`, `FileText`, `Globe`, `File`, `ExternalLink`。
-- 长文件名单行省略，hover title 显示完整路径/URL。
-- 当前正在预览的链接可以显示 selected 状态。
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ [file icon tile]  image-semantic-retrieval-architecture-plan.md │  ↗ 打开 ˅ │
+│                   文档 · MD                                  │            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+UI requirements:
+
+- 卡片是 block-level attachment card，宽度跟随 AI 消息正文容器，最大宽度约 `720px`，不能只是一段文字里的小按钮。
+- 卡片背景使用轻量 surface，边框低对比，圆角约 `14px`，整体视觉接近截图里的浅色文件卡片。
+- 左侧是固定尺寸图标 tile，约 `52px x 52px`，图标使用 lucide：`FileText`, `Image`, `Video`, `Music`, `FileArchive`, `Globe`, `File`。
+- 中间主标题显示文件名或链接标题，`font-medium/semibold`，长文件名单行省略。
+- 中间副标题显示类型摘要，例如 `文档 · MD`、`图片 · PNG`、`视频 · MP4`、`网页 · example.com`、`文件 · UNKNOWN`。
+- 右侧是独立操作按钮，显示 external/open 图标 + `打开` + chevron，点击主按钮直接打开右侧预览 pane。
+- chevron 后续可扩展菜单；第一版可以只显示图标但不展开，或者隐藏 chevron，不能做假菜单。
+- hover 状态只提高边框/背景对比，不改变卡片高度。
+- 当前正在右侧预览的卡片显示 selected 状态，例如 accent border 或淡色 ring。
+- 卡片内的系统打开、复制、显示文件夹等二级动作不放在消息卡片里，放到右侧 preview pane header，避免消息区域变成工具栏。
+- 多个链接连续出现时渲染为纵向卡片列表，间距约 `8px`，不要挤在同一行。
 
 ## 6. Data Model
 
@@ -187,16 +207,107 @@ export interface ChatMessageLinkTarget {
   kind: ChatMessageLinkKind;
   resolvedUrl: string;
   isLocal: boolean;
+  localPathCandidate?: string;
   sourceMessageId: string;
 }
 ```
 
 `href` 是 Markdown 原始链接值。  
 `resolvedUrl` 是 `resolveAssetUrl(href)` 后的可渲染地址。  
-`isLocal` 来自 `isLocalAssetUrl(href)` 或 `file:` 判断。  
+`isLocal` 来自 `isLocalAssetUrl(href)` / `isLocalAssetSource(href)`，不能只看 `file:`。  
+`localPathCandidate` 来自 `extractLocalAssetPathCandidate(href)`，只用于本地文件的系统打开和显示文件夹。  
 `kind` 由 URL/path 后缀、协议和 MIME hint 推断，不依赖 AI 文本语义。
 
-## 7. File Type Detection
+## 7. Path Parsing Requirements
+
+路径解析是本功能的高风险点，必须作为实现的核心约束处理。实现不能只覆盖 macOS/POSIX 路径，也不能把 Windows 路径当普通 URL 字符串处理。
+
+### 7.1 Accepted Input Forms
+
+RedClaw AI 消息中的文件链接卡片必须正确处理以下输入：
+
+| Input form | Example | Expected handling |
+| --- | --- | --- |
+| POSIX absolute path | `/Users/Jam/.redbox/demo/report.pdf` | 识别为 local，交给 `resolveAssetUrl` |
+| POSIX path with spaces | `/Users/Jam/My Images/demo 1.png` | 保留空格语义，预览 URL 由 helper 编码 |
+| Windows drive path | `C:\Users\Jam\.redconvert\spaces\default\media\demo 1.png` | 识别为 local，不被误判为 `c:` protocol |
+| Windows drive path with slash | `C:/Users/Jam/.redconvert/spaces/default/media/demo 1.png` | 识别为 local，保持 drive letter |
+| Windows file URL | `file:///C:/Users/Jam/My%20Images/demo%201.png` | 识别为 local file URL，解析后仍能判断后缀 |
+| Windows localhost file URL | `file://localhost/C:/Users/Jam/demo.pdf` | 识别为 local，不把 `localhost` 当 UNC host |
+| UNC path | `\\NAS\RedBox\assets\demo.mp4` | 识别为 local UNC，保留 server/share |
+| UNC file URL | `file://NAS/RedBox/assets/demo.mp4` | 识别为 local UNC，不丢 host |
+| RedBox asset URL | `redbox-asset://asset/C:/Users/Jam/demo.png` | 识别为 local asset source |
+| Legacy local-file URL | `local-file:///C:/Users/Jam/demo.png` | 兼容读取并归一化 |
+| HTTP URL | `https://example.com/report.pdf` | 识别为 remote，按后缀推断 kind |
+| URL with query/hash | `https://example.com/report.pdf?token=abc#page=2` | 后缀判断忽略 query/hash |
+| Markdown angle URL | `[报告](<file:///C:/Users/Jam/My Images/report.pdf>)` | 由 Markdown parser 处理，renderer 接收 href 后继续归一化 |
+
+### 7.2 Required Helper Boundary
+
+实现必须复用现有 helper：
+
+- `desktop/shared/localAsset.ts`
+  - `isWindowsAbsoluteLocalPath`
+  - `isUncLocalPath`
+  - `isLikelyAbsoluteLocalPath`
+  - `isFileUrl`
+  - `isLegacyLocalFileUrl`
+  - `isRedboxAssetUrl`
+  - `isLocalAssetSource`
+  - `extractLocalAssetPathCandidate`
+- `desktop/src/utils/pathManager.ts`
+  - `resolveAssetUrl`
+  - `hasRenderableAssetUrl`
+  - `isLocalAssetUrl`
+
+禁止在 `RedClaw.tsx` 或 `MessageItem.tsx` 中重新写一套“看起来能用”的本地路径 parser。可以新增轻量 wrapper，例如 `buildPreviewTargetFromHref`，但 wrapper 的本地路径判断必须调用上述 helper。
+
+### 7.3 Windows-Specific Failure Modes To Avoid
+
+必须重点防止以下错误：
+
+1. **把 `C:\...` 当成 URL protocol**  
+   `new URL('C:\Users\...')` 或简单 protocol regex 可能把 `C:` 当 scheme。实现应先用 `isWindowsAbsoluteLocalPath` 识别本地路径。
+
+2. **丢失 UNC host**  
+   `file://NAS/share/demo.mp4` 的 `NAS` 是 UNC host，不是普通网页域名。解析后应保留为 `//NAS/share/demo.mp4`。
+
+3. **重复编码空格和中文路径**  
+   已经是 `%20` 的 file URL 不应再次编码成 `%2520`。应通过 `extractLocalAssetPathCandidate` 解码候选路径，再交给 `convertFileSrc` / `resolveAssetUrl`。
+
+4. **反斜杠破坏 Markdown 链接**  
+   AI 如果输出 Windows 裸路径，Markdown 可能把反斜杠当 escape。Prompt 层后续可鼓励输出 `<C:\path\file.png>` 或 fenced path，但 renderer 仍要兼容实际 href 中出现的反斜杠。
+
+5. **drive letter 前导斜杠问题**  
+   `file:///C:/...` 解析得到的 pathname 可能是 `/C:/...`，归一化时需要去掉多余前导 slash。现有 helper 已处理，不能绕开。
+
+6. **系统打开与预览 URL 混用**  
+   `resolvedUrl` 用于 WebView 预览，`href` 或 local path candidate 用于 `app:open-path` / `file:show-in-folder`。不要把 Tauri asset URL 直接传给系统文件管理器。
+
+### 7.4 Path Target Fields
+
+为了避免混用，`ChatMessageLinkTarget` 必须保留独立的 `resolvedUrl` 与 `localPathCandidate`：
+
+```ts
+export interface ChatMessageLinkTarget {
+  href: string;
+  label: string;
+  kind: ChatMessageLinkKind;
+  resolvedUrl: string;
+  isLocal: boolean;
+  localPathCandidate?: string;
+  sourceMessageId: string;
+}
+```
+
+字段语义：
+
+- `href`: Markdown 原始 href，用于显示、复制和 remote open fallback。
+- `resolvedUrl`: `resolveAssetUrl(href)` 的结果，只用于 WebView 渲染。
+- `localPathCandidate`: `extractLocalAssetPathCandidate(href)` 的结果，只在 `isLocal` 时存在，用于系统打开和显示文件夹。
+- `isLocal`: 必须基于 `isLocalAssetUrl` / `isLocalAssetSource`，不能只看 `file:`。
+
+## 8. File Type Detection
 
 第一版使用轻量 deterministic 推断，不调用 host 扫描文件内容。
 
@@ -215,9 +326,10 @@ export interface ChatMessageLinkTarget {
 
 - 查询串和 hash 不应影响后缀判断，比如 `demo.pdf?token=...` 仍应识别为 PDF。
 - Windows 路径、POSIX 路径、`file://`、Tauri asset URL 都要通过已有 path helper 归一化。
+- 类型判断应优先基于 `localPathCandidate || href` 的去 query/hash 版本；不要直接对 `resolvedUrl` 判断，因为 Tauri asset URL 可能改变原始扩展名附近的字符串形态。
 - 禁止 `javascript:`，未知协议不进入预览 pane。
 
-## 8. Preview Pane Design
+## 9. Preview Pane Design
 
 新增文件：
 
@@ -257,6 +369,13 @@ Header actions：
 - 在文件夹中显示，仅本地文件显示。
 - 关闭预览。
 
+动作使用路径：
+
+- 复制：优先复制 `localPathCandidate || href`，不要复制 `resolvedUrl`，否则用户会拿到 Tauri 内部 asset URL。
+- 系统打开：本地文件传 `localPathCandidate || href`；远程网页传 `href`。
+- 显示文件夹：只允许本地文件，传 `localPathCandidate || href` 给 `file:show-in-folder`。
+- 预览渲染：只使用 `resolvedUrl`。
+
 Body rendering：
 
 | Kind | Renderer | Notes |
@@ -276,7 +395,7 @@ Body rendering：
 - iframe 的 load/error 信号不完全可靠。
 - 第一版应提供明确 fallback：`无法在 RedClaw 内预览时，请在系统浏览器打开`。
 
-## 9. Layout Implementation
+## 10. Layout Implementation
 
 在 `RedClaw.tsx` 的 Chat 容器外层增加分栏状态。
 
@@ -314,16 +433,16 @@ Body rendering：
 - 当前 Tauri window `minWidth` 是 `1180`，桌面端足够做双栏。
 - 如果未来允许更窄窗口，小于 `960px` 时可以把预览 pane 改为底部 sheet 或临时 overlay，但不作为本次主路径。
 
-## 10. File-Level Implementation Plan
+## 11. File-Level Implementation Plan
 
-### 10.1 `MessageItem.tsx`
+### 11.1 `MessageItem.tsx`
 
 新增 props：
 
 ```ts
 interface MessageItemProps {
   ...
-  linkRenderMode?: 'default' | 'preview-button';
+  linkRenderMode?: 'default' | 'preview-card';
   onPreviewLink?: (target: ChatMessageLinkTarget) => void;
 }
 ```
@@ -334,15 +453,17 @@ interface MessageItemProps {
 - `labelFromLink(href: string, children: React.ReactNode): string`
 - `buildMessageLinkTarget(href, children, msg.id): ChatMessageLinkTarget | null`
 - `isPreviewableLinkProtocol(href: string): boolean`
+- `stripUrlSearchAndHash(value: string): string`
 
 修改 Markdown `a` renderer：
 
 - 默认模式保持现有 `<a>`。
-- `preview-button` 模式下：
+- `preview-card` 模式下：
   - 阻止默认跳转。
   - 构建 `ChatMessageLinkTarget`。
   - 调用 `onPreviewLink(target)`。
   - 如果 target 无效，回退为普通链接或禁用按钮。
+  - 渲染为 `RedClaw` 附件风格 file card，而不是 inline text button。
 
 关键约束：
 
@@ -350,13 +471,15 @@ interface MessageItemProps {
 - 不新增 `useEffect` 扫描 DOM。
 - 不把 URL 正则塞进 RedClaw 页面。
 - 不改变 `img` Markdown 的现有渲染行为；图片 Markdown 仍可直接显示，链接按钮主要处理普通 links。
+- 本地路径判断必须先走 `isLocalAssetSource` / `extractLocalAssetPathCandidate`，再判断协议；这是 Windows drive path 支持的关键。
+- `isPreviewableLinkProtocol` 必须明确允许 Windows drive path 和 UNC path，不能用单纯 `^[a-z]+:` 判定。
 
-### 10.2 `Chat.tsx`
+### 11.2 `Chat.tsx`
 
 新增 props：
 
 ```ts
-messageLinkRenderMode?: 'default' | 'preview-button';
+messageLinkRenderMode?: 'default' | 'preview-card';
 onMessageLinkPreview?: (target: ChatMessageLinkTarget) => void;
 ```
 
@@ -376,7 +499,7 @@ onMessageLinkPreview?: (target: ChatMessageLinkTarget) => void;
 - 不让普通页面默认开启按钮模式。
 - 不影响 `showMessageAttachments`、workflow timeline、copy message 等既有行为。
 
-### 10.3 `RedClaw.tsx`
+### 11.3 `RedClaw.tsx`
 
 新增状态：
 
@@ -398,7 +521,7 @@ const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
 ```tsx
 <Chat
   ...
-  messageLinkRenderMode="preview-button"
+  messageLinkRenderMode="preview-card"
   onMessageLinkPreview={handlePreviewLink}
 />
 ```
@@ -418,8 +541,8 @@ const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
 
 操作 handlers：
 
-- `handleOpenPreviewExternal`: 调用 `window.ipcRenderer.openPath(target.href)` 或 `invoke('app:open-path')`。
-- `handleRevealPreviewInFolder`: 调用 `window.ipcRenderer.file.showInFolder({ source: target.href })`。
+- `handleOpenPreviewExternal`: 本地文件调用 `window.ipcRenderer.openPath(target.localPathCandidate || target.href)`；远程链接调用 `window.ipcRenderer.openPath(target.href)`。
+- `handleRevealPreviewInFolder`: 仅本地文件显示该动作，调用 `window.ipcRenderer.file.showInFolder({ source: target.localPathCandidate || target.href })`。
 - `handleCopyPreviewTarget`: 可放在 pane 内直接用 `navigator.clipboard.writeText`。
 
 关键约束：
@@ -427,8 +550,9 @@ const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
 - `previewTarget` 改变不能改变 `key={`redclaw:${chatRefreshKey}`}`，否则会重挂 Chat。
 - 不能把右侧 pane 做成 fixed overlay；必须参与 RedClaw 内容区域布局。
 - 不要让 preview pane 覆盖输入框。
+- 不要把 `resolvedUrl` 传给 host open/reveal IPC。
 
-### 10.4 `RedClawFilePreviewPane.tsx`
+### 11.4 `RedClawFilePreviewPane.tsx`
 
 组件职责：
 
@@ -449,13 +573,21 @@ const [copied, setCopied] = useState(false);
 - iframe `onError` 不一定可靠；UI 不应依赖它作为唯一失败判断。
 - 外部网页可提供一个短超时提示，但不要自动判定失败覆盖页面。
 - 图片和视频加载失败时展示 fallback card。
+- 路径/URL 展示必须使用 `localPathCandidate || href`，避免展示 Tauri asset URL。
 
-## 11. Existing Libraries vs Self-Built Code
+### 11.5 `pathManager.ts` / `localAsset.ts`
+
+第一版优先不改这两个文件；实现应先复用现有能力。
+
+只有在实际验证发现缺口时才允许小范围补 helper，并必须配套测试或至少补文档中对应的手测案例。任何新增 helper 都应保持通用、确定、无副作用，不能写成 RedClaw 专用分支。
+
+## 12. Existing Libraries vs Self-Built Code
 
 必须使用现成库/现有能力：
 
 - Markdown parsing: `react-markdown` + `remark-gfm`。
 - Local asset conversion: `resolveAssetUrl` + Tauri `convertFileSrc`。
+- Local path classification: `desktop/shared/localAsset.ts` helpers。
 - Browser-native preview: `img`, `video`, `audio`, `iframe`。
 - Icons: `lucide-react`。
 - Host open/reveal: existing `app:open-path`, `file:show-in-folder`。
@@ -468,16 +600,18 @@ const [copied, setCopied] = useState(false);
 - RedClaw split layout and preview state.
 - `RedClawFilePreviewPane` UI.
 - Preview fallback and recovery actions.
+- A thin target builder that combines existing local path helpers with kind inference.
 
 不应自研：
 
 - Markdown parser.
 - URL autolink parser.
+- Windows path parser that duplicates `desktop/shared/localAsset.ts`.
 - Full PDF renderer.
 - Video/audio decoder.
 - Generic embedded browser.
 
-## 12. Performance Strategy
+## 13. Performance Strategy
 
 1. **Lazy creation**  
    `RedClawFilePreviewPane` 只在用户点击链接后挂载。
@@ -500,7 +634,7 @@ const [copied, setCopied] = useState(false);
 7. **Scrollable boundaries**  
    Chat 和 preview pane 各自 `min-h-0 overflow-hidden`，pane body 单独滚动，避免整页滚动冲突。
 
-## 13. Security And Safety
+## 14. Security And Safety
 
 允许协议：
 
@@ -522,6 +656,8 @@ const [copied, setCopied] = useState(false);
 - Renderer 不手写 `file://`。
 - 使用 `resolveAssetUrl` 生成预览 URL。
 - 系统打开和显示文件夹走 existing IPC，不绕过 bridge。
+- Windows drive path、UNC path、legacy `local-file:`、`redbox-asset:` 都属于 local asset source，必须经 `extractLocalAssetPathCandidate` / `resolveAssetUrl` 处理。
+- Tauri asset URL 只用于渲染，不用于复制、系统打开或显示文件夹。
 
 外部网页规则：
 
@@ -529,19 +665,19 @@ const [copied, setCopied] = useState(false);
 - 系统打开按钮始终可用。
 - 不把网页内容自动注入 AI 上下文。
 
-## 14. Alternatives
+## 15. Alternatives
 
 | Option | Description | Pros | Cons | Recommendation |
 | --- | --- | --- | --- | --- |
-| A. 全局改 `MessageItem` 链接 | 所有 Chat 链接都变按钮 | 最快 | 影响主聊天、知识库、弹窗聊天，回归风险高 | 不推荐 |
+| A. 全局改 `MessageItem` 链接 | 所有 Chat 链接都变文件卡片 | 最快 | 影响主聊天、知识库、弹窗聊天，回归风险高 | 不推荐 |
 | B. Fork RedClaw 消息组件 | RedClaw 自己维护一套消息 UI | 隔离强 | 复制消息、附件、workflow timeline、图片菜单逻辑，维护成本高 | 不推荐 |
-| C. Chat 可选能力 + RedClaw 管布局 | 通用 Chat 只透传事件，RedClaw 启用按钮和右栏 | 改动小、边界清晰、可复用 | 需要设计 props contract | 推荐 |
+| C. Chat 可选能力 + RedClaw 管布局 | 通用 Chat 只透传事件，RedClaw 启用文件卡片和右栏 | 改动小、边界清晰、可复用 | 需要设计 props contract | 推荐 |
 | D. 直接用系统打开 | 点击后打开外部 app/browser | 实现最少 | 离开 RedClaw，无法边看边聊 | 不满足目标 |
 | E. 右侧 fixed drawer overlay | 预览浮在聊天上方 | 快速 | 遮挡聊天，不符合“聊天区域左移” | 不推荐 |
 
 推荐选项 C。
 
-## 15. Implementation Sequence
+## 16. Implementation Sequence
 
 本计划可以一个原子提交完成，提交主题建议：
 
@@ -551,18 +687,19 @@ Add RedClaw inline file preview pane
 
 执行顺序：
 
-1. 在 `MessageItem.tsx` 增加 link target 类型、kind 推断和 preview-button renderer。
-2. 在 `Chat.tsx` 增加 props 并透传。
-3. 新增 `RedClawFilePreviewPane.tsx`，先实现 image/video/audio/pdf/web/unknown fallback。
-4. 在 `RedClaw.tsx` 增加 `previewTarget` 状态和左右分栏布局。
-5. 接入系统打开、复制、显示文件夹动作。
-6. 做样式收口：保证右栏宽度、Chat 宽度、输入框和消息都不重叠。
-7. 验证普通 Chat 链接仍是普通外链。
-8. 运行前端构建或类型检查。
+1. 在 `MessageItem.tsx` 增加 link target 类型、kind 推断和 preview-card renderer。
+2. 先实现并本地检查 path target builder，覆盖 POSIX、Windows drive、UNC、file URL、redbox-asset、local-file、http(s) URL。
+3. 在 `Chat.tsx` 增加 props 并透传。
+4. 新增 `RedClawFilePreviewPane.tsx`，先实现 image/video/audio/pdf/web/unknown fallback。
+5. 在 `RedClaw.tsx` 增加 `previewTarget` 状态和左右分栏布局。
+6. 接入系统打开、复制、显示文件夹动作，确保本地动作使用 `localPathCandidate`。
+7. 做样式收口：保证右栏宽度、Chat 宽度、输入框和消息都不重叠。
+8. 验证普通 Chat 链接仍是普通外链。
+9. 运行前端构建或类型检查。
 
-## 16. Verification Plan
+## 17. Verification Plan
 
-### 16.1 Manual UI Checks
+### 17.1 Manual UI Checks
 
 在 RedClaw 会话里用 AI 或手动消息准备以下内容：
 
@@ -570,13 +707,16 @@ Add RedClaw inline file preview pane
 [本地图片](/Users/Jam/.redbox/demo/image.png)
 [本地视频](/Users/Jam/.redbox/demo/video.mp4)
 [PDF 文档](/Users/Jam/.redbox/demo/report.pdf)
+[Windows 图片](<file:///C:/Users/Jam/My Images/demo 1.png>)
+[UNC 视频](<file://NAS/RedBox/assets/demo.mp4>)
 [网页](https://example.com)
 https://example.com/plain-url
 ```
 
 检查：
 
-- 链接在 AI 消息里显示为按钮。
+- 链接在 AI 消息里显示为文件卡片，形态接近截图：左侧图标 tile，中间文件名/类型，右侧 `打开` 操作。
+- 文件卡片是 block-level card，不是 inline pill；长文件名不会撑破消息容器。
 - 点击图片后右侧显示图片。
 - 点击视频后右侧显示视频播放器。
 - 点击 PDF/网页后右侧显示 iframe 或 fallback。
@@ -586,14 +726,44 @@ https://example.com/plain-url
 - Chat 滚动位置不因预览切换明显跳动。
 - 技能面板打开时点击链接，技能面板收起，预览 pane 显示。
 
-### 16.2 Regression Checks
+### 17.2 Path Compatibility Matrix
+
+必须逐项验证 target 构建结果。即使当前开发机是 macOS，也要用单元级/console 级输入验证 Windows 字符串解析，不要求真实文件存在。
+
+| Case | Input | Expected |
+| --- | --- | --- |
+| POSIX image | `/Users/Jam/.redbox/demo/image 1.png` | `isLocal=true`, `kind=image`, `localPathCandidate=/Users/Jam/.redbox/demo/image 1.png` |
+| Windows drive image | `C:\Users\Jam\.redconvert\spaces\default\media\demo 1.png` | `isLocal=true`, `kind=image`, candidate keeps `C:/...` semantics |
+| Windows slash path | `C:/Users/Jam/.redconvert/spaces/default/media/demo 1.png` | `isLocal=true`, `kind=image` |
+| Windows file URL | `file:///C:/Users/Jam/My%20Images/demo%201.png` | `isLocal=true`, candidate decodes spaces once |
+| Windows localhost file URL | `file://localhost/C:/Users/Jam/demo.pdf` | `isLocal=true`, `kind=pdf`, host ignored as localhost |
+| UNC path | `\\NAS\RedBox\assets\demo.mp4` | `isLocal=true`, `kind=video`, UNC host/share preserved |
+| UNC file URL | `file://NAS/RedBox/assets/demo.mp4` | `isLocal=true`, `kind=video`, candidate starts with `//NAS/RedBox` |
+| RedBox asset URL | `redbox-asset://asset/C:/Users/Jam/demo.png` | `isLocal=true`, `kind=image`, preview uses `resolveAssetUrl` |
+| Legacy local-file URL | `local-file:///C:/Users/Jam/demo.png` | `isLocal=true`, `kind=image` |
+| Remote PDF with query | `https://example.com/report.pdf?token=abc#page=2` | `isLocal=false`, `kind=pdf` |
+| Remote webpage | `https://example.com/articles/123` | `isLocal=false`, `kind=web` |
+| Unsafe protocol | `javascript:alert(1)` | no target / no preview card |
+
+### 17.3 Windows Support Checks
+
+Windows 支持不能只靠“代码看起来用了 `replace('\\', '/')`”。需要明确检查：
+
+- `C:\...` 不被 protocol regex 拦截。
+- `file:///C:/...` 不变成 `/C:/...` 传给系统打开。
+- `file://NAS/share/...` 不丢 `NAS`。
+- `%20` 不重复编码。
+- `app:open-path` 收到的是本地候选路径或原始 remote URL，不是 Tauri asset URL。
+- `file:show-in-folder` 只在 `isLocal` 时显示，并收到本地候选路径。
+
+### 17.4 Regression Checks
 
 - 普通 `Chat` 页面链接仍显示为普通 `<a>`。
-- `KnowledgeChatModal` 复用 Chat 时不出现 RedClaw link buttons。
+- `KnowledgeChatModal` 复用 Chat 时不出现 RedClaw file link cards。
 - AI 消息里的图片 Markdown 仍能内联显示。
-- 用户消息中的链接不被 RedClaw 强制变成预览按钮，除非后续明确需要。
+- 用户消息中的链接不被 RedClaw 强制变成预览卡片，除非后续明确需要。
 
-### 16.3 Commands
+### 17.5 Commands
 
 最低验证：
 
@@ -618,7 +788,7 @@ cd src-tauri
 cargo check
 ```
 
-## 17. Future Extensions
+## 18. Future Extensions
 
 后续可继续扩展，但不进入第一版原子提交：
 
@@ -640,14 +810,16 @@ cargo check
 5. **Structured artifact links from runtime**  
    长期应让 AI runtime/tool result 输出结构化 artifacts，消息渲染层直接拿 artifact metadata，而不是只靠 Markdown href 推断类型。
 
-## 18. Acceptance Criteria
+## 19. Acceptance Criteria
 
 实现完成后必须满足：
 
-- RedClaw AI 消息链接按钮化，并能打开右侧预览。
+- RedClaw AI 消息链接卡片化，并能打开右侧预览。
 - 右侧预览是页面内分栏，不是覆盖层。
 - Chat 不重挂、不清空、不丢输入。
 - 普通 Chat 页面不受影响。
 - 本地媒体和网页都有明确预览或恢复路径。
+- 路径解析覆盖 POSIX、Windows drive、UNC、file URL、redbox-asset URL、legacy local-file URL 和 remote URL。
+- Windows 字符串测试证明 `C:\...` 不被当成协议、UNC host 不丢失、空格不重复编码。
 - 没有新增不必要的 runtime/tool/IPC surface。
 - 改动保持在一个原子提交内。
