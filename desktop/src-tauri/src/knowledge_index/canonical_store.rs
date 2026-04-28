@@ -179,23 +179,31 @@ pub(crate) fn delete_documents_for_source(
     state: &State<'_, AppState>,
     source_id: &str,
 ) -> Result<(), String> {
-    let conn = connection(state)?;
-    conn.execute(
-        "DELETE FROM knowledge_visual_evidence WHERE source_document_id IN (SELECT source_document_id FROM knowledge_visual_units WHERE source_id = ?1)",
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute(
+        r#"
+        DELETE FROM knowledge_visual_evidence
+        WHERE unit_id IN (
+            SELECT unit_id
+            FROM knowledge_visual_units
+            WHERE source_id = ?1
+        )
+        "#,
         params![source_id],
     )
     .map_err(|error| error.to_string())?;
-    conn.execute(
+    tx.execute(
         "DELETE FROM knowledge_visual_units WHERE source_id = ?1",
         params![source_id],
     )
     .map_err(|error| error.to_string())?;
-    conn.execute(
+    tx.execute(
         "DELETE FROM knowledge_canonical_documents WHERE source_id = ?1",
         params![source_id],
     )
-    .map(|_| ())
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())
 }
 
 pub(crate) fn load_document_rows(

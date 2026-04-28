@@ -2274,6 +2274,12 @@ pub(crate) fn delete_youtube_note(
     if let Some(video) = existing {
         if let Some(folder_path) = video.folder_path.as_deref() {
             remove_dir_if_exists(Path::new(folder_path))?;
+            crate::knowledge_index::delete_source_artifacts_and_emit(
+                app,
+                state,
+                &video.id,
+                "youtube-delete",
+            )?;
             refresh_knowledge_projection_and_emit(
                 Some(app),
                 state,
@@ -2289,6 +2295,12 @@ pub(crate) fn delete_youtube_note(
         store.youtube_videos.retain(|item| item.id != video_id);
         Ok(())
     })?;
+    crate::knowledge_index::delete_source_artifacts_and_emit(
+        app,
+        state,
+        video_id,
+        "youtube-delete-legacy",
+    )?;
     let _ = app.emit(
         "knowledge:youtube-video-updated",
         json!({ "noteId": video_id, "status": "deleted" }),
@@ -2501,6 +2513,12 @@ pub(crate) fn delete_note(
     if let Some(note) = existing {
         if let Some(folder_path) = note.folder_path.as_deref() {
             remove_dir_if_exists(Path::new(folder_path))?;
+            crate::knowledge_index::delete_source_artifacts_and_emit(
+                app,
+                state,
+                &note.id,
+                "note-delete",
+            )?;
             refresh_knowledge_projection_and_emit(
                 Some(app),
                 state,
@@ -2509,14 +2527,29 @@ pub(crate) fn delete_note(
             return Ok(json!({ "success": true }));
         }
     }
-    with_store_mut(state, |store| {
+    let result = with_store_mut(state, |store| {
         let before = store.knowledge_notes.len();
         store.knowledge_notes.retain(|item| item.id != note_id);
         if before == store.knowledge_notes.len() {
             return Ok(json!({ "success": false, "error": "笔记不存在" }));
         }
         Ok(json!({ "success": true, "legacyFallback": true }))
-    })
+    })?;
+    if result
+        .get("success")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        crate::knowledge_index::delete_source_artifacts_and_emit(
+            app,
+            state,
+            note_id,
+            "note-delete-legacy",
+        )?;
+        let _ = app.emit("knowledge:changed", json!({ "at": now_iso() }));
+        let _ = app.emit("knowledge:note-updated", json!({ "noteId": note_id }));
+    }
+    Ok(result)
 }
 
 pub(crate) fn persist_note_transcript(

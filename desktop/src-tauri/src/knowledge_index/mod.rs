@@ -19,7 +19,7 @@ pub mod watcher;
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::{now_iso, with_store, workspace_root, AppState};
 
@@ -97,10 +97,30 @@ pub(crate) fn delete_source_artifacts(
     state: &State<'_, AppState>,
     source_id: &str,
 ) -> Result<(), String> {
+    catalog::delete_item(state, source_id)?;
     canonical_store::delete_documents_for_source(state, source_id)?;
     citation_anchors::delete_anchors_for_source(state, source_id)?;
     document_blocks::delete_blocks_for_source(state, source_id)?;
     retrieval_audit::delete_runs_for_source(state, source_id)?;
+    Ok(())
+}
+
+pub(crate) fn delete_source_artifacts_and_emit(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    source_id: &str,
+    reason: &str,
+) -> Result<(), String> {
+    delete_source_artifacts(state, source_id)?;
+    let _ = app.emit(
+        "knowledge:file-index-updated",
+        serde_json::json!({
+            "at": now_iso(),
+            "kind": "source_deleted",
+            "reason": reason,
+            "sourceId": source_id
+        }),
+    );
     Ok(())
 }
 

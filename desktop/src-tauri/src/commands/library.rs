@@ -1451,8 +1451,8 @@ pub fn handle_library_channel(
                 Ok(result)
             }
             "media:delete" => {
+                let asset_id = payload_string(payload, "assetId").unwrap_or_default();
                 let result = with_store_mut(state, |store| {
-                    let asset_id = payload_string(payload, "assetId").unwrap_or_default();
                     let before = store.media_assets.len();
                     store.media_assets.retain(|item| item.id != asset_id);
                     if before == store.media_assets.len() {
@@ -1461,6 +1461,18 @@ pub fn handle_library_channel(
                     Ok(json!({ "success": true }))
                 })?;
                 persist_media_workspace_catalog(state)?;
+                if result
+                    .get("success")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+                {
+                    crate::knowledge_index::delete_source_artifacts_and_emit(
+                        app,
+                        state,
+                        &format!("media:{asset_id}"),
+                        "media-delete",
+                    )?;
+                }
                 Ok(result)
             }
             "media:import-files" => {
