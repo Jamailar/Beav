@@ -4,12 +4,14 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView } from '@codemirror/view';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { unifiedMergeView } from '@codemirror/merge';
 import { tags } from '@lezer/highlight';
 
 interface CodeMirrorEditorProps {
     value: string;
     onChange: (value: string) => void;
     className?: string;
+    diffOriginalValue?: string | null;
 }
 
 // Custom theme for "Obsidian-like" feel
@@ -89,6 +91,38 @@ const obsidianTheme = EditorView.theme({
     ".cm-link": { color: "var(--color-accent-primary)", textDecoration: "underline" },
 });
 
+const inlineDiffTheme = EditorView.theme({
+    ".cm-deletedChunk": {
+        paddingLeft: "0",
+        backgroundColor: "rgb(244 63 94 / 0.08)",
+    },
+    ".cm-deletedChunk .cm-line": {
+        color: "inherit",
+        opacity: "0.82",
+    },
+    ".cm-deletedChunk .cm-deletedText": {
+        background: "linear-gradient(rgb(244 63 94 / 0.34), rgb(244 63 94 / 0.34)) bottom / 100% 2px no-repeat",
+    },
+    "&.cm-merge-b .cm-changedLine, .cm-inlineChangedLine": {
+        backgroundColor: "rgb(16 185 129 / 0.08)",
+    },
+    "&.cm-merge-b .cm-changedText": {
+        background: "linear-gradient(rgb(16 185 129 / 0.38), rgb(16 185 129 / 0.38)) bottom / 100% 2px no-repeat",
+    },
+    "&.cm-merge-b .cm-deletedText": {
+        backgroundColor: "rgb(244 63 94 / 0.14)",
+    },
+    ".cm-insertedLine, .cm-deletedLine, .cm-deletedLine del": {
+        textDecoration: "none",
+    },
+    ".cm-collapsedLines": {
+        color: "rgb(var(--color-text-tertiary) / 1)",
+        background: "rgb(var(--color-surface-secondary) / 0.65)",
+        borderRadius: "8px",
+        margin: "4px 0",
+    },
+});
+
 // Syntax highlighting adjustments
 const markdownHighlighting = HighlightStyle.define([
     { tag: tags.heading1, class: "cm-header-1" },
@@ -164,10 +198,47 @@ const editorInteractionHandlers = EditorView.domEventHandlers({
     },
 });
 
-export function CodeMirrorEditor({ value, onChange, className }: CodeMirrorEditorProps) {
+export function CodeMirrorEditor({ value, onChange, className, diffOriginalValue }: CodeMirrorEditorProps) {
     const handleChange = React.useCallback((val: string, _viewUpdate: any) => {
         onChange(val);
     }, [onChange]);
+
+    const collapseLargeDiff = typeof diffOriginalValue === 'string'
+        && Math.max(diffOriginalValue.length, value.length) > 80000;
+
+    const extensions = React.useMemo(() => {
+        const nextExtensions = [
+            markdown({ base: markdownLanguage, codeLanguages: languages }),
+            EditorView.lineWrapping,
+            obsidianTheme,
+            syntaxHighlighting(markdownHighlighting),
+            editorInteractionHandlers,
+        ];
+
+        if (typeof diffOriginalValue === 'string') {
+            const shouldCollapseUnchanged = collapseLargeDiff
+                ? { margin: 4, minSize: 16 }
+                : undefined;
+            nextExtensions.push(
+                unifiedMergeView({
+                    original: diffOriginalValue,
+                    gutter: false,
+                    highlightChanges: true,
+                    allowInlineDiffs: true,
+                    mergeControls: false,
+                    syntaxHighlightDeletions: false,
+                    diffConfig: {
+                        scanLimit: 10000,
+                        timeout: 120,
+                    },
+                    collapseUnchanged: shouldCollapseUnchanged,
+                }),
+                inlineDiffTheme
+            );
+        }
+
+        return nextExtensions;
+    }, [collapseLargeDiff, diffOriginalValue]);
 
     return (
         <div className={`h-full min-h-0 w-full overflow-hidden flex flex-col ${className || ''}`}>
@@ -176,13 +247,7 @@ export function CodeMirrorEditor({ value, onChange, className }: CodeMirrorEdito
                 className="flex-1 min-h-0"
                 style={{ height: '100%' }}
                 height="100%"
-                extensions={[
-                    markdown({ base: markdownLanguage, codeLanguages: languages }),
-                    EditorView.lineWrapping,
-                    obsidianTheme,
-                    syntaxHighlighting(markdownHighlighting),
-                    editorInteractionHandlers,
-                ]}
+                extensions={extensions}
                 onChange={handleChange}
                 basicSetup={{
                     lineNumbers: false,

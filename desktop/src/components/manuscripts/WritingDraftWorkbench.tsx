@@ -1,7 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import clsx from 'clsx';
 import {
+  AlertTriangle,
   ArrowLeft,
+  Check,
   Columns,
   Download,
   ExternalLink,
@@ -14,7 +16,6 @@ import {
 } from 'lucide-react';
 import { CodeMirrorEditor } from './CodeMirrorEditor';
 import { MarkdownItPreview } from './MarkdownItPreview';
-import { WritingDiffProposalPanel } from './WritingDiffProposalPanel';
 import {
   loadRichpostPreviewHtml,
   RICHPOST_RENDER_VIEWPORT_HEIGHT,
@@ -160,10 +161,7 @@ export interface WritingDraftWorkbenchProps {
   filePath: string;
   editorBody: string;
   writeProposal?: {
-    id: string;
-    createdAt?: string | null;
     baseBody: string;
-    proposedBody: string;
     isStale?: boolean;
   } | null;
   editorBodyDirty: boolean;
@@ -1489,43 +1487,21 @@ function LongformPreview({
 function ManuscriptEditor({
   editorBody,
   writeProposal,
-  isApplyingWriteProposal = false,
-  isRejectingWriteProposal = false,
   onEditorBodyChange,
-  onAcceptWriteProposal,
-  onRejectWriteProposal,
   compact = false,
 }: {
   editorBody: string;
   writeProposal?: WritingDraftWorkbenchProps['writeProposal'];
-  isApplyingWriteProposal?: boolean;
-  isRejectingWriteProposal?: boolean;
   onEditorBodyChange: (value: string) => void;
-  onAcceptWriteProposal?: () => void;
-  onRejectWriteProposal?: () => void;
   compact?: boolean;
 }) {
-  if (writeProposal) {
-    return (
-      <WritingDiffProposalPanel
-        createdAt={writeProposal.createdAt}
-        baseBody={writeProposal.baseBody}
-        proposedBody={writeProposal.proposedBody}
-        isStale={writeProposal.isStale}
-        isApplying={isApplyingWriteProposal}
-        isRejecting={isRejectingWriteProposal}
-        onAccept={() => onAcceptWriteProposal?.()}
-        onReject={() => onRejectWriteProposal?.()}
-      />
-    );
-  }
-
   return (
     <div className={clsx('h-full min-h-0 overflow-hidden', compact ? 'px-4 py-4' : 'px-8 py-8')}>
       <div className="h-full min-h-0 overflow-hidden rounded-2xl border border-border bg-surface-primary">
         <CodeMirrorEditor
           value={editorBody}
           onChange={onEditorBodyChange}
+          diffOriginalValue={writeProposal?.baseBody ?? null}
           className="manuscript-editor-shell h-full min-h-0 bg-transparent"
         />
       </div>
@@ -2721,6 +2697,39 @@ export function WritingDraftWorkbench({
                 <span>分栏</span>
               </button>
             ) : null}
+            {activeTab === 'manuscript' && writeProposal ? (
+              <div className={clsx('flex items-center gap-2', !canSplitCompare && 'ml-auto')}>
+                {writeProposal.isStale ? (
+                  <span
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-full text-amber-700"
+                    title="稿件在提案生成后发生过变化"
+                    aria-label="稿件在提案生成后发生过变化"
+                  >
+                    <AlertTriangle className="h-4 w-4" />
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => onRejectWriteProposal?.()}
+                  disabled={isApplyingWriteProposal || isRejectingWriteProposal}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full text-text-tertiary transition hover:bg-surface-secondary/50 hover:text-text-primary disabled:opacity-35"
+                  aria-label="拒绝 AI 修改"
+                  title="拒绝 AI 修改"
+                >
+                  {isRejectingWriteProposal ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onAcceptWriteProposal?.()}
+                  disabled={isApplyingWriteProposal || isRejectingWriteProposal}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent-primary text-white transition hover:bg-accent-primary/92 disabled:opacity-35"
+                  aria-label="接受 AI 修改"
+                  title="接受 AI 修改"
+                >
+                  {isApplyingWriteProposal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                </button>
+              </div>
+            ) : null}
             {isRichPost && activeTab === 'richpost' ? (
               <div className="ml-auto flex items-center gap-1">
                 <button
@@ -2794,11 +2803,7 @@ export function WritingDraftWorkbench({
                     <ManuscriptEditor
                       editorBody={editorBody}
                       writeProposal={writeProposal}
-                      isApplyingWriteProposal={isApplyingWriteProposal}
-                      isRejectingWriteProposal={isRejectingWriteProposal}
                       onEditorBodyChange={onEditorBodyChange}
-                      onAcceptWriteProposal={onAcceptWriteProposal}
-                      onRejectWriteProposal={onRejectWriteProposal}
                       compact
                     />
                   </div>
@@ -2834,11 +2839,7 @@ export function WritingDraftWorkbench({
                 <ManuscriptEditor
                   editorBody={editorBody}
                   writeProposal={writeProposal}
-                  isApplyingWriteProposal={isApplyingWriteProposal}
-                  isRejectingWriteProposal={isRejectingWriteProposal}
                   onEditorBodyChange={onEditorBodyChange}
-                  onAcceptWriteProposal={onAcceptWriteProposal}
-                  onRejectWriteProposal={onRejectWriteProposal}
                 />
               ) : (
                 renderPreviewSurface(activeTab)

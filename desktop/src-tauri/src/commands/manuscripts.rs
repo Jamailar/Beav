@@ -5048,13 +5048,16 @@ pub(crate) fn accept_manuscript_write_proposal(
     app: &AppHandle,
     state: &State<'_, AppState>,
     file_path: &str,
+    proposed_content_override: Option<String>,
 ) -> Result<Value, String> {
     let proposal = get_manuscript_write_proposal(state, file_path)?
         .ok_or_else(|| "未找到待审改稿提案".to_string())?;
+    let accepted_content =
+        proposed_content_override.unwrap_or_else(|| proposal.proposed_content.clone());
     let saved = save_manuscript_content(
         state,
         &proposal.file_path,
-        &proposal.proposed_content,
+        &accepted_content,
         proposal.metadata.as_ref().and_then(Value::as_object),
         "ai-proposal-accepted",
     )?;
@@ -5062,7 +5065,7 @@ pub(crate) fn accept_manuscript_write_proposal(
     let mut object = saved.as_object().cloned().unwrap_or_default();
     object.insert("proposalId".to_string(), json!(proposal.id));
     object.insert("filePath".to_string(), json!(proposal.file_path));
-    object.insert("content".to_string(), json!(proposal.proposed_content));
+    object.insert("content".to_string(), json!(accepted_content));
     Ok(Value::Object(object))
 }
 
@@ -7746,7 +7749,8 @@ pub fn handle_manuscripts_channel(
                 let file_path = payload_string(&payload, "filePath")
                     .or_else(|| payload_string(&payload, "path"))
                     .unwrap_or_default();
-                accept_manuscript_write_proposal(app, state, &file_path)
+                let proposed_content_override = payload_string(&payload, "proposedContentOverride");
+                accept_manuscript_write_proposal(app, state, &file_path, proposed_content_override)
             }
             "manuscripts:reject-write-proposal" => {
                 let file_path = payload_string(&payload, "filePath")
