@@ -1515,4 +1515,36 @@ mod tests {
             RetrievalMode::Hybrid
         );
     }
+
+    #[test]
+    fn visual_blocks_do_not_expose_legacy_ocr_confidence() {
+        assert_eq!(legacy_ocr_confidence("visual_llm", Some(0.98)), None);
+        assert_eq!(legacy_ocr_confidence("ocr", Some(0.76)), Some(0.76));
+    }
+
+    #[test]
+    fn visual_source_metadata_points_to_original_unit_and_page() {
+        let source = visual_source_for_block(
+            "visual_llm",
+            "source-1",
+            "source-1:scans/contract.pdf#page=3",
+            "scans/contract.pdf#page=3",
+            "/tmp/contract.pdf",
+            Some(3),
+            "image.visible_text",
+            Some("unit-3"),
+            Some("source-1:scans/contract.pdf"),
+            r#"["fact_visible_text"]"#,
+        )
+        .expect("visual source");
+
+        assert_eq!(source["unitId"], json!("unit-3"));
+        assert_eq!(source["unitKind"], json!("pdf_page"));
+        assert_eq!(
+            source["sourceDocumentId"],
+            json!("source-1:scans/contract.pdf")
+        );
+        assert_eq!(source["pageNumber"], json!(3));
+        assert_eq!(source["evidenceRefs"], json!(["fact_visible_text"]));
+    }
 }

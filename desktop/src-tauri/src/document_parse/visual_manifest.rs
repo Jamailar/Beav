@@ -363,6 +363,18 @@ fn short_hash(hash: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "redbox-visual-manifest-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 
     #[test]
     fn normalizes_missing_manifest_fields_and_projects_sections() {
@@ -400,6 +412,33 @@ mod tests {
     }
 
     #[test]
+    fn non_object_manifest_falls_back_to_metadata_only_with_warning() {
+        let unit = VisualSourceUnit::image_file(
+            "source-1",
+            "photos/mountain.png",
+            Path::new("/tmp/mountain.png"),
+        );
+        let manifest = normalize_manifest(json!("not a manifest"), &unit);
+
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("processingMode"))
+                .and_then(Value::as_str),
+            Some("metadata_only")
+        );
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("warnings"))
+                .and_then(Value::as_array)
+                .and_then(|warnings| warnings.first())
+                .and_then(Value::as_str),
+            Some("visual model returned a non-object manifest")
+        );
+    }
+
+    #[test]
     fn pdf_page_unit_keeps_original_pdf_and_rendered_page_identity() {
         let unit = VisualSourceUnit::pdf_page(
             "source-1",
@@ -420,5 +459,45 @@ mod tests {
         assert_eq!(unit.page_number, Some(1));
         assert_eq!(unit.page_count, Some(3));
         assert_eq!(unit.absolute_path, "/tmp/contract.pdf");
+    }
+
+    #[test]
+    fn pdf_page_rendered_hash_changes_unit_identity_without_changing_source_mapping() {
+        let dir = unique_temp_dir("rendered-hash");
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let source_path = dir.join("scan.pdf");
+        let rendered_path_a = dir.join("page-a.png");
+        let rendered_path_b = dir.join("page-b.png");
+        fs::write(&source_path, b"%PDF-visual-source").expect("write source");
+        image::RgbImage::from_pixel(32, 32, image::Rgb([255, 255, 255]))
+            .save(&rendered_path_a)
+            .expect("write rendered a");
+        image::RgbImage::from_pixel(32, 32, image::Rgb([0, 0, 0]))
+            .save(&rendered_path_b)
+            .expect("write rendered b");
+
+        let unit_a = VisualSourceUnit::pdf_page(
+            "source-1",
+            "scans/contract.pdf",
+            &source_path,
+            &rendered_path_a,
+            3,
+            5,
+        );
+        let unit_b = VisualSourceUnit::pdf_page(
+            "source-1",
+            "scans/contract.pdf",
+            &source_path,
+            &rendered_path_b,
+            3,
+            5,
+        );
+        let _ = fs::remove_dir_all(&dir);
+
+        assert_ne!(unit_a.rendered_image_hash, unit_b.rendered_image_hash);
+        assert_ne!(unit_a.unit_id, unit_b.unit_id);
+        assert_eq!(unit_a.source_document_id, unit_b.source_document_id);
+        assert_eq!(unit_a.page_number, Some(3));
+        assert_eq!(unit_b.page_number, Some(3));
     }
 }

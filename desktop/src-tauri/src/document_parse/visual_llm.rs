@@ -289,6 +289,61 @@ mod tests {
     }
 
     #[test]
+    fn disabled_visual_index_returns_metadata_only_without_reading_source() {
+        let missing_path = Path::new("/tmp/redbox-visual-index-disabled-missing.png");
+        let unit = VisualSourceUnit::image_file("source-1", "missing.png", missing_path);
+        let manifest = analyze_visual_source(missing_path, &unit, &VisualIndexConfig::default())
+            .expect("metadata manifest");
+
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("processingMode"))
+                .and_then(Value::as_str),
+            Some("metadata_only")
+        );
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("warnings"))
+                .and_then(Value::as_array)
+                .and_then(|warnings| warnings.first())
+                .and_then(Value::as_str),
+            Some("visual index is disabled")
+        );
+    }
+
+    #[test]
+    fn missing_visual_endpoint_returns_metadata_only_without_reading_source() {
+        let missing_path = Path::new("/tmp/redbox-visual-index-no-endpoint-missing.png");
+        let unit = VisualSourceUnit::image_file("source-1", "missing.png", missing_path);
+        let config = VisualIndexConfig {
+            enabled: true,
+            model: Some("vision-small".to_string()),
+            ..VisualIndexConfig::default()
+        };
+        let manifest =
+            analyze_visual_source(missing_path, &unit, &config).expect("metadata manifest");
+
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("processingMode"))
+                .and_then(Value::as_str),
+            Some("metadata_only")
+        );
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("warnings"))
+                .and_then(Value::as_array)
+                .and_then(|warnings| warnings.first())
+                .and_then(Value::as_str),
+            Some("visual index endpoint is not configured")
+        );
+    }
+
+    #[test]
     fn visual_payload_resizes_large_images_for_model() {
         let path = std::env::temp_dir().join(format!(
             "redbox-visual-payload-{}-{}.png",
