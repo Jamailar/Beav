@@ -98,6 +98,27 @@ interface DocumentKnowledgeSource {
     visualSearchUnitId?: string;
     visualSearchEvidenceRefs?: string[];
     visualSearchThumbnailPath?: string;
+    visualBlocks?: VisualSemanticBlock[];
+}
+
+interface VisualSemanticBlock {
+    blockId: string;
+    path: string;
+    absolutePath?: string;
+    page?: number;
+    blockType: string;
+    text: string;
+    visualUnitId?: string;
+    evidenceRefs?: string[];
+    visualEvidence?: Array<{
+        id?: string;
+        kind?: string;
+        title?: string;
+        text?: string;
+        bbox?: { x?: number; y?: number; width?: number; height?: number } | null;
+    }>;
+    unitKind?: string;
+    summary?: string;
 }
 
 interface KnowledgeCatalogSummary {
@@ -336,6 +357,7 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [documentSources, setDocumentSources] = useState<DocumentKnowledgeSource[]>([]);
     const [selectedNote, setSelectedNote] = useState<Note | null>(null);
     const [selectedVideo, setSelectedVideo] = useState<YouTubeVideo | null>(null);
+    const [selectedDocumentSource, setSelectedDocumentSource] = useState<DocumentKnowledgeSource | null>(null);
     const [selectedAuthor, setSelectedAuthor] = useState<KnowledgeAuthorView | null>(null);
     const [selectedImageIndex, setSelectedImageIndex] = useState(0);
     const [isImagePreviewOpen, setIsImagePreviewOpen] = useState(false);
@@ -815,6 +837,17 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         const detail = await loadKnowledgeDetail(video.id, 'youtube-video');
         if (detail && loadDetailRequestRef.current > 0) {
             setSelectedVideo(detail as unknown as YouTubeVideo);
+        }
+    }, [loadKnowledgeDetail]);
+
+    const openDocumentDetail = useCallback(async (source: DocumentKnowledgeSource) => {
+        setSelectedDocumentSource(source);
+        const detail = await loadKnowledgeDetail(source.id, 'document-source');
+        if (detail && loadDetailRequestRef.current > 0) {
+            setSelectedDocumentSource({
+                ...source,
+                ...(detail as unknown as Partial<DocumentKnowledgeSource>),
+            });
         }
     }, [loadKnowledgeDetail]);
 
@@ -2113,6 +2146,15 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                         return (
                                             <div
                                                 key={item.id}
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => void openDocumentDetail(source)}
+                                                onKeyDown={(event) => {
+                                                    if (event.key === 'Enter' || event.key === ' ') {
+                                                        event.preventDefault();
+                                                        void openDocumentDetail(source);
+                                                    }
+                                                }}
                                                 className="mb-3 break-inside-avoid rounded-2xl border border-black/[0.04] bg-white shadow-sm p-4 transition-all"
                                             >
                                                 <div className="flex items-start justify-between gap-3">
@@ -2138,7 +2180,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                     </div>
                                                     <button
                                                         type="button"
-                                                        onClick={() => void handleDeleteDocumentSource(source)}
+                                                        onClick={(event) => {
+                                                            event.stopPropagation();
+                                                            void handleDeleteDocumentSource(source);
+                                                        }}
                                                         className="p-1.5 rounded-lg text-text-tertiary hover:text-red-500 hover:bg-red-50 transition-all active:scale-90"
                                                         title="移除此文档源"
                                                     >
@@ -3006,6 +3051,131 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                 <Trash2 className="w-3.5 h-3.5" />
                                 移除视频
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Document Source Detail Modal */}
+            {selectedDocumentSource && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[6px] animate-in fade-in duration-300"
+                    onClick={() => setSelectedDocumentSource(null)}
+                >
+                    <div
+                        className="w-full max-w-[860px] mx-4 bg-white rounded-[28px] border border-white/20 shadow-[0_48px_120px_-20px_rgba(0,0,0,0.3)] overflow-hidden max-h-[90vh] flex flex-col"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div className="px-7 py-6 border-b border-black/[0.04] flex items-start justify-between gap-5 bg-white">
+                            <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <h1 className="text-xl font-extrabold text-text-primary tracking-tight line-clamp-2">{selectedDocumentSource.name}</h1>
+                                    <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg bg-sky-50 text-sky-600 border border-sky-100">
+                                        <Image className="w-3 h-3" />
+                                        Visual Index
+                                    </span>
+                                </div>
+                                <div className="mt-2 text-[11px] font-bold text-text-tertiary/70 break-all">{selectedDocumentSource.rootPath}</div>
+                            </div>
+                            <button
+                                onClick={() => setSelectedDocumentSource(null)}
+                                className="flex h-10 w-10 items-center justify-center rounded-xl bg-black/[0.04] text-text-tertiary hover:bg-black/[0.08] hover:text-text-primary transition-all active:scale-90"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto px-7 py-7 space-y-6 custom-scrollbar bg-white">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] font-bold uppercase tracking-wider text-text-tertiary">
+                                <div className="rounded-xl bg-black/[0.025] border border-black/[0.02] px-3 py-2">
+                                    {selectedDocumentSource.fileCount} Documents
+                                </div>
+                                <div className="rounded-xl bg-black/[0.025] border border-black/[0.02] px-3 py-2">
+                                    {selectedDocumentSource.visualBlocks?.length || 0} Semantic Blocks
+                                </div>
+                                <div className="rounded-xl bg-black/[0.025] border border-black/[0.02] px-3 py-2">
+                                    {selectedDocumentSource.indexing ? 'Indexing' : 'Ready'}
+                                </div>
+                            </div>
+
+                            {selectedDocumentSource.sampleFiles.length > 0 && (
+                                <div>
+                                    <h3 className="text-[12px] font-extrabold text-text-primary uppercase tracking-wider mb-2.5">Source Files</h3>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {selectedDocumentSource.sampleFiles.slice(0, 12).map((file) => {
+                                            const isVisualFile = isVisualIndexFilePath(file);
+                                            const FileIcon = isVisualFile ? Image : FileText;
+                                            return (
+                                                <span
+                                                    key={`${selectedDocumentSource.id}-detail-${file}`}
+                                                    className={clsx(
+                                                        'inline-flex max-w-full items-start gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg border',
+                                                        isVisualFile
+                                                            ? 'bg-sky-50 text-sky-700 border-sky-100'
+                                                            : 'bg-black/[0.02] text-text-tertiary border-black/[0.01]',
+                                                    )}
+                                                >
+                                                    <FileIcon className="w-3 h-3 shrink-0 mt-0.5 opacity-60" />
+                                                    <span className="min-w-0 break-all leading-relaxed line-clamp-1">{file}</span>
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div>
+                                <h3 className="text-[12px] font-extrabold text-text-primary uppercase tracking-wider mb-2.5">Visual Semantic Blocks</h3>
+                                {selectedDocumentSource.visualBlocks && selectedDocumentSource.visualBlocks.length > 0 ? (
+                                    <div className="space-y-2.5">
+                                        {selectedDocumentSource.visualBlocks.map((block) => {
+                                            const evidenceWithBbox = (block.visualEvidence || []).filter((evidence) => evidence.bbox);
+                                            return (
+                                                <div key={block.blockId} className="rounded-2xl border border-black/[0.04] bg-black/[0.015] p-4">
+                                                    <div className="flex flex-wrap items-center gap-2 text-[9px] font-bold uppercase tracking-widest text-text-tertiary">
+                                                        <span className="rounded-md bg-white px-1.5 py-0.5 border border-black/[0.03]">{block.blockType}</span>
+                                                        {typeof block.page === 'number' && (
+                                                            <span className="rounded-md bg-white px-1.5 py-0.5 border border-black/[0.03]">PAGE {block.page}</span>
+                                                        )}
+                                                        {block.unitKind && (
+                                                            <span className="rounded-md bg-sky-50 text-sky-600 px-1.5 py-0.5 border border-sky-100">{block.unitKind}</span>
+                                                        )}
+                                                    </div>
+                                                    <div className="mt-2 text-[13px] font-semibold text-text-primary leading-relaxed">
+                                                        {block.summary || block.text}
+                                                    </div>
+                                                    {block.summary && (
+                                                        <div className="mt-1.5 text-[11px] text-text-secondary leading-relaxed line-clamp-3">
+                                                            {block.text}
+                                                        </div>
+                                                    )}
+                                                    <div className="mt-2 text-[10px] font-bold text-text-tertiary/70 break-all">
+                                                        {block.path}
+                                                    </div>
+                                                    {evidenceWithBbox.length > 0 && (
+                                                        <div className="mt-3 flex flex-wrap gap-1.5">
+                                                            {evidenceWithBbox.slice(0, 4).map((evidence) => (
+                                                                <span key={evidence.id || evidence.title || evidence.text} className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-1 text-[10px] font-bold">
+                                                                    BBOX
+                                                                    {evidence.title || evidence.kind || evidence.id}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {block.evidenceRefs && block.evidenceRefs.length > 0 && (
+                                                        <div className="mt-2 text-[9px] font-bold text-text-tertiary/50 break-all">
+                                                            Evidence: {block.evidenceRefs.slice(0, 4).join(', ')}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div className="rounded-2xl border border-dashed border-black/[0.08] p-8 text-center text-[12px] font-bold text-text-tertiary">
+                                        暂无视觉语义块
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>

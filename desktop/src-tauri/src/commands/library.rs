@@ -658,7 +658,115 @@ fn load_document_source_detail(
         .into_iter()
         .find(|entry| entry.id == item_id)
         .ok_or_else(|| "未找到文档源".to_string())?;
-    serde_json::to_value(item).map_err(|error| error.to_string())
+    let mut value = serde_json::to_value(item).map_err(|error| error.to_string())?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "visualBlocks".to_string(),
+            visual_blocks_for_document_source(state, item_id)?,
+        );
+    }
+    Ok(value)
+}
+
+fn visual_blocks_for_document_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<Value, String> {
+    knowledge_index::schema::ensure_catalog_ready(state)?;
+    let conn = rusqlite::Connection::open(knowledge_index::catalog_db_path(state)?)
+        .map_err(|error| error.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                b.block_id,
+                b.relative_path,
+                b.absolute_path,
+                b.page,
+                b.block_type,
+                b.text,
+                b.visual_unit_id,
+                b.evidence_refs_json,
+                u.unit_kind,
+                u.manifest_json
+            FROM knowledge_document_blocks b
+            LEFT JOIN knowledge_visual_units u ON u.unit_id = b.visual_unit_id
+            WHERE b.source_id = ?1
+              AND (b.content_origin = 'visual_llm' OR b.block_type LIKE 'image.%' OR b.visual_unit_id IS NOT NULL)
+            ORDER BY b.relative_path ASC, b.page ASC, b.block_index ASC
+            LIMIT 40
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![source_id], |row| {
+            let evidence_refs_json: String = row.get(7)?;
+            let evidence_refs =
+                serde_json::from_str::<Vec<String>>(&evidence_refs_json).unwrap_or_default();
+            let manifest_json: Option<String> = row.get(9)?;
+            let manifest = manifest_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+            let evidence_ref_set = evidence_refs
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            let visual_evidence = manifest
+                .as_ref()
+                .and_then(|manifest| manifest.get("factBlocks"))
+                .and_then(Value::as_array)
+                .map(|facts| {
+                    facts
+                        .iter()
+                        .filter(|fact| {
+                            if evidence_ref_set.is_empty() {
+                                return true;
+                            }
+                            fact.get("id")
+                                .and_then(Value::as_str)
+                                .is_some_and(|id| evidence_ref_set.contains(id))
+                        })
+                        .map(|fact| {
+                            json!({
+                                "id": fact.get("id").and_then(Value::as_str),
+                                "kind": fact.get("kind").and_then(Value::as_str),
+                                "title": fact.get("title").and_then(Value::as_str),
+                                "text": fact.get("text").and_then(Value::as_str),
+                                "bbox": fact.get("bbox").cloned().unwrap_or(Value::Null),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let summary = manifest.as_ref().and_then(|manifest| {
+                manifest
+                    .get("summary")
+                    .and_then(|summary| {
+                        summary
+                            .get("short")
+                            .or_else(|| summary.get("title"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(ToString::to_string)
+            });
+            Ok(json!({
+                "blockId": row.get::<_, String>(0)?,
+                "path": row.get::<_, String>(1)?,
+                "absolutePath": row.get::<_, String>(2)?,
+                "page": row.get::<_, Option<i64>>(3)?,
+                "blockType": row.get::<_, String>(4)?,
+                "text": row.get::<_, String>(5)?,
+                "visualUnitId": row.get::<_, Option<String>>(6)?,
+                "evidenceRefs": evidence_refs,
+                "visualEvidence": visual_evidence,
+                "unitKind": row.get::<_, Option<String>>(8)?,
+                "summary": summary,
+            }))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(Value::Array(rows))
 }
 
 pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {

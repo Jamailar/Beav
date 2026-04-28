@@ -39,6 +39,7 @@
 - visual manifest 必须通过 `retrievalProjection` 派生 block；block 需要写入 `visual_unit_id`、`source_document_id`、`evidence_refs_json`
 - canonical visual manifest 需要同步到 `knowledge_visual_units` / `knowledge_visual_evidence`，搜索命中必须能回到原始图片文件或原始 PDF 页码
 - `knowledge:list-page` 有查询词时需要同时搜索 indexed blocks，让知识库 UI 能通过视觉语义召回无文字图片和扫描 PDF 页，并在文档源卡片显示 visual match summary
+- 文档源详情需要返回 `visualBlocks`，用于展示 semantic blocks、evidence refs 和可用 bbox；retrieval audit 的 hit payload 需要保留 visual metadata，便于复盘为什么搜到这张图或 PDF 页
 - Stage 6 起 `knowledge.search` 默认走 hybrid，可通过 `retrievalMode=lexical` 关闭增强链路
 - hybrid 排序输出需要显式带 `retrievalLanes` 和 ranking breakdown，不能把 fusion / rerank 变成黑盒
 - indexed `knowledge.search` 必须写入 `knowledge_retrieval_runs` / `knowledge_retrieval_hits`，返回 `auditRunId`，保证 evidence pack 可回放
