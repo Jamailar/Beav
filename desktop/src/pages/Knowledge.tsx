@@ -7,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import type { PendingChatMessage } from '../App';
 import { KnowledgeChatModal } from '../components/KnowledgeChatModal';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
-import { resolveAssetUrl } from '../utils/pathManager';
+import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { formatTimestampDateTime } from '../utils/time';
@@ -92,6 +92,12 @@ interface DocumentKnowledgeSource {
     sampleFiles: string[];
     createdAt: string;
     updatedAt: string;
+    visualSearchSummary?: string;
+    visualSearchPath?: string;
+    visualSearchPage?: number;
+    visualSearchUnitId?: string;
+    visualSearchEvidenceRefs?: string[];
+    visualSearchThumbnailPath?: string;
 }
 
 interface KnowledgeCatalogSummary {
@@ -119,6 +125,12 @@ interface KnowledgeCatalogSummary {
     status?: string;
     sampleFiles: string[];
     fileCount: number;
+    visualSearchSummary?: string;
+    visualSearchPath?: string;
+    visualSearchPage?: number;
+    visualSearchUnitId?: string;
+    visualSearchEvidenceRefs?: string[];
+    visualSearchThumbnailPath?: string;
 }
 
 interface KnowledgeListPageResponse {
@@ -268,6 +280,12 @@ const catalogSummaryToDocSource = (item: KnowledgeCatalogSummary): DocumentKnowl
     sampleFiles: Array.isArray(item.sampleFiles) ? item.sampleFiles : [],
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
+    visualSearchSummary: item.visualSearchSummary,
+    visualSearchPath: item.visualSearchPath,
+    visualSearchPage: item.visualSearchPage,
+    visualSearchUnitId: item.visualSearchUnitId,
+    visualSearchEvidenceRefs: item.visualSearchEvidenceRefs,
+    visualSearchThumbnailPath: item.visualSearchThumbnailPath,
 });
 
 // 轻量级关键词提取（用于判断内容变化率）
@@ -2089,6 +2107,9 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     if (item.kind === 'docs' && item.doc) {
                                         const source = item.doc;
                                         const hasVisualIndexSamples = source.sampleFiles.some(isVisualIndexFilePath);
+                                        const visualPreviewUrl = source.visualSearchThumbnailPath && hasRenderableAssetUrl(source.visualSearchThumbnailPath)
+                                            ? resolveAssetUrl(source.visualSearchThumbnailPath)
+                                            : '';
                                         return (
                                             <div
                                                 key={item.id}
@@ -2130,6 +2151,45 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                         {source.fileCount} DOCUMENTS
                                                     </span>
                                                 </div>
+                                                {source.visualSearchSummary && (
+                                                    <div className="mt-3.5 overflow-hidden rounded-xl border border-sky-100 bg-sky-50/70">
+                                                        <div className="flex gap-3 p-2.5">
+                                                            {visualPreviewUrl ? (
+                                                                <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-white border border-sky-100">
+                                                                    <img
+                                                                        src={visualPreviewUrl}
+                                                                        alt={source.visualSearchPath || source.name}
+                                                                        className="h-full w-full object-cover"
+                                                                        loading="lazy"
+                                                                        decoding="async"
+                                                                    />
+                                                                </div>
+                                                            ) : (
+                                                                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg bg-white text-sky-500 border border-sky-100">
+                                                                    <Image className="h-5 w-5" />
+                                                                </div>
+                                                            )}
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="flex flex-wrap items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-sky-600">
+                                                                    <span>Visual Match</span>
+                                                                    {typeof source.visualSearchPage === 'number' && (
+                                                                        <span className="rounded-md bg-white/80 px-1.5 py-0.5 border border-sky-100">
+                                                                            PAGE {source.visualSearchPage}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <div className="mt-1 text-[11px] font-semibold leading-relaxed text-sky-950 line-clamp-3">
+                                                                    {source.visualSearchSummary}
+                                                                </div>
+                                                                {source.visualSearchPath && (
+                                                                    <div className="mt-1 text-[9px] font-bold text-sky-700/60 break-all line-clamp-1">
+                                                                        {source.visualSearchPath}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
                                                 {source.sampleFiles.length > 0 && (
                                                     <div className="mt-3.5 flex flex-wrap gap-1.5">
                                                         {source.sampleFiles.slice(0, 6).map((file) => {

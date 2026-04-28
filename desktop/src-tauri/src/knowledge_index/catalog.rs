@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::State;
@@ -39,6 +39,12 @@ pub(crate) struct KnowledgeCatalogSummary {
     pub sample_files: Vec<String>,
     pub file_count: i64,
     pub item_hash: String,
+    pub visual_search_summary: Option<String>,
+    pub visual_search_path: Option<String>,
+    pub visual_search_page: Option<i64>,
+    pub visual_search_unit_id: Option<String>,
+    pub visual_search_evidence_refs: Vec<String>,
+    pub visual_search_thumbnail_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +63,16 @@ fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
 
 fn decode_json_list(raw: String) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
+}
+
+fn preview_text(input: &str, max_chars: usize) -> String {
+    input
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect()
 }
 
 fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<KnowledgeCatalogSummary, rusqlite::Error> {
@@ -89,6 +105,12 @@ fn row_to_summary(row: &rusqlite::Row<'_>) -> Result<KnowledgeCatalogSummary, ru
         sample_files: decode_json_list(row.get("sample_files_json")?),
         file_count: row.get("file_count")?,
         item_hash: row.get("item_hash")?,
+        visual_search_summary: None,
+        visual_search_path: None,
+        visual_search_page: None,
+        visual_search_unit_id: None,
+        visual_search_evidence_refs: Vec::new(),
+        visual_search_thumbnail_path: None,
     })
 }
 
@@ -145,7 +167,18 @@ pub(crate) fn list_page(
             lower(COALESCE(root_path, '')) LIKE ?3 OR
             lower(preview_text) LIKE ?3 OR
             lower(tags_json) LIKE ?3 OR
-            lower(sample_files_json) LIKE ?3
+            lower(sample_files_json) LIKE ?3 OR
+            EXISTS (
+                SELECT 1
+                FROM knowledge_document_blocks b
+                WHERE b.source_id = knowledge_items.item_id
+                  AND (
+                    lower(b.text) LIKE ?3 OR
+                    lower(b.normalized_text) LIKE ?3 OR
+                    lower(COALESCE(b.title, '')) LIKE ?3 OR
+                    lower(b.relative_path) LIKE ?3
+                  )
+            )
         )
     "#;
 
@@ -162,7 +195,7 @@ pub(crate) fn list_page(
             "SELECT * FROM knowledge_items WHERE {where_sql} ORDER BY {order_by} LIMIT ?4 OFFSET ?5"
         ))
         .map_err(|error| error.to_string())?;
-    let items = stmt
+    let mut items = stmt
         .query_map(
             params![
                 workspace_id,
@@ -176,6 +209,7 @@ pub(crate) fn list_page(
         .map_err(|error| error.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
+    attach_visual_search_matches(&conn, &mut items, normalized_query.as_deref())?;
 
     let mut kind_stmt = conn
         .prepare(
@@ -211,6 +245,104 @@ pub(crate) fn list_page(
         total,
         kind_counts: Value::Object(kind_counts),
     })
+}
+
+fn attach_visual_search_matches(
+    conn: &Connection,
+    items: &mut [KnowledgeCatalogSummary],
+    normalized_query: Option<&str>,
+) -> Result<(), String> {
+    let Some(query) = normalized_query else {
+        return Ok(());
+    };
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                b.text,
+                b.relative_path,
+                b.page,
+                b.visual_unit_id,
+                b.evidence_refs_json,
+                u.unit_kind,
+                u.absolute_path,
+                json_extract(u.manifest_json, '$.summary.short') AS manifest_short,
+                json_extract(u.manifest_json, '$.summary.title') AS manifest_title
+            FROM knowledge_document_blocks b
+            LEFT JOIN knowledge_visual_units u ON u.unit_id = b.visual_unit_id
+            WHERE b.source_id = ?1
+              AND (
+                lower(b.text) LIKE ?2 OR
+                lower(b.normalized_text) LIKE ?2 OR
+                lower(COALESCE(b.title, '')) LIKE ?2 OR
+                lower(b.relative_path) LIKE ?2
+              )
+            ORDER BY
+                CASE WHEN b.content_origin = 'visual_llm' OR b.visual_unit_id IS NOT NULL THEN 0 ELSE 1 END,
+                b.block_index ASC
+            LIMIT 1
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    for item in items.iter_mut() {
+        if item.kind != "document-source" {
+            continue;
+        }
+        let match_row = stmt
+            .query_row(params![item.item_id, query], |row| {
+                let text: String = row.get("text")?;
+                let relative_path: String = row.get("relative_path")?;
+                let page: Option<i64> = row.get("page")?;
+                let unit_id: Option<String> = row.get("visual_unit_id")?;
+                let evidence_refs_json: String = row.get("evidence_refs_json")?;
+                let unit_kind: Option<String> = row.get("unit_kind")?;
+                let absolute_path: Option<String> = row.get("absolute_path")?;
+                let manifest_short: Option<String> = row.get("manifest_short")?;
+                let manifest_title: Option<String> = row.get("manifest_title")?;
+                Ok((
+                    text,
+                    relative_path,
+                    page,
+                    unit_id,
+                    evidence_refs_json,
+                    unit_kind,
+                    absolute_path,
+                    manifest_short,
+                    manifest_title,
+                ))
+            })
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let Some((
+            text,
+            relative_path,
+            page,
+            unit_id,
+            evidence_refs_json,
+            unit_kind,
+            absolute_path,
+            manifest_short,
+            manifest_title,
+        )) = match_row
+        else {
+            continue;
+        };
+        item.visual_search_summary = manifest_short
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| manifest_title.filter(|value| !value.trim().is_empty()))
+            .or_else(|| Some(preview_text(&text, 180)));
+        item.visual_search_path = Some(relative_path);
+        item.visual_search_page = page;
+        item.visual_search_unit_id = unit_id;
+        item.visual_search_evidence_refs =
+            serde_json::from_str::<Vec<String>>(&evidence_refs_json).unwrap_or_default();
+        item.visual_search_thumbnail_path = if unit_kind.as_deref() == Some("image_file") {
+            absolute_path
+        } else {
+            None
+        };
+    }
+    Ok(())
 }
 
 pub(crate) fn upsert_summaries(

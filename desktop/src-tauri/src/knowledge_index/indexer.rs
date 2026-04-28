@@ -90,6 +90,12 @@ fn summarize_note(item: KnowledgeNoteRecord) -> KnowledgeCatalogSummary {
         sample_files: Vec::new(),
         file_count: 0,
         item_hash: String::new(),
+        visual_search_summary: None,
+        visual_search_path: None,
+        visual_search_page: None,
+        visual_search_unit_id: None,
+        visual_search_evidence_refs: Vec::new(),
+        visual_search_thumbnail_path: None,
     }
 }
 
@@ -137,6 +143,12 @@ fn summarize_video(item: YoutubeVideoRecord) -> KnowledgeCatalogSummary {
         sample_files: Vec::new(),
         file_count: 0,
         item_hash: String::new(),
+        visual_search_summary: None,
+        visual_search_path: None,
+        visual_search_page: None,
+        visual_search_unit_id: None,
+        visual_search_evidence_refs: Vec::new(),
+        visual_search_thumbnail_path: None,
     }
 }
 
@@ -179,6 +191,12 @@ fn summarize_document_source(item: DocumentKnowledgeSourceRecord) -> KnowledgeCa
         sample_files: item.sample_files,
         file_count: item.file_count,
         item_hash: String::new(),
+        visual_search_summary: None,
+        visual_search_path: None,
+        visual_search_page: None,
+        visual_search_unit_id: None,
+        visual_search_evidence_refs: Vec::new(),
+        visual_search_thumbnail_path: None,
     }
 }
 
