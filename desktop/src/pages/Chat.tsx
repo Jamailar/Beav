@@ -17,7 +17,14 @@ import {
   type ChatSettingsSnapshot,
   type UploadedFileAttachment,
 } from '../components/ChatComposer';
-import { MessageItem, Message, ToolEvent, SkillEvent } from '../components/MessageItem';
+import {
+  MessageItem,
+  Message,
+  ToolEvent,
+  SkillEvent,
+  type ChatMessageLinkRenderMode,
+  type ChatMessageLinkTarget,
+} from '../components/MessageItem';
 import type { ProcessItem, ProcessItemType } from '../components/ProcessTimeline';
 import type { PendingChatMessage } from '../App';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -96,6 +103,9 @@ interface ChatProps {
   showMessageAttachments?: boolean;
   collapseEmptyFixedSession?: boolean;
   fixedSessionTaskHints?: unknown;
+  messageLinkRenderMode?: ChatMessageLinkRenderMode;
+  onMessageLinkPreview?: (target: ChatMessageLinkTarget) => void;
+  activePreviewHref?: string | null;
 }
 
 interface ChatContextUsage {
@@ -465,6 +475,9 @@ export function Chat({
   showMessageAttachments = true,
   collapseEmptyFixedSession = false,
   fixedSessionTaskHints,
+  messageLinkRenderMode = 'default',
+  onMessageLinkPreview,
+  activePreviewHref = null,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -3235,6 +3248,9 @@ export function Chat({
                           workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
                           workflowFailureTone={messageWorkflowFailureTone}
                           showAttachments={showMessageAttachments}
+                          linkRenderMode={messageLinkRenderMode}
+                          onPreviewLink={onMessageLinkPreview}
+                          activePreviewHref={activePreviewHref}
                         />
                       </ErrorBoundary>
                     ))}
