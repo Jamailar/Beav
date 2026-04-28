@@ -106,8 +106,7 @@ pub(crate) fn dashboard(state: &State<'_, AppState>) -> Result<FileIndexDashboar
 
     let source_stats = load_source_stats(&conn)?;
     let workspace_stats = load_workspace_stats(&conn)?;
-    let prefer_cached_visual_counts = !runtime.is_building;
-    let mut scopes = load_scope_seeds(state, &conn, prefer_cached_visual_counts)?;
+    let mut scopes = load_scope_seeds(state, &conn, true)?;
     if let Some(scope) = scopes
         .iter_mut()
         .find(|scope| scope.scope_id == "workspace")
@@ -174,7 +173,9 @@ fn load_scope_seeds(
     conn: &Connection,
     prefer_cached_visual_counts: bool,
 ) -> Result<Vec<ScopeSeed>, String> {
-    let cached_workspace_visual_count = cached_workspace_visual_unit_count(conn).unwrap_or(0);
+    let cached_workspace_visual_count =
+        cached_visual_candidate_count(conn, "workspace").unwrap_or(0);
+    let indexed_workspace_visual_count = cached_workspace_visual_unit_count(conn).unwrap_or(0);
     let mut scopes = vec![ScopeSeed {
         scope_id: "workspace".to_string(),
         source_id: None,
@@ -183,11 +184,12 @@ fn load_scope_seeds(
         owner_id: None,
         owner_name: None,
         file_count: 0,
-        visual_candidate_count: if prefer_cached_visual_counts && cached_workspace_visual_count > 0
+        visual_candidate_count: if prefer_cached_visual_counts
+            && cached_workspace_visual_count.max(indexed_workspace_visual_count) > 0
         {
-            cached_workspace_visual_count
+            cached_workspace_visual_count.max(indexed_workspace_visual_count)
         } else {
-            workspace_visual_candidate_count(state)?
+            workspace_visual_candidate_count(state, conn)?
         },
         source_failed_count: 0,
         updated_at: None,
@@ -208,14 +210,20 @@ fn load_scope_seeds(
             let status: Option<String> = row.get(3)?;
             let root_path: Option<String> = row.get(5)?;
             let source_id: String = row.get(0)?;
-            let cached_visual_count =
+            let cached_candidate_count =
+                cached_visual_candidate_count(conn, &source_id).unwrap_or(0);
+            let indexed_visual_count =
                 cached_source_visual_unit_count(conn, &source_id).unwrap_or(0);
-            let visual_candidate_count = if prefer_cached_visual_counts && cached_visual_count > 0 {
-                cached_visual_count
+            let visual_candidate_count = if prefer_cached_visual_counts
+                && cached_candidate_count.max(indexed_visual_count) > 0
+            {
+                cached_candidate_count.max(indexed_visual_count)
             } else {
                 root_path
                     .as_deref()
-                    .map(|value| count_visual_candidates_under(Path::new(value)))
+                    .map(|value| {
+                        count_visual_candidates_under_cached(conn, &source_id, Path::new(value))
+                    })
                     .unwrap_or(0)
             };
             Ok(ScopeSeed {
@@ -244,11 +252,14 @@ fn load_scope_seeds(
     for advisor in advisors {
         let root_path = crate::advisor_knowledge_dir(state, &advisor.id)?;
         let source_id = advisor_source_id(&advisor.id);
-        let cached_visual_count = cached_source_visual_unit_count(conn, &source_id).unwrap_or(0);
-        let visual_candidate_count = if prefer_cached_visual_counts && cached_visual_count > 0 {
-            cached_visual_count
+        let cached_candidate_count = cached_visual_candidate_count(conn, &source_id).unwrap_or(0);
+        let indexed_visual_count = cached_source_visual_unit_count(conn, &source_id).unwrap_or(0);
+        let visual_candidate_count = if prefer_cached_visual_counts
+            && cached_candidate_count.max(indexed_visual_count) > 0
+        {
+            cached_candidate_count.max(indexed_visual_count)
         } else {
-            count_visual_candidates_under(&root_path)
+            count_visual_candidates_under_cached(conn, &source_id, &root_path)
         };
         scopes.push(ScopeSeed {
             scope_id: format!("advisor:{}", advisor.id),
@@ -265,6 +276,35 @@ fn load_scope_seeds(
     }
 
     Ok(scopes)
+}
+
+fn visual_candidate_cache_key(scope_id: &str) -> String {
+    format!("visual-candidates:{scope_id}")
+}
+
+fn cached_visual_candidate_count(conn: &Connection, scope_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT value FROM knowledge_meta WHERE key = ?1",
+        params![visual_candidate_cache_key(scope_id)],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|error| error.to_string())?
+    .and_then(|value| value.trim().parse::<i64>().ok())
+    .ok_or_else(|| "visual candidate count cache miss".to_string())
+}
+
+fn store_visual_candidate_count(
+    conn: &Connection,
+    scope_id: &str,
+    count: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR REPLACE INTO knowledge_meta (key, value) VALUES (?1, ?2)",
+        params![visual_candidate_cache_key(scope_id), count.to_string()],
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 fn cached_workspace_visual_unit_count(conn: &Connection) -> Result<i64, String> {
@@ -294,7 +334,10 @@ fn cached_source_visual_unit_count(conn: &Connection, source_id: &str) -> Result
     .map_err(|error| error.to_string())
 }
 
-fn workspace_visual_candidate_count(state: &State<'_, AppState>) -> Result<i64, String> {
+fn workspace_visual_candidate_count(
+    state: &State<'_, AppState>,
+    conn: &Connection,
+) -> Result<i64, String> {
     let root = workspace_root(state)?;
     let knowledge_root = root.join("knowledge");
     let mut total = 0;
@@ -305,7 +348,14 @@ fn workspace_visual_candidate_count(state: &State<'_, AppState>) -> Result<i64, 
     ] {
         total += count_visual_candidates_under(&path);
     }
+    let _ = store_visual_candidate_count(conn, "workspace", total);
     Ok(total)
+}
+
+fn count_visual_candidates_under_cached(conn: &Connection, cache_key: &str, root: &Path) -> i64 {
+    let total = count_visual_candidates_under(root);
+    let _ = store_visual_candidate_count(conn, cache_key, total);
+    total
 }
 
 fn count_visual_candidates_under(root: &Path) -> i64 {
