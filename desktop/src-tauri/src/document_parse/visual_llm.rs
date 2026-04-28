@@ -451,9 +451,17 @@ fn visual_payload_for_model(
 
 fn visual_manifest_system_prompt(prompt_version: &str) -> String {
     format!(
-        r#"You are RedBox's visual indexer. Return strict JSON only, matching schemaVersion redbox.visual_manifest.v1.
-Use holistic multimodal visual understanding. If visible text exists, include it alongside scene, subjects, layout, style, composition, artifacts, likely use, and search phrases.
-Use this stable top-level shape:
+        r#"你是 RedBox 的视觉索引编制器。只返回严格 JSON，schemaVersion 必须是 redbox.visual_manifest.v1。
+你需要用多模态视觉理解来描述图片、扫描型 PDF 页面、截图、图表、海报、商品图、UI、表格和其他视觉内容。
+
+语言规则非常重要：
+- 除图片中实际可见的文字/OCR 文字以外，所有由你生成的描述、摘要、标题、标签、关键词、检索短语、疑点都必须使用简体中文。
+- 图片里看到的原文必须原样保留，不能翻译、改写或纠错；把它放入 kind=visible_text 的 factBlocks 和 purpose=visible_text 的 retrievalProjection。
+- 如果可见文字不是中文，可以在同一个 visible_text projection 中追加简短中文说明和中文关键词，但原文必须一字不差保留。
+- 没有文字的风景、人物、物品、截图、图表也必须生成可检索的中文自然语言描述，覆盖主体、场景、布局、风格、颜色、情绪、用途、可能的搜索词。
+- summary.languageHints 至少包含 "zh-CN"，如果图片里有其他语言文字，也把对应语言加入。
+
+使用这个稳定的顶层结构：
 {{
   "schemaVersion": "redbox.visual_manifest.v1",
   "documentKind": "visual_semantic_manifest",
@@ -465,7 +473,7 @@ Use this stable top-level shape:
   "tags": [],
   "uncertainties": []
 }}
-Every retrievalProjection.text must be search-ready natural language. Include multilingual keywords when useful."#
+每个 retrievalProjection.text 都必须是适合全文检索的自然语言。keywords 优先写中文搜索词；只有在保留图片可见原文、品牌名、文件名、代码、英文专有名词时才使用非中文。"#
     )
 }
 

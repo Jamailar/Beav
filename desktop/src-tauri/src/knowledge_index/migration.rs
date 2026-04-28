@@ -2,6 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 
 use crate::{
+    document_parse::VISUAL_DEFAULT_PROMPT_VERSION,
     knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
     now_iso, AppState,
 };
@@ -13,7 +14,7 @@ pub(crate) const CURRENT_PARSER_PIPELINE_VERSION: &str = "1";
 pub(crate) const CURRENT_CHUNK_ANCHOR_RULE_VERSION: &str = "1";
 pub(crate) const CURRENT_RERANK_POLICY_VERSION: &str = "1";
 pub(crate) const CURRENT_VISUAL_SCHEMA_VERSION: &str = "redbox.visual_manifest.v1";
-pub(crate) const CURRENT_VISUAL_PROMPT_VERSION: &str = "visual-manifest-v1";
+pub(crate) const CURRENT_VISUAL_PROMPT_VERSION: &str = VISUAL_DEFAULT_PROMPT_VERSION;
 pub(crate) const CURRENT_VISUAL_PROJECTION_VERSION: &str = "1";
 
 const META_SCHEMA_VERSION: &str = "schema_version";

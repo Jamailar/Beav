@@ -101,6 +101,7 @@ const SETTINGS_TAB_POLL_DELAY_MS = 300;
 const FILE_INDEX_DASHBOARD_CACHE_KEY = 'redbox:file-index-dashboard:v1';
 const FILE_INDEX_DASHBOARD_CACHE_TTL_MS = 60_000;
 const FILE_INDEX_DASHBOARD_POLL_MS = 30_000;
+const DEFAULT_VISUAL_INDEX_PROMPT_VERSION = 'visual-manifest-v2-zh';
 const RUNTIME_PERF_HISTORY_LIMIT = 12;
 const RUNTIME_PERF_TIMELINE_LIMIT = 40;
 const RUNTIME_PERF_CHECKPOINT_WINDOW_MS = 1500;
@@ -131,6 +132,14 @@ type SettingsNavigationTarget = {
   aiModelSubTab?: 'custom' | 'login';
   nonce?: number;
 };
+
+function normalizeVisualIndexPromptVersion(value: unknown): string {
+  const text = String(value || '').trim();
+  if (!text || text === 'visual-manifest-v1') {
+    return DEFAULT_VISUAL_INDEX_PROMPT_VERSION;
+  }
+  return text;
+}
 
 type RedclawProfileDraft = {
   user: string;
@@ -546,7 +555,7 @@ export function Settings({
     visual_index_endpoint: '',
     visual_index_api_key: '',
     visual_index_model: '',
-    visual_index_prompt_version: 'visual-manifest-v1',
+    visual_index_prompt_version: DEFAULT_VISUAL_INDEX_PROMPT_VERSION,
     visual_index_timeout_seconds: '90',
     visual_index_max_image_edge: '1536',
     visual_index_skip_small_images: true,
@@ -3376,7 +3385,7 @@ export function Settings({
           visual_index_endpoint: settings.visual_index_endpoint || '',
           visual_index_api_key: settings.visual_index_api_key || '',
           visual_index_model: settings.visual_index_model || '',
-          visual_index_prompt_version: settings.visual_index_prompt_version || 'visual-manifest-v1',
+          visual_index_prompt_version: normalizeVisualIndexPromptVersion(settings.visual_index_prompt_version),
           visual_index_timeout_seconds: String(settings.visual_index_timeout_seconds || 90),
           visual_index_max_image_edge: String(settings.visual_index_max_image_edge || 1536),
           visual_index_skip_small_images: settings.visual_index_skip_small_images !== false,
@@ -4620,7 +4629,7 @@ export function Settings({
         visual_index_endpoint: normalizedVisualIndexEndpoint,
         visual_index_api_key: normalizedVisualIndexApiKey,
         visual_index_model: normalizedVisualIndexModel,
-        visual_index_prompt_version: String(formData.visual_index_prompt_version || 'visual-manifest-v1').trim() || 'visual-manifest-v1',
+        visual_index_prompt_version: normalizeVisualIndexPromptVersion(formData.visual_index_prompt_version),
         visual_index_timeout_seconds: visualIndexTimeoutSeconds,
         visual_index_max_image_edge: visualIndexMaxImageEdge,
         visual_index_skip_small_images: Boolean(formData.visual_index_skip_small_images),
