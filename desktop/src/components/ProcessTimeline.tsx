@@ -4,6 +4,7 @@ import { clsx } from 'clsx';
 export type ProcessItemType =
   | 'phase'
   | 'thought'
+  | 'error'
   | 'tool-call'
   | 'skill'
   | 'cli-install'
@@ -59,6 +60,8 @@ type StatusLine = {
   status: 'running' | 'done' | 'failed';
   text: string;
   detail?: string;
+  preserveDetail?: boolean;
+  forceDanger?: boolean;
 };
 
 const COLLAPSED_STATUS_LINE_COUNT = 4;
@@ -114,6 +117,12 @@ const pickText = (source: Record<string, unknown> | null, ...paths: string[]): s
 };
 
 const truncateInline = (value: string, maxLength = 96): string => {
+  const collapsed = value.replace(/\s+/g, ' ').trim();
+  if (collapsed.length <= maxLength) return collapsed;
+  return `${collapsed.slice(0, maxLength - 1)}...`;
+};
+
+const truncateDetail = (value: string, maxLength = 360): string => {
   const collapsed = value.replace(/\s+/g, ' ').trim();
   if (collapsed.length <= maxLength) return collapsed;
   return `${collapsed.slice(0, maxLength - 1)}...`;
@@ -253,6 +262,17 @@ const stringifyCliCommand = (argv?: string[], fallback?: string): string => {
 };
 
 const buildStatusLine = (item: ProcessItem): StatusLine | null => {
+  if (item.type === 'error') {
+    return {
+      id: item.id,
+      status: 'failed',
+      text: item.title || 'AI 请求失败',
+      detail: truncateDetail(item.content || ''),
+      preserveDetail: true,
+      forceDanger: true,
+    };
+  }
+
   if (item.type === 'tool-call') {
     const name = item.toolData?.name || 'tool_call';
     const inputObject = toObjectIfJsonLike(item.toolData?.input);
@@ -334,6 +354,7 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default', failu
   );
   const runningLines = statusLines.filter((item) => item.status === 'running');
   const failedCount = statusLines.filter((item) => item.status === 'failed').length;
+  const hasCriticalFailure = statusLines.some((item) => item.status === 'failed' && item.forceDanger);
   const [expanded, setExpanded] = useState(false);
   const hiddenCount = Math.max(0, statusLines.length - COLLAPSED_STATUS_LINE_COUNT);
   const visibleStatusLines = expanded || hiddenCount === 0
@@ -366,7 +387,7 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default', failu
           {activeText}
         </div>
       ) : failedCount > 0 ? (
-        <div className={clsx('font-medium', failedTextClass)}>
+        <div className={clsx('font-medium', hasCriticalFailure ? 'text-red-500/80' : failedTextClass)}>
           有 {failedCount} 个步骤失败
         </div>
       ) : null}
@@ -376,10 +397,11 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default', failu
           <div
             key={item.id}
             className={clsx(
-              'min-w-0 truncate',
+              'min-w-0',
+              item.preserveDetail ? 'whitespace-normal break-words' : 'truncate',
               item.status === 'running' && 'text-text-tertiary/85',
               item.status === 'done' && 'text-text-tertiary/70',
-              item.status === 'failed' && failedTextClass,
+              item.status === 'failed' && (item.forceDanger ? 'text-red-500/80' : failedTextClass),
             )}
             title={[item.text, item.detail].filter(Boolean).join(' · ')}
           >

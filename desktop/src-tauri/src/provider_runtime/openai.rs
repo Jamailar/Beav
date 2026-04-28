@@ -25,7 +25,7 @@ pub(crate) fn should_prefer_non_streaming_openai_turn(
 }
 
 fn provider_error_from_transport(error: &LlmTransportError) -> ProviderError {
-    if error.http_status == Some(401) {
+    if error.http_status == Some(401) || error.http_status == Some(403) {
         return ProviderError::new(ProviderErrorKind::Auth, false, error.to_string());
     }
     if error.http_status == Some(429) {
