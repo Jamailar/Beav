@@ -29,6 +29,7 @@ const explicitCommandRoutes: Record<string, string> = {
   'knowledge:list-page': 'knowledge_list_page',
   'knowledge:get-item-detail': 'knowledge_get_item_detail',
   'knowledge:get-index-status': 'knowledge_get_index_status',
+  'knowledge:get-file-index-dashboard': 'knowledge_get_file_index_dashboard',
   'knowledge:rebuild-catalog': 'knowledge_rebuild_catalog',
   'knowledge:open-index-root': 'knowledge_open_index_root',
   'redclaw:runner-status': 'redclaw_runner_status',
@@ -234,6 +235,15 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (channel === 'knowledge:get-index-status') {
       return {
         indexedCount: 0,
+        visualIndex: {
+          totalUnits: 0,
+          indexedUnits: 0,
+          metadataOnlyUnits: 0,
+          failedUnits: 0,
+          retryDeferredUnits: 0,
+          retryReadyUnits: 0,
+          lastAttemptedAt: null,
+        },
         pendingCount: 0,
         failedCount: 0,
         rebuildProgress: null,
@@ -243,6 +253,19 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
         migrationStatus: null,
         pendingRebuildReason: null,
       };
+  }
+  if (channel === 'knowledge:get-file-index-dashboard') {
+    return {
+      overall: {
+        status: 'idle',
+        indexedFiles: 0,
+        totalFiles: 0,
+        failedFiles: 0,
+        lastIndexedAt: null,
+      },
+      lanes: [],
+      scopes: [],
+    };
   }
   if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
     return [];
@@ -650,8 +673,20 @@ function createIpcRenderer() {
           fallbackChannel: 'knowledge:get-index-status',
           normalize: (value) => {
             const raw = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+            const visualRaw = (raw.visualIndex && typeof raw.visualIndex === 'object')
+              ? raw.visualIndex as Record<string, unknown>
+              : {};
             return {
               indexedCount: typeof raw.indexedCount === 'number' ? raw.indexedCount : 0,
+              visualIndex: {
+                totalUnits: typeof visualRaw.totalUnits === 'number' ? visualRaw.totalUnits : 0,
+                indexedUnits: typeof visualRaw.indexedUnits === 'number' ? visualRaw.indexedUnits : 0,
+                metadataOnlyUnits: typeof visualRaw.metadataOnlyUnits === 'number' ? visualRaw.metadataOnlyUnits : 0,
+                failedUnits: typeof visualRaw.failedUnits === 'number' ? visualRaw.failedUnits : 0,
+                retryDeferredUnits: typeof visualRaw.retryDeferredUnits === 'number' ? visualRaw.retryDeferredUnits : 0,
+                retryReadyUnits: typeof visualRaw.retryReadyUnits === 'number' ? visualRaw.retryReadyUnits : 0,
+                lastAttemptedAt: typeof visualRaw.lastAttemptedAt === 'string' ? visualRaw.lastAttemptedAt : null,
+              },
               pendingCount: typeof raw.pendingCount === 'number' ? raw.pendingCount : 0,
               failedCount: typeof raw.failedCount === 'number' ? raw.failedCount : 0,
               rebuildProgress: typeof raw.rebuildProgress === 'number' ? raw.rebuildProgress : null,
@@ -664,7 +699,26 @@ function createIpcRenderer() {
           },
         },
       ),
-      rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeOcr?: boolean }) => invokeCommandGuarded(
+      getFileIndexDashboard: <T = Record<string, unknown>>() => invokeCommandGuarded<T>(
+        'knowledge_get_file_index_dashboard',
+        undefined,
+        {
+          timeoutMs: 2200,
+          fallbackChannel: 'knowledge:get-file-index-dashboard',
+          normalize: (value) => (value && typeof value === 'object') ? value as T : {
+            overall: {
+              status: 'idle',
+              indexedFiles: 0,
+              totalFiles: 0,
+              failedFiles: 0,
+              lastIndexedAt: null,
+            },
+            lanes: [],
+            scopes: [],
+          } as T,
+        },
+      ),
+      rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => invokeCommandGuarded(
         'knowledge_rebuild_catalog',
         payload ? { payload } : undefined,
         {

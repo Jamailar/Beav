@@ -3047,7 +3047,7 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "knowledge.read",
         namespace: "knowledge",
-        description: "Read one advisor/shared knowledge file or one indexed block from a registered document source.",
+        description: "Read one advisor/shared knowledge file or one indexed block from a registered document source. Visual blocks from images or scanned PDF pages may include visualSource, visualEvidence, and visualSummary.",
         input_schema: fs_knowledge_read_input_schema,
         output_schema: file_system_output_schema,
         mutating: false,
@@ -3069,7 +3069,7 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "knowledge.search",
         namespace: "knowledge",
-        description: "Search advisor knowledge, shared knowledge, or a registered document source by text query.",
+        description: "Search advisor knowledge, shared knowledge, or a registered document source by text query, including visual manifest projections for images and scanned PDF pages.",
         input_schema: fs_knowledge_search_input_schema,
         output_schema: file_system_output_schema,
         mutating: false,

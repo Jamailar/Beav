@@ -35,7 +35,7 @@ pub struct KnowledgeItemDetailRequest {
 pub struct KnowledgeRebuildCatalogRequest {
     pub mode: Option<String>,
     pub source_id: Option<String>,
-    pub include_ocr: Option<bool>,
+    pub include_visual_index: Option<bool>,
 }
 
 fn builtin_animation_elements() -> Vec<Value> {
@@ -452,7 +452,8 @@ fn build_cover_generation_prompt(payload: &Value, titles: &[Value]) -> String {
     let mut parts = vec![
         "你要生成一张适合中文内容平台信息流点击的封面图。".to_string(),
         "画面比例固定为 3:4，标题区域必须清晰、可读、适合直接作为封面文案。".to_string(),
-        "参考图顺序必须按以下规则理解：图1是我想学习的封面图风格，图2是需要被改造成封面的底图。".to_string(),
+        "参考图顺序必须按以下规则理解：图1是我想学习的封面图风格，图2是需要被改造成封面的底图。"
+            .to_string(),
         "请保留图2的核心主体、真实内容和空间关系，把图2做成和图1一样风格的中文封面图。".to_string(),
         "不要出现提示词原文、排版说明、水印、AI 字样或调试文字。".to_string(),
     ];
@@ -657,7 +658,115 @@ fn load_document_source_detail(
         .into_iter()
         .find(|entry| entry.id == item_id)
         .ok_or_else(|| "未找到文档源".to_string())?;
-    serde_json::to_value(item).map_err(|error| error.to_string())
+    let mut value = serde_json::to_value(item).map_err(|error| error.to_string())?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "visualBlocks".to_string(),
+            visual_blocks_for_document_source(state, item_id)?,
+        );
+    }
+    Ok(value)
+}
+
+fn visual_blocks_for_document_source(
+    state: &State<'_, AppState>,
+    source_id: &str,
+) -> Result<Value, String> {
+    knowledge_index::schema::ensure_catalog_ready(state)?;
+    let conn = rusqlite::Connection::open(knowledge_index::catalog_db_path(state)?)
+        .map_err(|error| error.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                b.block_id,
+                b.relative_path,
+                b.absolute_path,
+                b.page,
+                b.block_type,
+                b.text,
+                b.visual_unit_id,
+                b.evidence_refs_json,
+                u.unit_kind,
+                u.manifest_json
+            FROM knowledge_document_blocks b
+            LEFT JOIN knowledge_visual_units u ON u.unit_id = b.visual_unit_id
+            WHERE b.source_id = ?1
+              AND (b.content_origin = 'visual_llm' OR b.block_type LIKE 'image.%' OR b.visual_unit_id IS NOT NULL)
+            ORDER BY b.relative_path ASC, b.page ASC, b.block_index ASC
+            LIMIT 40
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params![source_id], |row| {
+            let evidence_refs_json: String = row.get(7)?;
+            let evidence_refs =
+                serde_json::from_str::<Vec<String>>(&evidence_refs_json).unwrap_or_default();
+            let manifest_json: Option<String> = row.get(9)?;
+            let manifest = manifest_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+            let evidence_ref_set = evidence_refs
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            let visual_evidence = manifest
+                .as_ref()
+                .and_then(|manifest| manifest.get("factBlocks"))
+                .and_then(Value::as_array)
+                .map(|facts| {
+                    facts
+                        .iter()
+                        .filter(|fact| {
+                            if evidence_ref_set.is_empty() {
+                                return true;
+                            }
+                            fact.get("id")
+                                .and_then(Value::as_str)
+                                .is_some_and(|id| evidence_ref_set.contains(id))
+                        })
+                        .map(|fact| {
+                            json!({
+                                "id": fact.get("id").and_then(Value::as_str),
+                                "kind": fact.get("kind").and_then(Value::as_str),
+                                "title": fact.get("title").and_then(Value::as_str),
+                                "text": fact.get("text").and_then(Value::as_str),
+                                "bbox": fact.get("bbox").cloned().unwrap_or(Value::Null),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let summary = manifest.as_ref().and_then(|manifest| {
+                manifest
+                    .get("summary")
+                    .and_then(|summary| {
+                        summary
+                            .get("short")
+                            .or_else(|| summary.get("title"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(ToString::to_string)
+            });
+            Ok(json!({
+                "blockId": row.get::<_, String>(0)?,
+                "path": row.get::<_, String>(1)?,
+                "absolutePath": row.get::<_, String>(2)?,
+                "page": row.get::<_, Option<i64>>(3)?,
+                "blockType": row.get::<_, String>(4)?,
+                "text": row.get::<_, String>(5)?,
+                "visualUnitId": row.get::<_, Option<String>>(6)?,
+                "evidenceRefs": evidence_refs,
+                "visualEvidence": visual_evidence,
+                "unitKind": row.get::<_, Option<String>>(8)?,
+                "summary": summary,
+            }))
+        })
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    Ok(Value::Array(rows))
 }
 
 pub(crate) fn knowledge_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
@@ -784,6 +893,14 @@ pub async fn knowledge_get_index_status(state: State<'_, AppState>) -> Result<Va
 }
 
 #[tauri::command]
+pub async fn knowledge_get_file_index_dashboard(
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    serde_json::to_value(knowledge_index::file_index_dashboard::dashboard(&state)?)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn knowledge_rebuild_catalog(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -812,7 +929,7 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "fts",
                 "sourceId": source_id,
-                "ocrIncluded": false
+                "visualIndexIncluded": false
             }))
         }
         "canonicalblocks" | "canonical_blocks" | "blocks" | "block_anchor_rebuild" => {
@@ -821,13 +938,13 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "canonicalBlocks",
                 "sourceId": source_id,
-                "ocrIncluded": false
+                "visualIndexIncluded": false
             }))
         }
         "canonicalreparse" | "canonical_reparse" => {
-            if request.include_ocr != Some(true) {
+            if request.include_visual_index != Some(true) {
                 return Err(
-                    "canonical reparse may trigger OCR; pass includeOcr=true after user confirmation"
+                    "canonical reparse may call the visual index model; pass includeVisualIndex=true after user confirmation"
                         .to_string(),
                 );
             }
@@ -836,14 +953,14 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "canonicalReparse",
                 "sourceId": Value::Null,
-                "ocrIncluded": request.include_ocr.unwrap_or(false),
-                "ocrPolicy": "uses configured OCR provider only when parser needs OCR"
+                "visualIndexIncluded": request.include_visual_index.unwrap_or(false),
+                "visualIndexPolicy": "uses the configured multimodal visual index model for images and scanned PDF pages"
             }))
         }
         "full" | "catalog" | "full_rebuild" => {
-            if request.include_ocr != Some(true) {
+            if request.include_visual_index != Some(true) {
                 return Err(
-                    "full rebuild may trigger OCR; pass includeOcr=true after user confirmation"
+                    "full rebuild may call the visual index model; pass includeVisualIndex=true after user confirmation"
                         .to_string(),
                 );
             }
@@ -852,8 +969,8 @@ fn knowledge_rebuild_catalog_value(
                 "success": true,
                 "mode": "full",
                 "sourceId": Value::Null,
-                "ocrIncluded": request.include_ocr.unwrap_or(false),
-                "ocrPolicy": "uses configured OCR provider only when parser needs OCR"
+                "visualIndexIncluded": request.include_visual_index.unwrap_or(false),
+                "visualIndexPolicy": "uses the configured multimodal visual index model for images and scanned PDF pages"
             }))
         }
         _ => Err(format!(

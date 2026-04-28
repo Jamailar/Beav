@@ -7,12 +7,13 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     knowledge_index::{
         advisor_source_id,
-        canonical_store::{load_document_rows, replace_documents},
+        canonical_store::{load_document_rows, load_visual_retry_gates, replace_documents},
         catalog::{replace_catalog, KnowledgeCatalogSummary},
         citation_anchors::{build_anchors_for_blocks, replace_anchors, replace_anchors_for_source},
         document_blocks::{
-            block_records_from_document, build_blocks_for_source_with_cache_policy, replace_blocks,
-            replace_blocks_for_source, CanonicalCachePolicy,
+            block_records_from_document, build_blocks_for_source_with_cache_policy,
+            canonical_needs_visual_backfill_for_config, replace_blocks, replace_blocks_for_source,
+            resolve_visual_index_config, visual_backfill_candidate_unit_ids, CanonicalCachePolicy,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
@@ -90,6 +91,12 @@ fn summarize_note(item: KnowledgeNoteRecord) -> KnowledgeCatalogSummary {
         sample_files: Vec::new(),
         file_count: 0,
         item_hash: String::new(),
+        visual_search_summary: None,
+        visual_search_path: None,
+        visual_search_page: None,
+        visual_search_unit_id: None,
+        visual_search_evidence_refs: Vec::new(),
+        visual_search_thumbnail_path: None,
     }
 }
 
@@ -137,6 +144,12 @@ fn summarize_video(item: YoutubeVideoRecord) -> KnowledgeCatalogSummary {
         sample_files: Vec::new(),
         file_count: 0,
         item_hash: String::new(),
+        visual_search_summary: None,
+        visual_search_path: None,
+        visual_search_page: None,
+        visual_search_unit_id: None,
+        visual_search_evidence_refs: Vec::new(),
+        visual_search_thumbnail_path: None,
     }
 }
 
@@ -179,6 +192,12 @@ fn summarize_document_source(item: DocumentKnowledgeSourceRecord) -> KnowledgeCa
         sample_files: item.sample_files,
         file_count: item.file_count,
         item_hash: String::new(),
+        visual_search_summary: None,
+        visual_search_path: None,
+        visual_search_page: None,
+        visual_search_unit_id: None,
+        visual_search_evidence_refs: Vec::new(),
+        visual_search_thumbnail_path: None,
     }
 }
 
@@ -313,7 +332,11 @@ fn finalize_item_hash(items: &mut [KnowledgeCatalogSummary], rows: &[IndexedFile
 }
 
 pub(crate) fn rebuild_catalog(app: &AppHandle, state: &State<'_, AppState>) -> Result<(), String> {
-    rebuild_catalog_with_cache_policy(app, state, CanonicalCachePolicy::CurrentParserOnly)
+    rebuild_catalog_with_cache_policy(
+        app,
+        state,
+        CanonicalCachePolicy::RefreshIncompleteVisualIndex,
+    )
 }
 
 pub(crate) fn refresh_catalog_summaries(
@@ -352,6 +375,77 @@ pub(crate) fn rebuild_catalog_reusing_unchanged_canonical(
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
     rebuild_catalog_with_cache_policy(app, state, CanonicalCachePolicy::ReuseUnchangedFingerprint)
+}
+
+pub(crate) fn backfill_incomplete_visual_index(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    if !visual_backfill_needed(state)? {
+        return Ok(());
+    }
+    rebuild_catalog_with_cache_policy(
+        app,
+        state,
+        CanonicalCachePolicy::RefreshIncompleteVisualIndex,
+    )
+}
+
+pub(crate) fn visual_backfill_needed(state: &State<'_, AppState>) -> Result<bool, String> {
+    let visual_config = resolve_visual_index_config(state)?;
+    if !visual_config.has_callable_model() {
+        return Ok(false);
+    }
+    let retry_gates = load_visual_retry_gates(state)?;
+    let now_ms = now_iso().parse::<i64>().unwrap_or_default();
+    for row in load_document_rows(state, None)? {
+        let canonical: crate::document_parse::CanonicalDocument =
+            serde_json::from_str(&row.canonical_json).map_err(|error| error.to_string())?;
+        if canonical_needs_visual_backfill_for_config(&canonical, &visual_config)
+            && !visual_backfill_deferred_by_retry_gate(
+                &canonical,
+                &visual_config,
+                &retry_gates,
+                now_ms,
+            )
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn visual_backfill_deferred_by_retry_gate(
+    canonical: &crate::document_parse::CanonicalDocument,
+    visual_config: &crate::document_parse::VisualIndexConfig,
+    retry_gates: &std::collections::HashMap<
+        String,
+        crate::knowledge_index::canonical_store::VisualRetryGate,
+    >,
+    now_ms: i64,
+) -> bool {
+    let Some(unit_ids) = visual_backfill_candidate_unit_ids(canonical, Some(visual_config)) else {
+        return false;
+    };
+    if unit_ids.is_empty() {
+        return false;
+    }
+    let current_signature = visual_config.config_signature();
+    unit_ids.iter().all(|unit_id| {
+        let Some(gate) = retry_gates.get(unit_id) else {
+            return false;
+        };
+        if gate.status != "failed" {
+            return false;
+        }
+        if gate.config_signature.as_deref() != Some(current_signature.as_str()) {
+            return false;
+        }
+        gate.next_retry_at
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .is_some_and(|retry_at| retry_at > now_ms)
+    })
 }
 
 fn rebuild_catalog_with_cache_policy(

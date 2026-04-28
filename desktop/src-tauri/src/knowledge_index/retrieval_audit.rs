@@ -90,7 +90,7 @@ pub(crate) fn record_search_run(
         .map_err(|error| error.to_string())?;
     for (index, hit) in hits.iter().enumerate() {
         let anchor_ids = hit.get("anchorIds").cloned().unwrap_or_else(|| json!([]));
-        let ranking = hit.get("ranking").cloned().unwrap_or_else(|| json!({}));
+        let ranking = hit_audit_payload(hit);
         stmt.execute(params![
             run_id,
             index as i64 + 1,
@@ -108,6 +108,18 @@ pub(crate) fn record_search_run(
     drop(stmt);
     tx.commit().map_err(|error| error.to_string())?;
     Ok(run_id)
+}
+
+fn hit_audit_payload(hit: &Value) -> Value {
+    let mut payload = hit.get("ranking").cloned().unwrap_or_else(|| json!({}));
+    if let Some(object) = payload.as_object_mut() {
+        for key in ["visualSource", "visualEvidence", "visualSummary"] {
+            if let Some(value) = hit.get(key) {
+                object.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    payload
 }
 
 fn new_run_id() -> String {
@@ -134,5 +146,19 @@ mod tests {
         });
         assert_eq!(value_string(&value, "blockId").as_deref(), Some("block-1"));
         assert_eq!(value_string(&value, "page"), None);
+    }
+
+    #[test]
+    fn hit_audit_payload_keeps_visual_metadata() {
+        let payload = hit_audit_payload(&json!({
+            "ranking": { "totalScore": 1.0 },
+            "visualSource": { "unitId": "unit-1", "evidenceRefs": ["fact_scene"] },
+            "visualEvidence": [{ "id": "fact_scene", "bbox": { "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4 } }],
+            "visualSummary": "snow mountain lake"
+        }));
+        assert_eq!(payload["totalScore"], json!(1.0));
+        assert_eq!(payload["visualSource"]["unitId"], json!("unit-1"));
+        assert_eq!(payload["visualEvidence"][0]["id"], json!("fact_scene"));
+        assert_eq!(payload["visualSummary"], json!("snow mountain lake"));
     }
 }

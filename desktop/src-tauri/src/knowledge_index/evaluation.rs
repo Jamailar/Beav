@@ -223,10 +223,24 @@ fn fixture_claim_audit_cases() -> Vec<ClaimAuditCase> {
             exact_span: true,
         },
         ClaimAuditCase {
-            claim: "OCR-derived evidence keeps exact citation spans in this fixture.",
-            anchor_ids: &["ocr-law#0@0-12"],
-            expected_quote: "Scanned Clause 123",
-            observed_quote: "Scanned Clause 123",
+            claim: "Visual LLM evidence keeps exact source mapping for scanned pages.",
+            anchor_ids: &["visual-scan-law#page=1@fact_clause"],
+            expected_quote: "Scanned Clause 123 visual source page 1",
+            observed_quote: "Scanned Clause 123 visual source page 1",
+            exact_span: true,
+        },
+        ClaimAuditCase {
+            claim: "A no-text landscape image can be retrieved through visual scene descriptions.",
+            anchor_ids: &["visual-landscape#image@fact_scene"],
+            expected_quote: "snow mountain lake forest landscape",
+            observed_quote: "snow mountain lake forest landscape",
+            exact_span: true,
+        },
+        ClaimAuditCase {
+            claim: "Visible text in an image remains grounded as visual evidence.",
+            anchor_ids: &["visual-poster#image@fact_visible_text"],
+            expected_quote: "visible poster title",
+            observed_quote: "visible poster title",
             exact_span: true,
         },
         ClaimAuditCase {
@@ -468,5 +482,21 @@ mod tests {
         assert!(metrics.unsupported_claim_rate > 0.03);
         assert!(metrics.quote_drift_rate > 0.01);
         assert!(metrics.citation_span_exactness < 0.98);
+    }
+
+    #[test]
+    fn fixture_contains_visual_image_and_scanned_pdf_coverage() {
+        let cases = fixture_claim_audit_cases();
+        assert!(cases.iter().any(|case| case
+            .anchor_ids
+            .iter()
+            .any(|anchor| anchor.starts_with("visual-landscape"))));
+        assert!(cases.iter().any(|case| case
+            .anchor_ids
+            .iter()
+            .any(|anchor| anchor.starts_with("visual-scan-law"))));
+        assert!(cases
+            .iter()
+            .any(|case| case.claim.contains("grounded as visual evidence")));
     }
 }

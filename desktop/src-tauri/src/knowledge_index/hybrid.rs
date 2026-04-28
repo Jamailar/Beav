@@ -82,6 +82,9 @@ pub(crate) fn citation_rerank_bonus(
     ) {
         score += 1.0;
     }
+    if content_origin == "visual_llm" || block_type.starts_with("image.") {
+        score += 0.8;
+    }
     if content_origin == "ocr" {
         score += match ocr_confidence {
             Some(confidence) if confidence >= 0.9 => 0.6,

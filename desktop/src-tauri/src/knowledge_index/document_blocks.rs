@@ -9,8 +9,8 @@ use time::OffsetDateTime;
 
 use crate::{
     document_parse::{
-        CanonicalDocument, LegalMetadata, OcrProvider, OcrProviderConfig, ParserInfo,
-        ParserProviderConfig, PARSER_NAME, PARSER_VERSION,
+        CanonicalBlock, CanonicalDocument, LegalMetadata, ParserInfo, ParserProviderConfig,
+        VisualIndexConfig, PARSER_NAME, PARSER_VERSION, VISUAL_SCHEMA_VERSION,
     },
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
@@ -47,6 +47,9 @@ pub(crate) struct DocumentBlockRecord {
     pub language: Option<String>,
     pub content_origin: String,
     pub ocr_confidence: Option<f64>,
+    pub visual_unit_id: Option<String>,
+    pub source_document_id: Option<String>,
+    pub evidence_refs_json: String,
     pub jurisdiction: Option<String>,
     pub authority: Option<String>,
     pub authority_level: Option<i64>,
@@ -81,6 +84,9 @@ pub(crate) struct DocumentBlockHit {
     pub language: Option<String>,
     pub content_origin: String,
     pub ocr_confidence: Option<f64>,
+    pub visual_unit_id: Option<String>,
+    pub source_document_id: Option<String>,
+    pub evidence_refs_json: String,
     pub jurisdiction: Option<String>,
     pub authority: Option<String>,
     pub authority_level: Option<i64>,
@@ -127,8 +133,8 @@ pub(crate) struct BuildSourceBlocksResult {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CanonicalCachePolicy {
-    CurrentParserOnly,
     ReuseUnchangedFingerprint,
+    RefreshIncompleteVisualIndex,
 }
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
@@ -153,16 +159,18 @@ pub(crate) fn replace_blocks(
                 INSERT INTO knowledge_document_blocks (
                     block_id, document_id, source_id, source_name, root_path, absolute_path,
                     relative_path, file_extension, title, language, content_origin,
-                    ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-                    expiry_date, document_type, is_superseded, page, block_type,
-                    section_path_json, block_index, line_start, line_end, text,
-                    normalized_text, semantic_vector_json, updated_at
+                    ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+                    jurisdiction, authority, authority_level, effective_date, expiry_date,
+                    document_type, is_superseded, page, block_type, section_path_json,
+                    block_index, line_start, line_end, text, normalized_text,
+                    semantic_vector_json, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10, ?11, ?12,
                     ?13, ?14, ?15, ?16, ?17, ?18,
                     ?19, ?20, ?21, ?22, ?23, ?24,
-                    ?25, ?26, ?27, ?28, ?29
+                    ?25, ?26, ?27, ?28, ?29, ?30,
+                    ?31, ?32
                 )
                 "#,
             )
@@ -190,6 +198,9 @@ pub(crate) fn replace_blocks(
                 block.language,
                 block.content_origin,
                 block.ocr_confidence,
+                block.visual_unit_id,
+                block.source_document_id,
+                block.evidence_refs_json,
                 block.jurisdiction,
                 block.authority,
                 block.authority_level,
@@ -244,16 +255,18 @@ pub(crate) fn replace_blocks_for_source(
                 INSERT INTO knowledge_document_blocks (
                     block_id, document_id, source_id, source_name, root_path, absolute_path,
                     relative_path, file_extension, title, language, content_origin,
-                    ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-                    expiry_date, document_type, is_superseded, page, block_type,
-                    section_path_json, block_index, line_start, line_end, text,
-                    normalized_text, semantic_vector_json, updated_at
+                    ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+                    jurisdiction, authority, authority_level, effective_date, expiry_date,
+                    document_type, is_superseded, page, block_type, section_path_json,
+                    block_index, line_start, line_end, text, normalized_text,
+                    semantic_vector_json, updated_at
                 ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
                     ?7, ?8, ?9, ?10, ?11, ?12,
                     ?13, ?14, ?15, ?16, ?17, ?18,
                     ?19, ?20, ?21, ?22, ?23, ?24,
-                    ?25, ?26, ?27, ?28, ?29
+                    ?25, ?26, ?27, ?28, ?29, ?30,
+                    ?31, ?32
                 )
                 "#,
             )
@@ -272,6 +285,9 @@ pub(crate) fn replace_blocks_for_source(
                 block.language,
                 block.content_origin,
                 block.ocr_confidence,
+                block.visual_unit_id,
+                block.source_document_id,
+                block.evidence_refs_json,
                 block.jurisdiction,
                 block.authority,
                 block.authority_level,
@@ -485,10 +501,11 @@ pub(crate) fn load_blocks_for_index(
             r#"
             SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
                    relative_path, file_extension, title, language, content_origin,
-                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-                   expiry_date, document_type, is_superseded, page, block_type,
-                   section_path_json, block_index, line_start, line_end, text,
-                   normalized_text, semantic_vector_json, updated_at
+                   ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+                   jurisdiction, authority, authority_level, effective_date, expiry_date,
+                   document_type, is_superseded, page, block_type, section_path_json,
+                   block_index, line_start, line_end, text, normalized_text,
+                   semantic_vector_json, updated_at
             FROM knowledge_document_blocks
             ORDER BY source_id ASC, relative_path ASC, block_index ASC
             "#,
@@ -709,6 +726,9 @@ pub(crate) fn search_blocks(
             language: candidate.language,
             content_origin: candidate.content_origin,
             ocr_confidence: candidate.ocr_confidence,
+            visual_unit_id: candidate.visual_unit_id,
+            source_document_id: candidate.source_document_id,
+            evidence_refs_json: candidate.evidence_refs_json,
             jurisdiction: candidate.jurisdiction,
             authority: candidate.authority,
             authority_level: candidate.authority_level,
@@ -895,10 +915,11 @@ pub(crate) fn read_block(
         r#"
         SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
                relative_path, file_extension, title, language, content_origin,
-               ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-               expiry_date, document_type, is_superseded, page, block_type,
-               section_path_json, block_index, line_start, line_end, text,
-               normalized_text, semantic_vector_json, updated_at
+               ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+               jurisdiction, authority, authority_level, effective_date, expiry_date,
+               document_type, is_superseded, page, block_type, section_path_json,
+               block_index, line_start, line_end, text, normalized_text,
+               semantic_vector_json, updated_at
         FROM knowledge_document_blocks
         WHERE block_id = ?1
         "#,
@@ -923,23 +944,26 @@ fn row_to_document_block(row: &rusqlite::Row<'_>) -> Result<DocumentBlockRecord,
         language: row.get(9)?,
         content_origin: row.get(10)?,
         ocr_confidence: row.get(11)?,
-        jurisdiction: row.get(12)?,
-        authority: row.get(13)?,
-        authority_level: row.get(14)?,
-        effective_date: row.get(15)?,
-        expiry_date: row.get(16)?,
-        document_type: row.get(17)?,
-        is_superseded: row.get(18)?,
-        page: row.get(19)?,
-        block_type: row.get(20)?,
-        section_path_json: row.get(21)?,
-        block_index: row.get(22)?,
-        line_start: row.get(23)?,
-        line_end: row.get(24)?,
-        text: row.get(25)?,
-        normalized_text: row.get(26)?,
-        semantic_vector_json: row.get(27)?,
-        updated_at: row.get(28)?,
+        visual_unit_id: row.get(12)?,
+        source_document_id: row.get(13)?,
+        evidence_refs_json: row.get(14)?,
+        jurisdiction: row.get(15)?,
+        authority: row.get(16)?,
+        authority_level: row.get(17)?,
+        effective_date: row.get(18)?,
+        expiry_date: row.get(19)?,
+        document_type: row.get(20)?,
+        is_superseded: row.get(21)?,
+        page: row.get(22)?,
+        block_type: row.get(23)?,
+        section_path_json: row.get(24)?,
+        block_index: row.get(25)?,
+        line_start: row.get(26)?,
+        line_end: row.get(27)?,
+        text: row.get(28)?,
+        normalized_text: row.get(29)?,
+        semantic_vector_json: row.get(30)?,
+        updated_at: row.get(31)?,
     })
 }
 
@@ -1054,21 +1078,41 @@ fn build_blocks_for_file(
     }
     let absolute_path = file_path.display().to_string();
     let fingerprint = fingerprint_file(file_path)?;
+    let visual_config = resolve_visual_index_config(state)?;
     let canonical = if let Some(cached) = load_cached_for_policy(
         state,
         &absolute_path,
         &fingerprint.content_hash,
         cache_policy,
     )? {
-        cached
+        if matches!(
+            cache_policy,
+            CanonicalCachePolicy::RefreshIncompleteVisualIndex
+        ) && visual_config.enabled
+            && canonical_needs_visual_backfill_for_config(&cached, &visual_config)
+        {
+            let parser_config = resolve_parser_provider_config(state)?;
+            let Some(parsed) = crate::document_parse::parse_path(
+                source_id,
+                root_path,
+                file_path,
+                &visual_config,
+                &parser_config,
+            )?
+            else {
+                return Ok(());
+            };
+            parsed
+        } else {
+            cached
+        }
     } else {
-        let ocr_config = resolve_ocr_provider_config(state)?;
         let parser_config = resolve_parser_provider_config(state)?;
         let Some(parsed) = crate::document_parse::parse_path(
             source_id,
             root_path,
             file_path,
-            &ocr_config,
+            &visual_config,
             &parser_config,
         )?
         else {
@@ -1120,7 +1164,7 @@ fn load_cached_for_policy(
     cache_policy: CanonicalCachePolicy,
 ) -> Result<Option<CanonicalDocument>, String> {
     let cached = match cache_policy {
-        CanonicalCachePolicy::CurrentParserOnly => {
+        CanonicalCachePolicy::RefreshIncompleteVisualIndex => {
             canonical_store::load_cached_document(state, absolute_path, content_hash)?
         }
         CanonicalCachePolicy::ReuseUnchangedFingerprint => {
@@ -1128,6 +1172,106 @@ fn load_cached_for_policy(
         }
     };
     Ok(cached.map(normalize_cached_canonical_parser_info))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn canonical_needs_visual_backfill(document: &CanonicalDocument) -> bool {
+    visual_backfill_candidate_unit_ids(document, None).is_some()
+}
+
+pub(crate) fn canonical_needs_visual_backfill_for_config(
+    document: &CanonicalDocument,
+    config: &VisualIndexConfig,
+) -> bool {
+    visual_backfill_candidate_unit_ids(document, Some(config)).is_some()
+}
+
+pub(crate) fn visual_backfill_candidate_unit_ids(
+    document: &CanonicalDocument,
+    config: Option<&VisualIndexConfig>,
+) -> Option<Vec<String>> {
+    if !document_requires_visual_index(document) {
+        return None;
+    }
+    let Some(manifest) = document.visual_manifest.as_ref() else {
+        return Some(Vec::new());
+    };
+    let manifests = visual_manifest_items(manifest);
+    if manifests.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut unit_ids = Vec::new();
+    let mut needs_backfill = false;
+    for manifest in manifests {
+        if visual_manifest_needs_backfill(manifest, config) {
+            needs_backfill = true;
+            if let Some(unit_id) = manifest
+                .get("source")
+                .and_then(|source| source.get("unitId"))
+                .and_then(Value::as_str)
+            {
+                unit_ids.push(unit_id.to_string());
+            }
+        }
+    }
+    needs_backfill.then_some(unit_ids)
+}
+
+fn document_requires_visual_index(document: &CanonicalDocument) -> bool {
+    is_visual_image_source_type(&document.source_type)
+        || document.content_origin == "visual_llm"
+        || document.visual_manifest.is_some()
+}
+
+fn is_visual_image_source_type(source_type: &str) -> bool {
+    matches!(
+        source_type.trim().to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" | "webp"
+    )
+}
+
+fn visual_manifest_items(manifest: &Value) -> Vec<&Value> {
+    manifest
+        .get("pages")
+        .and_then(Value::as_array)
+        .map(|pages| pages.iter().collect())
+        .unwrap_or_else(|| vec![manifest])
+}
+
+fn visual_manifest_processing_mode(manifest: &Value) -> Option<&str> {
+    manifest
+        .get("analysis")
+        .and_then(|analysis| analysis.get("processingMode"))
+        .and_then(Value::as_str)
+}
+
+fn visual_manifest_needs_backfill(manifest: &Value, config: Option<&VisualIndexConfig>) -> bool {
+    let Some(config) = config else {
+        return visual_manifest_processing_mode(manifest) != Some("visual_llm");
+    };
+    if !config.has_callable_model() {
+        return false;
+    }
+    if visual_manifest_processing_mode(manifest) != Some("visual_llm") {
+        return true;
+    }
+    let analysis = manifest.get("analysis");
+    let expected_signature = config.config_signature();
+    let model_matches = analysis
+        .and_then(|value| value.get("model"))
+        .and_then(Value::as_str)
+        == config.model_name();
+    let prompt_matches = analysis
+        .and_then(|value| value.get("promptVersion"))
+        .and_then(Value::as_str)
+        == Some(config.prompt_version.as_str());
+    let schema_matches =
+        manifest.get("schemaVersion").and_then(Value::as_str) == Some(VISUAL_SCHEMA_VERSION);
+    let signature_matches = analysis
+        .and_then(|value| value.get("configSignature"))
+        .and_then(Value::as_str)
+        == Some(expected_signature.as_str());
+    !(model_matches && prompt_matches && schema_matches && signature_matches)
 }
 
 fn normalize_cached_canonical_parser_info(mut document: CanonicalDocument) -> CanonicalDocument {
@@ -1170,20 +1314,11 @@ fn resolve_parser_provider_config(
     })
 }
 
-fn resolve_ocr_provider_config(state: &State<'_, AppState>) -> Result<OcrProviderConfig, String> {
+pub(crate) fn resolve_visual_index_config(
+    state: &State<'_, AppState>,
+) -> Result<VisualIndexConfig, String> {
     let settings = with_store(state, |store| Ok(store.settings.clone()))?;
-    let provider = match payload_string(&settings, "ocr_provider")
-        .unwrap_or_else(|| "auto".to_string())
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "api" | "network" | "remote" => OcrProvider::Api,
-        "local" | "internal" | "vision" => OcrProvider::Local,
-        "disabled" | "off" | "none" => OcrProvider::Disabled,
-        _ => OcrProvider::Auto,
-    };
-    let timeout_seconds = payload_field(&settings, "ocr_timeout_seconds")
+    let timeout_seconds = payload_field(&settings, "visual_index_timeout_seconds")
         .and_then(|value| {
             value.as_u64().or_else(|| {
                 value
@@ -1191,20 +1326,67 @@ fn resolve_ocr_provider_config(state: &State<'_, AppState>) -> Result<OcrProvide
                     .and_then(|text| text.trim().parse::<u64>().ok())
             })
         })
-        .unwrap_or(60)
+        .unwrap_or(90)
         .clamp(10, 300);
-    let local_fallback = payload_field(&settings, "ocr_local_fallback")
+    let max_image_edge = payload_field(&settings, "visual_index_max_image_edge")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(1536)
+        .clamp(512, 4096) as u32;
+    let pdf_max_pages = payload_field(&settings, "visual_index_pdf_max_pages")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(12)
+        .clamp(1, 200) as usize;
+    let pdf_render_dpi = payload_field(&settings, "visual_index_pdf_render_dpi")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(144)
+        .clamp(72, 300) as u32;
+    let concurrency = payload_field(&settings, "visual_index_concurrency")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(1)
+        .clamp(1, 4) as usize;
+    let enabled = payload_field(&settings, "visual_index_enabled")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let skip_small_images = payload_field(&settings, "visual_index_skip_small_images")
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
-    Ok(OcrProviderConfig {
-        provider,
-        endpoint: payload_string(&settings, "ocr_endpoint")
-            .or_else(|| payload_string(&settings, "ocr_api_endpoint")),
-        api_key: payload_string(&settings, "ocr_key")
-            .or_else(|| payload_string(&settings, "ocr_api_key")),
-        model: payload_string(&settings, "ocr_model"),
+    Ok(VisualIndexConfig {
+        enabled,
+        endpoint: payload_string(&settings, "visual_index_endpoint"),
+        api_key: payload_string(&settings, "visual_index_api_key"),
+        model: payload_string(&settings, "visual_index_model"),
+        prompt_version: payload_string(&settings, "visual_index_prompt_version")
+            .unwrap_or_else(|| "visual-manifest-v1".to_string()),
         timeout_seconds,
-        local_fallback,
+        max_image_edge,
+        skip_small_images,
+        pdf_max_pages,
+        pdf_render_dpi,
+        concurrency,
     })
 }
 
@@ -1220,6 +1402,8 @@ pub(crate) fn block_records_from_document(
         if normalized_text.is_empty() {
             continue;
         }
+        let (visual_unit_id, source_document_id, evidence_refs_json) =
+            visual_refs_for_block(document, block);
         records.push(DocumentBlockRecord {
             block_id: format!("{}#{block_index}", document.document_id),
             document_id: document.document_id.clone(),
@@ -1233,6 +1417,9 @@ pub(crate) fn block_records_from_document(
             language: block.language.clone().or_else(|| document.language.clone()),
             content_origin: block.content_origin.clone(),
             ocr_confidence: block.ocr_confidence,
+            visual_unit_id,
+            source_document_id,
+            evidence_refs_json,
             jurisdiction: document.legal_metadata.jurisdiction.clone(),
             authority: document.legal_metadata.authority.clone(),
             authority_level: document.legal_metadata.authority_level,
@@ -1261,6 +1448,83 @@ pub(crate) fn block_records_from_document(
     Ok(records)
 }
 
+fn visual_refs_for_block(
+    document: &CanonicalDocument,
+    block: &CanonicalBlock,
+) -> (Option<String>, Option<String>, String) {
+    if block.content_origin != "visual_llm" {
+        return (None, None, "[]".to_string());
+    }
+    let Some(manifest) = document.visual_manifest.as_ref() else {
+        return (None, None, "[]".to_string());
+    };
+    let manifests = visual_manifests_for_page(manifest, block.page);
+    for manifest in manifests {
+        let source = manifest.get("source").unwrap_or(&Value::Null);
+        let visual_unit_id = source
+            .get("unitId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToString::to_string);
+        let source_document_id = source
+            .get("sourceDocumentId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToString::to_string);
+        let evidence_refs = visual_evidence_refs_for_projection(manifest, block);
+        let evidence_refs_json =
+            serde_json::to_string(&evidence_refs).unwrap_or_else(|_| "[]".to_string());
+        if visual_unit_id.is_some() || source_document_id.is_some() || !evidence_refs.is_empty() {
+            return (visual_unit_id, source_document_id, evidence_refs_json);
+        }
+    }
+    (None, None, "[]".to_string())
+}
+
+fn visual_manifests_for_page(manifest: &Value, page: Option<i64>) -> Vec<&Value> {
+    let Some(pages) = manifest.get("pages").and_then(Value::as_array) else {
+        return vec![manifest];
+    };
+    pages
+        .iter()
+        .filter(|item| {
+            page.is_none_or(|target| {
+                item.get("source")
+                    .and_then(|source| source.get("pageNumber"))
+                    .and_then(Value::as_i64)
+                    == Some(target)
+            })
+        })
+        .collect()
+}
+
+fn visual_evidence_refs_for_projection(manifest: &Value, block: &CanonicalBlock) -> Vec<String> {
+    let projection_id = block.section_path.last().map(String::as_str);
+    manifest
+        .get("retrievalProjection")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("id").and_then(Value::as_str) == projection_id
+                    || item
+                        .get("purpose")
+                        .and_then(Value::as_str)
+                        .is_some_and(|purpose| block.block_type == format!("image.{purpose}"))
+            })
+        })
+        .and_then(|projection| projection.get("evidenceIds").and_then(Value::as_array))
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone)]
 struct SearchCandidate {
     block_id: String,
@@ -1275,6 +1539,9 @@ struct SearchCandidate {
     language: Option<String>,
     content_origin: String,
     ocr_confidence: Option<f64>,
+    visual_unit_id: Option<String>,
+    source_document_id: Option<String>,
+    evidence_refs_json: String,
     jurisdiction: Option<String>,
     authority: Option<String>,
     authority_level: Option<i64>,
@@ -1312,7 +1579,8 @@ fn fts_candidates_for_source(
             r#"
             SELECT b.block_id, b.document_id, b.source_id, b.source_name, b.root_path,
                    b.absolute_path, b.relative_path, b.file_extension, b.title, b.language,
-                   b.content_origin, b.ocr_confidence, b.jurisdiction, b.authority,
+                   b.content_origin, b.ocr_confidence, b.visual_unit_id,
+                   b.source_document_id, b.evidence_refs_json, b.jurisdiction, b.authority,
                    b.authority_level, b.effective_date, b.expiry_date, b.document_type,
                    b.is_superseded, b.page, b.block_type, b.section_path_json,
                    b.block_index, b.line_start, b.line_end, b.text, b.semantic_vector_json,
@@ -1329,7 +1597,7 @@ fn fts_candidates_for_source(
     let rows = stmt
         .query_map(params![match_query, source_id, limit as i64], |row| {
             let mut candidate = row_to_search_candidate(row)?;
-            let bm25_rank: f64 = row.get(27)?;
+            let bm25_rank: f64 = row.get(30)?;
             candidate.bm25_score = bm25_rank_score(bm25_rank);
             Ok(candidate)
         })
@@ -1369,10 +1637,10 @@ fn like_candidates_for_source(
             r#"
             SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
                    relative_path, file_extension, title, language, content_origin,
-                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-                   expiry_date, document_type, is_superseded, page, block_type,
-                   section_path_json, block_index, line_start, line_end, text,
-                   semantic_vector_json
+                   ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+                   jurisdiction, authority, authority_level, effective_date, expiry_date,
+                   document_type, is_superseded, page, block_type, section_path_json,
+                   block_index, line_start, line_end, text, semantic_vector_json
             FROM knowledge_document_blocks
             WHERE source_id = ?1
               AND ({})
@@ -1398,10 +1666,10 @@ fn candidate_for_block_id(
         r#"
         SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
                relative_path, file_extension, title, language, content_origin,
-               ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-               expiry_date, document_type, is_superseded, page, block_type,
-               section_path_json, block_index, line_start, line_end, text,
-               semantic_vector_json
+               ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+               jurisdiction, authority, authority_level, effective_date, expiry_date,
+               document_type, is_superseded, page, block_type, section_path_json,
+               block_index, line_start, line_end, text, semantic_vector_json
         FROM knowledge_document_blocks
         WHERE source_id = ?1 AND block_id = ?2
         "#,
@@ -1453,10 +1721,10 @@ fn semantic_candidates_for_source(
             r#"
             SELECT block_id, document_id, source_id, source_name, root_path, absolute_path,
                    relative_path, file_extension, title, language, content_origin,
-                   ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-                   expiry_date, document_type, is_superseded, page, block_type,
-                   section_path_json, block_index, line_start, line_end, text,
-                   semantic_vector_json
+                   ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+                   jurisdiction, authority, authority_level, effective_date, expiry_date,
+                   document_type, is_superseded, page, block_type, section_path_json,
+                   block_index, line_start, line_end, text, semantic_vector_json
             FROM knowledge_document_blocks
             WHERE source_id = ?1
             LIMIT ?2
@@ -1478,21 +1746,24 @@ fn semantic_candidates_for_source(
                 language: row.get(9)?,
                 content_origin: row.get(10)?,
                 ocr_confidence: row.get(11)?,
-                jurisdiction: row.get(12)?,
-                authority: row.get(13)?,
-                authority_level: row.get(14)?,
-                effective_date: row.get(15)?,
-                expiry_date: row.get(16)?,
-                document_type: row.get(17)?,
-                is_superseded: row.get(18)?,
-                page: row.get(19)?,
-                block_type: row.get(20)?,
-                section_path_json: row.get(21)?,
-                block_index: row.get(22)?,
-                line_start: row.get(23)?,
-                line_end: row.get(24)?,
-                text: row.get(25)?,
-                semantic_vector_json: row.get(26)?,
+                visual_unit_id: row.get(12)?,
+                source_document_id: row.get(13)?,
+                evidence_refs_json: row.get(14)?,
+                jurisdiction: row.get(15)?,
+                authority: row.get(16)?,
+                authority_level: row.get(17)?,
+                effective_date: row.get(18)?,
+                expiry_date: row.get(19)?,
+                document_type: row.get(20)?,
+                is_superseded: row.get(21)?,
+                page: row.get(22)?,
+                block_type: row.get(23)?,
+                section_path_json: row.get(24)?,
+                block_index: row.get(25)?,
+                line_start: row.get(26)?,
+                line_end: row.get(27)?,
+                text: row.get(28)?,
+                semantic_vector_json: row.get(29)?,
                 lexical_score: 0.0,
                 bm25_score: 0.0,
             })
@@ -1691,6 +1962,9 @@ fn legal_priority_score(metadata: &LegalMetadata, today: &str) -> f64 {
 }
 
 fn confidence_score(content_origin: &str, ocr_confidence: Option<f64>) -> f64 {
+    if content_origin == "visual_llm" {
+        return 1.0;
+    }
     if content_origin != "ocr" {
         return 0.0;
     }
@@ -1721,21 +1995,24 @@ fn row_to_search_candidate(row: &rusqlite::Row<'_>) -> Result<SearchCandidate, r
         language: row.get(9)?,
         content_origin: row.get(10)?,
         ocr_confidence: row.get(11)?,
-        jurisdiction: row.get(12)?,
-        authority: row.get(13)?,
-        authority_level: row.get(14)?,
-        effective_date: row.get(15)?,
-        expiry_date: row.get(16)?,
-        document_type: row.get(17)?,
-        is_superseded: row.get(18)?,
-        page: row.get(19)?,
-        block_type: row.get(20)?,
-        section_path_json: row.get(21)?,
-        block_index: row.get(22)?,
-        line_start: row.get(23)?,
-        line_end: row.get(24)?,
-        text: row.get(25)?,
-        semantic_vector_json: row.get(26)?,
+        visual_unit_id: row.get(12)?,
+        source_document_id: row.get(13)?,
+        evidence_refs_json: row.get(14)?,
+        jurisdiction: row.get(15)?,
+        authority: row.get(16)?,
+        authority_level: row.get(17)?,
+        effective_date: row.get(18)?,
+        expiry_date: row.get(19)?,
+        document_type: row.get(20)?,
+        is_superseded: row.get(21)?,
+        page: row.get(22)?,
+        block_type: row.get(23)?,
+        section_path_json: row.get(24)?,
+        block_index: row.get(25)?,
+        line_start: row.get(26)?,
+        line_end: row.get(27)?,
+        text: row.get(28)?,
+        semantic_vector_json: row.get(29)?,
         lexical_score: 0.0,
         bm25_score: 0.0,
     })
@@ -1825,6 +2102,9 @@ mod tests {
                 language TEXT,
                 content_origin TEXT NOT NULL DEFAULT 'native',
                 ocr_confidence REAL,
+                visual_unit_id TEXT,
+                source_document_id TEXT,
+                evidence_refs_json TEXT NOT NULL DEFAULT '[]',
                 jurisdiction TEXT,
                 authority TEXT,
                 authority_level INTEGER,
@@ -1860,17 +2140,19 @@ mod tests {
             INSERT INTO knowledge_document_blocks (
                 block_id, document_id, source_id, source_name, root_path, absolute_path,
                 relative_path, file_extension, title, language, content_origin,
-                ocr_confidence, jurisdiction, authority, authority_level, effective_date,
-                expiry_date, document_type, is_superseded, page, block_type,
-                section_path_json, block_index, line_start, line_end, text,
-                normalized_text, semantic_vector_json, updated_at
+                ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+                jurisdiction, authority, authority_level, effective_date, expiry_date,
+                document_type, is_superseded, page, block_type, section_path_json,
+                block_index, line_start, line_end, text, normalized_text,
+                semantic_vector_json, updated_at
             ) VALUES (
                 'block-1', 'doc-1', 'source-1', 'Source', '/tmp', '/tmp/doc.txt',
                 'doc.txt', 'txt', 'Breach Remedy', 'en', 'native',
-                NULL, NULL, NULL, NULL, NULL,
-                NULL, 'contract', 0, 1, 'paragraph',
-                '[]', 0, 1, 1, 'Material breach remedy clause.',
-                'material breach remedy clause', '[]', '2026-04-25'
+                NULL, NULL, NULL, '[]', NULL, NULL,
+                NULL, NULL, NULL, 'contract', 0, 1,
+                'paragraph', '[]', 0, 1, 1,
+                'Material breach remedy clause.', 'material breach remedy clause',
+                '[]', '2026-04-25'
             )
             "#,
             [],
@@ -1952,6 +2234,215 @@ mod tests {
     fn low_confidence_ocr_is_penalized() {
         assert!(confidence_score("ocr", Some(0.52)) < confidence_score("ocr", Some(0.92)));
         assert_eq!(confidence_score("native", None), 0.0);
+    }
+
+    fn test_canonical_document(
+        source_type: &str,
+        content_origin: &str,
+        visual_manifest: Option<Value>,
+    ) -> CanonicalDocument {
+        CanonicalDocument {
+            document_id: format!("source-1:file.{source_type}"),
+            source_id: "source-1".to_string(),
+            absolute_path: format!("/tmp/file.{source_type}"),
+            relative_path: format!("file.{source_type}"),
+            source_type: source_type.to_string(),
+            title: Some("file".to_string()),
+            language: Some("zh".to_string()),
+            content_origin: content_origin.to_string(),
+            ocr_average_confidence: None,
+            legal_metadata: LegalMetadata::default(),
+            parser_info: ParserInfo {
+                parser_name: "test".to_string(),
+                parser_version: "test".to_string(),
+                strategy: "test".to_string(),
+                fallback_used: false,
+            },
+            blocks: vec![CanonicalBlock {
+                block_type: "image.scene".to_string(),
+                section_path: vec!["visual".to_string()],
+                page: None,
+                line_start: 1,
+                line_end: 1,
+                text: "视觉内容".to_string(),
+                language: Some("zh".to_string()),
+                content_origin: content_origin.to_string(),
+                ocr_confidence: None,
+            }],
+            attachments: Vec::new(),
+            visual_manifest,
+        }
+    }
+
+    #[test]
+    fn visual_backfill_detects_metadata_only_image_manifest() {
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "analysis": { "processingMode": "metadata_only" }
+            })),
+        );
+
+        assert!(canonical_needs_visual_backfill(&document));
+    }
+
+    #[test]
+    fn visual_backfill_skips_complete_visual_image_manifest() {
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "analysis": { "processingMode": "visual_llm" }
+            })),
+        );
+
+        assert!(!canonical_needs_visual_backfill(&document));
+    }
+
+    #[test]
+    fn visual_backfill_skips_native_pdf_without_visual_manifest() {
+        let document = test_canonical_document("pdf", "native", None);
+
+        assert!(!canonical_needs_visual_backfill(&document));
+    }
+
+    #[test]
+    fn visual_backfill_detects_incomplete_scanned_pdf_page_manifest() {
+        let document = test_canonical_document(
+            "pdf",
+            "visual_llm",
+            Some(json!({
+                "pages": [
+                    { "analysis": { "processingMode": "visual_llm" } },
+                    { "analysis": { "processingMode": "metadata_only" } }
+                ]
+            })),
+        );
+
+        assert!(canonical_needs_visual_backfill(&document));
+    }
+
+    fn callable_visual_config(model: &str) -> VisualIndexConfig {
+        VisualIndexConfig {
+            enabled: true,
+            endpoint: Some("https://vision.example.com/v1".to_string()),
+            model: Some(model.to_string()),
+            ..VisualIndexConfig::default()
+        }
+    }
+
+    #[test]
+    fn visual_backfill_detects_model_config_signature_drift() {
+        let old_config = callable_visual_config("vision-small");
+        let new_config = callable_visual_config("vision-large");
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "schemaVersion": VISUAL_SCHEMA_VERSION,
+                "analysis": {
+                    "processingMode": "visual_llm",
+                    "model": "vision-small",
+                    "promptVersion": old_config.prompt_version,
+                    "configSignature": old_config.config_signature()
+                },
+                "source": { "unitId": "source-1:file.png#image=abc" }
+            })),
+        );
+
+        assert!(canonical_needs_visual_backfill_for_config(
+            &document,
+            &new_config
+        ));
+    }
+
+    #[test]
+    fn visual_backfill_waits_when_model_config_is_not_callable() {
+        let config = VisualIndexConfig {
+            enabled: true,
+            endpoint: None,
+            model: Some("vision-small".to_string()),
+            ..VisualIndexConfig::default()
+        };
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "analysis": { "processingMode": "metadata_only" },
+                "source": { "unitId": "source-1:file.png#image=abc" }
+            })),
+        );
+
+        assert!(!canonical_needs_visual_backfill_for_config(
+            &document, &config
+        ));
+    }
+
+    #[test]
+    fn visual_blocks_keep_unit_and_evidence_refs() {
+        let document = CanonicalDocument {
+            document_id: "source-1:photo.png".to_string(),
+            source_id: "source-1".to_string(),
+            absolute_path: "/tmp/photo.png".to_string(),
+            relative_path: "photo.png".to_string(),
+            source_type: "png".to_string(),
+            title: Some("photo".to_string()),
+            language: Some("zh".to_string()),
+            content_origin: "visual_llm".to_string(),
+            ocr_average_confidence: None,
+            legal_metadata: LegalMetadata::default(),
+            parser_info: ParserInfo {
+                parser_name: "test".to_string(),
+                parser_version: "test".to_string(),
+                strategy: "visual-semantic-manifest".to_string(),
+                fallback_used: false,
+            },
+            blocks: vec![CanonicalBlock {
+                block_type: "image.scene".to_string(),
+                section_path: vec![
+                    "visual".to_string(),
+                    "scene".to_string(),
+                    "rp_scene".to_string(),
+                ],
+                page: None,
+                line_start: 1,
+                line_end: 1,
+                text: "雪山湖泊风景图".to_string(),
+                language: Some("zh".to_string()),
+                content_origin: "visual_llm".to_string(),
+                ocr_confidence: None,
+            }],
+            attachments: Vec::new(),
+            visual_manifest: Some(json!({
+                "source": {
+                    "unitId": "source-1:photo.png#image",
+                    "sourceDocumentId": "source-1:photo.png"
+                },
+                "retrievalProjection": [{
+                    "id": "rp_scene",
+                    "purpose": "scene",
+                    "text": "雪山湖泊风景图",
+                    "evidenceIds": ["fact_scene"]
+                }]
+            })),
+        };
+
+        let records =
+            block_records_from_document(&document, "Source", Path::new("/tmp"), "2026-04-28")
+                .expect("records");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].visual_unit_id.as_deref(),
+            Some("source-1:photo.png#image")
+        );
+        assert_eq!(
+            records[0].source_document_id.as_deref(),
+            Some("source-1:photo.png")
+        );
+        assert_eq!(records[0].evidence_refs_json, r#"["fact_scene"]"#);
+        assert_eq!(records[0].ocr_confidence, None);
     }
 
     #[test]
