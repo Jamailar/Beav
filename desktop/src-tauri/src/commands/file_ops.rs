@@ -4,8 +4,9 @@ use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, State};
 
 use crate::{
-    copy_image_to_clipboard, cover_root, media_root, payload_string, pick_save_file_native,
-    resolve_local_path, resolve_manuscript_path, workspace_root, AppState,
+    copy_image_to_clipboard, cover_root, media_root, package_entry_path, package_manifest_path,
+    payload_string, pick_save_file_native, resolve_local_path, resolve_manuscript_path,
+    strip_markdown_frontmatter, workspace_root, AppState, POST_DRAFT_EXTENSION,
 };
 
 const PREVIEW_TEXT_MAX_BYTES: u64 = 512 * 1024;
@@ -62,6 +63,18 @@ fn extension_for_path(path: &Path) -> Option<String> {
         .and_then(|value| value.to_str())
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
+}
+
+fn file_name_for_path(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(ToString::to_string)
+}
+
+fn is_redpost_package_path(path: &Path) -> bool {
+    file_name_for_path(path)
+        .map(|value| value.ends_with(POST_DRAFT_EXTENSION))
+        .unwrap_or(false)
 }
 
 fn preview_kind_for_extension(extension: Option<&str>, is_local: bool) -> &'static str {
@@ -132,7 +145,53 @@ fn read_preview_text(path: &Path, kind: &str) -> Option<String> {
     if !metadata.is_file() || metadata.len() > PREVIEW_TEXT_MAX_BYTES {
         return None;
     }
-    fs::read_to_string(path).ok()
+    let content = fs::read_to_string(path).ok()?;
+    let extension = extension_for_path(path);
+    if matches!(extension.as_deref(), Some("md" | "markdown")) {
+        Some(strip_markdown_frontmatter(&content))
+    } else {
+        Some(content)
+    }
+}
+
+fn read_package_manifest(package_path: &Path) -> Option<Value> {
+    let manifest_path = package_manifest_path(package_path);
+    fs::read_to_string(manifest_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+}
+
+fn resolve_redpost_preview_entry(path: &Path) -> Option<PathBuf> {
+    if !is_redpost_package_path(path) || !path.is_dir() {
+        return None;
+    }
+    let file_name = file_name_for_path(path)?;
+    let manifest = read_package_manifest(path);
+    let manifest_entry_path = package_entry_path(path, &file_name, manifest.as_ref());
+    if manifest_entry_path.is_file() {
+        return Some(manifest_entry_path);
+    }
+    let default_entry_path = path.join("content.md");
+    if default_entry_path.is_file() {
+        Some(default_entry_path)
+    } else {
+        None
+    }
+}
+
+fn preview_title_for_path(
+    trimmed_source: &str,
+    original_path: &Path,
+    preview_path: &Path,
+) -> String {
+    let preview_name =
+        file_name_for_path(preview_path).unwrap_or_else(|| trimmed_source.to_string());
+    if original_path != preview_path && is_redpost_package_path(original_path) {
+        if let Some(package_name) = file_name_for_path(original_path) {
+            return format!("{package_name} / {preview_name}");
+        }
+    }
+    preview_name
 }
 
 fn is_windows_drive_prefix(value: &str) -> bool {
@@ -230,7 +289,9 @@ fn resolve_preview_target(state: &State<'_, AppState>, source: &str) -> Result<V
         Some(path) => Some(path),
         None => resolve_local_path(trimmed),
     };
-    let path = resolved.ok_or_else(|| "无效路径".to_string())?;
+    let original_path = resolved.ok_or_else(|| "无效路径".to_string())?;
+    let path =
+        resolve_redpost_preview_entry(&original_path).unwrap_or_else(|| original_path.clone());
     let exists = path.exists();
     let is_directory = path.is_dir();
     let metadata = if exists {
@@ -240,11 +301,7 @@ fn resolve_preview_target(state: &State<'_, AppState>, source: &str) -> Result<V
     };
     let extension = extension_for_path(&path);
     let kind = preview_kind_for_extension(extension.as_deref(), true);
-    let title = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| trimmed.to_string());
+    let title = preview_title_for_path(trimmed, &original_path, &path);
     let preview_text = if exists && !is_directory {
         read_preview_text(&path, kind)
     } else {
@@ -275,7 +332,10 @@ fn resolve_preview_target(state: &State<'_, AppState>, source: &str) -> Result<V
 
 #[cfg(test)]
 mod tests {
-    use super::{find_existing_file_candidate, safe_virtual_relative_path};
+    use super::{
+        find_existing_file_candidate, read_preview_text, resolve_redpost_preview_entry,
+        safe_virtual_relative_path,
+    };
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -325,6 +385,57 @@ mod tests {
         assert_eq!(safe_virtual_relative_path("../secret.md"), None);
         assert_eq!(safe_virtual_relative_path("C:/secret.md"), None);
         assert_eq!(safe_virtual_relative_path("//server/share/secret.md"), None);
+    }
+
+    #[test]
+    fn markdown_preview_text_strips_frontmatter() {
+        let root = make_temp_dir("frontmatter");
+        let target = root.join("content.md");
+        fs::write(
+            &target,
+            "---\ntitle: Hidden\nplatform: xiaohongshu\n---\n\n# Visible body\n正文",
+        )
+        .expect("write markdown file");
+
+        let preview = read_preview_text(&target, "text").expect("read markdown preview");
+
+        assert_eq!(preview, "# Visible body\n正文");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn redpost_preview_uses_default_content_markdown() {
+        let root = make_temp_dir("redpost-default");
+        let package = root.join("demo.redpost");
+        fs::create_dir_all(&package).expect("create redpost package");
+        let entry = package.join("content.md");
+        fs::write(&entry, "# Demo").expect("write package entry");
+
+        let resolved = resolve_redpost_preview_entry(&package);
+
+        assert_eq!(resolved, Some(entry));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn redpost_preview_respects_manifest_entry() {
+        let root = make_temp_dir("redpost-manifest");
+        let package = root.join("demo.redpost");
+        let notes_dir = package.join("notes");
+        fs::create_dir_all(&notes_dir).expect("create notes dir");
+        fs::write(
+            package.join("manifest.json"),
+            r#"{"entry":"notes/main.md"}"#,
+        )
+        .expect("write manifest");
+        let entry = notes_dir.join("main.md");
+        fs::write(&entry, "# Manifest entry").expect("write manifest entry");
+        fs::write(package.join("content.md"), "# Default entry").expect("write default entry");
+
+        let resolved = resolve_redpost_preview_entry(&package);
+
+        assert_eq!(resolved, Some(entry));
+        let _ = fs::remove_dir_all(root);
     }
 }
 
