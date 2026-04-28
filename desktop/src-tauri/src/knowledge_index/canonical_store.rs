@@ -206,6 +206,43 @@ pub(crate) fn delete_documents_for_source(
     tx.commit().map_err(|error| error.to_string())
 }
 
+pub(crate) fn delete_documents_by_ids(
+    state: &State<'_, AppState>,
+    document_ids: &[String],
+) -> Result<(), String> {
+    if document_ids.is_empty() {
+        return Ok(());
+    }
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for document_id in document_ids {
+        tx.execute(
+            r#"
+            DELETE FROM knowledge_visual_evidence
+            WHERE document_id = ?1
+               OR unit_id IN (
+                    SELECT unit_id
+                    FROM knowledge_visual_units
+                    WHERE document_id = ?1
+               )
+            "#,
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "DELETE FROM knowledge_visual_units WHERE document_id = ?1",
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "DELETE FROM knowledge_canonical_documents WHERE document_id = ?1",
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
+
 pub(crate) fn load_document_rows(
     state: &State<'_, AppState>,
     source_id: Option<&str>,

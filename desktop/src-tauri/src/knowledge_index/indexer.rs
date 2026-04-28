@@ -8,15 +8,20 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     knowledge_index::{
         advisor_source_id,
-        canonical_store::{load_document_rows, load_visual_retry_gates, replace_documents},
+        canonical_store::{
+            delete_documents_by_ids, load_document_rows, load_visual_retry_gates, replace_documents,
+        },
         catalog::{replace_catalog, KnowledgeCatalogSummary},
-        citation_anchors::{build_anchors_for_blocks, replace_anchors, replace_anchors_for_source},
+        citation_anchors::{
+            build_anchors_for_blocks, delete_anchors_for_documents, replace_anchors,
+            replace_anchors_for_source, upsert_anchors_for_documents,
+        },
         document_blocks::{
             block_records_from_document, build_blocks_for_source_with_cache_policy,
             canonical_needs_visual_backfill_for_config, is_visual_candidate_path, replace_blocks,
-            replace_blocks_for_source, resolve_visual_index_config,
+            replace_blocks_for_source, resolve_visual_index_config, upsert_blocks_for_documents,
             visual_backfill_candidate_unit_ids, visual_document_blocks_missing,
-            CanonicalCachePolicy,
+            visual_document_ids_missing_blocks, CanonicalCachePolicy,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
@@ -430,6 +435,10 @@ pub(crate) fn backfill_incomplete_visual_index(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
+    let repaired_from_canonical = repair_visual_blocks_from_canonical(app, state)?;
+    if repaired_from_canonical && !visual_maintenance_needed(state)? {
+        return Ok(());
+    }
     if !visual_maintenance_needed(state)? {
         return Ok(());
     }
@@ -440,14 +449,116 @@ pub(crate) fn backfill_incomplete_visual_index(
     )
 }
 
+fn repair_visual_blocks_from_canonical(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<bool, String> {
+    let rows = load_document_rows(state, None)?;
+    let visual_rows = rows
+        .into_iter()
+        .filter(|row| row.canonical_json.contains("\"visualManifest\""))
+        .collect::<Vec<_>>();
+    if visual_rows.is_empty() {
+        return Ok(false);
+    }
+
+    let stale_document_ids = visual_rows
+        .iter()
+        .filter(|row| !Path::new(&row.absolute_path).is_file())
+        .map(|row| row.document_id.clone())
+        .collect::<Vec<_>>();
+    if !stale_document_ids.is_empty() {
+        delete_anchors_for_documents(state, &stale_document_ids)?;
+        crate::knowledge_index::document_blocks::delete_blocks_for_documents(
+            state,
+            &stale_document_ids,
+        )?;
+        delete_documents_by_ids(state, &stale_document_ids)?;
+        crate::append_debug_trace_global(format!(
+            "[visual-index] cleaned_stale_documents count={}",
+            stale_document_ids.len()
+        ));
+    }
+
+    let stale_set = stale_document_ids.into_iter().collect::<HashSet<_>>();
+    let missing_document_ids = visual_document_ids_missing_blocks(state)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    if missing_document_ids.is_empty() {
+        if stale_set.is_empty() {
+            return Ok(false);
+        }
+        mark_indexed_now(state)?;
+        let _ = app.emit("knowledge:catalog-updated", Value::String(now_iso()));
+        let _ = app.emit("knowledge:changed", serde_json::json!({ "at": now_iso() }));
+        return Ok(true);
+    }
+
+    let mut blocks = Vec::new();
+    for row in visual_rows {
+        if stale_set.contains(&row.document_id) || !missing_document_ids.contains(&row.document_id)
+        {
+            continue;
+        }
+        let canonical: crate::document_parse::CanonicalDocument =
+            serde_json::from_str(&row.canonical_json).map_err(|error| error.to_string())?;
+        let (source_name, root_path) = source_context_for_canonical_row(state, &row)?;
+        blocks.extend(block_records_from_document(
+            &canonical,
+            &source_name,
+            &root_path,
+            &row.updated_at,
+        )?);
+    }
+
+    if blocks.is_empty() {
+        return Ok(!stale_set.is_empty());
+    }
+
+    upsert_blocks_for_documents(state, &blocks)?;
+    let anchors = build_anchors_for_blocks(&blocks);
+    upsert_anchors_for_documents(state, &anchors)?;
+    mark_indexed_now(state)?;
+    crate::append_debug_trace_global(format!(
+        "[visual-index] repaired_blocks_from_manifest documents={} blocks={}",
+        missing_document_ids.len(),
+        blocks.len()
+    ));
+    let _ = app.emit(
+        "knowledge:file-index-updated",
+        serde_json::json!({
+            "at": now_iso(),
+            "kind": "visual_index_blocks",
+            "updated": blocks.len()
+        }),
+    );
+    let _ = app.emit("knowledge:catalog-updated", Value::String(now_iso()));
+    let _ = app.emit("knowledge:changed", serde_json::json!({ "at": now_iso() }));
+    Ok(true)
+}
+
 pub(crate) fn visual_maintenance_needed(state: &State<'_, AppState>) -> Result<bool, String> {
     if visual_backfill_needed(state)? {
+        return Ok(true);
+    }
+    if visual_source_documents_missing(state)? {
         return Ok(true);
     }
     if visual_document_blocks_missing(state)? {
         return Ok(true);
     }
     visual_discovery_needed(state)
+}
+
+fn visual_source_documents_missing(state: &State<'_, AppState>) -> Result<bool, String> {
+    for row in load_document_rows(state, None)? {
+        if row.canonical_json.contains("\"visualManifest\"")
+            && !Path::new(&row.absolute_path).is_file()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub(crate) fn visual_backfill_needed(state: &State<'_, AppState>) -> Result<bool, String> {

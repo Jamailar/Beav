@@ -486,6 +486,38 @@ pub(crate) fn delete_blocks_for_source(
     rebuild_tantivy_from_db(state)
 }
 
+pub(crate) fn delete_blocks_for_documents(
+    state: &State<'_, AppState>,
+    document_ids: &[String],
+) -> Result<(), String> {
+    if document_ids.is_empty() {
+        return Ok(());
+    }
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for document_id in document_ids {
+        tx.execute(
+            r#"
+            DELETE FROM knowledge_document_blocks_fts
+            WHERE block_id IN (
+                SELECT block_id
+                FROM knowledge_document_blocks
+                WHERE document_id = ?1
+            )
+            "#,
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+        tx.execute(
+            "DELETE FROM knowledge_document_blocks WHERE document_id = ?1",
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())?;
+    rebuild_tantivy_from_db(state)
+}
+
 pub(crate) fn count_blocks_for_source(
     state: &State<'_, AppState>,
     source_id: &str,
@@ -520,6 +552,32 @@ pub(crate) fn visual_document_blocks_missing(state: &State<'_, AppState>) -> Res
     )
     .map(|value| value != 0)
     .map_err(|error| error.to_string())
+}
+
+pub(crate) fn visual_document_ids_missing_blocks(
+    state: &State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let conn = connection(state)?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT c.document_id
+            FROM knowledge_canonical_documents c
+            WHERE c.canonical_json LIKE '%"visualManifest"%'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM knowledge_document_blocks b
+                WHERE b.document_id = c.document_id
+              )
+            ORDER BY c.document_id ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn list_documents_for_source(
