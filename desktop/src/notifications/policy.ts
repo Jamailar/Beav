@@ -264,6 +264,11 @@ export function mapRuntimeErrorToNotification(
 ): NotificationEnvelope | null {
   if (!settings.rules.runtimeFailed) return null;
   const errorText = String(payload.errorPayload.error || payload.errorPayload.message || '').trim();
+  const titleText = String(payload.errorPayload.title || '').trim();
+  const normalizedErrorText = `${titleText} ${errorText}`.replace(/\s+/g, '').toLowerCase();
+  const shouldOpenLoginSettings = normalizedErrorText.includes('余额不足')
+    || normalizedErrorText.includes('登陆失效')
+    || normalizedErrorText.includes('登录失效');
   const createdAt = Date.now();
   const notification: NotificationEnvelope = {
     id: makeNotificationId('runtime', payload.sessionId || 'runtime', 'chat-error', createdAt),
@@ -278,10 +283,12 @@ export function mapRuntimeErrorToNotification(
     createdAt,
     actions: [
       {
-        id: 'open-runtime',
-        label: '查看',
+        id: shouldOpenLoginSettings ? 'open-settings-login' : 'open-runtime',
+        label: shouldOpenLoginSettings ? '去登录页' : '查看',
         action: 'navigate',
-        payload: { view: context.currentView === 'redclaw' ? 'redclaw' : 'chat' },
+        payload: shouldOpenLoginSettings
+          ? { view: 'settings', settingsTab: 'ai', aiModelSubTab: 'login' }
+          : { view: context.currentView === 'redclaw' ? 'redclaw' : 'chat' },
       },
     ],
   };

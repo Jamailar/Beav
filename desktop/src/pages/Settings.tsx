@@ -122,6 +122,11 @@ const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
 ];
 
 type SettingsTab = 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+type SettingsNavigationTarget = {
+  tab?: SettingsTab;
+  aiModelSubTab?: 'custom' | 'login';
+  nonce?: number;
+};
 
 type RedclawProfileDraft = {
   user: string;
@@ -466,10 +471,12 @@ export function Settings({
   isActive = true,
   onOpenRedClawOnboarding,
   redclawOnboardingVersion = 0,
+  navigationTarget,
 }: {
   isActive?: boolean;
   onOpenRedClawOnboarding?: () => void;
   redclawOnboardingVersion?: number;
+  navigationTarget?: SettingsNavigationTarget | null;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [baseSettingsLoadedRevision, setBaseSettingsLoadedRevision] = useState(0);
@@ -1124,6 +1131,16 @@ export function Settings({
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
   const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
+
+  useEffect(() => {
+    if (!navigationTarget) return;
+    if (navigationTarget.tab) {
+      setActiveTab(navigationTarget.tab);
+    }
+    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab) {
+      setAiModelSubTab(navigationTarget.aiModelSubTab);
+    }
+  }, [navigationTarget]);
 
   const isDeprecatedEmptyOpenAiSource = useCallback((source?: AiSourceConfig | null): boolean => {
     if (!source) return false;

@@ -29,6 +29,11 @@ const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workbo
 export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'group-chat' | 'members';
+type SettingsNavigationTarget = {
+  tab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+  aiModelSubTab?: 'custom' | 'login';
+  nonce: number;
+};
 
 const PINNED_VIEWS: ViewType[] = [];
 const MAX_CACHED_VIEWS = 0;
@@ -273,6 +278,7 @@ function App() {
   const [startupMigrationBusy, setStartupMigrationBusy] = useState(false);
   const [startupMigrationDismissed, setStartupMigrationDismissed] = useState(false);
   const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
+  const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -353,9 +359,20 @@ function App() {
 
   useEffect(() => {
     const handleNavigate = (event: Event) => {
-      const detail = (event as CustomEvent<{ view?: ViewType }>).detail;
+      const detail = (event as CustomEvent<{
+        view?: ViewType;
+        settingsTab?: SettingsNavigationTarget['tab'];
+        aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
+      }>).detail;
       const nextView = detail?.view;
       if (!nextView) return;
+      if (nextView === 'settings') {
+        setSettingsNavigationTarget({
+          tab: detail.settingsTab,
+          aiModelSubTab: detail.aiModelSubTab,
+          nonce: Date.now(),
+        });
+      }
       setCurrentView(nextView);
     };
 
@@ -656,6 +673,7 @@ function App() {
                 isActive={currentView === 'settings'}
                 onOpenRedClawOnboarding={openRedClawOnboarding}
                 redclawOnboardingVersion={redclawOnboardingVersion}
+                navigationTarget={settingsNavigationTarget}
               />
             </Suspense>
           </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
+import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 
 export type ProcessItemType =
   | 'phase'
@@ -62,6 +63,10 @@ type StatusLine = {
   detail?: string;
   preserveDetail?: boolean;
   forceDanger?: boolean;
+  action?: {
+    label: string;
+    target: 'settings-login';
+  };
 };
 
 const COLLAPSED_STATUS_LINE_COUNT = 4;
@@ -261,15 +266,24 @@ const stringifyCliCommand = (argv?: string[], fallback?: string): string => {
   return String(fallback || '').trim();
 };
 
+const shouldShowLoginSettingsAction = (title: string): boolean => {
+  const normalized = title.replace(/\s+/g, '');
+  return normalized.includes('余额不足')
+    || normalized.includes('登陆失效')
+    || normalized.includes('登录失效');
+};
+
 const buildStatusLine = (item: ProcessItem): StatusLine | null => {
   if (item.type === 'error') {
+    const title = item.title || 'AI 请求失败';
     return {
       id: item.id,
       status: 'failed',
-      text: item.title || 'AI 请求失败',
+      text: title,
       detail: truncateDetail(item.content || ''),
       preserveDetail: true,
       forceDanger: true,
+      action: shouldShowLoginSettingsAction(title) ? { label: '去登录页', target: 'settings-login' } : undefined,
     };
   }
 
@@ -372,6 +386,12 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default', failu
     }
   }, [expanded, hiddenCount]);
 
+  const openSettingsLogin = () => {
+    window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, {
+      detail: { view: 'settings', settingsTab: 'ai', aiModelSubTab: 'login' },
+    }));
+  };
+
   if (statusLines.length === 0) return null;
 
   return (
@@ -407,6 +427,15 @@ export function ProcessTimeline({ items, isStreaming, variant = 'default', failu
           >
             <span>{item.text}</span>
             {item.detail ? <span className="ml-1">{item.detail}</span> : null}
+            {item.action?.target === 'settings-login' ? (
+              <button
+                type="button"
+                className="ml-2 inline-flex items-center rounded-md border border-red-500/30 px-2 py-0.5 text-[11px] font-medium text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-200"
+                onClick={openSettingsLogin}
+              >
+                {item.action.label}
+              </button>
+            ) : null}
           </div>
         ))}
       </div>

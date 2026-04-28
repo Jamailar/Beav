@@ -111,8 +111,20 @@ pub fn runtime_error_envelope_from_error(
     } else {
         None
     };
-    let (category, layer, retryable, title) = if normalized.contains("登录失效")
+    let (category, layer, retryable, title) = if is_balance_insufficient_error(&lower)
+        || normalized.contains("余额不足")
+        || normalized.contains("额度不足")
+    {
+        (
+            RuntimeErrorCategory::Auth,
+            RuntimeErrorLayer::Auth,
+            false,
+            "余额不足，请及时充值".to_string(),
+        )
+    } else if normalized.contains("登录失效")
+        || normalized.contains("登陆失效")
         || normalized.contains("重新登录")
+        || normalized.contains("重新登陆")
         || lower.contains("invalid access token")
         || lower.contains("invalid api key")
         || lower.contains("api_key_required")
@@ -122,7 +134,7 @@ pub fn runtime_error_envelope_from_error(
             RuntimeErrorCategory::Auth,
             RuntimeErrorLayer::Auth,
             false,
-            "登录失效，请重新登录".to_string(),
+            "登陆失效，请重新登陆".to_string(),
         )
     } else if http_status == Some(403) {
         (
@@ -260,6 +272,16 @@ pub fn runtime_error_envelope_from_error(
     }
 }
 
+fn is_balance_insufficient_error(lower: &str) -> bool {
+    lower.contains("insufficient_quota")
+        || lower.contains("insufficient quota")
+        || lower.contains("insufficient balance")
+        || lower.contains("balance is insufficient")
+        || lower.contains("not enough balance")
+        || lower.contains("exceeded your current quota")
+        || (lower.contains("quota") && lower.contains("billing"))
+}
+
 pub fn runtime_error_payload(
     error: &str,
     provider_profile: Option<&ProviderProfile>,
@@ -342,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_error_envelope_preserves_forbidden_api_status() {
+    fn runtime_error_envelope_preserves_balance_insufficient_status() {
         let envelope = runtime_error_envelope_from_error(
             "AI request failed: HTTP 403 [code=insufficient_quota] Your account is not active",
             Some(&openai_profile()),
@@ -351,7 +373,21 @@ mod tests {
         assert_eq!(envelope.http_status, Some(403));
         assert_eq!(envelope.layer, RuntimeErrorLayer::Auth);
         assert_eq!(envelope.category, RuntimeErrorCategory::Auth);
-        assert_eq!(envelope.title, "API 权限受限，请检查密钥、额度或模型权限");
+        assert_eq!(envelope.title, "余额不足，请及时充值");
+        assert!(!envelope.retryable);
+    }
+
+    #[test]
+    fn runtime_error_envelope_preserves_expired_key_status() {
+        let envelope = runtime_error_envelope_from_error(
+            "AI request failed: HTTP 401 [code=invalid_api_key] Invalid API key",
+            Some(&openai_profile()),
+            Some("gpt-5"),
+        );
+        assert_eq!(envelope.http_status, Some(401));
+        assert_eq!(envelope.layer, RuntimeErrorLayer::Auth);
+        assert_eq!(envelope.category, RuntimeErrorCategory::Auth);
+        assert_eq!(envelope.title, "登陆失效，请重新登陆");
         assert!(!envelope.retryable);
     }
 

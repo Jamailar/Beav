@@ -7,7 +7,11 @@ export type NotificationAction =
       id: string;
       label: string;
       action: 'navigate';
-      payload: { view: NotificationView };
+      payload: {
+        view: NotificationView;
+        settingsTab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+        aiModelSubTab?: 'custom' | 'login';
+      };
     }
   | {
       id: string;
