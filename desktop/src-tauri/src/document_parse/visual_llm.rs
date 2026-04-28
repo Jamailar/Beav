@@ -1,4 +1,5 @@
 use base64::Engine;
+use image::codecs::jpeg::JpegEncoder;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
@@ -91,11 +92,11 @@ pub(super) fn analyze_visual_source(
             Some("visual index model is not configured".to_string()),
         ));
     };
-    let bytes = fs::read(image_path).map_err(|error| error.to_string())?;
+    let payload = visual_payload_for_model(image_path, unit, config.max_image_edge)?;
     let data_url = format!(
         "data:{};base64,{}",
-        unit.mime_type,
-        base64::engine::general_purpose::STANDARD.encode(bytes)
+        payload.mime_type,
+        base64::engine::general_purpose::STANDARD.encode(&payload.bytes)
     );
     let body = json!({
         "model": model,
@@ -157,6 +158,46 @@ pub(super) fn analyze_visual_source(
     manifest["analysis"]["model"] = json!(model);
     manifest["analysis"]["promptVersion"] = json!(config.prompt_version);
     Ok(manifest)
+}
+
+#[derive(Debug, Clone)]
+struct VisualModelPayload {
+    mime_type: String,
+    bytes: Vec<u8>,
+}
+
+fn visual_payload_for_model(
+    image_path: &Path,
+    unit: &VisualSourceUnit,
+    max_image_edge: u32,
+) -> Result<VisualModelPayload, String> {
+    let bytes = fs::read(image_path).map_err(|error| error.to_string())?;
+    let bounded_edge = max_image_edge.max(64);
+    let should_resize = match (unit.width, unit.height) {
+        (Some(width), Some(height)) => width.max(height) > bounded_edge,
+        _ => false,
+    };
+    if !should_resize {
+        return Ok(VisualModelPayload {
+            mime_type: unit.mime_type.clone(),
+            bytes,
+        });
+    }
+    let Ok(image) = image::load_from_memory(&bytes) else {
+        return Ok(VisualModelPayload {
+            mime_type: unit.mime_type.clone(),
+            bytes,
+        });
+    };
+    let resized = image.thumbnail(bounded_edge, bounded_edge);
+    let mut encoded = Vec::new();
+    JpegEncoder::new_with_quality(&mut encoded, 85)
+        .encode_image(&resized)
+        .map_err(|error| format!("failed to encode resized visual payload: {error}"))?;
+    Ok(VisualModelPayload {
+        mime_type: "image/jpeg".to_string(),
+        bytes: encoded,
+    })
 }
 
 fn visual_manifest_system_prompt(prompt_version: &str) -> String {
@@ -245,5 +286,24 @@ mod tests {
             normalize_chat_completions_endpoint("https://api.example.com/v1/chat/completions"),
             "https://api.example.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn visual_payload_resizes_large_images_for_model() {
+        let path = std::env::temp_dir().join(format!(
+            "redbox-visual-payload-{}-{}.png",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let image = image::RgbImage::from_pixel(2000, 1000, image::Rgb([12, 120, 220]));
+        image.save(&path).expect("write test image");
+        let unit = VisualSourceUnit::image_file("source-1", "large.png", &path);
+
+        let payload = visual_payload_for_model(&path, &unit, 512).expect("payload");
+        let decoded = image::load_from_memory(&payload.bytes).expect("decode resized payload");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(payload.mime_type, "image/jpeg");
+        assert!(decoded.width().max(decoded.height()) <= 512);
     }
 }

@@ -581,6 +581,7 @@ pub(crate) fn parse_visual_source_unit(
 - `visual_index_concurrency`
 
 当前实现把 `visual_index_concurrency` 接入扫描 PDF 页级 visual LLM 调用，按页分批并发，默认 1，运行时上限 4。
+当前实现也把 `visual_index_max_image_edge` 接入模型输入负载：超出边界的图片会在内存中按比例缩放并以 JPEG quality 85 发送给多模态模型，源文件不会被改写；无法被 `image` 解码的格式保留原始字节兜底。
 
 兼容规则：
 
