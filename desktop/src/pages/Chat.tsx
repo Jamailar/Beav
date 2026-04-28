@@ -107,6 +107,7 @@ interface ChatProps {
   messageLinkRenderMode?: ChatMessageLinkRenderMode;
   onMessageLinkPreview?: (target: ChatMessageLinkTarget) => void;
   activePreviewHref?: string | null;
+  inlineSidePanel?: React.ReactNode;
 }
 
 interface ChatContextUsage {
@@ -489,6 +490,7 @@ export function Chat({
   messageLinkRenderMode = 'default',
   onMessageLinkPreview,
   activePreviewHref = null,
+  inlineSidePanel,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -715,6 +717,7 @@ export function Chat({
     : wideContent
       ? 'max-w-4xl w-full'
       : 'max-w-2xl w-full';
+  const hasInlineSidePanel = Boolean(inlineSidePanel);
 
   const isNearBottom = useCallback((element: HTMLDivElement): boolean => {
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -3197,151 +3200,160 @@ export function Chat({
           </div>
         )}
 
-        {/* Content Area */}
-        {isEmptySession && !dockedEmptyState ? (
-          <div className={clsx(
-            'flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative',
-            emptyStateVerticalAlign === 'lower' && 'pt-16'
-          )}>
-            <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
-              {/* Logo/Icon */}
-              {showWelcomeHeader ? (
-                <>
-                  {welcomeHeaderBlock}
-                </>
-              ) : null}
-              {showWelcomeShortcuts && welcomeShortcuts.length > 0 && (
-                <div className="flex flex-wrap justify-center gap-2 text-xs">
-                  {welcomeShortcuts.map((shortcut) => (
-                    <button
-                      key={shortcut.label}
-                      onClick={() => applyShortcut(shortcut)}
-                      className={darkEmbedded
-                        ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
-                        : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
-                    >
-                      {shortcut.label}
-                    </button>
-                  ))}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className={clsx('flex min-h-0 flex-1 flex-col overflow-hidden', hasInlineSidePanel && 'basis-0')}>
+            {/* Content Area */}
+            {isEmptySession && !dockedEmptyState ? (
+              <div className={clsx(
+                'flex-1 flex flex-col items-center justify-center px-6 overflow-y-auto relative',
+                emptyStateVerticalAlign === 'lower' && 'pt-16'
+              )}>
+                <div className={clsx('text-center space-y-6 w-full max-w-2xl mx-auto', emptySessionWidthClass)}>
+                  {/* Logo/Icon */}
+                  {showWelcomeHeader ? (
+                    <>
+                      {welcomeHeaderBlock}
+                    </>
+                  ) : null}
+                  {showWelcomeShortcuts && welcomeShortcuts.length > 0 && (
+                    <div className="flex flex-wrap justify-center gap-2 text-xs">
+                      {welcomeShortcuts.map((shortcut) => (
+                        <button
+                          key={shortcut.label}
+                          onClick={() => applyShortcut(shortcut)}
+                          className={darkEmbedded
+                            ? 'px-3 py-1.5 border border-white/10 rounded-full text-white/62 hover:text-white hover:border-white/20 transition-all cursor-pointer'
+                            : 'px-3 py-1.5 bg-surface-secondary hover:bg-surface-tertiary border border-transparent hover:border-border rounded-full text-text-secondary hover:text-accent-primary transition-all cursor-pointer'}
+                        >
+                          {shortcut.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* 居中的输入框 (Codex Style) */}
+                  {showComposer ? renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+                    className: 'mt-10',
+                    showCancelWhenBusy: false,
+                  }) : null}
                 </div>
-              )}
-
-              {/* 居中的输入框 (Codex Style) */}
-              {showComposer ? renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
-                className: 'mt-10',
-                showCancelWhenBusy: false,
-              }) : null}
-            </div>
-            {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
-            <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
-              <div className="pointer-events-auto">
-                {welcomeActionsBlock}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* Messages */}
-            <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', contentOuterPaddingClass)}>
-              <div className={clsx('mx-auto min-w-0', contentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
-                {dockedEmptyState ? (
-                  <div className="text-center space-y-6 py-10">
-                    {welcomeHeaderBlock}
+                {/* 放置在最底部的动态按钮区 - 使用绝对定位以不干扰居中布局 */}
+                <div className="absolute bottom-10 left-0 right-0 flex justify-center pointer-events-none">
+                  <div className="pointer-events-auto">
                     {welcomeActionsBlock}
-                    {welcomeShortcutsBlock}
                   </div>
-                ) : (
-                  <>
-                    {messages.map((msg) => (
-                      <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
-                        <MessageItem
-                          msg={msg}
-                          copiedMessageId={copiedMessageId}
-                          onCopyMessage={handleCopyMessage}
-                          workflowPlacement={messageWorkflowPlacement}
-                          workflowVariant={messageWorkflowVariant}
-                          workflowEmphasis={messageWorkflowEmphasis}
-                          workflowDisplayMode={messageWorkflowDisplayMode}
-                          workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
-                          workflowFailureTone={messageWorkflowFailureTone}
-                          showAttachments={showMessageAttachments}
-                          linkRenderMode={messageLinkRenderMode}
-                          onPreviewLink={onMessageLinkPreview}
-                          activePreviewHref={activePreviewHref}
-                        />
-                      </ErrorBoundary>
-                    ))}
-                    <div ref={messagesEndRef} />
-                  </>
-                )}
+                </div>
               </div>
-            </div>
-
-            {/* Input Area - Bottom Fixed */}
-            {showComposer ? (
-            <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
-              <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
-                {dockedEmptyState ? (
-                  emptyComposerForm
-                ) : (
-                  <>
-                {errorNotice && (
-                  <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
-                    {typeof errorNotice === 'string' ? (
-                      <>
-                        <div className="font-medium">请求失败</div>
-                        <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
-                      </>
+            ) : (
+              <>
+                {/* Messages */}
+                <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', contentOuterPaddingClass)}>
+                  <div className={clsx('mx-auto min-w-0', contentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
+                    {dockedEmptyState ? (
+                      <div className="text-center space-y-6 py-10">
+                        {welcomeHeaderBlock}
+                        {welcomeActionsBlock}
+                        {welcomeShortcutsBlock}
+                      </div>
                     ) : (
                       <>
-                        <div className="font-medium">{errorNotice.title}</div>
-                        {errorNotice.hint && (
-                          <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
-                        )}
-                        {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
-                          <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
-                            {errorNotice.metaParts.join(' · ')}
-                          </div>
-                        )}
-                        {errorNotice.detail && (
-                          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
-                            {errorNotice.detail}
-                          </pre>
-                        )}
-                        {errorNotice.action?.target === 'settings-login' && (
-                          <button
-                            type="button"
-                            onClick={handleOpenSettingsLogin}
-                            className="mt-3 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
-                          >
-                            {errorNotice.action.label}
-                          </button>
-                        )}
+                        {messages.map((msg) => (
+                          <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
+                            <MessageItem
+                              msg={msg}
+                              copiedMessageId={copiedMessageId}
+                              onCopyMessage={handleCopyMessage}
+                              workflowPlacement={messageWorkflowPlacement}
+                              workflowVariant={messageWorkflowVariant}
+                              workflowEmphasis={messageWorkflowEmphasis}
+                              workflowDisplayMode={messageWorkflowDisplayMode}
+                              workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
+                              workflowFailureTone={messageWorkflowFailureTone}
+                              showAttachments={showMessageAttachments}
+                              linkRenderMode={messageLinkRenderMode}
+                              onPreviewLink={onMessageLinkPreview}
+                              activePreviewHref={activePreviewHref}
+                            />
+                          </ErrorBoundary>
+                        ))}
+                        <div ref={messagesEndRef} />
                       </>
                     )}
                   </div>
-                )}
-                {showComposerShortcuts && shortcuts.length > 0 && (
-                  <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
-                    {shortcuts.map((shortcut) => (
-                      <button key={shortcut.label} onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
-                        {shortcut.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                </div>
 
-                {renderComposer('composer', 'main', '发送消息...', {
-                  showContextUsage: true,
-                  showCancelWhenBusy: true,
-                })}
-                  </>
-                )}
-              </div>
+                {/* Input Area - Bottom Fixed */}
+                {showComposer ? (
+                <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
+                  <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
+                    {dockedEmptyState ? (
+                      emptyComposerForm
+                    ) : (
+                      <>
+                    {errorNotice && (
+                      <div className="rounded-xl border border-red-500/35 bg-red-500/10 px-3 py-3 text-sm text-red-700 shadow-sm dark:text-red-300">
+                        {typeof errorNotice === 'string' ? (
+                          <>
+                            <div className="font-medium">请求失败</div>
+                            <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="font-medium">{errorNotice.title}</div>
+                            {errorNotice.hint && (
+                              <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice.hint}</div>
+                            )}
+                            {errorNotice.metaParts && errorNotice.metaParts.length > 0 && (
+                              <div className="mt-2 text-[11px] leading-5 text-red-700/70 dark:text-red-300/75">
+                                {errorNotice.metaParts.join(' · ')}
+                              </div>
+                            )}
+                            {errorNotice.detail && (
+                              <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
+                                {errorNotice.detail}
+                              </pre>
+                            )}
+                            {errorNotice.action?.target === 'settings-login' && (
+                              <button
+                                type="button"
+                                onClick={handleOpenSettingsLogin}
+                                className="mt-3 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                              >
+                                {errorNotice.action.label}
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {showComposerShortcuts && shortcuts.length > 0 && (
+                      <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
+                        {shortcuts.map((shortcut) => (
+                          <button key={shortcut.label} onClick={() => applyShortcut(shortcut)} disabled={isProcessing} className={shortcutChipClass}>
+                            {shortcut.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {renderComposer('composer', 'main', '发送消息...', {
+                      showContextUsage: true,
+                      showCancelWhenBusy: true,
+                    })}
+                      </>
+                    )}
+                  </div>
+                </div>
+                ) : null}
+              </>
+            )}
+          </div>
+          {inlineSidePanel ? (
+            <div className="min-h-0 shrink-0">
+              {inlineSidePanel}
             </div>
-            ) : null}
-          </>
-        )}
+          ) : null}
+        </div>
       </div>
     </div>
   );

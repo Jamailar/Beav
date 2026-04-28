@@ -1152,7 +1152,6 @@ export function RedClaw({
     }, [onOpenRedClawOnboarding, onboardingCompleted, onboardingKnown]);
 
     const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
-        setSidebarCollapsed(true);
         setPreviewTarget(target);
         const source = String(target.localPathCandidate || target.href || '').trim();
         if (!source || /^https?:\/\//i.test(source)) return;
@@ -1277,50 +1276,48 @@ export function RedClaw({
                                     </div>
                                 </div>
                             )}
-                            <div className="flex h-full min-h-0 w-full overflow-hidden">
-                                <div className="min-w-0 flex-1">
-                                    <Chat
-                                        isActive={isActive}
-                                        onExecutionStateChange={onExecutionStateChange}
-                                        key={`redclaw:${chatRefreshKey}`}
-                                        fixedSessionId={activeSessionId}
-                                        pendingMessage={resolvedPendingMessage}
-                                        onMessageConsumed={onPendingMessageConsumed}
-                                        defaultCollapsed={true}
-                                        showClearButton={false}
-                                        fixedSessionBannerText=""
-                                        showWelcomeShortcuts={true}
-                                        showComposerShortcuts={true}
-                                        fixedSessionContextIndicatorMode="corner-ring"
-                                        shortcuts={REDCLAW_SHORTCUTS}
-                                        welcomeShortcuts={REDCLAW_WELCOME_SHORTCUTS}
-                                        embeddedTheme="auto"
-                                        welcomeTitle="RedClaw 自媒体AI工作台"
-                                        welcomeSubtitle=""
-                                        welcomeIconSrc={REDCLAW_WELCOME_ICON_SRC}
-                                        welcomeActions={welcomeActions}
-                                        contentLayout="wide"
-                                        contentWidthPreset={previewTarget ? 'default' : 'narrow'}
-                                        allowFileUpload={true}
-                                        attachmentPreviewMode="compact-status"
-                                        messageWorkflowPlacement="bottom"
-                                        messageWorkflowVariant="compact"
-                                        messageWorkflowEmphasis="default"
-                                        messageWorkflowAutoHideWhenComplete={true}
-                                        messageWorkflowFailureTone="neutral"
-                                        messageLinkRenderMode="preview-card"
-                                        onMessageLinkPreview={handlePreviewLink}
-                                        activePreviewHref={previewTarget?.href || null}
-                                    />
-                                </div>
-                                {previewTarget && (
-                                    <RedClawFilePreviewPane
-                                        target={previewTarget}
-                                        onClose={handleClosePreview}
-                                        onOpenExternal={handleOpenPreviewExternal}
-                                        onRevealInFolder={handleRevealPreviewInFolder}
-                                    />
-                                )}
+                            <div className="h-full min-h-0 w-full overflow-hidden">
+                                <Chat
+                                    isActive={isActive}
+                                    onExecutionStateChange={onExecutionStateChange}
+                                    key={`redclaw:${chatRefreshKey}`}
+                                    fixedSessionId={activeSessionId}
+                                    pendingMessage={resolvedPendingMessage}
+                                    onMessageConsumed={onPendingMessageConsumed}
+                                    defaultCollapsed={true}
+                                    showClearButton={false}
+                                    fixedSessionBannerText=""
+                                    showWelcomeShortcuts={true}
+                                    showComposerShortcuts={true}
+                                    fixedSessionContextIndicatorMode="corner-ring"
+                                    shortcuts={REDCLAW_SHORTCUTS}
+                                    welcomeShortcuts={REDCLAW_WELCOME_SHORTCUTS}
+                                    embeddedTheme="auto"
+                                    welcomeTitle="RedClaw 自媒体AI工作台"
+                                    welcomeSubtitle=""
+                                    welcomeIconSrc={REDCLAW_WELCOME_ICON_SRC}
+                                    welcomeActions={welcomeActions}
+                                    contentLayout="wide"
+                                    contentWidthPreset={previewTarget ? 'default' : 'narrow'}
+                                    allowFileUpload={true}
+                                    attachmentPreviewMode="compact-status"
+                                    messageWorkflowPlacement="bottom"
+                                    messageWorkflowVariant="compact"
+                                    messageWorkflowEmphasis="default"
+                                    messageWorkflowAutoHideWhenComplete={true}
+                                    messageWorkflowFailureTone="neutral"
+                                    messageLinkRenderMode="preview-card"
+                                    onMessageLinkPreview={handlePreviewLink}
+                                    activePreviewHref={previewTarget?.href || null}
+                                    inlineSidePanel={previewTarget ? (
+                                        <RedClawFilePreviewPane
+                                            target={previewTarget}
+                                            onClose={handleClosePreview}
+                                            onOpenExternal={handleOpenPreviewExternal}
+                                            onRevealInFolder={handleRevealPreviewInFolder}
+                                        />
+                                    ) : null}
+                                />
                             </div>
                             <RedClawHistoryDrawer
                                 open={historyDrawerOpen}

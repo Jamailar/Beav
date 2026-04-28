@@ -88,7 +88,7 @@ RedClaw.tsx
 
 ## 4. Recommended Architecture
 
-推荐方案：**通用 Chat 增加可选链接预览事件，RedClaw 独占启用，右侧预览布局由 RedClaw 页面管理。**
+推荐方案：**通用 Chat 增加可选链接预览事件和内部 inline side panel，RedClaw 独占启用，文件预览必须发生在中间聊天区域内部。**
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -97,11 +97,17 @@ RedClaw.tsx
 │ state: previewTarget                                        │
 │ state: previewPaneWidth                                     │
 │                                                             │
-│ ┌───────────────────────────────┬─────────────────────────┐ │
-│ │ Chat.tsx                       │ RedClawFilePreviewPane  │ │
-│ │ linkRenderMode=preview-card    │ target=previewTarget    │ │
-│ │ onMessageLinkPreview=handler   │                         │ │
-│ └───────────────────────────────┴─────────────────────────┘ │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ Chat.tsx                                                │ │
+│ │ linkRenderMode=preview-card                             │ │
+│ │ onMessageLinkPreview=handler                            │ │
+│ │ inlineSidePanel=<RedClawFilePreviewPane />              │ │
+│ │                                                         │ │
+│ │ ┌───────────────────────┬─────────────────────────────┐ │ │
+│ │ │ messages + composer   │ file preview pane           │ │ │
+│ │ └───────────────────────┴─────────────────────────────┘ │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│ RedClawSidebar remains an overlay/tool drawer, not preview │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -110,8 +116,8 @@ RedClaw.tsx
 | Layer | Responsibility | Must Not Do |
 | --- | --- | --- |
 | `MessageItem` | 把链接渲染为文件卡片，点击时上抛结构化 target | 不管理侧栏、不读取文件、不知道 RedClaw 布局 |
-| `Chat` | 透传链接渲染模式和点击回调 | 不保存预览状态、不改变其他页面行为 |
-| `RedClaw` | 保存当前预览对象，切换左右分栏，协调技能面板/历史抽屉 | 不解析 Markdown、不读取大文件 |
+| `Chat` | 透传链接渲染模式和点击回调；承载中间聊天区域内部的 `inlineSidePanel` 左右分栏 | 不保存预览 target、不改变其他页面行为、不占用 RedClaw 技能面板层 |
+| `RedClaw` | 保存当前预览对象，把 `RedClawFilePreviewPane` 作为 `Chat.inlineSidePanel` 传入 | 不解析 Markdown、不读取大文件、不用文件预览折叠技能面板 |
 | `RedClawFilePreviewPane` | 根据 target 渲染预览、操作栏、错误态 | 不影响聊天消息状态、不触发 AI runtime |
 | Host IPC | 系统打开、显示文件夹，后续可加受限文本读取 | 不做 UI 状态管理 |
 
@@ -159,7 +165,7 @@ RedClaw.tsx
 3. 用户连续点击不同链接时，右侧区域直接替换内容。
 4. 关闭右侧区域后，聊天区域恢复全宽。
 5. 当前会话、消息滚动、输入草稿、运行状态不应被重置。
-6. 右侧预览区域打开时，如果技能面板抽屉已打开，应自动收起技能面板，避免两个右侧面板竞争。
+6. 右侧预览区域属于 `Chat` 中间工作区内部，不得复用或挤占 RedClaw 技能面板抽屉位置，也不得因为打开文件而自动折叠技能面板。
 7. 历史抽屉仍可打开，但历史抽屉是临时覆盖层；关闭后预览状态保留。
 
 ### 5.3 File Link Card Behavior
@@ -695,7 +701,7 @@ const [copied, setCopied] = useState(false);
 | --- | --- | --- | --- | --- |
 | A. 全局改 `MessageItem` 链接 | 所有 Chat 链接都变文件卡片 | 最快 | 影响主聊天、知识库、弹窗聊天，回归风险高 | 不推荐 |
 | B. Fork RedClaw 消息组件 | RedClaw 自己维护一套消息 UI | 隔离强 | 复制消息、附件、workflow timeline、图片菜单逻辑，维护成本高 | 不推荐 |
-| C. Chat 可选能力 + RedClaw 管布局 | 通用 Chat 只透传事件，RedClaw 启用文件卡片和右栏 | 改动小、边界清晰、可复用 | 需要设计 props contract | 推荐 |
+| C. Chat 可选能力 + Chat 内部 inline side panel | 通用 Chat 透传事件并承载中间区域分栏，RedClaw 管 preview target | 改动小、边界清晰、不会和技能面板抢位置 | 需要设计 props contract | 推荐 |
 | D. 直接用系统打开 | 点击后打开外部 app/browser | 实现最少 | 离开 RedClaw，无法边看边聊 | 不满足目标 |
 | E. 右侧 fixed drawer overlay | 预览浮在聊天上方 | 快速 | 遮挡聊天，不符合“聊天区域左移” | 不推荐 |
 
@@ -713,9 +719,9 @@ Add RedClaw inline file preview pane
 
 1. 在 `MessageItem.tsx` 增加 link target 类型、kind 推断和 preview-card renderer。
 2. 先实现并本地检查 path target builder，覆盖 POSIX、Windows drive、UNC、file URL、redbox-asset、local-file、http(s) URL。
-3. 在 `Chat.tsx` 增加 props 并透传。
+3. 在 `Chat.tsx` 增加 props，并用 `inlineSidePanel` 在聊天中间区域内部承载右侧预览。
 4. 新增 `RedClawFilePreviewPane.tsx`，先实现 image/video/audio/pdf/web/unknown fallback。
-5. 在 `RedClaw.tsx` 增加 `previewTarget` 状态和左右分栏布局。
+5. 在 `RedClaw.tsx` 增加 `previewTarget` 状态，并把预览 pane 传给 `Chat.inlineSidePanel`，不要放到 RedClaw 外层侧栏层级。
 6. 接入系统打开、复制、显示文件夹动作，确保本地动作使用 `localPathCandidate`。
 7. 做样式收口：保证右栏宽度、Chat 宽度、输入框和消息都不重叠。
 8. 验证普通 Chat 链接仍是普通外链。
