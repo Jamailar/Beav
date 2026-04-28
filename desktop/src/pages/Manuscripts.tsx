@@ -1010,6 +1010,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [editorFrontmatterBlock, setEditorFrontmatterBlock] = useState<string | null>(null);
     const [editorMetadata, setEditorMetadata] = useState<Record<string, unknown>>({});
     const [editorWriteProposal, setEditorWriteProposal] = useState<ManuscriptWriteProposal | null>(null);
+    const [editorReviewBody, setEditorReviewBody] = useState('');
     const [editorBodyDirty, setEditorBodyDirty] = useState(false);
     const [isSavingEditorBody, setIsSavingEditorBody] = useState(false);
     const [isApplyingWriteProposal, setIsApplyingWriteProposal] = useState(false);
@@ -1033,6 +1034,8 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const draftContextMenuRef = useRef<HTMLDivElement | null>(null);
     const editorFileRef = useRef<string | null>(null);
     const editorBodyRef = useRef('');
+    const editorReviewBodyRef = useRef('');
+    const editorReviewProposalIdRef = useRef<string | null>(null);
     const editorFrontmatterBlockRef = useRef<string | null>(null);
     const editorMetadataRef = useRef<Record<string, unknown>>({});
     const editorBodyDirtyRef = useRef(false);
@@ -1121,6 +1124,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         editorBodyRef.current = editorBody;
     }, [editorBody]);
+
+    useEffect(() => {
+        editorReviewBodyRef.current = editorReviewBody;
+    }, [editorReviewBody]);
 
     useEffect(() => {
         editorFrontmatterBlockRef.current = editorFrontmatterBlock;
@@ -2532,6 +2539,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setEditorFrontmatterBlock(null);
             setEditorMetadata({});
             setEditorWriteProposal(null);
+            setEditorReviewBody('');
             setEditorBodyDirty(false);
             return;
         }
@@ -2552,6 +2560,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                     setEditorBody('');
                     setEditorFrontmatterBlock(null);
                     setEditorMetadata({});
+                    setEditorReviewBody('');
                     setEditorBodyDirty(false);
                 }
             }
@@ -2564,10 +2573,22 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     useEffect(() => {
         if (!editorFile || mode !== 'editor') {
             setEditorWriteProposal(null);
+            setEditorReviewBody('');
             return;
         }
         void loadEditorWriteProposal(editorFile);
     }, [editorFile, loadEditorWriteProposal, mode]);
+
+    useEffect(() => {
+        if (!editorWriteProposal) {
+            editorReviewProposalIdRef.current = null;
+            setEditorReviewBody('');
+            return;
+        }
+        const nextDraft = splitWritingDraftContent(editorWriteProposal.proposedContent, editorDescriptor?.draftType);
+        editorReviewProposalIdRef.current = editorWriteProposal.id;
+        setEditorReviewBody(nextDraft.body);
+    }, [editorDescriptor?.draftType, editorWriteProposal?.id, editorWriteProposal?.proposedContent]);
 
     useEffect(() => {
         const handleProposalChanged = (_event: unknown, payload?: { filePath?: string; proposal?: ManuscriptWriteProposal | null }) => {
@@ -2691,8 +2712,20 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         }
         setIsApplyingWriteProposal(true);
         try {
+            const proposedDraft = splitWritingDraftContent(
+                editorWriteProposal.proposedContent,
+                editorDescriptor?.draftType
+            );
+            const reviewBody = editorReviewProposalIdRef.current === editorWriteProposal.id
+                ? editorReviewBodyRef.current
+                : proposedDraft.body;
+            const proposedContentOverride = composeMarkdownWithFrontmatter(
+                reviewBody,
+                proposedDraft.frontmatterBlock
+            );
             const result = await window.ipcRenderer.invoke('manuscripts:accept-write-proposal', {
                 filePath: editorFile,
+                proposedContentOverride,
             }) as { success?: boolean; error?: string; content?: string; state?: PackageState };
             if (!result?.success || typeof result.content !== 'string') {
                 throw new Error(result?.error || '接受 AI 修改失败');
@@ -2702,6 +2735,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             setEditorFrontmatterBlock(nextDraft.frontmatterBlock);
             setEditorBodyDirty(false);
             setEditorWriteProposal(null);
+            setEditorReviewBody('');
             if (result.state) {
                 applyPackageState(editorFile, result.state);
             }
@@ -2723,6 +2757,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                 throw new Error(result?.error || '拒绝 AI 修改失败');
             }
             setEditorWriteProposal(null);
+            setEditorReviewBody('');
         } catch (error) {
             void appAlert(error instanceof Error ? error.message : '拒绝 AI 修改失败');
         } finally {
@@ -3116,11 +3151,11 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
             packageState?.videoProject?.scriptApproval?.status
             || packageState?.editorProject?.ai?.scriptApproval?.status
         ) === 'confirmed';
-        const editorWriteProposalView = editorWriteProposal ? {
-            id: editorWriteProposal.id,
-            createdAt: editorWriteProposal.createdAt,
-            baseBody: splitWritingDraftContent(editorWriteProposal.baseContent, draftType).body,
-            proposedBody: splitWritingDraftContent(editorWriteProposal.proposedContent, draftType).body,
+        const editorWriteProposalBaseDraft = editorWriteProposal
+            ? splitWritingDraftContent(editorWriteProposal.baseContent, draftType)
+            : null;
+        const editorWriteProposalView = editorWriteProposal && editorWriteProposalBaseDraft ? {
+            baseBody: editorWriteProposalBaseDraft.body,
             isStale: currentEditorContent !== editorWriteProposal.baseContent,
         } : null;
         const packageCoverId = String(packageState?.cover?.assetId || '').trim();
@@ -3545,7 +3580,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             draftType={isRichPostDraft ? 'richpost' : draftType === 'longform' ? 'longform' : 'unknown'}
                             title={currentDescriptor.title}
                             filePath={editorFile}
-                            editorBody={editorBody}
+                            editorBody={editorWriteProposalView ? editorReviewBody : editorBody}
                             writeProposal={editorWriteProposalView}
                             editorBodyDirty={editorBodyDirty}
                             isSavingEditorBody={isSavingEditorBody}
@@ -3570,6 +3605,10 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                             coverAsset={packageCoverAsset}
                             imageAssets={packageImageAssets}
                             onEditorBodyChange={(value) => {
+                                if (editorWriteProposalView) {
+                                    setEditorReviewBody(value);
+                                    return;
+                                }
                                 setEditorBody(value);
                                 setEditorBodyDirty(true);
                             }}
