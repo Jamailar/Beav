@@ -2,8 +2,8 @@ use glob::Pattern;
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::fs;
 use std::path::Path;
+use std::{collections::HashSet, fs};
 use tauri::State;
 use time::OffsetDateTime;
 
@@ -344,6 +344,128 @@ pub(crate) fn replace_blocks_for_source(
     rebuild_tantivy_from_db(state)
 }
 
+pub(crate) fn upsert_blocks_for_documents(
+    state: &State<'_, AppState>,
+    blocks: &[DocumentBlockRecord],
+) -> Result<(), String> {
+    if blocks.is_empty() {
+        return Ok(());
+    }
+    let document_ids = blocks
+        .iter()
+        .map(|block| block.document_id.clone())
+        .collect::<HashSet<_>>();
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for document_id in &document_ids {
+        let old_block_ids = {
+            let mut stmt = tx
+                .prepare("SELECT block_id FROM knowledge_document_blocks WHERE document_id = ?1")
+                .map_err(|error| error.to_string())?;
+            let rows = stmt
+                .query_map(params![document_id], |row| row.get::<_, String>(0))
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        };
+        for block_id in old_block_ids {
+            tx.execute(
+                "DELETE FROM knowledge_document_blocks_fts WHERE block_id = ?1",
+                params![block_id],
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        tx.execute(
+            "DELETE FROM knowledge_document_blocks WHERE document_id = ?1",
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO knowledge_document_blocks (
+                    block_id, document_id, source_id, source_name, root_path, absolute_path,
+                    relative_path, file_extension, title, language, content_origin,
+                    ocr_confidence, visual_unit_id, source_document_id, evidence_refs_json,
+                    jurisdiction, authority, authority_level, effective_date, expiry_date,
+                    document_type, is_superseded, page, block_type, section_path_json,
+                    block_index, line_start, line_end, text, normalized_text,
+                    semantic_vector_json, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6,
+                    ?7, ?8, ?9, ?10, ?11, ?12,
+                    ?13, ?14, ?15, ?16, ?17, ?18,
+                    ?19, ?20, ?21, ?22, ?23, ?24,
+                    ?25, ?26, ?27, ?28, ?29, ?30,
+                    ?31, ?32
+                )
+                "#,
+            )
+            .map_err(|error| error.to_string())?;
+        let mut fts_stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO knowledge_document_blocks_fts (
+                    block_id, source_id, title, text, normalized_text, relative_path
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+            )
+            .map_err(|error| error.to_string())?;
+        for block in blocks {
+            stmt.execute(params![
+                block.block_id,
+                block.document_id,
+                block.source_id,
+                block.source_name,
+                block.root_path,
+                block.absolute_path,
+                block.relative_path,
+                block.file_extension,
+                block.title,
+                block.language,
+                block.content_origin,
+                block.ocr_confidence,
+                block.visual_unit_id,
+                block.source_document_id,
+                block.evidence_refs_json,
+                block.jurisdiction,
+                block.authority,
+                block.authority_level,
+                block.effective_date,
+                block.expiry_date,
+                block.document_type,
+                block.is_superseded,
+                block.page,
+                block.block_type,
+                block.section_path_json,
+                block.block_index,
+                block.line_start,
+                block.line_end,
+                block.text,
+                block.normalized_text,
+                block.semantic_vector_json,
+                block.updated_at
+            ])
+            .map_err(|error| error.to_string())?;
+            fts_stmt
+                .execute(params![
+                    block.block_id,
+                    block.source_id,
+                    block.title,
+                    block.text,
+                    block.normalized_text,
+                    block.relative_path
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    tx.commit().map_err(|error| error.to_string())?;
+    rebuild_tantivy_from_db(state)
+}
+
 pub(crate) fn delete_blocks_for_source(
     state: &State<'_, AppState>,
     source_id: &str,
@@ -374,6 +496,29 @@ pub(crate) fn count_blocks_for_source(
         params![source_id],
         |row| row.get(0),
     )
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn visual_document_blocks_missing(state: &State<'_, AppState>) -> Result<bool, String> {
+    let conn = connection(state)?;
+    conn.query_row(
+        r#"
+        SELECT EXISTS (
+            SELECT 1
+            FROM knowledge_canonical_documents c
+            WHERE c.canonical_json LIKE '%"visualManifest"%'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM knowledge_document_blocks b
+                WHERE b.document_id = c.document_id
+              )
+            LIMIT 1
+        )
+        "#,
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value != 0)
     .map_err(|error| error.to_string())
 }
 
@@ -1179,20 +1324,25 @@ fn build_blocks_for_file(
         canonical_json: serde_json::to_string(&canonical).map_err(|error| error.to_string())?,
         updated_at: updated_at.to_string(),
     };
+    let file_blocks = block_records_from_document(&canonical, source_name, root_path, updated_at)?;
     if has_visual_manifest {
         canonical_store::upsert_documents(state, std::slice::from_ref(&canonical_row))?;
+        upsert_blocks_for_documents(state, &file_blocks)?;
+        let file_anchors =
+            crate::knowledge_index::citation_anchors::build_anchors_for_blocks(&file_blocks);
+        crate::knowledge_index::citation_anchors::upsert_anchors_for_documents(
+            state,
+            &file_anchors,
+        )?;
         crate::append_debug_trace_global(format!(
-            "[visual-index] persisted_progress source={} path={}",
-            canonical_row.source_id, canonical_row.relative_path
+            "[visual-index] persisted_progress source={} path={} blocks={}",
+            canonical_row.source_id,
+            canonical_row.relative_path,
+            file_blocks.len()
         ));
     }
     canonical_rows.push(canonical_row);
-    blocks.extend(block_records_from_document(
-        &canonical,
-        source_name,
-        root_path,
-        updated_at,
-    )?);
+    blocks.extend(file_blocks);
     Ok(())
 }
 

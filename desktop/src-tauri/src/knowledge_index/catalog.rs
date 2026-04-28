@@ -195,6 +195,15 @@ pub(crate) fn list_page(
                     lower(COALESCE(b.title, '')) LIKE ?3 OR
                     lower(b.relative_path) LIKE ?3
                   )
+            ) OR
+            EXISTS (
+                SELECT 1
+                FROM knowledge_visual_units u
+                WHERE u.source_id = knowledge_items.item_id
+                  AND (
+                    lower(u.relative_path) LIKE ?3 OR
+                    lower(u.manifest_json) LIKE ?3
+                  )
             )
         )
     "#;
@@ -350,6 +359,82 @@ fn attach_visual_search_matches(
         item.visual_search_unit_id = unit_id;
         item.visual_search_evidence_refs =
             serde_json::from_str::<Vec<String>>(&evidence_refs_json).unwrap_or_default();
+        item.visual_search_thumbnail_path = if unit_kind.as_deref() == Some("image_file") {
+            absolute_path
+        } else {
+            None
+        };
+        continue;
+    }
+
+    let mut unit_stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                relative_path,
+                page_number,
+                unit_id,
+                unit_kind,
+                absolute_path,
+                json_extract(manifest_json, '$.summary.short') AS manifest_short,
+                json_extract(manifest_json, '$.summary.title') AS manifest_title
+            FROM knowledge_visual_units
+            WHERE source_id = ?1
+              AND (
+                lower(relative_path) LIKE ?2 OR
+                lower(manifest_json) LIKE ?2
+              )
+            ORDER BY
+                CASE WHEN status = 'indexed' THEN 0 ELSE 1 END,
+                updated_at DESC
+            LIMIT 1
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    for item in items.iter_mut() {
+        if item.visual_search_summary.is_some() {
+            continue;
+        }
+        let match_row = unit_stmt
+            .query_row(params![item.item_id, query], |row| {
+                let relative_path: String = row.get("relative_path")?;
+                let page: Option<i64> = row.get("page_number")?;
+                let unit_id: Option<String> = row.get("unit_id")?;
+                let unit_kind: Option<String> = row.get("unit_kind")?;
+                let absolute_path: Option<String> = row.get("absolute_path")?;
+                let manifest_short: Option<String> = row.get("manifest_short")?;
+                let manifest_title: Option<String> = row.get("manifest_title")?;
+                Ok((
+                    relative_path,
+                    page,
+                    unit_id,
+                    unit_kind,
+                    absolute_path,
+                    manifest_short,
+                    manifest_title,
+                ))
+            })
+            .optional()
+            .map_err(|error| error.to_string())?;
+        let Some((
+            relative_path,
+            page,
+            unit_id,
+            unit_kind,
+            absolute_path,
+            manifest_short,
+            manifest_title,
+        )) = match_row
+        else {
+            continue;
+        };
+        item.visual_search_summary = manifest_short
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| manifest_title.filter(|value| !value.trim().is_empty()));
+        item.visual_search_path = Some(relative_path);
+        item.visual_search_page = page;
+        item.visual_search_unit_id = unit_id;
+        item.visual_search_evidence_refs = Vec::new();
         item.visual_search_thumbnail_path = if unit_kind.as_deref() == Some("image_file") {
             absolute_path
         } else {
