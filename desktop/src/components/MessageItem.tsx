@@ -230,6 +230,12 @@ export interface ChatMessageLinkTarget {
   isLocal: boolean;
   localPathCandidate?: string;
   extension?: string;
+  exists?: boolean;
+  isDirectory?: boolean;
+  mimeType?: string;
+  sizeBytes?: number;
+  previewText?: string;
+  error?: string;
   sourceMessageId: string;
 }
 
@@ -329,6 +335,7 @@ const transformMarkdownUrlForPreviewCards: UrlTransform = (url, key, node) => {
   const value = String(url || '').trim();
   if (!value) return '';
   if (isLocalAssetUrl(value)) return value;
+  if (isPreviewVirtualPath(value) || isPreviewRelativePath(value)) return value;
   return transformMarkdownUrl(value, key, node);
 };
 
@@ -367,6 +374,46 @@ const TEXT_LINK_EXTENSIONS = new Set([
   'xlsx',
 ]);
 const ARCHIVE_LINK_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'tgz']);
+const PREVIEW_VIRTUAL_PATH_RE = /^(workspace|knowledge|manuscripts|media|cover|redclaw):\/\/.+/i;
+const PREVIEW_PATH_LINKIFY_EXT_PATTERN = '(?:png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)';
+const PREVIEW_PATH_LINKIFY_RE = new RegExp(
+  String.raw`(^|[\s([{])((?:(?:workspace|knowledge|manuscripts|media|cover|redclaw):\/\/|file:\/\/|local-file:\/\/|redbox-asset:\/\/asset\/|[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]|[A-Za-z0-9._@ -]+[\\/])[^<>"'\n\r]*?\.${PREVIEW_PATH_LINKIFY_EXT_PATTERN})(?=$|[\s)\]},.!?;:'">])`,
+  'gi',
+);
+
+const isPreviewVirtualPath = (value: string): boolean => PREVIEW_VIRTUAL_PATH_RE.test(String(value || '').trim());
+
+const isPreviewRelativePath = (value: string): boolean => {
+  const raw = String(value || '').trim();
+  if (!raw || /^https?:/i.test(raw)) return false;
+  if (raw.includes('..')) return false;
+  return /\.(png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
+};
+
+const escapeMarkdownLinkLabel = (value: string): string => (
+  getPathFilename(value).replace(/[[\]]/g, '\\$&') || value.replace(/[[\]]/g, '\\$&')
+);
+
+const shouldSkipPathLinkifyLine = (line: string): boolean => (
+  /]\([^)]+(?:\)|$)/.test(line) || /!\[[^\]]*]\([^)]+(?:\)|$)/.test(line)
+);
+
+const linkifyPreviewFilePaths = (content: string): string => {
+  if (!content) return content;
+  let inFence = false;
+  return content.split('\n').map((line) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      return line;
+    }
+    if (inFence || shouldSkipPathLinkifyLine(line)) return line;
+    return line.replace(PREVIEW_PATH_LINKIFY_RE, (match, prefix: string, pathValue: string) => {
+      const trimmedPath = String(pathValue || '').trim();
+      if (!trimmedPath || trimmedPath.startsWith('://')) return match;
+      return `${prefix}[${escapeMarkdownLinkLabel(trimmedPath)}](<${trimmedPath}>)`;
+    });
+  }).join('\n');
+};
 
 const safeDecodeLabel = (value: string): string => {
   try {
@@ -469,6 +516,8 @@ const isPreviewCardCandidate = (href: string): boolean => {
   if (!value) return false;
   if (/^(mailto:|tel:|javascript:|vbscript:)/i.test(value)) return false;
   if (isLocalAssetSource(value)) return true;
+  if (isPreviewVirtualPath(value)) return true;
+  if (isPreviewRelativePath(value)) return true;
   if (/^https?:\/\//i.test(value)) return true;
   return false;
 };
@@ -482,9 +531,8 @@ const buildMessageLinkTarget = (
   if (!isPreviewCardCandidate(rawHref)) return null;
   const localPathCandidate = isLocalAssetSource(rawHref)
     ? extractLocalAssetPathCandidate(rawHref)
-    : '';
-  const resolvedUrl = localPathCandidate ? resolveAssetUrl(rawHref) : rawHref;
-  if (!resolvedUrl) return null;
+    : (isPreviewVirtualPath(rawHref) || isPreviewRelativePath(rawHref) ? rawHref : '');
+  const resolvedUrl = isLocalAssetSource(rawHref) ? resolveAssetUrl(rawHref) : rawHref;
   const kind = inferMessageLinkKind(rawHref, localPathCandidate || undefined);
   const extension = getExtension(localPathCandidate || rawHref);
   const explicitLabel = extractNodeText(children).trim();
@@ -797,6 +845,17 @@ export const MessageItem = memo(({
   const markdownUrlTransform = linkRenderMode === 'preview-card'
     ? transformMarkdownUrlForPreviewCards
     : transformMarkdownUrl;
+  const renderedAssistantContent = useMemo(() => (
+    linkRenderMode === 'preview-card' && !isUser
+      ? linkifyPreviewFilePaths(sanitizedAssistantContent)
+      : sanitizedAssistantContent
+  ), [isUser, linkRenderMode, sanitizedAssistantContent]);
+
+  const renderPreviewAwareMarkdownContent = useCallback((content: string) => (
+    linkRenderMode === 'preview-card' && !isUser
+      ? linkifyPreviewFilePaths(content)
+      : content
+  ), [isUser, linkRenderMode]);
 
   const isUploadedImageAttachment = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const kind = String(attachment.kind || '').trim().toLowerCase();
@@ -997,7 +1056,7 @@ export const MessageItem = memo(({
     <div className="chat-ai-shell">
       <div className="chat-ai-content">
         <StreamingMarkdown
-          content={content}
+          content={renderPreviewAwareMarkdownContent(content)}
           isStreaming={msg.isStreaming}
           components={markdownComponents}
           urlTransform={markdownUrlTransform}
@@ -1104,7 +1163,7 @@ export const MessageItem = memo(({
                   <ThinkingIndicator />
                 ) : (
                   <StreamingMarkdown
-                    content={sanitizedAssistantContent}
+                    content={renderedAssistantContent}
                     isStreaming={msg.isStreaming}
                     components={markdownComponents}
                     urlTransform={markdownUrlTransform}
