@@ -57,6 +57,45 @@
       <div id="capture-status" class="capture-status" hidden></div>
     </section>
 
+    <section id="blogger-notes-panel" class="section blogger-notes-panel hidden" aria-live="polite">
+      <div class="section-row">
+        <div class="section-title">博主笔记采集</div>
+        <div id="blogger-notes-mode-pill" class="task-badge">API 模式</div>
+      </div>
+      <label class="switch-row">
+        <input id="blogger-notes-api-mode" type="checkbox" checked>
+        <span id="blogger-notes-mode-label">API 模式（更快）</span>
+      </label>
+      <div class="field-grid">
+        <label class="field">
+          <span>抓取数量</span>
+          <input id="blogger-notes-limit" type="number" min="1" max="200" step="1">
+        </label>
+        <label class="field">
+          <span>最大间隔（秒）</span>
+          <input id="blogger-notes-interval-max" type="number" min="3" max="60" step="1">
+        </label>
+      </div>
+      <div class="capture-actions">
+        <button id="blogger-notes-start" type="button" class="primary">开始采集</button>
+      </div>
+      <div id="blogger-notes-progress" class="progress-card" hidden>
+        <div class="progress-card-head">
+          <div id="blogger-notes-progress-label" class="progress-card-label">准备开始</div>
+          <div id="blogger-notes-progress-percent" class="progress-card-percent">0%</div>
+        </div>
+        <div class="progress-track">
+          <div id="blogger-notes-progress-fill" class="progress-fill"></div>
+        </div>
+        <div id="blogger-notes-progress-meta" class="progress-card-meta">等待任务开始</div>
+      </div>
+      <div id="blogger-notes-controls" class="task-controls hidden">
+        <button id="blogger-notes-pause" type="button">暂停</button>
+        <button id="blogger-notes-resume" type="button" class="hidden">继续</button>
+        <button id="blogger-notes-cancel" type="button">取消</button>
+      </div>
+    </section>
+
     <section class="section task-panel">
       <div class="section-row">
         <div class="section-title">任务队列</div>

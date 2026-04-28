@@ -19,6 +19,22 @@ const elements = {
   captureSubtitle: document.getElementById('capture-subtitle'),
   captureActions: document.getElementById('capture-actions'),
   captureStatus: document.getElementById('capture-status'),
+  bloggerNotesPanel: document.getElementById('blogger-notes-panel'),
+  bloggerNotesModePill: document.getElementById('blogger-notes-mode-pill'),
+  bloggerNotesApiMode: document.getElementById('blogger-notes-api-mode'),
+  bloggerNotesModeLabel: document.getElementById('blogger-notes-mode-label'),
+  bloggerNotesLimit: document.getElementById('blogger-notes-limit'),
+  bloggerNotesIntervalMax: document.getElementById('blogger-notes-interval-max'),
+  bloggerNotesStart: document.getElementById('blogger-notes-start'),
+  bloggerNotesProgress: document.getElementById('blogger-notes-progress'),
+  bloggerNotesProgressLabel: document.getElementById('blogger-notes-progress-label'),
+  bloggerNotesProgressPercent: document.getElementById('blogger-notes-progress-percent'),
+  bloggerNotesProgressFill: document.getElementById('blogger-notes-progress-fill'),
+  bloggerNotesProgressMeta: document.getElementById('blogger-notes-progress-meta'),
+  bloggerNotesControls: document.getElementById('blogger-notes-controls'),
+  bloggerNotesPause: document.getElementById('blogger-notes-pause'),
+  bloggerNotesResume: document.getElementById('blogger-notes-resume'),
+  bloggerNotesCancel: document.getElementById('blogger-notes-cancel'),
   taskQueueBadge: document.getElementById('task-queue-badge'),
   taskCurrent: document.getElementById('task-current'),
   taskQueueMeta: document.getElementById('task-queue-meta'),
@@ -32,6 +48,19 @@ let capturePendingAction = '';
 let captureFeedback = null;
 let captureSignature = '';
 let updateChecking = false;
+let currentSettings = {
+  xhsBloggerNoteLimit: 50,
+  xhsIntervalMaxSeconds: 6,
+  xhsBloggerCollectionMode: 'api',
+};
+
+function debugLog(scope, details) {
+  console.debug(`[redbox-plugin][sidepanel][${scope}]`, details);
+}
+
+function debugWarn(scope, details) {
+  console.warn(`[redbox-plugin][sidepanel][${scope}]`, details);
+}
 
 init().catch((error) => {
   renderConnection(false, error instanceof Error ? error.message : String(error));
@@ -56,6 +85,13 @@ function bindEvents() {
   elements.openSettings.addEventListener('click', () => chrome.runtime.openOptionsPage());
   elements.checkUpdate.addEventListener('click', () => void refreshUpdateStatus(true));
   elements.openUpdateSource.addEventListener('click', () => void openUpdateSource());
+  elements.bloggerNotesApiMode.addEventListener('change', () => {
+    renderBloggerNotesMode();
+  });
+  elements.bloggerNotesStart.addEventListener('click', () => void startBloggerNotesCollection());
+  elements.bloggerNotesPause.addEventListener('click', () => void controlBloggerNotesTask('pause'));
+  elements.bloggerNotesResume.addEventListener('click', () => void controlBloggerNotesTask('resume'));
+  elements.bloggerNotesCancel.addEventListener('click', () => void controlBloggerNotesTask('cancel'));
   elements.captureActions.addEventListener('click', (event) => {
     const button = event.target?.closest?.('button[data-action]');
     if (!button) return;
@@ -73,8 +109,13 @@ function bindEvents() {
   });
   chrome.runtime?.onMessage?.addListener((message) => {
     if (message?.type === 'xhs:task-queue:update') {
+      debugLog('task-queue-update', message.queue || {});
       renderTaskQueue(message.queue || {});
       renderTaskLogs(message.queue?.logs || []);
+      renderBloggerNotesPanel({
+        ...context,
+        queue: message.queue || {},
+      });
     }
   });
 }
@@ -166,9 +207,24 @@ async function refreshContext() {
   refreshing = true;
   elements.refresh.disabled = true;
   try {
-    context = await sendMessage({ type: 'sidepanel:get-context' });
+    const [nextContext, settingsResponse] = await Promise.all([
+      sendMessage({ type: 'sidepanel:get-context' }),
+      sendMessage({ type: 'settings:get' }),
+    ]);
+    context = nextContext;
+    currentSettings = {
+      ...currentSettings,
+      ...(settingsResponse?.settings || {}),
+    };
+    debugLog('refresh-context', {
+      context: nextContext,
+      settings: currentSettings,
+    });
     renderContext(context);
   } catch (error) {
+    debugWarn('refresh-context-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     renderConnection(false, error instanceof Error ? error.message : String(error));
     renderPageIdentity({
       platform: 'redbox',
@@ -188,6 +244,7 @@ function renderContext(nextContext) {
   renderConnection(Boolean(health.success), health.error || '');
   renderPageIdentity(resolvePageIdentity(nextContext));
   renderCaptureActions(nextContext);
+  renderBloggerNotesPanel(nextContext);
   renderTaskQueue(nextContext?.queue || {});
   renderTaskLogs(nextContext?.logs || nextContext?.queue?.logs || []);
 }
@@ -321,6 +378,12 @@ async function runCaptureAction(action) {
   renderCaptureActions(context);
   try {
     const tab = context?.tab || {};
+    debugLog('capture-action-start', {
+      action,
+      messageType: meta.type,
+      tabId,
+      tabUrl: tab.url || '',
+    });
     const response = await sendMessage({
       type: meta.type,
       tabId,
@@ -331,12 +394,20 @@ async function runCaptureAction(action) {
       renderTaskQueue(response.taskQueue);
       renderTaskLogs(response.taskQueue.logs || []);
     }
+    debugLog('capture-action-success', {
+      action,
+      response,
+    });
     captureFeedback = {
       status: 'success',
       message: summarizeActionResponse(response, meta.done),
     };
     await refreshTaskQueue(false);
   } catch (error) {
+    debugWarn('capture-action-failed', {
+      action,
+      error: error instanceof Error ? error.message : String(error),
+    });
     captureFeedback = {
       status: 'error',
       message: `执行失败：${error instanceof Error ? error.message : String(error)}`,
@@ -352,6 +423,206 @@ function renderCaptureStatus(message, status = 'idle') {
   elements.captureStatus.textContent = message || '';
   elements.captureStatus.dataset.state = status;
   elements.captureStatus.hidden = !message;
+}
+
+function renderBloggerNotesMode() {
+  const apiMode = elements.bloggerNotesApiMode.checked;
+  elements.bloggerNotesModeLabel.textContent = apiMode ? 'API 模式（更快）' : '传统模式（更稳定）';
+  elements.bloggerNotesModePill.textContent = apiMode ? 'API 模式' : '传统模式';
+}
+
+function applyBloggerNotesSettings() {
+  if (elements.bloggerNotesPanel.dataset.hydrated === 'true') {
+    renderBloggerNotesMode();
+    return;
+  }
+  const defaultMode = String(currentSettings?.xhsBloggerCollectionMode || 'api') !== 'tab';
+  elements.bloggerNotesApiMode.checked = defaultMode;
+  elements.bloggerNotesLimit.value = Number(currentSettings?.xhsBloggerNoteLimit || 50);
+  elements.bloggerNotesIntervalMax.value = Math.max(3, Number(currentSettings?.xhsIntervalMaxSeconds || 6));
+  elements.bloggerNotesPanel.dataset.hydrated = 'true';
+  renderBloggerNotesMode();
+}
+
+function getBloggerNotesOptions() {
+  const limit = Math.max(1, Math.min(Number(elements.bloggerNotesLimit.value || 50), 200));
+  const intervalMaxSeconds = Math.max(3, Math.min(Number(elements.bloggerNotesIntervalMax.value || 6), 60));
+  return {
+    mode: elements.bloggerNotesApiMode.checked ? 'api' : 'tab',
+    limit,
+    interval: {
+      minSeconds: 3,
+      maxSeconds: intervalMaxSeconds,
+    },
+  };
+}
+
+async function startBloggerNotesCollection() {
+  const tabId = Number(context?.tab?.id || 0);
+  if (!tabId) {
+    renderBloggerNotesProgress({
+      label: '未识别到当前标签页',
+      meta: '请刷新后重试',
+      status: 'error',
+    });
+    return;
+  }
+  elements.bloggerNotesStart.disabled = true;
+  renderBloggerNotesProgress({
+    label: '正在创建采集任务…',
+    meta: '准备提交到后台队列',
+    status: 'pending',
+  });
+  try {
+    const tab = context?.tab || {};
+    const options = getBloggerNotesOptions();
+    debugLog('blogger-notes-start', {
+      tabId,
+      tabUrl: tab.url || '',
+      options,
+    });
+    const response = await sendMessage({
+      type: 'xhs:collect-blogger-notes',
+      tabId,
+      tabUrl: tab.url || '',
+      windowId: Number(tab.windowId || 0) || undefined,
+      options,
+    });
+    debugLog('blogger-notes-start-success', response);
+    if (response.taskQueue) {
+      renderTaskQueue(response.taskQueue);
+      renderTaskLogs(response.taskQueue.logs || []);
+      renderBloggerNotesPanel({
+        ...context,
+        queue: response.taskQueue,
+      });
+    }
+    renderBloggerNotesProgress({
+      label: '采集任务已启动',
+      meta: summarizeActionResponse(response, '采集任务已加入队列'),
+      status: 'success',
+    });
+    await refreshTaskQueue(false);
+  } catch (error) {
+    debugWarn('blogger-notes-start-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    renderBloggerNotesProgress({
+      label: '启动失败',
+      meta: error instanceof Error ? error.message : String(error),
+      status: 'error',
+    });
+  } finally {
+    elements.bloggerNotesStart.disabled = false;
+  }
+}
+
+async function controlBloggerNotesTask(action) {
+  try {
+    debugLog('blogger-notes-control', { action });
+    const response = await sendMessage({ type: 'xhs:control-active-task', action });
+    debugLog('blogger-notes-control-success', response);
+    renderTaskQueue(response.queue || {});
+    renderTaskLogs(response.queue?.logs || []);
+    renderBloggerNotesPanel({
+      ...context,
+      queue: response.queue || {},
+    });
+  } catch (error) {
+    debugWarn('blogger-notes-control-failed', {
+      action,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    renderBloggerNotesProgress({
+      label: '操作失败',
+      meta: error instanceof Error ? error.message : String(error),
+      status: 'error',
+    });
+  }
+}
+
+function renderBloggerNotesProgress({
+  label = '',
+  status = 'idle',
+  current = 0,
+  total = 0,
+  meta = '',
+} = {}) {
+  const safeTotal = Math.max(Number(total || 0), 0);
+  const safeCurrent = Math.max(Number(current || 0), 0);
+  const percentage = safeTotal > 0 ? Math.max(0, Math.min(100, Math.round((safeCurrent / safeTotal) * 100))) : 0;
+  const hasContent = Boolean(label || meta || status === 'pending' || status === 'success' || status === 'error');
+  elements.bloggerNotesProgress.dataset.state = status;
+  elements.bloggerNotesProgress.hidden = !hasContent;
+  elements.bloggerNotesProgressLabel.textContent = label || '准备开始采集';
+  elements.bloggerNotesProgressPercent.textContent = `${percentage}%`;
+  elements.bloggerNotesProgressFill.style.width = `${percentage}%`;
+  elements.bloggerNotesProgressMeta.textContent = meta || (safeTotal > 0 ? `已完成 ${safeCurrent} / ${safeTotal}` : '等待任务开始');
+}
+
+function renderBloggerNotesPanel(nextContext) {
+  const tab = nextContext?.tab || {};
+  const pageInfo = nextContext?.pageInfo || {};
+  const identity = nextContext?.pageIdentity || {};
+  const platform = normalizePlatform(identity.platform || pageInfo.platform || tab.hostname || pageInfo.kind || tab.url);
+  const pageType = identity.pageType || inferPageType(pageInfo, tab);
+  const visible = platform === 'xhs' && pageType === 'profile';
+  elements.bloggerNotesPanel.classList.toggle('hidden', !visible);
+  if (!visible) {
+    elements.bloggerNotesControls.classList.add('hidden');
+    elements.bloggerNotesPause.classList.add('hidden');
+    elements.bloggerNotesResume.classList.add('hidden');
+    elements.bloggerNotesCancel.classList.add('hidden');
+    return;
+  }
+
+  applyBloggerNotesSettings();
+  const active = nextContext?.queue?.active || null;
+  const last = nextContext?.queue?.last || null;
+  const isRunning = active?.type === 'xhs:collect-blogger-notes';
+  const paused = active?.paused === true;
+  const progress = active?.progress || null;
+  const disabled = !nextContext?.health?.success || Boolean(capturePendingAction) || isRunning;
+
+  elements.bloggerNotesStart.disabled = disabled;
+  elements.bloggerNotesApiMode.disabled = isRunning;
+  elements.bloggerNotesLimit.disabled = isRunning;
+  elements.bloggerNotesIntervalMax.disabled = isRunning;
+
+  elements.bloggerNotesControls.classList.toggle('hidden', !isRunning);
+  elements.bloggerNotesPause.classList.toggle('hidden', !isRunning || paused);
+  elements.bloggerNotesResume.classList.toggle('hidden', !isRunning || !paused);
+  elements.bloggerNotesCancel.classList.toggle('hidden', !isRunning);
+
+  if (isRunning && progress) {
+    renderBloggerNotesProgress({
+      label: paused ? '任务已暂停' : (progress.message || '正在采集博主笔记'),
+      status: paused ? 'idle' : 'pending',
+      current: Number(progress.current || 0),
+      total: Number(progress.total || 0),
+      meta: `已完成 ${Number(progress.current || 0)} / ${Number(progress.total || 0)}${paused ? ' · 点击继续恢复' : ''}`,
+    });
+  } else if (!nextContext?.health?.success) {
+    renderBloggerNotesProgress({
+      label: '桌面端未连接',
+      meta: '请先打开 RedBox 桌面端',
+      status: 'error',
+    });
+  } else if (last?.type === 'xhs:collect-blogger-notes' && last?.status === 'cancelled') {
+    renderBloggerNotesProgress({
+      label: '采集博主笔记已取消',
+      meta: `已保存 ${Number(last?.savedCount || 0)} 条`,
+      status: 'error',
+      current: Number(last?.savedCount || 0),
+      total: Math.max(Number(last?.progress?.total || 0), Number(last?.savedCount || 0)),
+    });
+  } else {
+    renderBloggerNotesProgress({
+      label: '准备开始采集',
+      meta: '设置模式、数量和间隔后即可开始',
+      status: 'idle',
+    });
+  }
 }
 
 function getCaptureActionConfig(nextContext) {
@@ -375,7 +646,6 @@ function getCaptureActionConfig(nextContext) {
       subtitle: '小红书博主页',
       actions: [
         { label: '保存博主', action: 'blogger', primary: true, title: '保存当前博主资料到 RedBox' },
-        { label: '采集博主笔记', action: 'bloggerNotes', title: '采集当前博主主页笔记' },
       ],
     };
   }
@@ -504,6 +774,10 @@ async function refreshTaskQueue(showErrors = false) {
     const response = await sendMessage({ type: 'xhs:get-task-queue' });
     renderTaskQueue(response.queue || {});
     renderTaskLogs(response.queue?.logs || []);
+    renderBloggerNotesPanel({
+      ...context,
+      queue: response.queue || {},
+    });
   } catch (error) {
     if (showErrors) {
       renderTaskQueue({
@@ -524,7 +798,13 @@ function renderTaskQueue(queue) {
     elements.taskQueueBadge.textContent = queued.length > 0 ? `执行中 · 排队 ${queued.length}` : '执行中';
     elements.taskQueueBadge.className = 'task-badge running';
     elements.taskCurrent.textContent = active.title || '小红书采集任务';
+    const progressText = active?.progress?.total
+      ? `进度 ${Number(active.progress.current || 0)}/${Number(active.progress.total || 0)}`
+      : '';
     elements.taskQueueMeta.textContent = [
+      active?.paused ? '已暂停' : '',
+      progressText,
+      active?.progress?.message || '',
       active.startedAt ? `开始 ${formatTime(active.startedAt)}` : '',
       queued.length > 0 ? `后续 ${queued.map((item) => item.title || '任务').slice(0, 2).join('、')}${queued.length > 2 ? '...' : ''}` : '队列无等待任务',
     ].filter(Boolean).join(' · ');
