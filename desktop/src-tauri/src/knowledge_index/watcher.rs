@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 use notify::{recommended_watcher, Event, RecursiveMode, Watcher};
 use tauri::{AppHandle, Manager};
 
-use crate::{knowledge_index::jobs, with_store, workspace_root, AppState};
+use crate::{
+    knowledge_index::{document_blocks::is_visual_candidate_path, jobs},
+    with_store, workspace_root, AppState,
+};
 
 const WATCH_DEBOUNCE_MS: u64 = 1200;
 
@@ -20,6 +23,11 @@ fn desired_watch_roots(app: &AppHandle) -> Vec<PathBuf> {
     let state = app.state::<AppState>();
     let mut roots = Vec::<PathBuf>::new();
     if let Ok(root) = workspace_root(&state).map(|root| root.join("knowledge")) {
+        if root.exists() {
+            roots.push(root);
+        }
+    }
+    if let Ok(root) = workspace_root(&state).map(|root| root.join("media")) {
         if root.exists() {
             roots.push(root);
         }
@@ -62,6 +70,13 @@ fn classify_event(app: &AppHandle, event: &Event) -> WatchDirtyKind {
     let redbook_root = knowledge_root.join("redbook");
     let youtube_root = knowledge_root.join("youtube");
     if event.paths.is_empty() {
+        return WatchDirtyKind::FullRebuild;
+    }
+    if event
+        .paths
+        .iter()
+        .any(|path| is_visual_candidate_path(path))
+    {
         return WatchDirtyKind::FullRebuild;
     }
     let all_catalog_paths = event
@@ -128,7 +143,8 @@ pub(crate) fn start(app: AppHandle) {
                 if last_dirty_at.elapsed() >= Duration::from_millis(WATCH_DEBOUNCE_MS) {
                     match dirty_kind {
                         WatchDirtyKind::CatalogOnly => {
-                            jobs::refresh_catalog_async(&app, "watcher-catalog")
+                            jobs::refresh_catalog_async(&app, "watcher-catalog");
+                            jobs::schedule_visual_backfill(&app, "watcher-visual")
                         }
                         WatchDirtyKind::FullRebuild => jobs::schedule_rebuild(&app, "watcher"),
                     }

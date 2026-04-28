@@ -1979,6 +1979,7 @@ fn emit_media_assets_changed(app: Option<&AppHandle>) {
             "knowledge:changed",
             json!({ "at": now_iso(), "kind": "media-assets" }),
         );
+        crate::knowledge_index::jobs::schedule_rebuild(app, "media-assets-changed");
     }
 }
 
