@@ -98,6 +98,9 @@ const DEVELOPER_MODE_UNLOCK_TAP_COUNT = 7;
 const DEVELOPER_MODE_TTL_MS = 24 * 60 * 60 * 1000;
 const SETTINGS_ACTIVATION_DEBOUNCE_MS = 80;
 const SETTINGS_TAB_POLL_DELAY_MS = 300;
+const FILE_INDEX_DASHBOARD_CACHE_KEY = 'redbox:file-index-dashboard:v1';
+const FILE_INDEX_DASHBOARD_CACHE_TTL_MS = 60_000;
+const FILE_INDEX_DASHBOARD_POLL_MS = 30_000;
 const RUNTIME_PERF_HISTORY_LIMIT = 12;
 const RUNTIME_PERF_TIMELINE_LIMIT = 40;
 const RUNTIME_PERF_CHECKPOINT_WINDOW_MS = 1500;
@@ -468,6 +471,51 @@ const sanitizeChatMaxTokensInput = (value: string, fallback: number): string => 
   return String(Math.floor(parsed));
 };
 
+type FileIndexDashboardCacheRecord = {
+  savedAt: number;
+  dashboard: FileIndexDashboard;
+};
+
+function readCachedFileIndexDashboard(): FileIndexDashboardCacheRecord | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FileIndexDashboardCacheRecord>;
+    if (!parsed || typeof parsed.savedAt !== 'number' || !parsed.dashboard) return null;
+    return {
+      savedAt: parsed.savedAt,
+      dashboard: parsed.dashboard,
+    };
+  } catch (error) {
+    console.warn('Failed to read cached file index dashboard:', error);
+    return null;
+  }
+}
+
+function writeCachedFileIndexDashboard(dashboard: FileIndexDashboard): number {
+  const savedAt = Date.now();
+  if (typeof window === 'undefined') return savedAt;
+  try {
+    window.localStorage.setItem(
+      FILE_INDEX_DASHBOARD_CACHE_KEY,
+      JSON.stringify({ savedAt, dashboard }),
+    );
+  } catch (error) {
+    console.warn('Failed to cache file index dashboard:', error);
+  }
+  return savedAt;
+}
+
+function clearCachedFileIndexDashboard() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
+  } catch (error) {
+    console.warn('Failed to clear cached file index dashboard:', error);
+  }
+}
+
 export function Settings({
   isActive = true,
   onOpenRedClawOnboarding,
@@ -480,6 +528,7 @@ export function Settings({
   navigationTarget?: SettingsNavigationTarget | null;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const initialFileIndexDashboardCache = useMemo(() => readCachedFileIndexDashboard(), []);
   const [baseSettingsLoadedRevision, setBaseSettingsLoadedRevision] = useState(0);
   const [formData, setFormData] = useState<any>({
     api_endpoint: '',
@@ -570,7 +619,9 @@ export function Settings({
   const [imageModelStatus, setImageModelStatus] = useState('');
   const [recentDebugLogs, setRecentDebugLogs] = useState<string[]>([]);
   const [isDebugLogsLoading, setIsDebugLogsLoading] = useState(false);
-  const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(null);
+  const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(
+    () => initialFileIndexDashboardCache?.dashboard ?? null,
+  );
   const [isFileIndexDashboardLoading, setIsFileIndexDashboardLoading] = useState(false);
   const [logStatus, setLogStatus] = useState<DiagnosticsLogStatus | null>(null);
   const [pendingDiagnosticReports, setPendingDiagnosticReports] = useState<DiagnosticsPendingReport[]>([]);
@@ -809,6 +860,11 @@ export function Settings({
   const backgroundTasksLoadRequestRef = useRef(0);
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const fileIndexDashboardLoadRequestRef = useRef(0);
+  const fileIndexDashboardInFlightRef = useRef<Promise<FileIndexDashboard | null> | null>(null);
+  const fileIndexDashboardCurrentRef = useRef<FileIndexDashboard | null>(
+    initialFileIndexDashboardCache?.dashboard ?? null,
+  );
+  const fileIndexDashboardLoadedAtRef = useRef(initialFileIndexDashboardCache?.savedAt ?? 0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
   const aiSourceAutosaveTimerRef = useRef<number | null>(null);
@@ -2219,30 +2275,67 @@ export function Settings({
         ));
   }, []);
 
-  const loadFileIndexDashboard = useCallback(async () => {
+  const loadFileIndexDashboard = useCallback(async (options: { force?: boolean; background?: boolean } = {}) => {
+    const cachedDashboard = fileIndexDashboardCurrentRef.current;
+    const cacheAge = Date.now() - fileIndexDashboardLoadedAtRef.current;
+    if (
+      !options.force
+      && cachedDashboard
+      && cacheAge >= 0
+      && cacheAge < FILE_INDEX_DASHBOARD_CACHE_TTL_MS
+    ) {
+      return cachedDashboard;
+    }
+    if (fileIndexDashboardInFlightRef.current) {
+      return fileIndexDashboardInFlightRef.current;
+    }
+
     const requestId = ++fileIndexDashboardLoadRequestRef.current;
-    setIsFileIndexDashboardLoading(true);
-    try {
-      const dashboard = await window.ipcRenderer.knowledge.getFileIndexDashboard<FileIndexDashboard>();
-      if (requestId !== fileIndexDashboardLoadRequestRef.current) return;
-      setFileIndexDashboard((previous) => {
+    const shouldShowLoading = !options.background || !cachedDashboard;
+    if (shouldShowLoading) {
+      setIsFileIndexDashboardLoading(true);
+    }
+
+    let request: Promise<FileIndexDashboard | null>;
+    request = (async () => {
+      try {
+        const dashboard = await window.ipcRenderer.knowledge.getFileIndexDashboard<FileIndexDashboard>();
+        if (requestId !== fileIndexDashboardLoadRequestRef.current) {
+          return fileIndexDashboardCurrentRef.current;
+        }
+
+        let nextDashboard = dashboard || fileIndexDashboardCurrentRef.current || null;
         if (
           isEmptyFileIndexDashboardFallback(dashboard)
-          && previous
-          && !isEmptyFileIndexDashboardFallback(previous)
+          && fileIndexDashboardCurrentRef.current
+          && !isEmptyFileIndexDashboardFallback(fileIndexDashboardCurrentRef.current)
         ) {
-          return previous;
+          nextDashboard = fileIndexDashboardCurrentRef.current;
         }
-        return dashboard || previous || null;
-      });
-    } catch (error) {
-      if (requestId !== fileIndexDashboardLoadRequestRef.current) return;
-      console.error('Failed to load file index dashboard:', error);
-    } finally {
-      if (requestId === fileIndexDashboardLoadRequestRef.current) {
-        setIsFileIndexDashboardLoading(false);
+
+        if (nextDashboard) {
+          fileIndexDashboardCurrentRef.current = nextDashboard;
+          fileIndexDashboardLoadedAtRef.current = writeCachedFileIndexDashboard(nextDashboard);
+          setFileIndexDashboard(nextDashboard);
+        }
+        return nextDashboard;
+      } catch (error) {
+        if (requestId === fileIndexDashboardLoadRequestRef.current) {
+          console.error('Failed to load file index dashboard:', error);
+        }
+        return fileIndexDashboardCurrentRef.current;
+      } finally {
+        if (fileIndexDashboardInFlightRef.current === request) {
+          fileIndexDashboardInFlightRef.current = null;
+          if (shouldShowLoading) {
+            setIsFileIndexDashboardLoading(false);
+          }
+        }
       }
-    }
+    })();
+
+    fileIndexDashboardInFlightRef.current = request;
+    return request;
   }, [isEmptyFileIndexDashboardFallback]);
 
   const loadLoggingStatus = useCallback(async () => {
@@ -4004,7 +4097,7 @@ export function Settings({
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
-          loadFileIndexDashboard(),
+          loadFileIndexDashboard({ force }),
           loadLoggingStatus(),
           loadPendingDiagnosticReports(),
         ]);
@@ -4128,15 +4221,23 @@ export function Settings({
       }
       tabWarmRef.current.profile = false;
       resetRedclawProfileState();
+      clearCachedFileIndexDashboard();
+      fileIndexDashboardCurrentRef.current = null;
+      fileIndexDashboardLoadedAtRef.current = 0;
+      setFileIndexDashboard(null);
+      tabWarmRef.current.general = false;
       if (activeTab === 'profile') {
         void loadRedclawProfileBundle({ expectedSpaceId: nextSpaceId });
+      }
+      if (activeTab === 'general') {
+        void loadFileIndexDashboard({ force: true });
       }
     };
     window.ipcRenderer.on('space:changed', handleSpaceChanged);
     return () => {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
-  }, [activeTab, isActive, loadRedclawProfileBundle, loadSpaceContext, resetRedclawProfileState, setCurrentSpaceState]);
+  }, [activeTab, isActive, loadFileIndexDashboard, loadRedclawProfileBundle, loadSpaceContext, resetRedclawProfileState, setCurrentSpaceState]);
 
   useEffect(() => {
     if (!redclawOnboardingVersion) return;
@@ -4172,8 +4273,8 @@ export function Settings({
     if (activeTab === 'general') {
       void ensureTabResourcesLoaded('general');
       fileIndexPollTimer = window.setInterval(() => {
-        void loadFileIndexDashboard();
-      }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
+        void loadFileIndexDashboard({ background: true });
+      }, FILE_INDEX_DASHBOARD_POLL_MS);
     }
     if (activeTab === 'profile') {
       void ensureTabResourcesLoaded('profile');
@@ -4621,7 +4722,9 @@ export function Settings({
                 handleResetWorkspaceDir={handleResetWorkspaceDir}
                 fileIndexDashboard={fileIndexDashboard}
                 fileIndexLoading={isFileIndexDashboardLoading}
-                handleRefreshFileIndexDashboard={loadFileIndexDashboard}
+                handleRefreshFileIndexDashboard={async () => {
+                  await loadFileIndexDashboard({ force: true });
+                }}
                 handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
                 recentDebugLogs={recentDebugLogs}
                 isDebugLogsLoading={isDebugLogsLoading}
