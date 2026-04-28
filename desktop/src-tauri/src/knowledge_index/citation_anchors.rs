@@ -262,6 +262,25 @@ pub(crate) fn delete_anchors_for_source(
     .map_err(|error| error.to_string())
 }
 
+pub(crate) fn delete_anchors_for_documents(
+    state: &State<'_, AppState>,
+    document_ids: &[String],
+) -> Result<(), String> {
+    if document_ids.is_empty() {
+        return Ok(());
+    }
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for document_id in document_ids {
+        tx.execute(
+            "DELETE FROM knowledge_citation_anchors WHERE document_id = ?1",
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
+
 pub(crate) fn build_anchors_for_blocks(
     blocks: &[DocumentBlockRecord],
 ) -> Vec<CitationAnchorRecord> {
