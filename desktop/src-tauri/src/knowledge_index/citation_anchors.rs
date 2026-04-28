@@ -181,6 +181,74 @@ pub(crate) fn replace_anchors_for_source(
     tx.commit().map_err(|error| error.to_string())
 }
 
+pub(crate) fn upsert_anchors_for_documents(
+    state: &State<'_, AppState>,
+    anchors: &[CitationAnchorRecord],
+) -> Result<(), String> {
+    if anchors.is_empty() {
+        return Ok(());
+    }
+    let document_ids = anchors
+        .iter()
+        .map(|anchor| anchor.document_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let mut conn = connection(state)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for document_id in &document_ids {
+        tx.execute(
+            "DELETE FROM knowledge_citation_anchors WHERE document_id = ?1",
+            params![document_id],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    {
+        let mut stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO knowledge_citation_anchors (
+                    anchor_id, block_id, document_id, source_id, source_name, root_path,
+                    absolute_path, relative_path, file_extension, title, language, page,
+                    block_type, section_path_json, char_start, char_end, line_start,
+                    line_end, quote_text, normalized_quote_text, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6,
+                    ?7, ?8, ?9, ?10, ?11, ?12,
+                    ?13, ?14, ?15, ?16, ?17,
+                    ?18, ?19, ?20, ?21
+                )
+                "#,
+            )
+            .map_err(|error| error.to_string())?;
+        for anchor in anchors {
+            stmt.execute(params![
+                anchor.anchor_id,
+                anchor.block_id,
+                anchor.document_id,
+                anchor.source_id,
+                anchor.source_name,
+                anchor.root_path,
+                anchor.absolute_path,
+                anchor.relative_path,
+                anchor.file_extension,
+                anchor.title,
+                anchor.language,
+                anchor.page,
+                anchor.block_type,
+                anchor.section_path_json,
+                anchor.char_start,
+                anchor.char_end,
+                anchor.line_start,
+                anchor.line_end,
+                anchor.quote_text,
+                anchor.normalized_quote_text,
+                anchor.updated_at
+            ])
+            .map_err(|error| error.to_string())?;
+        }
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
+
 pub(crate) fn delete_anchors_for_source(
     state: &State<'_, AppState>,
     source_id: &str,

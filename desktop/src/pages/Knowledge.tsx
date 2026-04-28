@@ -40,6 +40,10 @@ interface Note { type?: string; sourceUrl?: string;
     createdAt: string;
     updatedAt?: string;
     folderPath?: string;
+    visualSearchSummary?: string;
+    visualSearchPath?: string;
+    visualSearchPage?: number;
+    visualSearchThumbnailPath?: string;
 }
 
 interface YouTubeVideo {
@@ -58,6 +62,10 @@ interface YouTubeVideo {
     createdAt: string;
     updatedAt?: string;
     folderPath?: string;
+    visualSearchSummary?: string;
+    visualSearchPath?: string;
+    visualSearchPage?: number;
+    visualSearchThumbnailPath?: string;
 }
 
 type KnowledgeTypeFilter =
@@ -259,14 +267,14 @@ const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     authorId: item.authorId,
     authorUrl: item.authorUrl,
     content: '',
-    excerpt: item.previewText,
+    excerpt: item.visualSearchSummary || item.previewText,
     siteName: item.siteName,
     captureKind: item.captureKind,
     htmlFile: undefined,
     htmlFileUrl: undefined,
     images: [],
     tags: item.tags,
-    cover: item.coverUrl,
+    cover: item.coverUrl || item.visualSearchThumbnailPath,
     video: undefined,
     videoUrl: undefined,
     transcript: item.hasTranscript ? '' : undefined,
@@ -278,6 +286,10 @@ const catalogSummaryToNote = (item: KnowledgeCatalogSummary): Note => ({
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     folderPath: item.folderPath,
+    visualSearchSummary: item.visualSearchSummary,
+    visualSearchPath: item.visualSearchPath,
+    visualSearchPage: item.visualSearchPage,
+    visualSearchThumbnailPath: item.visualSearchThumbnailPath,
 });
 
 const catalogSummaryToVideo = (item: KnowledgeCatalogSummary): YouTubeVideo => ({
@@ -287,8 +299,8 @@ const catalogSummaryToVideo = (item: KnowledgeCatalogSummary): YouTubeVideo => (
     title: item.title,
     originalTitle: undefined,
     description: item.previewText,
-    summary: item.previewText,
-    thumbnailUrl: item.thumbnailUrl || '',
+    summary: item.visualSearchSummary || item.previewText,
+    thumbnailUrl: item.thumbnailUrl || item.visualSearchThumbnailPath || '',
     hasSubtitle: item.hasTranscript,
     subtitleContent: undefined,
     subtitleError: item.status === 'failed' ? item.previewText : undefined,
@@ -296,6 +308,10 @@ const catalogSummaryToVideo = (item: KnowledgeCatalogSummary): YouTubeVideo => (
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     folderPath: item.folderPath,
+    visualSearchSummary: item.visualSearchSummary,
+    visualSearchPath: item.visualSearchPath,
+    visualSearchPage: item.visualSearchPage,
+    visualSearchThumbnailPath: item.visualSearchThumbnailPath,
 });
 
 const catalogSummaryToDocSource = (item: KnowledgeCatalogSummary): DocumentKnowledgeSource => ({

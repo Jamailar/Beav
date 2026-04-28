@@ -15,7 +15,8 @@ use crate::{
             block_records_from_document, build_blocks_for_source_with_cache_policy,
             canonical_needs_visual_backfill_for_config, is_visual_candidate_path, replace_blocks,
             replace_blocks_for_source, resolve_visual_index_config,
-            visual_backfill_candidate_unit_ids, CanonicalCachePolicy,
+            visual_backfill_candidate_unit_ids, visual_document_blocks_missing,
+            CanonicalCachePolicy,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
@@ -441,6 +442,9 @@ pub(crate) fn backfill_incomplete_visual_index(
 
 pub(crate) fn visual_maintenance_needed(state: &State<'_, AppState>) -> Result<bool, String> {
     if visual_backfill_needed(state)? {
+        return Ok(true);
+    }
+    if visual_document_blocks_missing(state)? {
         return Ok(true);
     }
     visual_discovery_needed(state)
