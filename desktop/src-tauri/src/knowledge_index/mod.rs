@@ -40,6 +40,7 @@ pub(crate) struct KnowledgeIndexRuntimeState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KnowledgeCatalogStatus {
     pub indexed_count: i64,
+    pub visual_index: canonical_store::VisualIndexUnitStatusSummary,
     pub pending_count: usize,
     pub failed_count: usize,
     pub rebuild_progress: Option<f64>,
@@ -71,6 +72,7 @@ pub(crate) fn initialize(app: &AppHandle, state: &State<'_, AppState>) -> Result
 
 pub(crate) fn index_status(state: &State<'_, AppState>) -> Result<KnowledgeCatalogStatus, String> {
     let indexed_count = catalog::count_items(state)?;
+    let visual_index = canonical_store::visual_status_summary(state)?;
     let runtime = state
         .knowledge_index_state
         .lock()
@@ -78,6 +80,7 @@ pub(crate) fn index_status(state: &State<'_, AppState>) -> Result<KnowledgeCatal
         .clone();
     Ok(KnowledgeCatalogStatus {
         indexed_count,
+        visual_index,
         pending_count: runtime.pending_count,
         failed_count: runtime.failed_count,
         rebuild_progress: runtime.rebuild_progress,

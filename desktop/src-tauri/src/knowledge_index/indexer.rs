@@ -7,19 +7,19 @@ use tauri::{AppHandle, Emitter, State};
 use crate::{
     knowledge_index::{
         advisor_source_id,
-        canonical_store::{load_document_rows, replace_documents},
+        canonical_store::{load_document_rows, load_visual_retry_gates, replace_documents},
         catalog::{replace_catalog, KnowledgeCatalogSummary},
         citation_anchors::{build_anchors_for_blocks, replace_anchors, replace_anchors_for_source},
         document_blocks::{
             block_records_from_document, build_blocks_for_source_with_cache_policy,
-            canonical_needs_visual_backfill, replace_blocks, replace_blocks_for_source,
-            CanonicalCachePolicy,
+            canonical_needs_visual_backfill_for_config, replace_blocks, replace_blocks_for_source,
+            resolve_visual_index_config, visual_backfill_candidate_unit_ids, CanonicalCachePolicy,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
-    now_iso, payload_field, workspace_root, AppState, DocumentKnowledgeSourceRecord,
-    KnowledgeNoteRecord, YoutubeVideoRecord,
+    now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
+    YoutubeVideoRecord,
 };
 
 type IndexedFileRow = (String, String, i64, i64, String, String);
@@ -392,24 +392,60 @@ pub(crate) fn backfill_incomplete_visual_index(
 }
 
 pub(crate) fn visual_backfill_needed(state: &State<'_, AppState>) -> Result<bool, String> {
-    if !visual_index_enabled(state)? {
+    let visual_config = resolve_visual_index_config(state)?;
+    if !visual_config.has_callable_model() {
         return Ok(false);
     }
+    let retry_gates = load_visual_retry_gates(state)?;
+    let now_ms = now_iso().parse::<i64>().unwrap_or_default();
     for row in load_document_rows(state, None)? {
         let canonical: crate::document_parse::CanonicalDocument =
             serde_json::from_str(&row.canonical_json).map_err(|error| error.to_string())?;
-        if canonical_needs_visual_backfill(&canonical) {
+        if canonical_needs_visual_backfill_for_config(&canonical, &visual_config)
+            && !visual_backfill_deferred_by_retry_gate(
+                &canonical,
+                &visual_config,
+                &retry_gates,
+                now_ms,
+            )
+        {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
-fn visual_index_enabled(state: &State<'_, AppState>) -> Result<bool, String> {
-    let settings = crate::with_store(state, |store| Ok(store.settings.clone()))?;
-    Ok(payload_field(&settings, "visual_index_enabled")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false))
+fn visual_backfill_deferred_by_retry_gate(
+    canonical: &crate::document_parse::CanonicalDocument,
+    visual_config: &crate::document_parse::VisualIndexConfig,
+    retry_gates: &std::collections::HashMap<
+        String,
+        crate::knowledge_index::canonical_store::VisualRetryGate,
+    >,
+    now_ms: i64,
+) -> bool {
+    let Some(unit_ids) = visual_backfill_candidate_unit_ids(canonical, Some(visual_config)) else {
+        return false;
+    };
+    if unit_ids.is_empty() {
+        return false;
+    }
+    let current_signature = visual_config.config_signature();
+    unit_ids.iter().all(|unit_id| {
+        let Some(gate) = retry_gates.get(unit_id) else {
+            return false;
+        };
+        if gate.status != "failed" {
+            return false;
+        }
+        if gate.config_signature.as_deref() != Some(current_signature.as_str()) {
+            return false;
+        }
+        gate.next_retry_at
+            .as_deref()
+            .and_then(|value| value.parse::<i64>().ok())
+            .is_some_and(|retry_at| retry_at > now_ms)
+    })
 }
 
 fn rebuild_catalog_with_cache_policy(

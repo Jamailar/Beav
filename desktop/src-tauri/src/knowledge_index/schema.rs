@@ -241,10 +241,24 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
             content_hash TEXT NOT NULL DEFAULT '',
             rendered_image_hash TEXT,
             manifest_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'indexed',
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            next_retry_at TEXT,
+            schema_version TEXT,
+            provider TEXT,
+            model TEXT,
+            prompt_version TEXT,
+            config_signature TEXT,
+            payload_policy_version TEXT,
+            indexed_at TEXT,
+            last_attempted_at TEXT,
             updated_at TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS idx_knowledge_visual_units_source
             ON knowledge_visual_units(source_id, source_document_id, page_number);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_visual_units_status
+            ON knowledge_visual_units(status, next_retry_at);
         CREATE TABLE IF NOT EXISTS knowledge_visual_evidence (
             evidence_id TEXT PRIMARY KEY,
             unit_id TEXT NOT NULL,
@@ -283,6 +297,38 @@ pub(crate) fn ensure_catalog_ready(state: &State<'_, AppState>) -> Result<(), St
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
     ensure_column(&conn, "knowledge_document_blocks", "visual_unit_id", "TEXT")?;
+    ensure_column(
+        &conn,
+        "knowledge_visual_units",
+        "status",
+        "TEXT NOT NULL DEFAULT 'indexed'",
+    )?;
+    ensure_column(
+        &conn,
+        "knowledge_visual_units",
+        "retry_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(&conn, "knowledge_visual_units", "last_error", "TEXT")?;
+    ensure_column(&conn, "knowledge_visual_units", "next_retry_at", "TEXT")?;
+    ensure_column(&conn, "knowledge_visual_units", "schema_version", "TEXT")?;
+    ensure_column(&conn, "knowledge_visual_units", "provider", "TEXT")?;
+    ensure_column(&conn, "knowledge_visual_units", "model", "TEXT")?;
+    ensure_column(&conn, "knowledge_visual_units", "prompt_version", "TEXT")?;
+    ensure_column(&conn, "knowledge_visual_units", "config_signature", "TEXT")?;
+    ensure_column(
+        &conn,
+        "knowledge_visual_units",
+        "payload_policy_version",
+        "TEXT",
+    )?;
+    ensure_column(&conn, "knowledge_visual_units", "indexed_at", "TEXT")?;
+    ensure_column(&conn, "knowledge_visual_units", "last_attempted_at", "TEXT")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_visual_units_status ON knowledge_visual_units(status, next_retry_at)",
+        [],
+    )
+    .map_err(|error| error.to_string())?;
     ensure_column(
         &conn,
         "knowledge_document_blocks",

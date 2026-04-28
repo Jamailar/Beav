@@ -163,6 +163,15 @@ interface KnowledgeListPageResponse {
 
 interface KnowledgeIndexStatus {
     indexedCount: number;
+    visualIndex?: {
+        totalUnits: number;
+        indexedUnits: number;
+        metadataOnlyUnits: number;
+        failedUnits: number;
+        retryDeferredUnits: number;
+        retryReadyUnits: number;
+        lastAttemptedAt?: string | null;
+    };
     pendingCount: number;
     failedCount: number;
     rebuildProgress?: number | null;
@@ -382,6 +391,15 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
     const [kindCounts, setKindCounts] = useState<Record<string, number>>({});
     const [indexStatus, setIndexStatus] = useState<KnowledgeIndexStatus>({
         indexedCount: 0,
+        visualIndex: {
+            totalUnits: 0,
+            indexedUnits: 0,
+            metadataOnlyUnits: 0,
+            failedUnits: 0,
+            retryDeferredUnits: 0,
+            retryReadyUnits: 0,
+            lastAttemptedAt: null,
+        },
         pendingCount: 0,
         failedCount: 0,
         rebuildProgress: null,
