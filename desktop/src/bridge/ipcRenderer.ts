@@ -319,7 +319,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   ) {
     return { success: false, error: `RedBox audio action failed for "${channel}": ${message}` };
   }
-  if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as') {
+  if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as' || channel === 'file:preview-resolve') {
     return { success: false, error: `RedBox file action failed for "${channel}": ${message}` };
   }
   if (channel === 'youtube:check-ytdlp') {
@@ -704,6 +704,7 @@ function createIpcRenderer() {
       showInFolder: (payload: { source: string }) => invokeChannel('file:show-in-folder', payload),
       copyImage: (payload: { source: string }) => invokeChannel('file:copy-image', payload),
       saveAs: (payload: { source: string; defaultName?: string }) => invokeChannel('file:save-as', payload),
+      resolvePreview: (payload: { source: string }) => invokeChannel('file:preview-resolve', payload),
     },
     notifications: {
       getPermissionState: () => invokeCommandGuarded('notifications_permission_state', undefined, {

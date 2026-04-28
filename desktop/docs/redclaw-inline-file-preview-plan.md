@@ -9,6 +9,12 @@ target_files:
   - desktop/src/pages/Chat.tsx
   - desktop/src/components/MessageItem.tsx
   - desktop/src/pages/redclaw/RedClawFilePreviewPane.tsx
+  - desktop/src/bridge/ipcRenderer.ts
+  - desktop/src/types.d.ts
+  - desktop/src-tauri/src/commands/file_ops.rs
+  - desktop/src-tauri/src/main.rs
+  - desktop/prompts/library/runtime/agents/redclaw/base.txt
+  - desktop/src/pages/redclaw/config.ts
   - desktop/src/utils/pathManager.ts
   - desktop/shared/localAsset.ts
 success_metrics:
@@ -17,6 +23,7 @@ success_metrics:
   - 关闭预览后聊天区域恢复全宽，当前对话和输入草稿不丢失
   - 普通 Chat、KnowledgeChatModal 和其他复用 Chat 的页面不改变链接行为
   - 本地图片、视频、音频、PDF、HTML 和外部网页至少各有明确预览或恢复动作
+  - AI 输出中的裸文件路径、workspace 相对路径和 app 虚拟路径能够进入卡片与 host resolver 流程
   - Windows 盘符路径、UNC 路径、file URL、redbox-asset URL、local-file URL、POSIX 绝对路径、普通 http(s) URL 均能被正确识别、归一化和预览或恢复
 ---
 
@@ -77,6 +84,7 @@ RedClaw.tsx
 - `file:show-in-folder` 已存在，可用于本地文件的文件夹显示。
 - `MessageItem` 已经有图片和视频的内联渲染经验，可以复用类型判断思路。
 - Rust 侧 `file_url_for_path`、`asset_preview_url_from_result` 已经有 Windows drive path 相关测试，计划实现必须沿用这些语义，不要在 renderer 单独发明另一套路径格式。
+- Rust 侧新增 `file:preview-resolve` 作为预览路径解析入口；renderer 只负责展示和触发，不负责猜测 workspace、media、knowledge、manuscripts、cover、redclaw 等 app 内目录。
 
 ## 4. Recommended Architecture
 
@@ -106,6 +114,13 @@ RedClaw.tsx
 | `RedClaw` | 保存当前预览对象，切换左右分栏，协调技能面板/历史抽屉 | 不解析 Markdown、不读取大文件 |
 | `RedClawFilePreviewPane` | 根据 target 渲染预览、操作栏、错误态 | 不影响聊天消息状态、不触发 AI runtime |
 | Host IPC | 系统打开、显示文件夹，后续可加受限文本读取 | 不做 UI 状态管理 |
+
+第二轮补齐后，`Host IPC` 增加 `file:preview-resolve`：
+
+- 输入：`{ source: string }`，source 可以是绝对路径、workspace 相对路径、`workspace://` / `knowledge://` / `manuscripts://` / `media://` / `cover://` / `redclaw://` 虚拟路径、`file://`、`local-file://`、`redbox-asset://asset/...`。
+- 输出：`resolvedUrl`、`localPathCandidate`、`kind`、`mimeType`、`sizeBytes`、`previewText` 等结构化字段。
+- 用途：点击文件卡片后先让 host 确认真实文件位置，避免 renderer 单独猜测 app 内路径。
+- 文本类小文件由 host 返回 `previewText`，右侧 pane 直接渲染只读文本，避免 WebView 对 `.md` / `.txt` / `.json` 预览不稳定。
 
 ## 5. Product Interaction
 
@@ -185,6 +200,15 @@ UI requirements:
 - 当前正在右侧预览的卡片显示 selected 状态，例如 accent border 或淡色 ring。
 - 卡片内的系统打开、复制、显示文件夹等二级动作不放在消息卡片里，放到右侧 preview pane header，避免消息区域变成工具栏。
 - 多个链接连续出现时渲染为纵向卡片列表，间距约 `8px`，不要挤在同一行。
+
+### 5.4 AI Output Contract
+
+RedClaw runtime prompt 必须要求 AI 在报告交付物时输出 Markdown 链接：
+
+- 保存稿件、素材、导出 HTML/PDF、生成媒体或 workspace artifact 后，用 `[filename.ext](<path-or-file-url>)` 或 `[filename.ext](workspace://relative/path.ext)` 报告。
+- 路径包含空格、中文、括号或 Windows 反斜杠时，Markdown destination 必须使用 angle brackets。
+- 多个交付物一行一个链接，避免把重要路径埋在纯文本段落里。
+- Renderer 会对明显的裸本地路径做保守 linkify，但这只是兜底，不替代 prompt contract。
 
 ## 6. Data Model
 

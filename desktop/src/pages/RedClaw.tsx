@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, MessageSquarePlus, Heart, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { Chat } from './Chat';
 import type { PendingChatMessage } from '../App';
-import type { ChatMessageLinkTarget } from '../components/MessageItem';
+import type { ChatMessageLinkKind, ChatMessageLinkTarget } from '../components/MessageItem';
+import { resolveAssetUrl } from '../utils/pathManager';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import {
     HEARTBEAT_INTERVAL_OPTIONS,
@@ -42,6 +43,40 @@ import type {
     ScheduleDraft,
     SidebarTab,
 } from './redclaw/types';
+
+interface FilePreviewResolveResult {
+    success?: boolean;
+    error?: string;
+    isLocal?: boolean;
+    exists?: boolean;
+    isDirectory?: boolean;
+    absolutePath?: string | null;
+    localPathCandidate?: string | null;
+    resolvedUrl?: string | null;
+    title?: string | null;
+    extension?: string | null;
+    kind?: string | null;
+    mimeType?: string | null;
+    sizeBytes?: number | null;
+    previewText?: string | null;
+}
+
+const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
+    'image',
+    'video',
+    'audio',
+    'pdf',
+    'html',
+    'text',
+    'archive',
+    'web',
+    'unknown',
+]);
+
+const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): ChatMessageLinkKind => {
+    const normalized = String(value || '').trim().toLowerCase() as ChatMessageLinkKind;
+    return PREVIEW_KIND_SET.has(normalized) ? normalized : fallback;
+};
 
 interface RedClawProps {
     pendingMessage?: PendingChatMessage | null;
@@ -1119,6 +1154,45 @@ export function RedClaw({
     const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
         setSidebarCollapsed(true);
         setPreviewTarget(target);
+        const source = String(target.localPathCandidate || target.href || '').trim();
+        if (!source || /^https?:\/\//i.test(source)) return;
+
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.files.resolvePreview({ source }) as FilePreviewResolveResult;
+                if (!result?.success) {
+                    setPreviewTarget((current) => current?.href === target.href
+                        ? { ...current, error: result?.error || '解析文件路径失败' }
+                        : current);
+                    return;
+                }
+                const localCandidate = String(result.localPathCandidate || result.absolutePath || source).trim();
+                const rawResolved = String(result.resolvedUrl || localCandidate || target.resolvedUrl || '').trim();
+                const resolvedUrl = rawResolved ? resolveAssetUrl(rawResolved) : '';
+                setPreviewTarget((current) => current?.href === target.href
+                    ? {
+                        ...current,
+                        label: String(result.title || current.label || target.label),
+                        kind: normalizePreviewKind(result.kind, current.kind),
+                        resolvedUrl: resolvedUrl || current.resolvedUrl,
+                        isLocal: result.isLocal ?? current.isLocal,
+                        localPathCandidate: localCandidate || current.localPathCandidate,
+                        extension: String(result.extension || current.extension || '').trim() || undefined,
+                        exists: result.exists,
+                        isDirectory: result.isDirectory,
+                        mimeType: String(result.mimeType || '').trim() || undefined,
+                        sizeBytes: typeof result.sizeBytes === 'number' ? result.sizeBytes : undefined,
+                        previewText: typeof result.previewText === 'string' ? result.previewText : undefined,
+                        error: result.exists === false ? '文件不存在或已被移动' : undefined,
+                    }
+                    : current);
+            } catch (error) {
+                console.error('Failed to resolve RedClaw preview target:', error);
+                setPreviewTarget((current) => current?.href === target.href
+                    ? { ...current, error: '解析文件路径失败' }
+                    : current);
+            }
+        })();
     }, []);
 
     const handleClosePreview = useCallback(() => {
