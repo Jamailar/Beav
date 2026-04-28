@@ -808,6 +808,7 @@ export function Settings({
   const runtimePerfRunCounterRef = useRef(0);
   const backgroundTasksLoadRequestRef = useRef(0);
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
+  const fileIndexDashboardLoadRequestRef = useRef(0);
   const assistantDaemonLogBufferRef = useRef<string[]>([]);
   const assistantDaemonLogFlushTimerRef = useRef<number | null>(null);
   const aiSourceAutosaveTimerRef = useRef<number | null>(null);
@@ -2205,18 +2206,44 @@ export function Settings({
     }
   }, []);
 
+  const isEmptyFileIndexDashboardFallback = useCallback((dashboard: FileIndexDashboard | null | undefined): boolean => {
+    if (!dashboard) return true;
+    const overall = dashboard.overall;
+    return (dashboard.lanes || []).length === 0
+      && (dashboard.scopes || []).length === 0
+      && (!overall
+        || (
+          Number(overall.indexedFiles || 0) === 0
+          && Number(overall.totalFiles || 0) === 0
+          && Number(overall.failedFiles || 0) === 0
+        ));
+  }, []);
+
   const loadFileIndexDashboard = useCallback(async () => {
+    const requestId = ++fileIndexDashboardLoadRequestRef.current;
     setIsFileIndexDashboardLoading(true);
     try {
       const dashboard = await window.ipcRenderer.knowledge.getFileIndexDashboard<FileIndexDashboard>();
-      setFileIndexDashboard(dashboard);
+      if (requestId !== fileIndexDashboardLoadRequestRef.current) return;
+      setFileIndexDashboard((previous) => {
+        if (
+          isEmptyFileIndexDashboardFallback(dashboard)
+          && previous
+          && !isEmptyFileIndexDashboardFallback(previous)
+        ) {
+          return previous;
+        }
+        return dashboard || previous || null;
+      });
     } catch (error) {
+      if (requestId !== fileIndexDashboardLoadRequestRef.current) return;
       console.error('Failed to load file index dashboard:', error);
-      setFileIndexDashboard(null);
     } finally {
-      setIsFileIndexDashboardLoading(false);
+      if (requestId === fileIndexDashboardLoadRequestRef.current) {
+        setIsFileIndexDashboardLoading(false);
+      }
     }
-  }, []);
+  }, [isEmptyFileIndexDashboardFallback]);
 
   const loadLoggingStatus = useCallback(async () => {
     try {
