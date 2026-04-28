@@ -712,9 +712,14 @@ export function Chat({
     : wideContent
       ? 'max-w-[920px]'
       : 'max-w-[780px]';
-  const splitContentMaxWidthClass = wideContent ? 'max-w-[1280px]' : 'max-w-[1160px]';
+  const splitContentMaxWidthClass = wideContent ? 'max-w-[1360px]' : 'max-w-[1240px]';
   const contentOuterPaddingClass = wideContent ? 'px-2 md:px-3 lg:px-4 xl:px-5' : 'px-2 md:px-3 lg:px-4 xl:px-5';
+  const splitOuterPaddingClass = hasInlineSidePanel
+    ? 'px-6 md:px-8 lg:px-12 xl:px-16 2xl:px-20'
+    : contentOuterPaddingClass;
   const paneOuterPaddingClass = hasInlineSidePanel ? 'px-0' : contentOuterPaddingClass;
+  const messageContentMaxWidthClass = hasInlineSidePanel ? 'max-w-none' : contentMaxWidthClass;
+  const composerMaxWidthClass = hasInlineSidePanel ? splitContentMaxWidthClass : contentMaxWidthClass;
   const emptySessionWidthClass = centeredContent
     ? 'w-2/3 mx-auto'
     : wideContent
@@ -3248,16 +3253,16 @@ export function Chat({
               </div>
             ) : (
               <>
-                <div className={clsx('flex min-h-0 flex-1 overflow-hidden', hasInlineSidePanel && contentOuterPaddingClass)}>
+                <div className={clsx('flex min-h-0 flex-1 overflow-hidden', hasInlineSidePanel && splitOuterPaddingClass)}>
                   <div className={clsx(
                     hasInlineSidePanel
-                      ? 'mx-auto flex min-h-0 w-full gap-3'
+                      ? 'mx-auto grid min-h-0 w-full grid-cols-2 gap-4'
                       : 'flex min-h-0 flex-1 overflow-hidden',
                     hasInlineSidePanel && splitContentMaxWidthClass,
                   )}>
                     {/* Messages */}
-                    <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', paneOuterPaddingClass)}>
-                      <div className={clsx('mx-auto min-w-0', contentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
+                    <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx(hasInlineSidePanel ? 'min-w-0' : 'flex-1', 'overflow-y-auto py-4 md:py-5', paneOuterPaddingClass)}>
+                      <div className={clsx('mx-auto min-w-0', messageContentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
                         {dockedEmptyState ? (
                           <div className="text-center space-y-6 py-10">
                             {welcomeHeaderBlock}
@@ -3291,7 +3296,7 @@ export function Chat({
                       </div>
                     </div>
                     {inlineSidePanel ? (
-                      <div className="min-h-0 w-[420px] min-w-[340px] max-w-[38%] shrink-0 py-4 md:py-5">
+                      <div className="min-h-0 min-w-0 py-4 md:py-5">
                         {inlineSidePanel}
                       </div>
                     ) : null}
@@ -3300,8 +3305,8 @@ export function Chat({
 
                 {/* Input Area - Bottom Fixed */}
                 {showComposer ? (
-                <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
-                  <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
+                <div className={clsx('shrink-0', inputAreaShellClass, splitOuterPaddingClass)}>
+                  <div className={clsx('mx-auto space-y-3.5', composerMaxWidthClass, contentWidthClass)}>
                     {dockedEmptyState ? (
                       emptyComposerForm
                     ) : (
