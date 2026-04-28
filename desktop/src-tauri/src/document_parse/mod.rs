@@ -531,19 +531,47 @@ fn parse_scanned_pdf_visual_manifest(
     if rendered_pages.is_empty() {
         return Ok((None, None));
     }
+    let mut page_manifests = Vec::new();
+    let concurrency = visual_config.concurrency.max(1);
+    for chunk in rendered_pages
+        .iter()
+        .enumerate()
+        .collect::<Vec<_>>()
+        .chunks(concurrency)
+    {
+        let mut handles = Vec::new();
+        for (index, rendered_path) in chunk {
+            let config = visual_config.clone();
+            let source_id = source_id.to_string();
+            let relative_path = relative_path.to_string();
+            let source_path = path.to_path_buf();
+            let rendered_path = (*rendered_path).clone();
+            let page_count = rendered_pages.len() as i64;
+            let page_number = (*index + 1) as i64;
+            handles.push(std::thread::spawn(move || {
+                let unit = visual_manifest::VisualSourceUnit::pdf_page(
+                    &source_id,
+                    &relative_path,
+                    &source_path,
+                    &rendered_path,
+                    page_number,
+                    page_count,
+                );
+                visual_llm::analyze_visual_source(&rendered_path, &unit, &config)
+                    .map(|manifest| (page_number, manifest))
+            }));
+        }
+        for handle in handles {
+            let result = handle
+                .join()
+                .map_err(|_| "visual PDF page analysis thread panicked".to_string())??;
+            page_manifests.push(result);
+        }
+    }
+    page_manifests.sort_by_key(|(page_number, _)| *page_number);
     let mut sections = Vec::new();
     let mut manifests = Vec::new();
-    for (index, rendered_path) in rendered_pages.iter().enumerate() {
-        let page_number = (index + 1) as i64;
-        let unit = visual_manifest::VisualSourceUnit::pdf_page(
-            source_id,
-            relative_path,
-            path,
-            rendered_path,
-            page_number,
-            rendered_pages.len() as i64,
-        );
-        let manifest = visual_llm::analyze_visual_source(rendered_path, &unit, visual_config)?;
+    for (page_number, manifest) in page_manifests {
         if let Some(mut page_sections) =
             visual_manifest::sections_from_manifest(&manifest, Some(page_number))
         {

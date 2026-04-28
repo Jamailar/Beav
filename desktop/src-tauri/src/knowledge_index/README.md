@@ -36,6 +36,7 @@
 - 图片和扫描型 PDF 页走 `contentOrigin=visual_llm`，由 visual index model 直接生成结构化 manifest
 - 扫描 PDF 先走原生文本抽取；失败或为空时渲染为页图并交给 visual index model，避免把 native PDF 和扫描 PDF 混为一类
 - visual index provider 使用独立 `visual_index_*` 设置；模型不可用时生成 `metadata_only` manifest
+- `visual_index_concurrency` 控制扫描 PDF 页级 visual LLM 调用的分批并发度，默认 1，上限 4
 - visual manifest 必须通过 `retrievalProjection` 派生 block；block 需要写入 `visual_unit_id`、`source_document_id`、`evidence_refs_json`
 - canonical visual manifest 需要同步到 `knowledge_visual_units` / `knowledge_visual_evidence`，搜索命中必须能回到原始图片文件或原始 PDF 页码
 - `knowledge:list-page` 有查询词时需要同时搜索 indexed blocks，让知识库 UI 能通过视觉语义召回无文字图片和扫描 PDF 页，并在文档源卡片显示 visual match summary
@@ -43,7 +44,7 @@
 - Stage 6 起 `knowledge.search` 默认走 hybrid，可通过 `retrievalMode=lexical` 关闭增强链路
 - hybrid 排序输出需要显式带 `retrievalLanes` 和 ranking breakdown，不能把 fusion / rerank 变成黑盒
 - indexed `knowledge.search` 必须写入 `knowledge_retrieval_runs` / `knowledge_retrieval_hits`，返回 `auditRunId`，保证 evidence pack 可回放
-- App 升级必须先走 `migration.rs` 版本决策；FTS/index-only 变化不能触发默认 visual parser 全量重建
+- App 升级必须先走 `migration.rs` 版本决策；FTS/index-only/projection-only 变化不能触发默认 visual parser 全量重建；visual prompt/schema 变化必须进入 canonical reparse 确认路径
 - Stage 7 起 release gate 依赖固定 fixture 测试；任一阈值不达标都应直接阻塞发布
 - 对法律检索查询要先做 query profile，明确 intent、citation requirement、granularity，再决定默认 lexical/hybrid 路径
 - advisor/member knowledge 也必须进入同一套 block/anchor 索引链，不能只让 registered document source 使用 indexed retrieval
