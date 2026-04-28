@@ -13,7 +13,9 @@ use std::path::Path;
 
 pub(crate) use legal_metadata::LegalMetadata;
 pub(crate) use visual_llm::VisualIndexConfig;
-pub(crate) use visual_manifest::VISUAL_SCHEMA_VERSION;
+pub(crate) use visual_manifest::{
+    DEFAULT_PROMPT_VERSION as VISUAL_DEFAULT_PROMPT_VERSION, VISUAL_SCHEMA_VERSION,
+};
 
 pub(crate) const PARSER_NAME: &str = "redbox-canonical";
 pub(crate) const PARSER_VERSION: &str = "stage8-v2";

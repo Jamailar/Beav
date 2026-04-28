@@ -10,7 +10,8 @@ use time::OffsetDateTime;
 use crate::{
     document_parse::{
         CanonicalBlock, CanonicalDocument, LegalMetadata, ParserInfo, ParserProviderConfig,
-        VisualIndexConfig, PARSER_NAME, PARSER_VERSION, VISUAL_SCHEMA_VERSION,
+        VisualIndexConfig, PARSER_NAME, PARSER_VERSION, VISUAL_DEFAULT_PROMPT_VERSION,
+        VISUAL_SCHEMA_VERSION,
     },
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
@@ -1626,8 +1627,10 @@ pub(crate) fn resolve_visual_index_config(
         endpoint: payload_string(&settings, "visual_index_endpoint"),
         api_key: payload_string(&settings, "visual_index_api_key"),
         model: payload_string(&settings, "visual_index_model"),
-        prompt_version: payload_string(&settings, "visual_index_prompt_version")
-            .unwrap_or_else(|| "visual-manifest-v1".to_string()),
+        prompt_version: normalized_visual_prompt_version(payload_string(
+            &settings,
+            "visual_index_prompt_version",
+        )),
         timeout_seconds,
         max_image_edge,
         skip_small_images,
@@ -1635,6 +1638,17 @@ pub(crate) fn resolve_visual_index_config(
         pdf_render_dpi,
         concurrency,
     })
+}
+
+fn normalized_visual_prompt_version(value: Option<String>) -> String {
+    match value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some("visual-manifest-v1") | None => VISUAL_DEFAULT_PROMPT_VERSION.to_string(),
+        Some(value) => value.to_string(),
+    }
 }
 
 pub(crate) fn block_records_from_document(

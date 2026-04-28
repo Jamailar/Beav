@@ -10,7 +10,7 @@ use super::{detect_language, mime_type_for_path, ParsedSection};
 pub(crate) const VISUAL_SCHEMA_VERSION: &str = "redbox.visual_manifest.v1";
 pub(super) const VISUAL_PARSER_NAME: &str = "redbox-visual-llm-indexer";
 pub(super) const VISUAL_PARSER_VERSION: &str = "v1";
-pub(super) const DEFAULT_PROMPT_VERSION: &str = "visual-manifest-v1";
+pub(crate) const DEFAULT_PROMPT_VERSION: &str = "visual-manifest-v2-zh";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,13 +101,10 @@ pub(super) fn metadata_only_manifest(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(&unit.relative_path);
-    let dimensions = match (unit.width, unit.height) {
-        (Some(width), Some(height)) => format!("{width}x{height}"),
-        _ => "unknown dimensions".to_string(),
-    };
+    let dimensions = dimensions_text(unit);
     let text = if unit.unit_kind == "pdf_page" {
         format!(
-            "Scanned PDF page image. File: {}. Page: {}. Dimensions: {}. Mime: {}.",
+            "扫描型 PDF 页面图片。源文件：{}。页码：{}。尺寸：{}。MIME：{}。",
             unit.source_document_id,
             unit.page_number.unwrap_or(1),
             dimensions,
@@ -115,7 +112,7 @@ pub(super) fn metadata_only_manifest(
         )
     } else {
         format!(
-            "Image file. File: {name}. Path: {}. Dimensions: {}. Mime: {}.",
+            "图片文件。文件名：{name}。路径：{}。尺寸：{}。MIME：{}。",
             unit.relative_path, dimensions, unit.mime_type
         )
     };
@@ -141,7 +138,7 @@ pub(super) fn metadata_only_manifest(
         "factBlocks": [{
             "id": "fact_metadata",
             "kind": "metadata",
-            "title": "Source metadata",
+            "title": "源文件元数据",
             "text": text,
             "confidence": 1.0
         }],
@@ -149,7 +146,7 @@ pub(super) fn metadata_only_manifest(
             "id": "rp_metadata",
             "purpose": "metadata",
             "text": text,
-            "keywords": [name, unit.relative_path],
+            "keywords": [name, unit.relative_path, "图片", "视觉索引", "视觉素材"],
             "evidenceIds": ["fact_metadata"]
         }],
         "tags": [unit.unit_kind],
@@ -226,7 +223,7 @@ pub(super) fn normalize_manifest(mut value: Value, unit: &VisualSourceUnit) -> V
         value["factBlocks"] = json!([{
             "id": "fact_summary",
             "kind": "summary",
-            "title": "Visual summary",
+            "title": "视觉摘要",
             "text": summary_text,
             "confidence": 0.5
         }]);
@@ -324,14 +321,31 @@ fn first_string(value: &Value, keys: &[&str]) -> Option<String> {
 }
 
 fn fallback_summary(unit: &VisualSourceUnit) -> String {
+    let dimensions = dimensions_text(unit);
     if unit.unit_kind == "pdf_page" {
         format!(
-            "Scanned PDF page {} from {}.",
+            "扫描型 PDF 页面图片。源文件：{}。页码：{}。尺寸：{}。MIME：{}。",
+            unit.source_document_id,
             unit.page_number.unwrap_or(1),
-            unit.source_document_id
+            dimensions,
+            unit.mime_type
         )
     } else {
-        format!("Image file {}.", unit.relative_path)
+        let name = Path::new(&unit.relative_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(&unit.relative_path);
+        format!(
+            "图片文件。文件名：{name}。路径：{}。尺寸：{}。MIME：{}。",
+            unit.relative_path, dimensions, unit.mime_type
+        )
+    }
+}
+
+fn dimensions_text(unit: &VisualSourceUnit) -> String {
+    match (unit.width, unit.height) {
+        (Some(width), Some(height)) => format!("{width}x{height}"),
+        _ => "未知".to_string(),
     }
 }
 
@@ -436,6 +450,38 @@ mod tests {
                 .and_then(Value::as_str),
             Some("visual model returned a non-object manifest")
         );
+    }
+
+    #[test]
+    fn metadata_only_manifest_uses_chinese_searchable_text() {
+        let unit = VisualSourceUnit::image_file(
+            "source-1",
+            "photos/mountain.png",
+            Path::new("/tmp/mountain.png"),
+        );
+        let manifest = metadata_only_manifest(&unit, None, DEFAULT_PROMPT_VERSION, None);
+
+        assert_eq!(
+            manifest
+                .get("analysis")
+                .and_then(|analysis| analysis.get("promptVersion"))
+                .and_then(Value::as_str),
+            Some(DEFAULT_PROMPT_VERSION)
+        );
+        assert!(manifest
+            .get("summary")
+            .and_then(|summary| summary.get("short"))
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("图片文件")));
+        assert!(manifest
+            .get("retrievalProjection")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("keywords"))
+            .and_then(Value::as_array)
+            .is_some_and(|keywords| keywords
+                .iter()
+                .any(|value| value.as_str() == Some("视觉索引"))));
     }
 
     #[test]
