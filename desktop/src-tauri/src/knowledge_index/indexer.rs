@@ -576,6 +576,27 @@ fn visual_backfill_deferred_by_retry_gate(
     })
 }
 
+fn emit_visual_index_progress(
+    app: &AppHandle,
+    rows: &[crate::knowledge_index::canonical_store::CanonicalDocumentRow],
+) {
+    let updated = rows
+        .iter()
+        .filter(|row| row.canonical_json.contains("\"visualManifest\""))
+        .count();
+    if updated == 0 {
+        return;
+    }
+    let _ = app.emit(
+        "knowledge:file-index-updated",
+        serde_json::json!({
+            "at": now_iso(),
+            "kind": "visual_index",
+            "updated": updated
+        }),
+    );
+}
+
 fn rebuild_catalog_with_cache_policy(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -600,6 +621,7 @@ fn rebuild_catalog_with_cache_policy(
                 &summary.updated_at,
                 cache_policy,
             )?;
+            emit_visual_index_progress(app, &indexed.canonical_rows);
             anchors.extend(build_anchors_for_blocks(&indexed.blocks));
             blocks.extend(indexed.blocks);
             canonical_rows.extend(indexed.canonical_rows);
@@ -619,6 +641,7 @@ fn rebuild_catalog_with_cache_policy(
                 &summary.updated_at,
                 cache_policy,
             )?;
+            emit_visual_index_progress(app, &indexed.canonical_rows);
             anchors.extend(build_anchors_for_blocks(&indexed.blocks));
             blocks.extend(indexed.blocks);
             canonical_rows.extend(indexed.canonical_rows);
@@ -637,6 +660,7 @@ fn rebuild_catalog_with_cache_policy(
                 &source.updated_at,
                 cache_policy,
             )?;
+            emit_visual_index_progress(app, &indexed.canonical_rows);
             anchors.extend(build_anchors_for_blocks(&indexed.blocks));
             blocks.extend(indexed.blocks);
             canonical_rows.extend(indexed.canonical_rows);
@@ -659,6 +683,7 @@ fn rebuild_catalog_with_cache_policy(
             &now_iso(),
             cache_policy,
         )?;
+        emit_visual_index_progress(app, &indexed.canonical_rows);
         anchors.extend(build_anchors_for_blocks(&indexed.blocks));
         blocks.extend(indexed.blocks);
         canonical_rows.extend(indexed.canonical_rows);
@@ -676,6 +701,7 @@ fn rebuild_catalog_with_cache_policy(
             &asset.updated_at,
             cache_policy,
         )?;
+        emit_visual_index_progress(app, &indexed.canonical_rows);
         anchors.extend(build_anchors_for_blocks(&indexed.blocks));
         blocks.extend(indexed.blocks);
         canonical_rows.extend(indexed.canonical_rows);

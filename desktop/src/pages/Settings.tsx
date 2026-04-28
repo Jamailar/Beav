@@ -861,6 +861,7 @@ export function Settings({
   const backgroundWorkerPoolLoadRequestRef = useRef(0);
   const fileIndexDashboardLoadRequestRef = useRef(0);
   const fileIndexDashboardInFlightRef = useRef<Promise<FileIndexDashboard | null> | null>(null);
+  const fileIndexDashboardRefreshTimerRef = useRef<number | null>(null);
   const fileIndexDashboardCurrentRef = useRef<FileIndexDashboard | null>(
     initialFileIndexDashboardCache?.dashboard ?? null,
   );
@@ -4245,6 +4246,29 @@ export function Settings({
   }, [loadRedclawProfileBundle, redclawOnboardingVersion]);
 
   useEffect(() => {
+    if (!isActive || activeTab !== 'general') return;
+    const scheduleFileIndexRefresh = () => {
+      if (fileIndexDashboardRefreshTimerRef.current != null) {
+        window.clearTimeout(fileIndexDashboardRefreshTimerRef.current);
+      }
+      fileIndexDashboardRefreshTimerRef.current = window.setTimeout(() => {
+        fileIndexDashboardRefreshTimerRef.current = null;
+        void loadFileIndexDashboard({ force: true, background: true });
+      }, 750);
+    };
+    window.ipcRenderer.on('knowledge:file-index-updated', scheduleFileIndexRefresh);
+    window.ipcRenderer.on('knowledge:catalog-updated', scheduleFileIndexRefresh);
+    return () => {
+      window.ipcRenderer.off('knowledge:file-index-updated', scheduleFileIndexRefresh);
+      window.ipcRenderer.off('knowledge:catalog-updated', scheduleFileIndexRefresh);
+      if (fileIndexDashboardRefreshTimerRef.current != null) {
+        window.clearTimeout(fileIndexDashboardRefreshTimerRef.current);
+        fileIndexDashboardRefreshTimerRef.current = null;
+      }
+    };
+  }, [activeTab, isActive, loadFileIndexDashboard]);
+
+  useEffect(() => {
     const handleDiagnosticsReportPending = () => {
       void Promise.all([
         loadLoggingStatus(),
@@ -4273,7 +4297,7 @@ export function Settings({
     if (activeTab === 'general') {
       void ensureTabResourcesLoaded('general');
       fileIndexPollTimer = window.setInterval(() => {
-        void loadFileIndexDashboard({ background: true });
+        void loadFileIndexDashboard({ force: true, background: true });
       }, FILE_INDEX_DASHBOARD_POLL_MS);
     }
     if (activeTab === 'profile') {
