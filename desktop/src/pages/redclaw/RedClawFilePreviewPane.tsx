@@ -216,7 +216,7 @@ export function RedClawFilePreviewPane({
     };
 
     return (
-        <aside className="flex h-full min-h-0 w-[420px] min-w-[340px] max-w-[42vw] shrink-0 flex-col overflow-hidden border-l border-border bg-surface-primary shadow-[-18px_0_44px_rgba(15,23,42,0.08)]">
+        <section className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-surface-primary">
             <div className="flex min-h-[72px] items-center gap-3 border-b border-border px-4 py-3">
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-secondary text-text-tertiary">
                     <Icon className="h-5 w-5" />
@@ -269,6 +269,6 @@ export function RedClawFilePreviewPane({
             <div className={clsx('min-h-0 flex-1 overflow-hidden', loadFailed && 'bg-surface-secondary/30')}>
                 {renderPreview()}
             </div>
-        </aside>
+        </section>
     );
 }
