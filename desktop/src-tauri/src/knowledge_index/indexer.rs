@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -12,14 +13,15 @@ use crate::{
         citation_anchors::{build_anchors_for_blocks, replace_anchors, replace_anchors_for_source},
         document_blocks::{
             block_records_from_document, build_blocks_for_source_with_cache_policy,
-            canonical_needs_visual_backfill_for_config, replace_blocks, replace_blocks_for_source,
-            resolve_visual_index_config, visual_backfill_candidate_unit_ids, CanonicalCachePolicy,
+            canonical_needs_visual_backfill_for_config, is_visual_candidate_path, replace_blocks,
+            replace_blocks_for_source, resolve_visual_index_config,
+            visual_backfill_candidate_unit_ids, CanonicalCachePolicy,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
     now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
-    YoutubeVideoRecord,
+    MediaAssetRecord, YoutubeVideoRecord,
 };
 
 type IndexedFileRow = (String, String, i64, i64, String, String);
@@ -199,6 +201,52 @@ fn summarize_document_source(item: DocumentKnowledgeSourceRecord) -> KnowledgeCa
         visual_search_evidence_refs: Vec::new(),
         visual_search_thumbnail_path: None,
     }
+}
+
+fn media_asset_title(item: &MediaAssetRecord) -> String {
+    item.title
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            item.relative_path
+                .as_ref()
+                .and_then(|value| Path::new(value).file_name())
+                .and_then(|value| value.to_str())
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| item.id.clone())
+}
+
+fn local_visual_path(value: &str) -> Option<PathBuf> {
+    crate::resolve_local_path(value)
+        .filter(|path| path.exists() && path.is_file() && is_visual_candidate_path(path))
+}
+
+fn note_visual_paths(note: &KnowledgeNoteRecord) -> Vec<PathBuf> {
+    let mut seen = HashSet::<PathBuf>::new();
+    let mut paths = Vec::new();
+    for source in note.images.iter().chain(note.cover.iter()) {
+        let Some(path) = local_visual_path(source) else {
+            continue;
+        };
+        if seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+fn video_visual_paths(video: &YoutubeVideoRecord) -> Vec<PathBuf> {
+    if video.thumbnail_url.trim().is_empty() {
+        return Vec::new();
+    }
+    local_visual_path(&video.thumbnail_url)
+        .into_iter()
+        .collect()
+}
+
+fn media_asset_visual_path(asset: &MediaAssetRecord) -> Option<PathBuf> {
+    asset.absolute_path.as_deref().and_then(local_visual_path)
 }
 
 fn file_row_for_path(
@@ -381,7 +429,7 @@ pub(crate) fn backfill_incomplete_visual_index(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<(), String> {
-    if !visual_backfill_needed(state)? {
+    if !visual_maintenance_needed(state)? {
         return Ok(());
     }
     rebuild_catalog_with_cache_policy(
@@ -389,6 +437,13 @@ pub(crate) fn backfill_incomplete_visual_index(
         state,
         CanonicalCachePolicy::RefreshIncompleteVisualIndex,
     )
+}
+
+pub(crate) fn visual_maintenance_needed(state: &State<'_, AppState>) -> Result<bool, String> {
+    if visual_backfill_needed(state)? {
+        return Ok(true);
+    }
+    visual_discovery_needed(state)
 }
 
 pub(crate) fn visual_backfill_needed(state: &State<'_, AppState>) -> Result<bool, String> {
@@ -413,6 +468,79 @@ pub(crate) fn visual_backfill_needed(state: &State<'_, AppState>) -> Result<bool
         }
     }
     Ok(false)
+}
+
+fn visual_discovery_needed(state: &State<'_, AppState>) -> Result<bool, String> {
+    let visual_config = resolve_visual_index_config(state)?;
+    if !visual_config.has_callable_model() {
+        return Ok(false);
+    }
+    let indexed_paths = load_document_rows(state, None)?
+        .into_iter()
+        .map(|row| row.absolute_path)
+        .collect::<HashSet<_>>();
+    visual_candidates_missing_from_index(state, &indexed_paths)
+}
+
+fn visual_candidates_missing_from_index(
+    state: &State<'_, AppState>,
+    indexed_paths: &HashSet<String>,
+) -> Result<bool, String> {
+    let knowledge_root = workspace_root(state)?.join("knowledge");
+    for source in crate::load_document_sources_from_fs(&knowledge_root) {
+        let root_path = PathBuf::from(&source.root_path);
+        if visual_candidate_missing_under(&root_path, indexed_paths)? {
+            return Ok(true);
+        }
+    }
+    let advisors = crate::with_store(state, |store| Ok(store.advisors.clone()))?;
+    for advisor in advisors {
+        let root_path = crate::advisor_knowledge_dir(state, &advisor.id)?;
+        if visual_candidate_missing_under(&root_path, indexed_paths)? {
+            return Ok(true);
+        }
+    }
+    for root in [
+        knowledge_root.join("redbook"),
+        knowledge_root.join("youtube"),
+        workspace_root(state)?.join("media"),
+    ] {
+        if visual_candidate_missing_under(&root, indexed_paths)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn visual_candidate_missing_under(
+    root: &Path,
+    indexed_paths: &HashSet<String>,
+) -> Result<bool, String> {
+    if !root.exists() {
+        return Ok(false);
+    }
+    if root.is_file() {
+        return Ok(is_missing_visual_candidate(root, indexed_paths));
+    }
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => return Err(error.to_string()),
+    };
+    for entry in entries {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.is_dir() {
+            if visual_candidate_missing_under(&path, indexed_paths)? {
+                return Ok(true);
+            }
+        } else if path.is_file() && is_missing_visual_candidate(&path, indexed_paths) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn is_missing_visual_candidate(path: &Path, indexed_paths: &HashSet<String>) -> bool {
+    is_visual_candidate_path(path) && !indexed_paths.contains(&path.display().to_string())
 }
 
 fn visual_backfill_deferred_by_retry_gate(
@@ -461,12 +589,40 @@ fn rebuild_catalog_with_cache_policy(
     let mut canonical_rows = Vec::new();
 
     for note in crate::load_knowledge_notes_from_fs(&knowledge_root) {
+        let note_visual_paths = note_visual_paths(&note);
         let summary = summarize_note(note);
+        for path in note_visual_paths {
+            let indexed = build_blocks_for_source_with_cache_policy(
+                state,
+                &summary.item_id,
+                &summary.title,
+                &path,
+                &summary.updated_at,
+                cache_policy,
+            )?;
+            anchors.extend(build_anchors_for_blocks(&indexed.blocks));
+            blocks.extend(indexed.blocks);
+            canonical_rows.extend(indexed.canonical_rows);
+        }
         files.extend(build_rows_for_note(&summary)?);
         items.push(summary);
     }
     for video in crate::load_youtube_videos_from_fs(&knowledge_root) {
+        let video_visual_paths = video_visual_paths(&video);
         let summary = summarize_video(video);
+        for path in video_visual_paths {
+            let indexed = build_blocks_for_source_with_cache_policy(
+                state,
+                &summary.item_id,
+                &summary.title,
+                &path,
+                &summary.updated_at,
+                cache_policy,
+            )?;
+            anchors.extend(build_anchors_for_blocks(&indexed.blocks));
+            blocks.extend(indexed.blocks);
+            canonical_rows.extend(indexed.canonical_rows);
+        }
         files.extend(build_rows_for_video(&summary)?);
         items.push(summary);
     }
@@ -501,6 +657,23 @@ fn rebuild_catalog_with_cache_policy(
             &advisor.name,
             &root_path,
             &now_iso(),
+            cache_policy,
+        )?;
+        anchors.extend(build_anchors_for_blocks(&indexed.blocks));
+        blocks.extend(indexed.blocks);
+        canonical_rows.extend(indexed.canonical_rows);
+    }
+    let media_assets = crate::with_store(state, |store| Ok(store.media_assets.clone()))?;
+    for asset in media_assets {
+        let Some(path) = media_asset_visual_path(&asset) else {
+            continue;
+        };
+        let indexed = build_blocks_for_source_with_cache_policy(
+            state,
+            &format!("media:{}", asset.id),
+            &media_asset_title(&asset),
+            &path,
+            &asset.updated_at,
             cache_policy,
         )?;
         anchors.extend(build_anchors_for_blocks(&indexed.blocks));

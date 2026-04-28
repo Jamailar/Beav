@@ -285,9 +285,6 @@ fn attach_visual_search_matches(
         )
         .map_err(|error| error.to_string())?;
     for item in items.iter_mut() {
-        if item.kind != "document-source" {
-            continue;
-        }
         let match_row = stmt
             .query_row(params![item.item_id, query], |row| {
                 let text: String = row.get("text")?;

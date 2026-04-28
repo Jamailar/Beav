@@ -112,13 +112,17 @@ pub(crate) fn dashboard(state: &State<'_, AppState>) -> Result<FileIndexDashboar
     }
 
     let mut scope_statuses = Vec::new();
+    let scoped_source_ids = scopes
+        .iter()
+        .filter_map(|scope| scope.source_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    let workspace_source_stats = aggregate_unscoped_source_stats(&source_stats, &scoped_source_ids);
     for scope in scopes {
-        let stats = scope
-            .source_id
-            .as_deref()
-            .and_then(|source_id| source_stats.get(source_id))
-            .cloned()
-            .unwrap_or_default();
+        let stats = if let Some(source_id) = scope.source_id.as_deref() {
+            source_stats.get(source_id).cloned().unwrap_or_default()
+        } else {
+            workspace_source_stats.clone()
+        };
         scope_statuses.push(build_scope_status(
             &scope,
             &stats,
@@ -397,6 +401,37 @@ fn load_source_stats(conn: &Connection) -> Result<HashMap<String, SourceStats>, 
     }
 
     Ok(stats)
+}
+
+fn aggregate_unscoped_source_stats(
+    source_stats: &HashMap<String, SourceStats>,
+    scoped_source_ids: &std::collections::HashSet<String>,
+) -> SourceStats {
+    let mut aggregate = SourceStats::default();
+    for (source_id, stats) in source_stats {
+        if scoped_source_ids.contains(source_id) || source_id.starts_with("advisor:") {
+            continue;
+        }
+        aggregate.canonical_documents += stats.canonical_documents;
+        aggregate.indexed_documents += stats.indexed_documents;
+        aggregate.blocks += stats.blocks;
+        aggregate.anchored_blocks += stats.anchored_blocks;
+        aggregate.visual_total += stats.visual_total;
+        aggregate.visual_indexed += stats.visual_indexed;
+        aggregate.visual_metadata_only += stats.visual_metadata_only;
+        aggregate.visual_failed += stats.visual_failed;
+        aggregate.visual_retry_deferred += stats.visual_retry_deferred;
+        aggregate.visual_retry_ready += stats.visual_retry_ready;
+        aggregate.last_visual_attempted_at = max_optional_text(
+            aggregate.last_visual_attempted_at.take(),
+            stats.last_visual_attempted_at.clone(),
+        );
+        aggregate.next_visual_retry_at = min_optional_text(
+            aggregate.next_visual_retry_at.take(),
+            stats.next_visual_retry_at.clone(),
+        );
+    }
+    aggregate
 }
 
 #[derive(Debug, Clone, Default)]

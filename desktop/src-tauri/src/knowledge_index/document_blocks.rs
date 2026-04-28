@@ -29,7 +29,9 @@ use crate::{
     AppState,
 };
 
-const MAX_INDEXED_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_INDEXED_TEXT_FILE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_INDEXED_IMAGE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_INDEXED_PDF_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SEMANTIC_SCAN_BLOCKS: usize = 1200;
 const MAX_EXTERNAL_RERANK_CANDIDATES: usize = 80;
 
@@ -135,6 +137,34 @@ pub(crate) struct BuildSourceBlocksResult {
 pub(crate) enum CanonicalCachePolicy {
     ReuseUnchangedFingerprint,
     RefreshIncompleteVisualIndex,
+}
+
+pub(crate) fn is_visual_candidate_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| {
+            let extension = extension.to_ascii_lowercase();
+            matches!(
+                extension.as_str(),
+                "pdf" | "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" | "webp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn max_indexed_file_bytes_for_path(path: &Path) -> u64 {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("pdf") => MAX_INDEXED_PDF_FILE_BYTES,
+        Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" | "webp") => {
+            MAX_INDEXED_IMAGE_FILE_BYTES
+        }
+        _ => MAX_INDEXED_TEXT_FILE_BYTES,
+    }
 }
 
 fn connection(state: &State<'_, AppState>) -> Result<Connection, String> {
@@ -1073,7 +1103,7 @@ fn build_blocks_for_file(
     canonical_rows: &mut Vec<CanonicalDocumentRow>,
 ) -> Result<(), String> {
     let metadata = fs::metadata(file_path).map_err(|error| error.to_string())?;
-    if metadata.len() > MAX_INDEXED_FILE_BYTES {
+    if metadata.len() > max_indexed_file_bytes_for_path(file_path) {
         return Ok(());
     }
     let absolute_path = file_path.display().to_string();

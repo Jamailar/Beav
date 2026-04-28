@@ -7,7 +7,7 @@ use crate::{
         indexer::{
             backfill_incomplete_visual_index, rebuild_blocks_from_canonical, rebuild_catalog,
             rebuild_catalog_reusing_unchanged_canonical, refresh_catalog_summaries,
-            visual_backfill_needed,
+            visual_maintenance_needed,
         },
         migration::{self, MigrationDecision},
         schema::ensure_catalog_ready,
@@ -231,7 +231,7 @@ pub(crate) fn schedule_canonical_reparse(app: &AppHandle) {
 
 pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
     let state = app.state::<AppState>();
-    match visual_backfill_needed(&state) {
+    match visual_maintenance_needed(&state) {
         Ok(false) => return,
         Ok(true) => {}
         Err(error) => {
