@@ -101,6 +101,7 @@
 - 不要让新页面首次渲染依赖 awaited activation-time IPC，这很容易导致“点 tab 就卡住”。
 - 不要在 render 中直接解引用不稳定的嵌套宿主字段；旧持久化数据、部分迁移和陈旧 daemon 快照都可能缺字段。
 - 不要引入基于 ad hoc 字符串匹配的用户意图路由。
+- 外部 URL / 平台 ID / 用户输入只要会落成 workspace 目录名或文件名，必须用 `storage_safe_file_stem` 这类 Windows-safe 规则；不要直接用 `slug_from_relative_path`。
 - 不要把新逻辑继续堆进 `src-tauri/src/main.rs`，除非只是接线。
 - agent 执行异常不要只截取表层报错；先去 `~/Library/Application Support/RedBox/` 联合检查 `session-transcripts/`、`session-bundles/` 和状态库，再判断是 prompt、runtime、tool 还是持久化问题。
 
