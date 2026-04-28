@@ -552,6 +552,7 @@ pub fn handle_advisor_channel(
                 let member_skill =
                     publish_member_skill_if_enabled(state, &advisor_id, "advisor-knowledge-import");
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                knowledge_index::jobs::schedule_rebuild(app, "advisor-knowledge-import");
                 let mut imported = imported;
                 if let Some(object) = imported.as_object_mut() {
                     object.insert(
@@ -579,6 +580,7 @@ pub fn handle_advisor_channel(
                 let _ =
                     publish_member_skill_if_enabled(state, &advisor_id, "advisor-knowledge-delete");
                 let _ = app.emit("advisors:changed", json!({ "advisorId": advisor_id }));
+                knowledge_index::jobs::schedule_rebuild(app, "advisor-knowledge-delete");
                 Ok(result)
             }
             "members:enqueue-distillation" | "members:distill-skill" => {
