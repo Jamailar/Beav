@@ -631,7 +631,7 @@ fn redbook_entry_dir(state: &State<'_, AppState>, entry_id: &str) -> Result<Path
 }
 
 fn youtube_entry_id(seed: &str) -> String {
-    let slug = slug_from_relative_path(seed);
+    let slug = storage_safe_file_stem(seed);
     if slug.is_empty() {
         make_id("youtube")
     } else {
@@ -640,7 +640,7 @@ fn youtube_entry_id(seed: &str) -> String {
 }
 
 fn note_entry_id(seed: &str) -> String {
-    let slug = slug_from_relative_path(seed);
+    let slug = storage_safe_file_stem(seed);
     if slug.is_empty() {
         make_id("knowledge")
     } else {
@@ -660,7 +660,7 @@ fn author_entry_id(seed: &str) -> String {
     let mut hasher = DefaultHasher::new();
     seed.hash(&mut hasher);
     let hash = format!("{:016x}", hasher.finish());
-    let slug = slug_from_relative_path(seed);
+    let slug = storage_safe_file_stem(seed);
     if slug.is_empty() {
         format!("author-{hash}")
     } else {
@@ -746,7 +746,7 @@ fn upsert_knowledge_author_profile(
     let profile_url = normalize_author_profile_url(request, normalized_kind);
     let platform_user_id = normalize_string(request.content.author_platform_user_id.clone());
     let explicit_author_id = normalize_string(request.content.author_id.clone())
-        .map(|value| slug_from_relative_path(&value))
+        .map(|value| storage_safe_file_stem(&value))
         .filter(|value| !value.is_empty());
     let seed = explicit_author_id
         .clone()
@@ -2564,10 +2564,10 @@ pub(crate) fn persist_note_transcript(
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_embedded_js_string, extract_css_url_near, extract_html_attribute_near,
-        extract_json_string_values, is_supported_social_entry_kind,
-        maybe_backfill_xiaohongshu_assets, note_transcript_file_from_meta,
-        KnowledgeEntryAssetsInput,
+        author_entry_id, decode_embedded_js_string, extract_css_url_near,
+        extract_html_attribute_near, extract_json_string_values, is_supported_social_entry_kind,
+        maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
+        youtube_entry_id, KnowledgeEntryAssetsInput,
     };
     use serde_json::json;
 
@@ -2654,5 +2654,22 @@ mod tests {
             );
         }
         assert!(!is_supported_social_entry_kind("unknown-social-kind"));
+    }
+
+    #[test]
+    fn entry_ids_are_safe_for_windows_directories() {
+        let note_id =
+            note_entry_id("https://www.douyin.com/video/123456?modal_id=abc:1&from=plugin");
+        let youtube_id = youtube_entry_id("https://youtu.be/demo:video?id=1");
+        let author_id = author_entry_id("https://www.douyin.com/user/MS4wLjABAAAA?from:profile");
+
+        for id in [note_id, youtube_id, author_id] {
+            assert!(
+                !id.contains(['<', '>', ':', '"', '\\', '|', '?', '*']),
+                "{id} should not contain Windows-reserved filename characters"
+            );
+            assert!(!id.ends_with('.'), "{id} should not end with dot");
+            assert!(!id.ends_with(' '), "{id} should not end with space");
+        }
     }
 }
