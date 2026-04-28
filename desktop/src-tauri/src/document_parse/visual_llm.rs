@@ -344,6 +344,72 @@ mod tests {
     }
 
     #[test]
+    fn extracts_manifest_from_chat_completion_string_content() {
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "content": r#"{"schemaVersion":"redbox.visual_manifest.v1","summary":{"short":"snow lake"}}"#
+                }
+            }]
+        });
+
+        let manifest = extract_manifest_json(&response).expect("manifest");
+        assert_eq!(
+            manifest.get("schemaVersion").and_then(Value::as_str),
+            Some("redbox.visual_manifest.v1")
+        );
+        assert_eq!(
+            manifest
+                .get("summary")
+                .and_then(|summary| summary.get("short"))
+                .and_then(Value::as_str),
+            Some("snow lake")
+        );
+    }
+
+    #[test]
+    fn extracts_manifest_from_chat_completion_content_parts() {
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        { "type": "text", "text": "ignore this" },
+                        {
+                            "type": "text",
+                            "text": r#"{"schemaVersion":"redbox.visual_manifest.v1","summary":{"short":"visible poster"}}"#
+                        }
+                    ]
+                }
+            }]
+        });
+
+        let manifest = extract_manifest_json(&response).expect("manifest");
+        assert_eq!(
+            manifest
+                .get("summary")
+                .and_then(|summary| summary.get("short"))
+                .and_then(Value::as_str),
+            Some("visible poster")
+        );
+    }
+
+    #[test]
+    fn extracts_manifest_from_output_text_response() {
+        let response = json!({
+            "output_text": "prefix\n{\"schemaVersion\":\"redbox.visual_manifest.v1\",\"summary\":{\"short\":\"scanned page\"}}\n"
+        });
+
+        let manifest = extract_manifest_json(&response).expect("manifest");
+        assert_eq!(
+            manifest
+                .get("summary")
+                .and_then(|summary| summary.get("short"))
+                .and_then(Value::as_str),
+            Some("scanned page")
+        );
+    }
+
+    #[test]
     fn visual_payload_resizes_large_images_for_model() {
         let path = std::env::temp_dir().join(format!(
             "redbox-visual-payload-{}-{}.png",
