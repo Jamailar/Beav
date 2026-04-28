@@ -1182,6 +1182,7 @@ export function RedClaw({
                                 contentLayout="wide"
                                 contentWidthPreset="narrow"
                                 allowFileUpload={true}
+                                attachmentPreviewMode="compact-status"
                                 messageWorkflowPlacement="bottom"
                                 messageWorkflowVariant="compact"
                                 messageWorkflowEmphasis="default"
