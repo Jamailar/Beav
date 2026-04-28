@@ -1,7 +1,7 @@
 ---
 doc_type: report
 execution_status: completed
-last_updated: 2026-04-23
+last_updated: 2026-04-28
 owner: ai-agent
 scope:
   - desktop/src-tauri/src/knowledge_index/evaluation.rs
@@ -54,7 +54,9 @@ cargo test grounding_audit_detects_unsupported_claims -- --nocapture
 
 - Hybrid retrieval regression test passes.
 - Grounding audit gate passes.
-- OCR confidence penalty regression still passes.
+- Historical confidence penalty regression still passes for already-indexed legacy blocks.
+- Visual LLM image recall smoke checks cover no-text images and scanned PDF page hits.
+- Visual source mapping checks require every new image/scanned-PDF hit to expose `visualSource.unitId`, `sourceDocumentId`, original file path, page number when applicable, and `evidenceRefs`.
 - Anchor stability regression still passes.
 - Execution plan remains at `stage8_completed`.
 
@@ -62,4 +64,5 @@ cargo test grounding_audit_detects_unsupported_claims -- --nocapture
 
 - This gate is deterministic and fixture-based by design, so it can run on every version change.
 - The current gate is a repository-local acceptance baseline, not yet a large external legal benchmark corpus.
-- Stage 8 migration coverage now includes explicit decisions for `schema_only`, `fts_rebuild`, `block_anchor_rebuild`, `canonical_reparse`, and `full_rebuild`; manual full reparse paths require explicit OCR confirmation.
+- Stage 8 migration coverage now includes explicit decisions for `schema_only`, `fts_rebuild`, `block_anchor_rebuild`, `canonical_reparse`, and `full_rebuild`; visual prompt/schema changes require canonical reparse, visual projection changes reuse block/anchor rebuild, and manual full/canonical reparse paths require explicit visual-index confirmation.
+- New image and scanned-PDF indexing stores visual manifests in canonical JSON and synchronizes them into `knowledge_visual_units` / `knowledge_visual_evidence` for source-file exactness.

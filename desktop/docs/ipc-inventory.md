@@ -1,5 +1,13 @@
 # IPC Inventory
 
+## Contract Notes
+
+- `knowledge:rebuild-catalog` full/canonical reparse confirmation uses `includeVisualIndex`.
+- Visual image and scanned-PDF indexing settings use `visual_index_enabled`, `visual_index_provider`, `visual_index_endpoint`, `visual_index_api_key`, `visual_index_model`, `visual_index_timeout_seconds`, `visual_index_max_image_edge`, `visual_index_pdf_max_pages`, `visual_index_pdf_render_dpi`, and `visual_index_skip_small_images`.
+- New visual search hits may include `visualSource.unitId`, `visualSource.sourceDocumentId`, `visualSource.pageNumber`, and `visualSource.evidenceRefs`.
+- `knowledge:list-page` text search also checks indexed document blocks. Document-source rows may include `visualSearchSummary`, `visualSearchPath`, `visualSearchPage`, `visualSearchUnitId`, `visualSearchEvidenceRefs`, and `visualSearchThumbnailPath`.
+- `knowledge:get-item-detail` for document sources may include `visualBlocks[]` with semantic block text, source path, page, evidence refs, and bbox-bearing visual evidence.
+
 ## Frontend referenced channels
 
 | Channel | References |

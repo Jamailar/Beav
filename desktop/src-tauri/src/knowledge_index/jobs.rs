@@ -5,8 +5,9 @@ use crate::{
         document_blocks::rebuild_fts_index_for_source,
         index_status,
         indexer::{
-            rebuild_blocks_from_canonical, rebuild_catalog,
+            backfill_incomplete_visual_index, rebuild_blocks_from_canonical, rebuild_catalog,
             rebuild_catalog_reusing_unchanged_canonical, refresh_catalog_summaries,
+            visual_backfill_needed,
         },
         migration::{self, MigrationDecision},
         schema::ensure_catalog_ready,
@@ -20,6 +21,7 @@ enum RebuildJobKind {
     FtsOnly { source_id: Option<String> },
     BlockAnchor { source_id: Option<String> },
     CanonicalReparse,
+    VisualBackfill,
 }
 
 impl RebuildJobKind {
@@ -29,15 +31,17 @@ impl RebuildJobKind {
             Self::FtsOnly { .. } => "fts_rebuild",
             Self::BlockAnchor { .. } => "block_anchor_rebuild",
             Self::CanonicalReparse => "canonical_reparse",
+            Self::VisualBackfill => "visual_backfill",
         }
     }
 
-    fn migration_decision(&self) -> MigrationDecision {
+    fn migration_decision(&self) -> Option<MigrationDecision> {
         match self {
-            Self::FullCatalog => MigrationDecision::FullRebuild,
-            Self::FtsOnly { .. } => MigrationDecision::FtsRebuild,
-            Self::BlockAnchor { .. } => MigrationDecision::BlockAnchorRebuild,
-            Self::CanonicalReparse => MigrationDecision::CanonicalReparse,
+            Self::FullCatalog => Some(MigrationDecision::FullRebuild),
+            Self::FtsOnly { .. } => Some(MigrationDecision::FtsRebuild),
+            Self::BlockAnchor { .. } => Some(MigrationDecision::BlockAnchorRebuild),
+            Self::CanonicalReparse => Some(MigrationDecision::CanonicalReparse),
+            Self::VisualBackfill => None,
         }
     }
 }
@@ -131,20 +135,26 @@ fn spawn_rebuild(app: AppHandle, kind: RebuildJobKind) {
             RebuildJobKind::CanonicalReparse => {
                 rebuild_catalog_reusing_unchanged_canonical(&app, &state)
             }
+            RebuildJobKind::VisualBackfill => backfill_incomplete_visual_index(&app, &state),
         };
         match &result {
             Ok(_) => {
-                if let Err(error) =
-                    migration::mark_rebuild_success(&state, kind.migration_decision())
-                {
-                    eprintln!("[RedBox knowledge index] mark migration success failed: {error}");
+                if let Some(decision) = kind.migration_decision() {
+                    if let Err(error) = migration::mark_rebuild_success(&state, decision) {
+                        eprintln!(
+                            "[RedBox knowledge index] mark migration success failed: {error}"
+                        );
+                    }
                 }
             }
             Err(error) => {
-                if let Err(mark_error) =
-                    migration::mark_rebuild_error(&state, kind.migration_decision(), error)
-                {
-                    eprintln!("[RedBox knowledge index] mark migration error failed: {mark_error}");
+                if let Some(decision) = kind.migration_decision() {
+                    if let Err(mark_error) = migration::mark_rebuild_error(&state, decision, error)
+                    {
+                        eprintln!(
+                            "[RedBox knowledge index] mark migration error failed: {mark_error}"
+                        );
+                    }
                 }
             }
         }
@@ -219,6 +229,30 @@ pub(crate) fn schedule_canonical_reparse(app: &AppHandle) {
     }
 }
 
+pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
+    let state = app.state::<AppState>();
+    match visual_backfill_needed(&state) {
+        Ok(false) => return,
+        Ok(true) => {}
+        Err(error) => {
+            eprintln!("[RedBox knowledge index] visual backfill check failed: {error}");
+            return;
+        }
+    }
+    let reason = if reason.trim().is_empty() {
+        "visual_backfill"
+    } else {
+        reason.trim()
+    };
+    match mark_pending(&state, reason) {
+        Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::VisualBackfill),
+        Ok(false) => {}
+        Err(error) => {
+            eprintln!("[RedBox knowledge index] mark visual backfill pending failed: {error}")
+        }
+    }
+}
+
 pub(crate) fn ensure_catalog_ready_async(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -247,6 +281,8 @@ pub(crate) fn ensure_catalog_ready_async(
     let status = index_status(state)?;
     if status.indexed_count == 0 && !status.is_building {
         schedule_rebuild(app, "ensure-ready");
+    } else {
+        schedule_visual_backfill(app, "ensure-visual-backfill");
     }
     Ok(())
 }

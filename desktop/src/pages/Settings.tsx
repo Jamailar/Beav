@@ -85,6 +85,7 @@ import {
   ExperimentalSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
+  type FileIndexDashboard,
 } from './settings/SettingsSections';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playTestNotificationSound } from '../notifications/audio';
@@ -491,12 +492,18 @@ export function Settings({
     embedding_endpoint: '',
     embedding_key: '',
     embedding_model: '',
-    ocr_provider: 'auto',
-    ocr_endpoint: '',
-    ocr_api_key: '',
-    ocr_model: '',
-    ocr_timeout_seconds: '60',
-    ocr_local_fallback: true,
+    visual_index_enabled: false,
+    visual_index_provider: 'openai-compatible',
+    visual_index_endpoint: '',
+    visual_index_api_key: '',
+    visual_index_model: '',
+    visual_index_prompt_version: 'visual-manifest-v1',
+    visual_index_timeout_seconds: '90',
+    visual_index_max_image_edge: '1536',
+    visual_index_skip_small_images: true,
+    visual_index_pdf_max_pages: '12',
+    visual_index_pdf_render_dpi: '144',
+    visual_index_concurrency: '1',
     docling_endpoint: '',
     tika_endpoint: '',
     unstructured_endpoint: '',
@@ -562,6 +569,8 @@ export function Settings({
   const [imageModelStatus, setImageModelStatus] = useState('');
   const [recentDebugLogs, setRecentDebugLogs] = useState<string[]>([]);
   const [isDebugLogsLoading, setIsDebugLogsLoading] = useState(false);
+  const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(null);
+  const [isFileIndexDashboardLoading, setIsFileIndexDashboardLoading] = useState(false);
   const [logStatus, setLogStatus] = useState<DiagnosticsLogStatus | null>(null);
   const [pendingDiagnosticReports, setPendingDiagnosticReports] = useState<DiagnosticsPendingReport[]>([]);
   const [diagnosticsActionBusy, setDiagnosticsActionBusy] = useState<string | null>(null);
@@ -2150,6 +2159,19 @@ export function Settings({
     }
   }, []);
 
+  const loadFileIndexDashboard = useCallback(async () => {
+    setIsFileIndexDashboardLoading(true);
+    try {
+      const dashboard = await window.ipcRenderer.knowledge.getFileIndexDashboard<FileIndexDashboard>();
+      setFileIndexDashboard(dashboard);
+    } catch (error) {
+      console.error('Failed to load file index dashboard:', error);
+      setFileIndexDashboard(null);
+    } finally {
+      setIsFileIndexDashboardLoading(false);
+    }
+  }, []);
+
   const loadLoggingStatus = useCallback(async () => {
     try {
       const result = await window.ipcRenderer.logs.getStatus();
@@ -3174,12 +3196,18 @@ export function Settings({
           embedding_endpoint: settings.embedding_endpoint || '',
           embedding_key: settings.embedding_key || '',
           embedding_model: settings.embedding_model || '',
-          ocr_provider: settings.ocr_provider || 'auto',
-          ocr_endpoint: settings.ocr_endpoint || settings.ocr_api_endpoint || '',
-          ocr_api_key: settings.ocr_api_key || settings.ocr_key || '',
-          ocr_model: settings.ocr_model || '',
-          ocr_timeout_seconds: String(settings.ocr_timeout_seconds || 60),
-          ocr_local_fallback: settings.ocr_local_fallback !== false,
+          visual_index_enabled: Boolean(settings.visual_index_enabled),
+          visual_index_provider: settings.visual_index_provider || 'openai-compatible',
+          visual_index_endpoint: settings.visual_index_endpoint || '',
+          visual_index_api_key: settings.visual_index_api_key || '',
+          visual_index_model: settings.visual_index_model || '',
+          visual_index_prompt_version: settings.visual_index_prompt_version || 'visual-manifest-v1',
+          visual_index_timeout_seconds: String(settings.visual_index_timeout_seconds || 90),
+          visual_index_max_image_edge: String(settings.visual_index_max_image_edge || 1536),
+          visual_index_skip_small_images: settings.visual_index_skip_small_images !== false,
+          visual_index_pdf_max_pages: String(settings.visual_index_pdf_max_pages || 12),
+          visual_index_pdf_render_dpi: String(settings.visual_index_pdf_render_dpi || 144),
+          visual_index_concurrency: String(settings.visual_index_concurrency || 1),
           docling_endpoint: settings.docling_endpoint || settings.parser_docling_endpoint || '',
           tika_endpoint: settings.tika_endpoint || settings.parser_tika_endpoint || '',
           unstructured_endpoint: settings.unstructured_endpoint || settings.parser_unstructured_endpoint || '',
@@ -3895,6 +3923,7 @@ export function Settings({
         await Promise.all([
           loadAppVersion(),
           loadRecentDebugLogs(),
+          loadFileIndexDashboard(),
           loadLoggingStatus(),
           loadPendingDiagnosticReports(),
         ]);
@@ -3939,6 +3968,7 @@ export function Settings({
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
     loadBrowserPluginStatus,
+    loadFileIndexDashboard,
     loadLoggingStatus,
     loadMcpRuntimeData,
     loadPendingDiagnosticReports,
@@ -4054,11 +4084,15 @@ export function Settings({
     }
     let runtimePollTimer: number | null = null;
     let backgroundTaskPollTimer: number | null = null;
+    let fileIndexPollTimer: number | null = null;
     if (activeTab === 'remote') {
       scheduleRemoteTabWarmup();
     }
     if (activeTab === 'general') {
       void ensureTabResourcesLoaded('general');
+      fileIndexPollTimer = window.setInterval(() => {
+        void loadFileIndexDashboard();
+      }, Math.max(5000, SETTINGS_TAB_POLL_DELAY_MS));
     }
     if (activeTab === 'profile') {
       void ensureTabResourcesLoaded('profile');
@@ -4096,6 +4130,9 @@ export function Settings({
       if (backgroundTaskPollTimer) {
         window.clearInterval(backgroundTaskPollTimer);
       }
+      if (fileIndexPollTimer) {
+        window.clearInterval(fileIndexPollTimer);
+      }
       if (remoteTabWarmTimerRef.current != null) {
         window.clearTimeout(remoteTabWarmTimerRef.current);
         remoteTabWarmTimerRef.current = null;
@@ -4109,6 +4146,7 @@ export function Settings({
     isActive,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
+    loadFileIndexDashboard,
     loadRuntimeSessions,
     loadRuntimeTasks,
     runtimeSessions.length,
@@ -4312,16 +4350,33 @@ export function Settings({
       ));
       const releaseLogRetentionDays = Math.max(1, Number(formData.release_log_retention_days || 7) || 7);
       const releaseLogMaxFileMb = Math.max(1, Number(formData.release_log_max_file_mb || 10) || 10);
-      const normalizedOcrProvider = ['auto', 'api', 'local', 'disabled'].includes(String(formData.ocr_provider || '').trim())
-        ? String(formData.ocr_provider || '').trim()
-        : 'auto';
-      const parsedOcrTimeoutSeconds = Number(formData.ocr_timeout_seconds);
-      const ocrTimeoutSeconds = Number.isFinite(parsedOcrTimeoutSeconds)
-        ? Math.min(300, Math.max(10, Math.floor(parsedOcrTimeoutSeconds)))
-        : 60;
-      const normalizedOcrEndpoint = String(formData.ocr_endpoint || '').trim();
-      if (normalizedOcrProvider === 'api' && !normalizedOcrEndpoint) {
-        throw new Error('OCR Provider 设为 api 时必须填写远程 OCR Endpoint');
+      const normalizedVisualIndexProvider = ['openai-compatible', 'custom', 'disabled'].includes(String(formData.visual_index_provider || '').trim())
+        ? String(formData.visual_index_provider || '').trim()
+        : 'openai-compatible';
+      const parsedVisualIndexTimeoutSeconds = Number(formData.visual_index_timeout_seconds);
+      const visualIndexTimeoutSeconds = Number.isFinite(parsedVisualIndexTimeoutSeconds)
+        ? Math.min(300, Math.max(10, Math.floor(parsedVisualIndexTimeoutSeconds)))
+        : 90;
+      const parsedVisualIndexMaxImageEdge = Number(formData.visual_index_max_image_edge);
+      const visualIndexMaxImageEdge = Number.isFinite(parsedVisualIndexMaxImageEdge)
+        ? Math.min(4096, Math.max(512, Math.floor(parsedVisualIndexMaxImageEdge)))
+        : 1536;
+      const parsedVisualIndexPdfMaxPages = Number(formData.visual_index_pdf_max_pages);
+      const visualIndexPdfMaxPages = Number.isFinite(parsedVisualIndexPdfMaxPages)
+        ? Math.min(200, Math.max(1, Math.floor(parsedVisualIndexPdfMaxPages)))
+        : 12;
+      const parsedVisualIndexPdfRenderDpi = Number(formData.visual_index_pdf_render_dpi);
+      const visualIndexPdfRenderDpi = Number.isFinite(parsedVisualIndexPdfRenderDpi)
+        ? Math.min(300, Math.max(72, Math.floor(parsedVisualIndexPdfRenderDpi)))
+        : 144;
+      const parsedVisualIndexConcurrency = Number(formData.visual_index_concurrency);
+      const visualIndexConcurrency = Number.isFinite(parsedVisualIndexConcurrency)
+        ? Math.min(4, Math.max(1, Math.floor(parsedVisualIndexConcurrency)))
+        : 1;
+      const normalizedVisualIndexEndpoint = String(formData.visual_index_endpoint || '').trim();
+      const normalizedVisualIndexModel = String(formData.visual_index_model || '').trim();
+      if (formData.visual_index_enabled && normalizedVisualIndexProvider !== 'disabled' && (!normalizedVisualIndexEndpoint || !normalizedVisualIndexModel)) {
+        throw new Error('启用知识库视觉索引时必须填写多模态 Endpoint 和模型名');
       }
       const parsedParserTimeoutSeconds = Number(formData.parser_timeout_seconds);
       const parserTimeoutSeconds = Number.isFinite(parsedParserTimeoutSeconds)
@@ -4353,12 +4408,18 @@ export function Settings({
         embedding_model: resolvedEmbeddingModel,
         embedding_endpoint: String(resolvedEmbeddingSource?.baseURL || formData.embedding_endpoint || resolvedApiEndpoint).trim(),
         embedding_key: String(resolvedEmbeddingSource?.apiKey || formData.embedding_key || '').trim(),
-        ocr_provider: normalizedOcrProvider,
-        ocr_endpoint: normalizedOcrEndpoint,
-        ocr_api_key: String(formData.ocr_api_key || '').trim(),
-        ocr_model: String(formData.ocr_model || '').trim(),
-        ocr_timeout_seconds: ocrTimeoutSeconds,
-        ocr_local_fallback: Boolean(formData.ocr_local_fallback),
+        visual_index_enabled: Boolean(formData.visual_index_enabled) && normalizedVisualIndexProvider !== 'disabled',
+        visual_index_provider: normalizedVisualIndexProvider,
+        visual_index_endpoint: normalizedVisualIndexEndpoint,
+        visual_index_api_key: String(formData.visual_index_api_key || '').trim(),
+        visual_index_model: normalizedVisualIndexModel,
+        visual_index_prompt_version: String(formData.visual_index_prompt_version || 'visual-manifest-v1').trim() || 'visual-manifest-v1',
+        visual_index_timeout_seconds: visualIndexTimeoutSeconds,
+        visual_index_max_image_edge: visualIndexMaxImageEdge,
+        visual_index_skip_small_images: Boolean(formData.visual_index_skip_small_images),
+        visual_index_pdf_max_pages: visualIndexPdfMaxPages,
+        visual_index_pdf_render_dpi: visualIndexPdfRenderDpi,
+        visual_index_concurrency: visualIndexConcurrency,
         docling_endpoint: String(formData.docling_endpoint || '').trim(),
         tika_endpoint: String(formData.tika_endpoint || '').trim(),
         unstructured_endpoint: String(formData.unstructured_endpoint || '').trim(),
@@ -4476,6 +4537,9 @@ export function Settings({
                 handleTestNotificationSound={handleTestNotificationSound}
                 handlePickWorkspaceDir={handlePickWorkspaceDir}
                 handleResetWorkspaceDir={handleResetWorkspaceDir}
+                fileIndexDashboard={fileIndexDashboard}
+                fileIndexLoading={isFileIndexDashboardLoading}
+                handleRefreshFileIndexDashboard={loadFileIndexDashboard}
                 handleOpenKnowledgeApiGuide={handleOpenKnowledgeApiGuide}
                 recentDebugLogs={recentDebugLogs}
                 isDebugLogsLoading={isDebugLogsLoading}

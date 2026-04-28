@@ -458,6 +458,12 @@ pub fn handle_system_channel(
                             "updatedAt": now_iso(),
                         }),
                     );
+                    if payload_requests_visual_index_backfill(payload) {
+                        crate::knowledge_index::jobs::schedule_visual_backfill(
+                            app,
+                            "settings-visual-index",
+                        );
+                    }
                     Ok(json!({ "success": true }))
                 }
                 "debug:get-status" | "logs:get-status" => logging_status_value(state),
@@ -569,6 +575,12 @@ pub fn handle_system_channel(
     };
 
     Some(result)
+}
+
+fn payload_requests_visual_index_backfill(payload: &Value) -> bool {
+    payload_field(payload, "visual_index_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

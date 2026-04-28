@@ -1,4 +1,5 @@
 use glob::{MatchOptions, Pattern};
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -6,7 +7,7 @@ use std::time::UNIX_EPOCH;
 use tauri::State;
 
 use crate::knowledge_index::{
-    advisor_source_id, citation_anchors, document_blocks,
+    advisor_source_id, catalog_db_path, citation_anchors, document_blocks,
     hybrid::RetrievalMode,
     index_status,
     query_profile::{self, QueryProfile},
@@ -233,6 +234,14 @@ pub fn execute_read(
         {
             if let Some(anchor) = citation_anchors::read_anchor(state, &anchor_id)? {
                 let block = document_blocks::read_block(state, &anchor.block_id)?;
+                let visual_evidence = match block.as_ref() {
+                    Some(item) => visual_evidence_for_block(
+                        state,
+                        item.visual_unit_id.as_deref(),
+                        &item.evidence_refs_json,
+                    )?,
+                    None => Vec::new(),
+                };
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
                     "memberId": scope.member_id,
@@ -257,7 +266,20 @@ pub fn execute_read(
                     "lineStart": anchor.line_start,
                     "lineEnd": anchor.line_end,
                     "contentOrigin": block.as_ref().map(|item| item.content_origin.clone()),
-                    "ocrConfidence": block.as_ref().and_then(|item| item.ocr_confidence),
+                    "ocrConfidence": block.as_ref().and_then(|item| legacy_ocr_confidence(&item.content_origin, item.ocr_confidence)),
+                    "visualSource": block.as_ref().and_then(|item| visual_source_for_block(
+                        &item.content_origin,
+                        &item.source_id,
+                        &item.document_id,
+                        &item.relative_path,
+                        &item.absolute_path,
+                        item.page,
+                        &item.block_type,
+                        item.visual_unit_id.as_deref(),
+                        item.source_document_id.as_deref(),
+                        &item.evidence_refs_json
+                    )),
+                    "visualEvidence": visual_evidence,
                     "content": truncate_chars(&anchor.quote_text, parse_usize(arguments, "maxChars", DEFAULT_READ_MAX_CHARS, 20_000))
                 }));
             }
@@ -268,6 +290,11 @@ pub fn execute_read(
         {
             if let Some(block) = document_blocks::read_block(state, &block_id)? {
                 let anchors = citation_anchors::anchors_for_block(state, &block.block_id)?;
+                let visual_evidence = visual_evidence_for_block(
+                    state,
+                    block.visual_unit_id.as_deref(),
+                    &block.evidence_refs_json,
+                )?;
                 return Ok(json!({
                     "scopeKind": scope_kind_label(&scope),
                     "memberId": scope.member_id,
@@ -286,7 +313,20 @@ pub fn execute_read(
                     "title": block.title,
                     "language": block.language,
                     "contentOrigin": block.content_origin,
-                    "ocrConfidence": block.ocr_confidence,
+                    "ocrConfidence": legacy_ocr_confidence(&block.content_origin, block.ocr_confidence),
+                    "visualSource": visual_source_for_block(
+                        &block.content_origin,
+                        &block.source_id,
+                        &block.document_id,
+                        &block.relative_path,
+                        &block.absolute_path,
+                        block.page,
+                        &block.block_type,
+                        block.visual_unit_id.as_deref(),
+                        block.source_document_id.as_deref(),
+                        &block.evidence_refs_json
+                    ),
+                    "visualEvidence": visual_evidence,
                     "legalMetadata": {
                         "jurisdiction": block.jurisdiction,
                         "authority": block.authority,
@@ -901,6 +941,11 @@ fn build_hit_payloads_and_evidence_pack(
     let query_profile_json = query_profile::query_profile_to_json(query_profile);
     for hit in hits {
         let anchors = citation_anchors::anchors_for_block_query(state, &hit.block_id, query, 3)?;
+        let visual_evidence = visual_evidence_for_block(
+            state,
+            hit.visual_unit_id.as_deref(),
+            &hit.evidence_refs_json,
+        )?;
         let anchor_ids = anchors
             .iter()
             .map(|item| item.anchor_id.clone())
@@ -917,7 +962,21 @@ fn build_hit_payloads_and_evidence_pack(
             "title": hit.title,
             "language": hit.language,
             "contentOrigin": hit.content_origin,
-            "ocrConfidence": hit.ocr_confidence,
+            "ocrConfidence": legacy_ocr_confidence(&hit.content_origin, hit.ocr_confidence),
+            "visualSource": visual_source_for_block(
+                &hit.content_origin,
+                &hit.source_id,
+                &hit.document_id,
+                &hit.path,
+                &hit.absolute_path,
+                hit.page,
+                &hit.block_type,
+                hit.visual_unit_id.as_deref(),
+                hit.source_document_id.as_deref(),
+                &hit.evidence_refs_json
+            ),
+            "visualSummary": visual_summary_for_hit(&hit.content_origin, &hit.title, &hit.snippet),
+            "visualEvidence": visual_evidence,
             "legalMetadata": {
                 "jurisdiction": hit.jurisdiction,
                 "authority": hit.authority,
@@ -955,7 +1014,20 @@ fn build_hit_payloads_and_evidence_pack(
             "blockType": hit.block_type,
             "sectionPath": hit.section_path,
             "contentOrigin": hit.content_origin,
-            "ocrConfidence": hit.ocr_confidence,
+            "ocrConfidence": legacy_ocr_confidence(&hit.content_origin, hit.ocr_confidence),
+            "visualSource": visual_source_for_block(
+                &hit.content_origin,
+                &hit.source_id,
+                &hit.document_id,
+                &hit.path,
+                &hit.absolute_path,
+                hit.page,
+                &hit.block_type,
+                hit.visual_unit_id.as_deref(),
+                hit.source_document_id.as_deref(),
+                &hit.evidence_refs_json
+            ),
+            "visualEvidence": visual_evidence,
             "legalMetadata": {
                 "jurisdiction": hit.jurisdiction,
                 "authority": hit.authority,
@@ -1232,6 +1304,124 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     chars.into_iter().take(max_chars).collect::<String>()
 }
 
+fn legacy_ocr_confidence(content_origin: &str, confidence: Option<f64>) -> Option<f64> {
+    if content_origin == "ocr" {
+        confidence
+    } else {
+        None
+    }
+}
+
+fn visual_source_for_block(
+    content_origin: &str,
+    source_id: &str,
+    document_id: &str,
+    path: &str,
+    absolute_path: &str,
+    page: Option<i64>,
+    block_type: &str,
+    visual_unit_id: Option<&str>,
+    source_document_id: Option<&str>,
+    evidence_refs_json: &str,
+) -> Option<Value> {
+    if content_origin != "visual_llm" && !block_type.starts_with("image.") {
+        return None;
+    }
+    Some(json!({
+        "unitId": visual_unit_id,
+        "unitKind": if page.is_some() { "pdf_page" } else { "image_file" },
+        "sourceId": source_id,
+        "documentId": document_id,
+        "sourceDocumentId": source_document_id
+            .unwrap_or_else(|| document_id.split("#page=").next().unwrap_or(document_id)),
+        "path": path,
+        "absolutePath": absolute_path,
+        "pageNumber": page,
+        "blockType": block_type,
+        "evidenceRefs": parse_evidence_refs(evidence_refs_json)
+    }))
+}
+
+fn parse_evidence_refs(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+fn visual_evidence_for_block(
+    state: &State<'_, AppState>,
+    visual_unit_id: Option<&str>,
+    evidence_refs_json: &str,
+) -> Result<Vec<Value>, String> {
+    let Some(unit_id) = visual_unit_id.filter(|value| !value.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let wanted_refs = parse_evidence_refs(evidence_refs_json);
+    let conn = Connection::open(catalog_db_path(state)?).map_err(|error| error.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT evidence_id, unit_id, source_document_id, document_id, block_id,
+                   projection_id, page_number, bbox_json, label, text
+            FROM knowledge_visual_evidence
+            WHERE unit_id = ?1
+            ORDER BY evidence_id ASC
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = stmt
+        .query_map(params![unit_id], |row| {
+            let evidence_id: String = row.get(0)?;
+            let bbox_json: Option<String> = row.get(7)?;
+            let bbox = bbox_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                .unwrap_or(Value::Null);
+            Ok(json!({
+                "evidenceId": evidence_id,
+                "unitId": row.get::<_, String>(1)?,
+                "sourceDocumentId": row.get::<_, String>(2)?,
+                "documentId": row.get::<_, String>(3)?,
+                "blockId": row.get::<_, Option<String>>(4)?,
+                "projectionId": row.get::<_, Option<String>>(5)?,
+                "pageNumber": row.get::<_, Option<i64>>(6)?,
+                "bbox": bbox,
+                "label": row.get::<_, Option<String>>(8)?,
+                "text": row.get::<_, String>(9)?,
+            }))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut evidence = Vec::new();
+    for row in rows {
+        let item = row.map_err(|error| error.to_string())?;
+        if wanted_refs.is_empty()
+            || item
+                .get("evidenceId")
+                .and_then(Value::as_str)
+                .is_some_and(|value| {
+                    wanted_refs
+                        .iter()
+                        .any(|wanted| value.ends_with(&format!(":{wanted}")) || value == wanted)
+                })
+        {
+            evidence.push(item);
+        }
+    }
+    Ok(evidence)
+}
+
+fn visual_summary_for_hit(
+    content_origin: &str,
+    title: &Option<String>,
+    snippet: &str,
+) -> Option<Value> {
+    if content_origin != "visual_llm" {
+        return None;
+    }
+    Some(json!({
+        "title": title,
+        "snippet": snippet
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1324,5 +1514,37 @@ mod tests {
             parse_retrieval_mode(&json!({ "retrievalMode": "hybrid" }), &profile),
             RetrievalMode::Hybrid
         );
+    }
+
+    #[test]
+    fn visual_blocks_do_not_expose_legacy_ocr_confidence() {
+        assert_eq!(legacy_ocr_confidence("visual_llm", Some(0.98)), None);
+        assert_eq!(legacy_ocr_confidence("ocr", Some(0.76)), Some(0.76));
+    }
+
+    #[test]
+    fn visual_source_metadata_points_to_original_unit_and_page() {
+        let source = visual_source_for_block(
+            "visual_llm",
+            "source-1",
+            "source-1:scans/contract.pdf#page=3",
+            "scans/contract.pdf#page=3",
+            "/tmp/contract.pdf",
+            Some(3),
+            "image.visible_text",
+            Some("unit-3"),
+            Some("source-1:scans/contract.pdf"),
+            r#"["fact_visible_text"]"#,
+        )
+        .expect("visual source");
+
+        assert_eq!(source["unitId"], json!("unit-3"));
+        assert_eq!(source["unitKind"], json!("pdf_page"));
+        assert_eq!(
+            source["sourceDocumentId"],
+            json!("source-1:scans/contract.pdf")
+        );
+        assert_eq!(source["pageNumber"], json!(3));
+        assert_eq!(source["evidenceRefs"], json!(["fact_visible_text"]));
     }
 }
