@@ -33,6 +33,7 @@ import { resolveUsableTranscript } from '../features/audio-input/transcriptionRe
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
+import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
@@ -149,6 +150,10 @@ interface StructuredChatErrorNotice {
   hint?: string;
   detail?: string;
   metaParts?: string[];
+  action?: {
+    label: string;
+    target: 'settings-login';
+  };
 }
 
 function stripTransientAttachmentPreview(
@@ -390,6 +395,7 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
     : `${String(payload?.message || '').trim()}\n${String(payload?.raw || '').trim()}`);
   const data = typeof payload === 'string' ? embedded : { ...embedded, ...(payload || {}) };
   const title = String(data.title || data.message || '').trim() || '请求失败';
+  const normalizedTitle = title.replace(/\s+/g, '');
   const detail = String(data.detail || data.raw || '').trim();
   const hint = String(data.hint || '').trim();
   const layer = String(data.layer || data.category || '').trim();
@@ -405,6 +411,11 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
     hint: hint || undefined,
     detail: detail || undefined,
     metaParts: metaParts.length > 0 ? metaParts : undefined,
+    action: normalizedTitle.includes('余额不足')
+      || normalizedTitle.includes('登陆失效')
+      || normalizedTitle.includes('登录失效')
+      ? { label: '去登录页', target: 'settings-login' }
+      : undefined,
   };
 }
 
@@ -857,6 +868,12 @@ export function Chat({
     if (!isActive) return;
     void loadChatModelOptions();
   }, [isActive, loadChatModelOptions]);
+
+  const handleOpenSettingsLogin = useCallback(() => {
+    window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, {
+      detail: { view: 'settings', settingsTab: 'ai', aiModelSubTab: 'login' },
+    }));
+  }, []);
 
   useEffect(() => {
     if (!isActive || messages.length === 0) return;
@@ -3290,6 +3307,15 @@ export function Chat({
                           <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-5 text-red-800/85 dark:text-red-200/90">
                             {errorNotice.detail}
                           </pre>
+                        )}
+                        {errorNotice.action?.target === 'settings-login' && (
+                          <button
+                            type="button"
+                            onClick={handleOpenSettingsLogin}
+                            className="mt-3 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                          >
+                            {errorNotice.action.label}
+                          </button>
                         )}
                       </>
                     )}
