@@ -3129,6 +3129,10 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                     <div className="space-y-2.5">
                                         {selectedDocumentSource.visualBlocks.map((block) => {
                                             const evidenceWithBbox = (block.visualEvidence || []).filter((evidence) => evidence.bbox);
+                                            const visualPreviewPath = block.absolutePath || block.path;
+                                            const showVisualBboxPreview = block.unitKind === 'image_file'
+                                                && hasRenderableAssetUrl(visualPreviewPath)
+                                                && evidenceWithBbox.length > 0;
                                             return (
                                                 <div key={block.blockId} className="rounded-2xl border border-black/[0.04] bg-black/[0.015] p-4">
                                                     <div className="flex flex-wrap items-center gap-2 text-[9px] font-bold uppercase tracking-widest text-text-tertiary">
@@ -3151,6 +3155,36 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                                                     <div className="mt-2 text-[10px] font-bold text-text-tertiary/70 break-all">
                                                         {block.path}
                                                     </div>
+                                                    {showVisualBboxPreview && (
+                                                        <div className="mt-3 w-full max-w-sm overflow-hidden rounded-xl border border-black/[0.06] bg-black/[0.03]">
+                                                            <div className="relative aspect-video">
+                                                                <img
+                                                                    src={resolveAssetUrl(visualPreviewPath)}
+                                                                    alt=""
+                                                                    className="absolute inset-0 h-full w-full object-contain"
+                                                                />
+                                                                {evidenceWithBbox.slice(0, 6).map((evidence) => {
+                                                                    const bbox = evidence.bbox || {};
+                                                                    const left = Math.max(0, Math.min(1, Number(bbox.x ?? 0)));
+                                                                    const top = Math.max(0, Math.min(1, Number(bbox.y ?? 0)));
+                                                                    const width = Math.max(0.02, Math.min(1 - left, Number(bbox.width ?? 0)));
+                                                                    const height = Math.max(0.02, Math.min(1 - top, Number(bbox.height ?? 0)));
+                                                                    return (
+                                                                        <div
+                                                                            key={`${block.blockId}-bbox-${evidence.id || evidence.title || evidence.text}`}
+                                                                            className="absolute border-2 border-emerald-400 bg-emerald-300/20 shadow-[0_0_0_1px_rgba(6,95,70,0.22)]"
+                                                                            style={{
+                                                                                left: `${left * 100}%`,
+                                                                                top: `${top * 100}%`,
+                                                                                width: `${width * 100}%`,
+                                                                                height: `${height * 100}%`,
+                                                                            }}
+                                                                        />
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                     {evidenceWithBbox.length > 0 && (
                                                         <div className="mt-3 flex flex-wrap gap-1.5">
                                                             {evidenceWithBbox.slice(0, 4).map((evidence) => (
