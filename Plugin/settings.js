@@ -1,11 +1,6 @@
 const DEFAULT_SETTINGS = {
   knowledgeApiBaseUrl: 'http://127.0.0.1:31937',
   knowledgeApiEndpointPath: '/api/knowledge',
-  xhsIntervalMinSeconds: 1.5,
-  xhsIntervalMaxSeconds: 3.5,
-  xhsBloggerNoteLimit: 50,
-  xhsKeywordNoteLimit: 20,
-  xhsLinkBatchLimit: 50,
   saveToRedboxByDefault: true,
   autoUpdateCheck: true,
 };
@@ -14,11 +9,6 @@ const elements = {
   form: document.getElementById('settings-form'),
   apiBaseUrl: document.getElementById('api-base-url'),
   apiEndpointPath: document.getElementById('api-endpoint-path'),
-  intervalMin: document.getElementById('interval-min'),
-  intervalMax: document.getElementById('interval-max'),
-  bloggerLimit: document.getElementById('blogger-limit'),
-  keywordLimit: document.getElementById('keyword-limit'),
-  batchLimit: document.getElementById('batch-limit'),
   saveDefault: document.getElementById('save-default'),
   autoUpdate: document.getElementById('auto-update'),
   reset: document.getElementById('reset-settings'),
@@ -62,26 +52,10 @@ function sendMessage(message) {
   });
 }
 
-function clampNumber(value, min, max, fallback) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  return Math.max(min, Math.min(number, max));
-}
-
 function normalizeFormSettings() {
-  let minSeconds = clampNumber(Number(elements.intervalMin.value), 0.5, 60, DEFAULT_SETTINGS.xhsIntervalMinSeconds);
-  let maxSeconds = clampNumber(Number(elements.intervalMax.value), 0.5, 60, DEFAULT_SETTINGS.xhsIntervalMaxSeconds);
-  if (maxSeconds < minSeconds) {
-    [minSeconds, maxSeconds] = [maxSeconds, minSeconds];
-  }
   return {
     knowledgeApiBaseUrl: elements.apiBaseUrl.value.trim() || DEFAULT_SETTINGS.knowledgeApiBaseUrl,
     knowledgeApiEndpointPath: elements.apiEndpointPath.value.trim() || DEFAULT_SETTINGS.knowledgeApiEndpointPath,
-    xhsIntervalMinSeconds: Math.round(minSeconds * 10) / 10,
-    xhsIntervalMaxSeconds: Math.round(maxSeconds * 10) / 10,
-    xhsBloggerNoteLimit: Math.round(clampNumber(Number(elements.bloggerLimit.value), 1, 200, DEFAULT_SETTINGS.xhsBloggerNoteLimit)),
-    xhsKeywordNoteLimit: Math.round(clampNumber(Number(elements.keywordLimit.value), 1, 50, DEFAULT_SETTINGS.xhsKeywordNoteLimit)),
-    xhsLinkBatchLimit: Math.round(clampNumber(Number(elements.batchLimit.value), 1, 50, DEFAULT_SETTINGS.xhsLinkBatchLimit)),
     saveToRedboxByDefault: elements.saveDefault.checked,
     autoUpdateCheck: elements.autoUpdate.checked,
   };
@@ -91,11 +65,6 @@ function renderSettings(settings) {
   const next = { ...DEFAULT_SETTINGS, ...(settings || {}) };
   elements.apiBaseUrl.value = next.knowledgeApiBaseUrl;
   elements.apiEndpointPath.value = next.knowledgeApiEndpointPath;
-  elements.intervalMin.value = next.xhsIntervalMinSeconds;
-  elements.intervalMax.value = next.xhsIntervalMaxSeconds;
-  elements.bloggerLimit.value = next.xhsBloggerNoteLimit;
-  elements.keywordLimit.value = next.xhsKeywordNoteLimit;
-  elements.batchLimit.value = next.xhsLinkBatchLimit;
   elements.saveDefault.checked = next.saveToRedboxByDefault !== false;
   elements.autoUpdate.checked = next.autoUpdateCheck !== false;
 }

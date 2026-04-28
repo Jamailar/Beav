@@ -44,11 +44,12 @@ const MENU_VIDEO_ID = 'redbox-save-video';
 const DEFAULT_PLUGIN_SETTINGS = {
   knowledgeApiBaseUrl: 'http://127.0.0.1:31937',
   knowledgeApiEndpointPath: '/api/knowledge',
-  xhsIntervalMinSeconds: 1.5,
-  xhsIntervalMaxSeconds: 3.5,
+  xhsIntervalMinSeconds: 3,
+  xhsIntervalMaxSeconds: 6,
   xhsBloggerNoteLimit: 50,
   xhsKeywordNoteLimit: 20,
   xhsLinkBatchLimit: 50,
+  xhsBloggerCollectionMode: 'api',
   saveToRedboxByDefault: true,
   autoUpdateCheck: true,
 };
@@ -93,6 +94,18 @@ function pluginWarn(scope, details) {
 
 function pluginError(scope, details) {
   console.error(`[redbox-plugin][${scope}]`, details);
+}
+
+function pluginDebug(scope, details) {
+  console.debug(`[redbox-plugin][debug][${scope}]`, details);
+}
+
+function shouldLogMessageType(type) {
+  const noisyTypes = new Set([
+    'page-state:update',
+    'xhs:get-task-queue',
+  ]);
+  return !noisyTypes.has(String(type || ''));
 }
 
 function createLinkFallbackPageInfo(overrides = {}) {
@@ -232,12 +245,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function handleMessage(message, sender) {
   const tabContext = await resolveMessageTab(message, sender);
   const tabId = tabContext.tabId;
-  pluginLog('handle-message', {
-    type: message?.type || 'unknown',
-    tabId: tabId || null,
-    senderTabUrl: String(sender?.tab?.url || ''),
-    resolvedTabUrl: String(tabContext.tab?.url || ''),
-  });
+  if (shouldLogMessageType(message?.type)) {
+    pluginLog('handle-message', {
+      type: message?.type || 'unknown',
+      tabId: tabId || null,
+      senderTabUrl: String(sender?.tab?.url || ''),
+      resolvedTabUrl: String(tabContext.tab?.url || ''),
+    });
+  }
 
   switch (message?.type) {
     case 'page-state:update':
@@ -337,6 +352,8 @@ async function handleMessage(message, sender) {
       });
     case 'xhs:get-task-queue':
       return { success: true, queue: getXhsTaskQueueState() };
+    case 'xhs:control-active-task':
+      return controlXhsActiveTask(message?.action);
     case 'xhs:get-history':
       return await getXhsTaskHistory();
     case 'xhs:clear-history':
@@ -703,8 +720,45 @@ function normalizePluginSettings(input = {}) {
     xhsBloggerNoteLimit: Math.round(clampNumber(source.xhsBloggerNoteLimit, 1, 200, DEFAULT_PLUGIN_SETTINGS.xhsBloggerNoteLimit)),
     xhsKeywordNoteLimit: Math.round(clampNumber(source.xhsKeywordNoteLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsKeywordNoteLimit)),
     xhsLinkBatchLimit: Math.round(clampNumber(source.xhsLinkBatchLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsLinkBatchLimit)),
+    xhsBloggerCollectionMode: normalizeText(source.xhsBloggerCollectionMode) === 'tab' ? 'tab' : 'api',
     saveToRedboxByDefault: source.saveToRedboxByDefault !== false,
     autoUpdateCheck: source.autoUpdateCheck !== false,
+  };
+}
+
+function resolveXhsCollectionMode(modeInput, fallback = DEFAULT_PLUGIN_SETTINGS.xhsBloggerCollectionMode) {
+  return normalizeText(modeInput) === 'tab'
+    ? 'tab'
+    : normalizeText(fallback) === 'tab'
+      ? 'tab'
+      : 'api';
+}
+
+function normalizeXhsBloggerCollectOptions(options = {}, settingsInput) {
+  const settings = normalizePluginSettings(settingsInput || DEFAULT_PLUGIN_SETTINGS);
+  const source = options && typeof options === 'object' ? options : {};
+  const mode = resolveXhsCollectionMode(source.mode, settings.xhsBloggerCollectionMode);
+  const limit = Math.round(clampNumber(source.limit, 1, 200, settings.xhsBloggerNoteLimit));
+  const interval = normalizeXhsCollectInterval({
+    minSeconds: Math.max(3, clampNumber(
+      source?.interval?.minSeconds ?? source?.intervalMinSeconds ?? settings.xhsIntervalMinSeconds,
+      3,
+      XHS_COLLECT_INTERVAL_MAX_MS / 1000,
+      Math.max(3, settings.xhsIntervalMinSeconds),
+    )),
+    maxSeconds: clampNumber(
+      source?.interval?.maxSeconds ?? source?.intervalMaxSeconds ?? settings.xhsIntervalMaxSeconds,
+      3,
+      XHS_COLLECT_INTERVAL_MAX_MS / 1000,
+      Math.max(6, settings.xhsIntervalMaxSeconds),
+    ),
+  });
+  return {
+    ...source,
+    mode,
+    limit,
+    interval,
+    saveToRedBox: source.saveToRedBox !== false,
   };
 }
 
@@ -1129,6 +1183,17 @@ function sanitizeXhsTaskForState(task) {
     updatedAt: normalizeText(task.updatedAt),
     summary: normalizeText(task.summary),
     error: normalizeText(task.error),
+    savedCount: Number(task.savedCount || 0),
+    paused: task.paused === true,
+    cancelRequested: task.cancelRequested === true,
+    progress: task.progress && typeof task.progress === 'object'
+      ? {
+          current: Number(task.progress.current || 0),
+          total: Number(task.progress.total || 0),
+          message: normalizeText(task.progress.message),
+          mode: normalizeText(task.progress.mode),
+        }
+      : null,
   };
 }
 
@@ -1161,6 +1226,84 @@ function getXhsTaskQueueState() {
     queuedCount: xhsTaskQueue.length,
     running: Boolean(xhsActiveTask),
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function setActiveXhsTaskProgress(progressPatch = {}) {
+  if (!xhsActiveTask) return getXhsTaskQueueState();
+  const previous = xhsActiveTask.progress && typeof xhsActiveTask.progress === 'object'
+    ? xhsActiveTask.progress
+    : {};
+  xhsActiveTask.progress = {
+    ...previous,
+    ...progressPatch,
+    current: Number(progressPatch.current ?? previous.current ?? 0),
+    total: Number(progressPatch.total ?? previous.total ?? 0),
+    message: normalizeText(progressPatch.message ?? previous.message),
+    mode: normalizeText(progressPatch.mode ?? previous.mode),
+  };
+  xhsActiveTask.updatedAt = new Date().toISOString();
+  pluginDebug('xhs-task-progress', {
+    taskId: xhsActiveTask.id,
+    type: xhsActiveTask.type,
+    progress: xhsActiveTask.progress,
+  });
+  return publishXhsTaskQueueState();
+}
+
+function ensureXhsTaskNotCancelled() {
+  if (xhsActiveTask?.cancelRequested) {
+    throw new Error('采集任务已取消');
+  }
+}
+
+async function waitIfXhsTaskPaused() {
+  while (xhsActiveTask?.paused) {
+    await sleep(250);
+    ensureXhsTaskNotCancelled();
+  }
+}
+
+async function syncXhsTaskStep(progressPatch = {}) {
+  ensureXhsTaskNotCancelled();
+  await waitIfXhsTaskPaused();
+  setActiveXhsTaskProgress(progressPatch);
+}
+
+function controlXhsActiveTask(actionInput) {
+  const action = normalizeText(actionInput);
+  if (!xhsActiveTask) {
+    return {
+      success: false,
+      error: '当前没有执行中的采集任务',
+      queue: getXhsTaskQueueState(),
+    };
+  }
+  if (action === 'pause') {
+    xhsActiveTask.paused = true;
+  } else if (action === 'resume') {
+    xhsActiveTask.paused = false;
+  } else if (action === 'cancel') {
+    xhsActiveTask.cancelRequested = true;
+    xhsActiveTask.paused = false;
+  } else {
+    return {
+      success: false,
+      error: '不支持的任务控制动作',
+      queue: getXhsTaskQueueState(),
+    };
+  }
+  xhsActiveTask.updatedAt = new Date().toISOString();
+  pluginDebug('xhs-task-control', {
+    taskId: xhsActiveTask.id,
+    type: xhsActiveTask.type,
+    action,
+    paused: xhsActiveTask.paused === true,
+    cancelRequested: xhsActiveTask.cancelRequested === true,
+  });
+  return {
+    success: true,
+    queue: publishXhsTaskQueueState(),
   };
 }
 
@@ -1237,13 +1380,32 @@ function buildXhsTaskLogMessage(task, status, result, error) {
   }
   if (status === 'failed') {
     const detail = error instanceof Error ? error.message : normalizeText(error);
-    return `${action}失败${detail ? `：${detail}` : ''}`;
+    const progress = task?.progress?.total
+      ? `（进度 ${Number(task.progress.current || 0)}/${Number(task.progress.total || 0)}）`
+      : '';
+    return `${action}失败${progress}${detail ? `：${detail}` : ''}`;
   }
   const summary = normalizeText(result?.task?.summary || result?.summary || summarizeXhsTaskResult(result));
   if (status === 'partial') {
     return `${action}部分完成：${summary}`;
   }
   return `${action}成功：${summary}`;
+}
+
+function setActiveXhsTaskSavedCount(value) {
+  if (!xhsActiveTask) return;
+  xhsActiveTask.savedCount = Math.max(0, Number(value || 0));
+  xhsActiveTask.updatedAt = new Date().toISOString();
+}
+
+function describeBloggerCollectOptions(options = {}) {
+  return {
+    mode: normalizeText(options?.mode) || 'api',
+    limit: Number(options?.limit || 0),
+    intervalMinSeconds: Number(options?.interval?.minMs || 0) / 1000,
+    intervalMaxSeconds: Number(options?.interval?.maxMs || 0) / 1000,
+    saveToRedBox: options?.saveToRedBox !== false,
+  };
 }
 
 async function hydrateXhsTaskLogs() {
@@ -1268,6 +1430,11 @@ function appendXhsTaskLog(entry) {
 
 function publishXhsTaskQueueState() {
   const queue = getXhsTaskQueueState();
+  pluginDebug('xhs-task-queue-state', {
+    active: queue.active,
+    queuedCount: queue.queuedCount,
+    running: queue.running,
+  });
   void setStorageLocal({ [XHS_TASK_QUEUE_STATE_KEY]: queue }).catch((error) => {
     pluginWarn('xhs-task-queue-store-failed', { error: describeError(error) });
   });
@@ -1284,6 +1451,10 @@ function enqueueXhsTask({ type, title, tabId, execute }) {
       title,
       tabId,
       status: 'queued',
+      savedCount: 0,
+      paused: false,
+      cancelRequested: false,
+      progress: null,
       createdAt: now,
       updatedAt: now,
       execute,
@@ -1291,6 +1462,13 @@ function enqueueXhsTask({ type, title, tabId, execute }) {
       reject,
     };
     xhsTaskQueue.push(task);
+    pluginDebug('xhs-task-enqueue', {
+      taskId: task.id,
+      type,
+      title,
+      tabId,
+      queuedCount: xhsTaskQueue.length,
+    });
     publishXhsTaskQueueState();
     void runNextXhsTask();
   });
@@ -1301,8 +1479,18 @@ async function runNextXhsTask() {
   const task = xhsTaskQueue.shift();
   xhsActiveTask = task;
   task.status = 'running';
+  task.savedCount = 0;
+  task.paused = false;
+  task.cancelRequested = false;
+  task.progress = null;
   task.startedAt = new Date().toISOString();
   task.updatedAt = task.startedAt;
+  pluginDebug('xhs-task-start', {
+    taskId: task.id,
+    type: task.type,
+    title: task.title,
+    tabId: task.tabId,
+  });
   appendXhsTaskLog({
     taskId: task.id,
     type: task.type,
@@ -1314,6 +1502,11 @@ async function runNextXhsTask() {
   publishXhsTaskQueueState();
   try {
     const result = await task.execute();
+    pluginDebug('xhs-task-finish', {
+      taskId: task.id,
+      type: task.type,
+      result,
+    });
     const logStatus = classifyXhsTaskResult(result);
     task.status = logStatus === 'success' ? 'completed' : logStatus;
     task.summary = summarizeXhsTaskResult(result);
@@ -1333,17 +1526,31 @@ async function runNextXhsTask() {
       taskQueue: getXhsTaskQueueState(),
     });
   } catch (error) {
-    task.status = 'failed';
-    task.error = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    const cancelled = /已取消/.test(message);
+    const savedCount = Math.max(0, Number(task.savedCount || 0));
+    pluginWarn('xhs-task-failed', {
+      taskId: task.id,
+      type: task.type,
+      title: task.title,
+      error: message,
+      savedCount,
+      progress: task.progress || null,
+    });
+    task.status = cancelled ? 'cancelled' : 'failed';
+    task.error = message;
+    task.summary = cancelled ? `采集已取消，已保存 ${savedCount} 条` : '';
     task.completedAt = new Date().toISOString();
     task.updatedAt = task.completedAt;
     xhsLastTask = task;
     appendXhsTaskLog({
       taskId: task.id,
       type: task.type,
-      status: 'failed',
+      status: cancelled ? 'partial' : 'failed',
       title: task.title,
-      message: buildXhsTaskLogMessage(task, 'failed', null, error),
+      message: cancelled
+        ? `${getXhsTaskActionLabel(task.type)}已取消，已保存 ${savedCount} 条`
+        : buildXhsTaskLogMessage(task, 'failed', null, error),
       createdAt: task.completedAt,
     });
     task.reject(error);
@@ -3083,12 +3290,148 @@ async function collectXhsBloggerFromTab(tabId) {
   };
 }
 
+function parseXhsNoteUrl(urlInput) {
+  try {
+    const parsed = new URL(String(urlInput || ''));
+    const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([A-Za-z0-9]+)/);
+    if (!match?.[1]) return null;
+    return {
+      id: match[1],
+      token: normalizeText(parsed.searchParams.get('xsec_token')),
+      source: normalizeText(parsed.searchParams.get('xsec_source')) || 'pc_user',
+      href: parsed.toString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function pickXhsImageUrl(image) {
+  if (!image) return '';
+  if (typeof image === 'string') return normalizeText(image);
+  if (Array.isArray(image)) {
+    for (const item of image) {
+      const url = pickXhsImageUrl(item);
+      if (url) return url;
+    }
+    return '';
+  }
+  return normalizeText(
+    image.urlDefault
+    || image.url_default
+    || image.urlPre
+    || image.url_pre
+    || image.url
+    || image.info_list?.[0]?.url
+    || image.infoList?.[0]?.url
+    || image.src,
+  );
+}
+
+function pickXhsVideoUrl(video) {
+  const stream = video?.media?.stream || video?.consumer?.origin_video_key || video?.stream || null;
+  if (!stream || typeof stream !== 'object') return '';
+  const groups = [
+    ...(Array.isArray(stream.h265) ? stream.h265 : []),
+    ...(Array.isArray(stream.h_265) ? stream.h_265 : []),
+    ...(Array.isArray(stream.h264) ? stream.h264 : []),
+    ...(Array.isArray(stream.h_264) ? stream.h_264 : []),
+    ...(Array.isArray(stream.av1) ? stream.av1 : []),
+  ].filter(Boolean);
+  groups.sort((left, right) => Number(right?.size || 0) - Number(left?.size || 0));
+  return normalizeText(groups[0]?.master_url || groups[0]?.backup_url || '');
+}
+
+function buildXhsNotePayloadFromFeed(feedResult, fallback = {}) {
+  const rawItems = Array.isArray(feedResult?.items)
+    ? feedResult.items
+    : Array.isArray(feedResult?.data?.items)
+      ? feedResult.data.items
+      : Array.isArray(feedResult?.result?.items)
+        ? feedResult.result.items
+        : [];
+  const firstItem = rawItems[0] || null;
+  const noteCard =
+    firstItem?.note_card
+    || firstItem?.noteCard
+    || firstItem?.item?.note_card
+    || firstItem?.item?.noteCard
+    || feedResult?.note_card
+    || feedResult?.noteCard
+    || null;
+  if (!noteCard) {
+    pluginWarn('xhs-feed-shape-unexpected', {
+      fallback,
+      feedResultType: typeof feedResult,
+      feedResultKeys: feedResult && typeof feedResult === 'object' ? Object.keys(feedResult).slice(0, 20) : [],
+      firstItemKeys: firstItem && typeof firstItem === 'object' ? Object.keys(firstItem).slice(0, 20) : [],
+      sample: firstItem && typeof firstItem === 'object'
+        ? {
+            model_type: firstItem.model_type,
+            note_card: Boolean(firstItem.note_card),
+            noteCard: Boolean(firstItem.noteCard),
+            item: Boolean(firstItem.item),
+          }
+        : null,
+    });
+    throw new Error(`未获取到笔记详情接口数据（keys: ${(feedResult && typeof feedResult === 'object' ? Object.keys(feedResult).slice(0, 6).join(',') : 'none') || 'none'}）`);
+  }
+  const noteId = normalizeText(noteCard.note_id || noteCard.noteId || fallback.id);
+  const source = normalizeText(fallback.href) || `https://www.xiaohongshu.com/explore/${noteId}`;
+  const images = Array.isArray(noteCard.image_list)
+    ? noteCard.image_list.map((item) => pickXhsImageUrl(item)).filter(Boolean)
+    : [];
+  return {
+    source,
+    noteId,
+    noteType: normalizeText(noteCard.type) === 'video' ? 'video' : 'image',
+    title: normalizeText(noteCard.title),
+    text: normalizeText(noteCard.desc),
+    content: normalizeText(noteCard.desc),
+    author: normalizeText(noteCard.user?.nickname),
+    authorProfileUrl: noteCard.user?.user_id
+      ? `https://www.xiaohongshu.com/user/profile/${noteCard.user.user_id}`
+      : '',
+    coverUrl: images[0] || pickXhsImageUrl(noteCard.cover) || '',
+    images,
+    videoUrl: pickXhsVideoUrl(noteCard.video),
+    stats: {
+      likes: Number(noteCard.interact_info?.liked_count || 0),
+      collects: Number(noteCard.interact_info?.collected_count || 0),
+    },
+  };
+}
+
 async function collectXhsBloggerNotesFromTab(tabId, options = {}) {
-  const settings = await readPluginSettings();
-  const limit = Math.max(1, Math.min(Number(options?.limit || settings.xhsBloggerNoteLimit), 200));
+  pluginLog('xhs-blogger-notes-dispatch', {
+    tabId,
+    rawOptions: options || {},
+  });
   const payload = await runExtraction(tabId, extractXhsBloggerNotesPayload, {
     world: 'MAIN',
-    args: [limit, normalizeText(options?.mode) || 'auto'],
+    args: [Number(options?.limit || 50), normalizeText(options?.mode) === 'tab' ? 'rpa' : 'api'],
+  });
+  return await collectXhsBloggerNotesByMode(tabId, payload, options);
+}
+
+async function collectXhsBloggerNotesByMode(tabId, payload, options = {}) {
+  const settings = await readPluginSettings();
+  const normalizedOptions = normalizeXhsBloggerCollectOptions(options, settings);
+  pluginLog('xhs-blogger-notes-payload', {
+    tabId,
+    userId: normalizeText(payload?.userId),
+    nickname: normalizeText(payload?.nickname),
+    extractedNotes: Array.isArray(payload?.notes) ? payload.notes.length : 0,
+    extractedUrls: Array.isArray(payload?.urls) ? payload.urls.length : 0,
+    payloadCollectionMode: normalizeText(payload?.collectionMode),
+    payloadApiError: normalizeText(payload?.apiError),
+    options: describeBloggerCollectOptions(normalizedOptions),
+  });
+  appendXhsTaskLog({
+    type: 'xhs:collect-blogger-notes',
+    status: 'running',
+    title: `采集当前博主笔记（${normalizedOptions.limit} 条）`,
+    message: `模式 ${normalizedOptions.mode === 'tab' ? '传统 Tab' : 'API'}，识别到 ${Array.isArray(payload?.urls) ? payload.urls.length : 0} 条候选笔记`,
   });
   const urls = Array.from(new Set(Array.isArray(payload?.urls)
     ? payload.urls.map((url) => normalizeText(url)).filter(Boolean)
@@ -3097,9 +3440,29 @@ async function collectXhsBloggerNotesFromTab(tabId, options = {}) {
     const reason = normalizeText(payload?.apiError);
     throw new Error(reason || '当前博主页未识别到可采集的笔记，请确认已登录并滚动加载主页笔记');
   }
+  if (normalizedOptions.mode === 'tab') {
+    return await collectXhsBloggerNotesWithTabs(payload, urls, normalizedOptions);
+  }
+  return await collectXhsBloggerNotesViaApi(tabId, payload, normalizedOptions);
+}
+
+async function collectXhsBloggerNotesWithTabs(payload, urls, options = {}) {
   const titleName = normalizeText(payload?.nickname) || normalizeText(payload?.userId) || '小红书博主';
+  pluginLog('xhs-blogger-notes-tab-mode', {
+    blogger: titleName,
+    userId: normalizeText(payload?.userId),
+    urlCount: urls.length,
+    options: describeBloggerCollectOptions(options),
+  });
+  appendXhsTaskLog({
+    type: 'xhs:collect-blogger-notes',
+    status: 'running',
+    title: `采集当前博主笔记（${urls.length} 条）`,
+    message: `传统模式启动：${titleName}，待打开 ${urls.length} 个详情页`,
+  });
   const response = await collectXhsNoteLinks(urls, {
     ...options,
+    mode: 'tab',
     limit: urls.length,
     taskType: 'blogger-notes',
     taskTitle: `博主笔记采集：${titleName}`,
@@ -3116,6 +3479,166 @@ async function collectXhsBloggerNotesFromTab(tabId, options = {}) {
       apiError: normalizeText(payload?.apiError),
       collectionMode: normalizeText(payload?.collectionMode),
     },
+  };
+}
+
+async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
+  const notes = Array.isArray(payload?.notes) ? payload.notes : [];
+  const titleName = normalizeText(payload?.nickname) || normalizeText(payload?.userId) || '小红书博主';
+  const targetNotes = notes
+    .map((item) => ({
+      ...item,
+      urlInfo: parseXhsNoteUrl(item?.url),
+    }))
+    .filter((item) => item.urlInfo?.id)
+    .slice(0, options.limit);
+  if (targetNotes.length === 0) {
+    throw new Error('当前博主页未识别到可用于 API 采集的笔记链接');
+  }
+  pluginLog('xhs-blogger-notes-api-mode', {
+    tabId,
+    blogger: titleName,
+    userId: normalizeText(payload?.userId),
+    candidateNotes: notes.length,
+    targetNotes: targetNotes.length,
+    options: describeBloggerCollectOptions(options),
+  });
+  appendXhsTaskLog({
+    type: 'xhs:collect-blogger-notes',
+    status: 'running',
+    title: `采集当前博主笔记（${targetNotes.length} 条）`,
+    message: `API 模式启动：${titleName}，准备采集 ${targetNotes.length} 条`,
+  });
+
+  const results = [];
+  const failures = [];
+  await syncXhsTaskStep({
+    current: 0,
+    total: targetNotes.length,
+    message: `准备采集 ${titleName} 的笔记`,
+    mode: 'api',
+  });
+
+  for (let index = 0; index < targetNotes.length; index += 1) {
+    const note = targetNotes[index];
+    pluginLog('xhs-blogger-notes-api-item-start', {
+      blogger: titleName,
+      index: index + 1,
+      total: targetNotes.length,
+      noteId: normalizeText(note?.urlInfo?.id),
+      url: normalizeText(note?.urlInfo?.href),
+    });
+    await syncXhsTaskStep({
+      current: results.length + failures.length,
+      total: targetNotes.length,
+      message: `API 模式采集中 ${index + 1}/${targetNotes.length}`,
+      mode: 'api',
+    });
+    let intervalMs = 0;
+    try {
+      if (index > 0) {
+        intervalMs = await sleepXhsCollectInterval(options.interval);
+      }
+      const feedResult = await runExtraction(tabId, extractXhsNoteFeedByUrlFromCurrentPage, {
+        world: 'MAIN',
+        args: [note.urlInfo.href, note.urlInfo.id],
+      });
+      const entryPayload = buildXhsNotePayloadFromFeed(feedResult, note.urlInfo);
+      const response = options.saveToRedBox !== false ? await postKnowledgeEntry(buildXhsEntry(entryPayload)) : null;
+      results.push({
+        url: note.urlInfo.href,
+        title: normalizeText(entryPayload.title) || note.urlInfo.href,
+        noteId: entryPayload.noteId,
+        entryId: response?.entryId || '',
+        duplicate: Boolean(response?.duplicate),
+        intervalMs,
+      });
+      setActiveXhsTaskSavedCount(results.length);
+      pluginLog('xhs-blogger-notes-api-item-success', {
+        blogger: titleName,
+        index: index + 1,
+        total: targetNotes.length,
+        noteId: entryPayload.noteId,
+        title: normalizeText(entryPayload.title),
+        entryId: response?.entryId || '',
+        duplicate: Boolean(response?.duplicate),
+        intervalMs,
+      });
+      setActiveXhsTaskProgress({
+        current: results.length + failures.length,
+        total: targetNotes.length,
+        message: `已采集 ${results.length + failures.length}/${targetNotes.length}`,
+        mode: 'api',
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      failures.push({
+        url: note.urlInfo.href,
+        error: errorMessage,
+        intervalMs,
+      });
+      pluginWarn('xhs-blogger-notes-api-item-failed', {
+        blogger: titleName,
+        index: index + 1,
+        total: targetNotes.length,
+        noteId: normalizeText(note?.urlInfo?.id),
+        url: normalizeText(note?.urlInfo?.href),
+        intervalMs,
+        error: errorMessage,
+      });
+      appendXhsTaskLog({
+        type: 'xhs:collect-blogger-notes',
+        status: 'partial',
+        title: `采集当前博主笔记（${targetNotes.length} 条）`,
+        message: `第 ${index + 1}/${targetNotes.length} 条失败：${errorMessage}`,
+      });
+      setActiveXhsTaskProgress({
+        current: results.length + failures.length,
+        total: targetNotes.length,
+        message: `已采集 ${results.length + failures.length}/${targetNotes.length}`,
+        mode: 'api',
+      });
+    }
+  }
+
+  const historyItem = await appendXhsTaskHistory({
+    id: `xhs-blogger-api-${hashString(`${titleName}-${Date.now()}`)}`,
+    type: 'blogger-notes',
+    title: `博主笔记采集：${titleName}`,
+    status: failures.length > 0 ? (results.length > 0 ? 'partial' : 'failed') : 'completed',
+    count: results.length,
+    failed: failures.length,
+    summary: `成功 ${results.length} 条，失败 ${failures.length} 条；API 模式；采集间隔 ${formatXhsCollectInterval(options.interval)}`,
+    payload: { results, failures, interval: options.interval, mode: 'api' },
+  });
+  pluginLog('xhs-blogger-notes-api-finished', {
+    blogger: titleName,
+    successCount: results.length,
+    failedCount: failures.length,
+    failures: failures.slice(0, 5),
+    interval: describeBloggerCollectOptions(options),
+  });
+
+  return {
+    success: true,
+    mode: 'xhs-blogger-notes',
+    completed: failures.length === 0,
+    count: results.length,
+    failed: failures.length,
+    results,
+    failures,
+    interval: options.interval,
+    task: historyItem,
+    blogger: {
+      userId: normalizeText(payload?.userId),
+      nickname: titleName,
+      source: normalizeText(payload?.source),
+      noteCount: Number(payload?.noteCount || 0),
+      collectedUrlCount: targetNotes.length,
+      apiError: normalizeText(payload?.apiError),
+      collectionMode: 'api',
+    },
+    error: failures.length > 0 ? `API 模式采集完成，但有 ${failures.length} 条失败` : undefined,
   };
 }
 
@@ -3164,7 +3687,38 @@ async function collectXhsNoteLinks(urlsInput, options = {}) {
   const failures = [];
 
   const targetUrls = urls.slice(0, limit);
+  pluginLog('xhs-note-links-start', {
+    totalUrls: urls.length,
+    targetUrls: targetUrls.length,
+    options: {
+      mode: normalizeText(options?.mode) || 'tab',
+      limit,
+      intervalMinSeconds: Number(interval.minMs || 0) / 1000,
+      intervalMaxSeconds: Number(interval.maxMs || 0) / 1000,
+      saveToRedBox: shouldSave,
+      taskType: normalizeText(options?.taskType),
+      taskTitle: normalizeText(options?.taskTitle),
+    },
+  });
+  await syncXhsTaskStep({
+    current: 0,
+    total: targetUrls.length,
+    message: '准备采集笔记详情',
+    mode: normalizeText(options?.mode) || 'tab',
+  });
   for (let index = 0; index < targetUrls.length; index += 1) {
+    pluginLog('xhs-note-links-item-start', {
+      index: index + 1,
+      total: targetUrls.length,
+      url: targetUrls[index],
+      mode: normalizeText(options?.mode) || 'tab',
+    });
+    await syncXhsTaskStep({
+      current: results.length + failures.length,
+      total: targetUrls.length,
+      message: `正在采集第 ${index + 1}/${targetUrls.length} 条笔记`,
+      mode: normalizeText(options?.mode) || 'tab',
+    });
     const url = targetUrls[index];
     let tab = null;
     let intervalMs = 0;
@@ -3192,11 +3746,49 @@ async function collectXhsNoteLinks(urlsInput, options = {}) {
         duplicate: Boolean(response?.duplicate),
         intervalMs,
       });
+      setActiveXhsTaskSavedCount(results.length);
+      pluginLog('xhs-note-links-item-success', {
+        index: index + 1,
+        total: targetUrls.length,
+        url,
+        noteId: payload?.noteId || '',
+        title: normalizeText(payload?.title),
+        entryId: response?.entryId || '',
+        duplicate: Boolean(response?.duplicate),
+        intervalMs,
+      });
+      setActiveXhsTaskProgress({
+        current: results.length + failures.length,
+        total: targetUrls.length,
+        message: `已完成 ${results.length + failures.length}/${targetUrls.length}`,
+        mode: normalizeText(options?.mode) || 'tab',
+      });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       failures.push({
         url,
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
         intervalMs,
+      });
+      pluginWarn('xhs-note-links-item-failed', {
+        index: index + 1,
+        total: targetUrls.length,
+        url,
+        intervalMs,
+        error: errorMessage,
+        mode: normalizeText(options?.mode) || 'tab',
+      });
+      appendXhsTaskLog({
+        type: normalizeText(options?.taskType) === 'blogger-notes' ? 'xhs:collect-blogger-notes' : 'xhs:collect-note-links',
+        status: 'partial',
+        title: normalizeText(options?.taskTitle) || '批量采集',
+        message: `第 ${index + 1}/${targetUrls.length} 条失败：${errorMessage}`,
+      });
+      setActiveXhsTaskProgress({
+        current: results.length + failures.length,
+        total: targetUrls.length,
+        message: `已完成 ${results.length + failures.length}/${targetUrls.length}`,
+        mode: normalizeText(options?.mode) || 'tab',
       });
     } finally {
       if (tab?.id) {
@@ -3214,6 +3806,12 @@ async function collectXhsNoteLinks(urlsInput, options = {}) {
     failed: failures.length,
     summary: `成功 ${results.length} 条，失败 ${failures.length} 条；采集间隔 ${formatXhsCollectInterval(interval)}`,
     payload: { results, failures, interval },
+  });
+  pluginLog('xhs-note-links-finished', {
+    completed: results.length,
+    failed: failures.length,
+    failures: failures.slice(0, 5),
+    mode: normalizeText(options?.mode) || 'tab',
   });
 
   return {
@@ -5578,6 +6176,274 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
     notes: notes.slice(0, limit),
     urls,
   };
+}
+
+async function extractXhsNoteFeedByUrlFromCurrentPage(targetUrlInput, noteIdInput) {
+  function normalizeText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function parseTarget(inputUrl, inputId) {
+    try {
+      const parsed = new URL(String(inputUrl || ''), location.href);
+      const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([A-Za-z0-9]+)/);
+      return {
+        noteId: normalizeText(inputId) || normalizeText(match?.[1]),
+        url: parsed.toString(),
+        token: normalizeText(parsed.searchParams.get('xsec_token')),
+        source: normalizeText(parsed.searchParams.get('xsec_source')) || 'pc_user',
+      };
+    } catch {
+      return {
+        noteId: normalizeText(inputId),
+        url: '',
+        token: '',
+        source: 'pc_user',
+      };
+    }
+  }
+
+  function readFeedFromStore(noteId) {
+    const store = Array.isArray(window.__REDBOX_XHS_RESPONSES__) ? window.__REDBOX_XHS_RESPONSES__ : [];
+    for (let index = store.length - 1; index >= 0; index -= 1) {
+      const record = store[index];
+      let parsed;
+      try {
+        parsed = new URL(record?.url || '', location.href);
+      } catch {
+        continue;
+      }
+      if (parsed.pathname !== '/api/sns/web/v1/feed') continue;
+      const data = record?.result?.data || record?.result;
+      const noteCard = data?.items?.[0]?.note_card;
+      const currentId = normalizeText(noteCard?.note_id || noteCard?.noteId);
+      if (currentId && currentId === noteId) {
+        return data;
+      }
+    }
+    return null;
+  }
+
+  function xB3TraceId() {
+    let value = '';
+    for (let index = 0; index < 16; index += 1) {
+      value += 'abcdef0123456789'.charAt(Math.floor(Math.random() * 16));
+    }
+    return value;
+  }
+
+  function traceId() {
+    const random = (bits) => Math.floor(Math.random() * (1 << bits));
+    const time = Date.now();
+    const part1 = (BigInt(time) << 23n) | BigInt(random(23));
+    const part2 = (BigInt(random(32)) << 32n) | BigInt(random(32));
+    return part1.toString(16).padStart(16, '0') + part2.toString(16).padStart(16, '0');
+  }
+
+  function crc32(value) {
+    const bytes = typeof value === 'string' ? Array.from(new TextEncoder().encode(value)) : Array.from(value || []);
+    let crc = -1;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let index = 0; index < 8; index += 1) {
+        crc = (crc & 1) ? ((crc >>> 1) ^ 0xedb88320) : (crc >>> 1);
+      }
+    }
+    return ((crc ^ -1) >>> 0);
+  }
+
+  function customBase64(inputBytes) {
+    const alphabet = 'ZmserbBoHQtNP+wOcza/LpngG8yJq42KWYj0DSfdikx3VT16IlUAFM97hECvuRX5';
+    const bytes = Array.isArray(inputBytes) ? inputBytes : Array.from(inputBytes || []);
+    let output = '';
+    for (let index = 0; index < bytes.length; index += 3) {
+      const byte1 = bytes[index];
+      const byte2 = index + 1 < bytes.length ? bytes[index + 1] : NaN;
+      const byte3 = index + 2 < bytes.length ? bytes[index + 2] : NaN;
+      const triplet = (byte1 << 16) | ((Number.isNaN(byte2) ? 0 : byte2) << 8) | (Number.isNaN(byte3) ? 0 : byte3);
+      output += alphabet[(triplet >>> 18) & 63];
+      output += alphabet[(triplet >>> 12) & 63];
+      output += Number.isNaN(byte2) ? '=' : alphabet[(triplet >>> 6) & 63];
+      output += Number.isNaN(byte3) ? '=' : alphabet[triplet & 63];
+    }
+    return output;
+  }
+
+  function getCookie(name) {
+    const cookies = document.cookie.split(';');
+    for (const item of cookies) {
+      const cookie = item.trim();
+      if (cookie.startsWith(`${name}=`)) {
+        return cookie.slice(name.length + 1);
+      }
+    }
+    return '';
+  }
+
+  function getOS() {
+    const userAgent = window.navigator?.userAgent?.toLowerCase() || '';
+    if (userAgent.includes('android')) return 'Android';
+    if (userAgent.includes('iphone') || userAgent.includes('ipad') || userAgent.includes('ipod')) return 'iOS';
+    if (userAgent.includes('macintosh')) return 'Mac OS';
+    if (userAgent.includes('windows')) return 'Windows';
+    if (userAgent.includes('linux')) return 'Linux';
+    return 'PC';
+  }
+
+  function getPlatform(os) {
+    switch (os) {
+      case 'Windows':
+        return 0;
+      case 'Android':
+        return 2;
+      case 'iOS':
+        return 1;
+      case 'Mac OS':
+        return 3;
+      case 'Linux':
+        return 4;
+      default:
+        return 5;
+    }
+  }
+
+  function getXSCommon() {
+    const b1 = localStorage.getItem('b1') || '';
+    const b1b1 = localStorage.getItem('b1b1') || '1';
+    const os = getOS();
+    const payload = {
+      s0: getPlatform(os),
+      s1: '',
+      x0: b1b1,
+      x1: '4.2.6',
+      x2: os,
+      x3: 'xhs-pc-web',
+      x4: '4.83.1',
+      x5: getCookie('a1'),
+      x6: '',
+      x7: '',
+      x8: b1,
+      x9: crc32(`${b1}`),
+      x10: 0,
+      x11: 'normal',
+    };
+    return customBase64(new TextEncoder().encode(JSON.stringify(payload)));
+  }
+
+  async function seccoreSign(path, body) {
+    if (typeof window.mnsv2 !== 'function') {
+      throw new Error('当前页面缺少 window.mnsv2，无法生成小红书签名');
+    }
+    if (typeof window.md5 !== 'function') {
+      throw new Error('当前页面缺少 window.md5，无法生成小红书签名');
+    }
+    let content = path;
+    const tag = Object.prototype.toString.call(body);
+    if (tag === '[object Object]' || tag === '[object Array]') {
+      content += JSON.stringify(body);
+    } else if (typeof body === 'string') {
+      content += body;
+    }
+    const contentMd5 = window.md5(content);
+    const pathMd5 = window.md5(path);
+    const signature = await window.mnsv2(content, contentMd5, pathMd5);
+    const payload = {
+      x0: '4.2.6',
+      x1: 'xhs-pc-web',
+      x2: window.xsecplatform || 'PC',
+      x3: signature,
+      x4: body ? typeof body : '',
+    };
+    return `XYS_${customBase64(new TextEncoder().encode(JSON.stringify(payload)))}`;
+  }
+
+  async function requestFeed(target) {
+    const body = {
+      source_note_id: target.noteId,
+      image_formats: ['jpg', 'webp', 'avif'],
+      extra: { need_body_topic: '1' },
+      xsec_source: target.source || 'pc_user',
+      xsec_token: target.token,
+    };
+    const path = '/api/sns/web/v1/feed';
+    const headers = {
+      accept: 'application/json, text/plain, */*',
+      'content-type': 'application/json;charset=UTF-8',
+      'x-s': await seccoreSign(path, body),
+      'x-t': `${Date.now()}`,
+      'x-s-common': getXSCommon(),
+      'x-xray-traceid': traceId(),
+      'x-b3-traceid': xB3TraceId(),
+    };
+    console.debug('[redbox-plugin][debug][xhs-feed-request]', {
+      noteId: target.noteId,
+      source: target.source,
+      hasToken: Boolean(target.token),
+    });
+    const response = await window.fetch(`https://edith.xiaohongshu.com${path}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error(`feed HTTP ${response.status}`);
+    }
+    const json = await response.json();
+    console.warn('[redbox-plugin][debug][xhs-feed-response-shape]', {
+      noteId: target.noteId,
+      status: response.status,
+      topLevelKeys: json && typeof json === 'object' ? Object.keys(json).slice(0, 20) : [],
+      success: json?.success,
+      code: json?.code,
+      msg: json?.msg,
+      hasData: Boolean(json?.data),
+      dataKeys: json?.data && typeof json.data === 'object' ? Object.keys(json.data).slice(0, 20) : [],
+      itemCount: Array.isArray(json?.data?.items) ? json.data.items.length : (Array.isArray(json?.items) ? json.items.length : 0),
+      firstItemKeys: Array.isArray(json?.data?.items) && json.data.items[0] && typeof json.data.items[0] === 'object'
+        ? Object.keys(json.data.items[0]).slice(0, 20)
+        : Array.isArray(json?.items) && json.items[0] && typeof json.items[0] === 'object'
+          ? Object.keys(json.items[0]).slice(0, 20)
+          : [],
+    });
+    if (!json) {
+      throw new Error('小红书 feed 接口返回为空');
+    }
+    if (json.success === false) {
+      throw new Error(normalizeText(json.msg) || '小红书 feed 接口请求失败');
+    }
+    return json.data || json.result?.data || json;
+  }
+
+  const target = parseTarget(targetUrlInput, noteIdInput);
+  if (!target.noteId) {
+    throw new Error('未识别到目标笔记 ID');
+  }
+  console.debug('[redbox-plugin][debug][xhs-feed-extract]', {
+    target,
+    location: location.href,
+  });
+
+  const cached = readFeedFromStore(target.noteId);
+  if (cached) {
+    console.debug('[redbox-plugin][debug][xhs-feed-extract-cache-hit]', {
+      noteId: target.noteId,
+    });
+    return cached;
+  }
+  if (!target.token) {
+    console.warn('[redbox-plugin][debug][xhs-feed-extract-token-missing]', {
+      target,
+      location: location.href,
+    });
+    throw new Error('目标笔记链接缺少 xsec_token，无法直接请求详情接口');
+  }
+  const feed = await requestFeed(target);
+  console.debug('[redbox-plugin][debug][xhs-feed-extract-success]', {
+    noteId: target.noteId,
+    mode: 'direct-fetch',
+  });
+  return feed;
 }
 
 function extractXhsVisibleNoteLinksPayload() {

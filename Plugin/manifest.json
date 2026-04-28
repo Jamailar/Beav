@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "RedBox Capture",
   "description": "将网页、链接、选中文字、图片、小红书、抖音、Bilibili、快手、TikTok、Reddit、X、Instagram 和 YouTube 内容保存到 RedBox。",
-  "version": "1.9.6",
+  "version": "1.9.7",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -62,7 +62,7 @@
         "https://www.xiaohongshu.com/*",
         "https://www.rednote.com/*"
       ],
-      "js": ["xhsBridge.js"],
+      "js": ["vendor/md5.min.js", "xhsBridge.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
