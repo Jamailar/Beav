@@ -110,6 +110,28 @@ export function RedClawFilePreviewPane({
     };
 
     const renderPreview = () => {
+        if (target.error) {
+            return (
+                <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-4 px-8 text-center">
+                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-border bg-surface-secondary text-text-tertiary">
+                        <AlertCircle className="h-6 w-6" />
+                    </div>
+                    <div className="space-y-1">
+                        <div className="text-sm font-semibold text-text-primary">{target.label}</div>
+                        <div className="text-xs text-red-500">{target.error}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => void copySource()}
+                        className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface-primary px-3 py-2 text-sm font-semibold text-text-secondary transition hover:bg-surface-secondary"
+                    >
+                        <Copy className="h-4 w-4" />
+                        复制路径
+                    </button>
+                </div>
+            );
+        }
+
         if (loadFailed || !target.resolvedUrl || !canInlinePreview) {
             return (
                 <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-4 px-8 text-center">
@@ -129,6 +151,14 @@ export function RedClawFilePreviewPane({
                         打开
                     </button>
                 </div>
+            );
+        }
+
+        if ((target.kind === 'text' || target.kind === 'html') && typeof target.previewText === 'string') {
+            return (
+                <pre className="h-full w-full overflow-auto bg-surface-secondary/30 p-4 font-mono text-xs leading-5 text-text-secondary whitespace-pre-wrap">
+                    {target.previewText}
+                </pre>
             );
         }
 

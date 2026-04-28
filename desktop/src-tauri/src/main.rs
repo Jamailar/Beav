@@ -1961,6 +1961,25 @@ mod tests {
     }
 
     #[test]
+    fn resolve_local_path_accepts_local_file_and_redbox_asset_urls() {
+        let legacy =
+            resolve_local_path("local-file:///Users/Jam/My%20Images/demo%201.png")
+                .expect("legacy local file url path");
+        assert_eq!(
+            legacy,
+            std::path::PathBuf::from("/Users/Jam/My Images/demo 1.png")
+        );
+
+        let asset =
+            resolve_local_path("redbox-asset://asset/%2FUsers%2FJam%2FMy%20Images%2Fdemo%201.png")
+                .expect("redbox asset path");
+        assert_eq!(
+            asset,
+            std::path::PathBuf::from("/Users/Jam/My Images/demo 1.png")
+        );
+    }
+
+    #[test]
     fn validate_runtime_tool_message_sequence_accepts_paired_messages() {
         let messages = vec![
             json!({
@@ -8647,12 +8666,30 @@ fn resolve_local_path(source: &str) -> Option<PathBuf> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(rest) = trimmed.strip_prefix("file://") {
-        if let Ok(parsed) = url::Url::parse(trimmed) {
+    let normalized_scheme = trimmed.to_ascii_lowercase();
+    if normalized_scheme.starts_with("file://")
+        || normalized_scheme.starts_with("local-file://")
+        || normalized_scheme.starts_with("redbox-asset://asset/")
+    {
+        let parse_target = if normalized_scheme.starts_with("local-file://") {
+            format!("file://{}", &trimmed["local-file://".len()..])
+        } else if normalized_scheme.starts_with("redbox-asset://asset/") {
+            format!("file:///{}", &trimmed["redbox-asset://asset/".len()..])
+        } else {
+            trimmed.to_string()
+        };
+        if let Ok(parsed) = url::Url::parse(&parse_target) {
             if let Ok(path) = parsed.to_file_path() {
                 return Some(path);
             }
         }
+        let rest = if normalized_scheme.starts_with("local-file://") {
+            &trimmed["local-file://".len()..]
+        } else if normalized_scheme.starts_with("redbox-asset://asset/") {
+            &trimmed["redbox-asset://asset/".len()..]
+        } else {
+            trimmed.strip_prefix("file://").unwrap_or(trimmed)
+        };
         #[cfg(target_os = "windows")]
         let normalized = rest.trim_start_matches('/');
         #[cfg(not(target_os = "windows"))]
