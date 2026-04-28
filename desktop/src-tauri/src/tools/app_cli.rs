@@ -1526,6 +1526,15 @@ impl<'a> AppCliExecutor<'a> {
                         .get("image_api_key")
                         .and_then(Value::as_str)
                         .map(|value| !value.trim().is_empty())
+                        .unwrap_or(false),
+                    "visualIndexEnabled": summary.get("visual_index_enabled").cloned().unwrap_or(Value::Null),
+                    "visualIndexProvider": summary.get("visual_index_provider").cloned().unwrap_or(Value::Null),
+                    "visualIndexModel": summary.get("visual_index_model").cloned().unwrap_or(Value::Null),
+                    "visualIndexEndpoint": summary.get("visual_index_endpoint").cloned().unwrap_or(Value::Null),
+                    "hasVisualIndexApiKey": summary
+                        .get("visual_index_api_key")
+                        .and_then(Value::as_str)
+                        .map(|value| !value.trim().is_empty())
                         .unwrap_or(false)
                 }))
             }

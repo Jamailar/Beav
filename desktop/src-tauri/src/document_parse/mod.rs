@@ -1,5 +1,7 @@
 mod legal_metadata;
-mod ocr;
+mod pdf_pages;
+mod visual_llm;
+mod visual_manifest;
 
 use base64::Engine;
 use calamine::{open_workbook_auto, Data, Reader};
@@ -10,7 +12,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 
 pub(crate) use legal_metadata::LegalMetadata;
-pub(crate) use ocr::{OcrProvider, OcrProviderConfig};
+pub(crate) use visual_llm::VisualIndexConfig;
 
 pub(crate) const PARSER_NAME: &str = "redbox-canonical";
 pub(crate) const PARSER_VERSION: &str = "stage8-v2";
@@ -76,13 +78,15 @@ pub(crate) struct CanonicalDocument {
     pub parser_info: ParserInfo,
     pub blocks: Vec<CanonicalBlock>,
     pub attachments: Vec<CanonicalAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual_manifest: Option<Value>,
 }
 
 pub(crate) fn parse_path(
     source_id: &str,
     root_path: &Path,
     path: &Path,
-    ocr_config: &OcrProviderConfig,
+    visual_config: &VisualIndexConfig,
     parser_config: &ParserProviderConfig,
 ) -> Result<Option<CanonicalDocument>, String> {
     let extension = path
@@ -101,36 +105,15 @@ pub(crate) fn parse_path(
         .and_then(|value| value.to_str())
         .map(|value| value.to_string());
 
-    let parsed = if let Some(external) = parse_external_pipeline(path, &extension, parser_config)? {
-        Some(external)
-    } else {
-        match extension.as_str() {
-            "txt" | "md" | "markdown" | "json" | "yaml" | "yml" | "xml" => {
-                read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
-            }
-            "html" | "htm" => {
-                read_utf8_sections(path, "html", vec!["body".to_string()])?.map(|value| {
-                    value
-                        .into_iter()
-                        .map(|section| ParsedSection {
-                            text: strip_xml_tags(&section.text),
-                            ..section
-                        })
-                        .collect()
-                })
-            }
-            "csv" | "tsv" => parse_delimited_file(path)?,
-            "pdf" => parse_pdf(path, ocr_config)?,
-            "docx" => parse_docx(path)?,
-            "pptx" => parse_pptx(path)?,
-            "xlsx" => parse_xlsx(path)?,
-            "eml" => parse_eml(path)?,
-            "zip" => parse_zip(path)?,
-            "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" => {
-                parse_image_ocr(path, ocr_config)?
-            }
-            _ => read_utf8_sections(path, "plain-text-fallback", vec!["body".to_string()])?,
+    let is_visual_image = is_visual_image_extension(&extension);
+    let (parsed, visual_manifest) = if !is_visual_image && extension != "pdf" {
+        if let Some(external) = parse_external_pipeline(path, &extension, parser_config)? {
+            (Some(external), None)
+        } else {
+            parse_native_path(source_id, &relative_path, path, &extension, visual_config)?
         }
+    } else {
+        parse_native_path(source_id, &relative_path, path, &extension, visual_config)?
     };
 
     let Some(parsed) = parsed else {
@@ -198,7 +181,47 @@ pub(crate) fn parse_path(
         },
         blocks,
         attachments,
+        visual_manifest,
     }))
+}
+
+fn parse_native_path(
+    source_id: &str,
+    relative_path: &str,
+    path: &Path,
+    extension: &str,
+    visual_config: &VisualIndexConfig,
+) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
+    let parsed = match extension {
+        "txt" | "md" | "markdown" | "json" | "yaml" | "yml" | "xml" => {
+            read_utf8_sections(path, "plain-text", vec!["body".to_string()])?
+        }
+        "html" | "htm" => {
+            read_utf8_sections(path, "html", vec!["body".to_string()])?.map(|value| {
+                value
+                    .into_iter()
+                    .map(|section| ParsedSection {
+                        text: strip_xml_tags(&section.text),
+                        ..section
+                    })
+                    .collect()
+            })
+        }
+        "csv" | "tsv" => parse_delimited_file(path)?,
+        "pdf" => {
+            return parse_pdf_visual_or_native(source_id, relative_path, path, visual_config);
+        }
+        "docx" => parse_docx(path)?,
+        "pptx" => parse_pptx(path)?,
+        "xlsx" => parse_xlsx(path)?,
+        "eml" => parse_eml(path)?,
+        "zip" => parse_zip(path)?,
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" | "webp" => {
+            return parse_image_visual_manifest(source_id, relative_path, path, visual_config);
+        }
+        _ => read_utf8_sections(path, "plain-text-fallback", vec!["body".to_string()])?,
+    };
+    Ok((parsed, None))
 }
 
 fn parse_external_pipeline(
@@ -393,8 +416,16 @@ fn mime_type_for_path(path: &Path) -> &'static str {
         Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("tif") | Some("tiff") => "image/tiff",
+        Some("webp") => "image/webp",
         _ => "application/octet-stream",
     }
+}
+
+fn is_visual_image_extension(extension: &str) -> bool {
+    matches!(
+        extension,
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "heic" | "bmp" | "webp"
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -446,32 +477,85 @@ fn parse_delimited_file(path: &Path) -> Result<Option<Vec<ParsedSection>>, Strin
     )
 }
 
-fn parse_pdf(
+fn parse_pdf_visual_or_native(
+    source_id: &str,
+    relative_path: &str,
     path: &Path,
-    ocr_config: &OcrProviderConfig,
-) -> Result<Option<Vec<ParsedSection>>, String> {
+    visual_config: &VisualIndexConfig,
+) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
     match pdf_extract::extract_text(path) {
-        Ok(text) if !text.trim().is_empty() => Ok(Some(vec![ParsedSection {
-            strategy: "pdf-extract".to_string(),
-            block_type: "pdf-page".to_string(),
-            section_path: vec!["page".to_string(), "1".to_string()],
-            page: Some(1),
-            language: detect_language(&text),
-            text,
-            content_origin: "native".to_string(),
-            ocr_confidence: None,
-            fallback_used: false,
-            attachment_path: None,
-        }])),
-        Ok(_) | Err(_) => ocr::ocr_pdf_to_sections(path, ocr_config),
+        Ok(text) if !text.trim().is_empty() => Ok((
+            Some(vec![ParsedSection {
+                strategy: "pdf-extract".to_string(),
+                block_type: "pdf-page".to_string(),
+                section_path: vec!["page".to_string(), "1".to_string()],
+                page: Some(1),
+                language: detect_language(&text),
+                text,
+                content_origin: "native".to_string(),
+                ocr_confidence: None,
+                fallback_used: false,
+                attachment_path: None,
+            }]),
+            None,
+        )),
+        Ok(_) | Err(_) => {
+            parse_scanned_pdf_visual_manifest(source_id, relative_path, path, visual_config)
+        }
     }
 }
 
-fn parse_image_ocr(
+fn parse_image_visual_manifest(
+    source_id: &str,
+    relative_path: &str,
     path: &Path,
-    ocr_config: &OcrProviderConfig,
-) -> Result<Option<Vec<ParsedSection>>, String> {
-    ocr::ocr_image_to_sections(path, ocr_config)
+    visual_config: &VisualIndexConfig,
+) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
+    let unit = visual_manifest::VisualSourceUnit::image_file(source_id, relative_path, path);
+    let manifest = visual_llm::analyze_visual_source(path, &unit, visual_config)?;
+    let sections = visual_manifest::sections_from_manifest(&manifest, None);
+    Ok((sections, Some(manifest)))
+}
+
+fn parse_scanned_pdf_visual_manifest(
+    source_id: &str,
+    relative_path: &str,
+    path: &Path,
+    visual_config: &VisualIndexConfig,
+) -> Result<(Option<Vec<ParsedSection>>, Option<Value>), String> {
+    let rendered_pages = pdf_pages::render_pdf_pages(
+        path,
+        visual_config.pdf_max_pages,
+        visual_config.pdf_render_dpi,
+    )?;
+    if rendered_pages.is_empty() {
+        return Ok((None, None));
+    }
+    let mut sections = Vec::new();
+    let mut manifests = Vec::new();
+    for (index, rendered_path) in rendered_pages.iter().enumerate() {
+        let page_number = (index + 1) as i64;
+        let unit = visual_manifest::VisualSourceUnit::pdf_page(
+            source_id,
+            relative_path,
+            path,
+            rendered_path,
+            page_number,
+            rendered_pages.len() as i64,
+        );
+        let manifest = visual_llm::analyze_visual_source(rendered_path, &unit, visual_config)?;
+        if let Some(mut page_sections) =
+            visual_manifest::sections_from_manifest(&manifest, Some(page_number))
+        {
+            sections.append(&mut page_sections);
+        }
+        manifests.push(manifest);
+    }
+    let _ = pdf_pages::cleanup_rendered_pages(&rendered_pages);
+    if sections.is_empty() {
+        return Ok((None, Some(json!({ "pages": manifests }))));
+    }
+    Ok((Some(sections), Some(json!({ "pages": manifests }))))
 }
 
 fn parse_docx(path: &Path) -> Result<Option<Vec<ParsedSection>>, String> {
@@ -1017,12 +1101,23 @@ fn dominant_content_origin(blocks: &[CanonicalBlock]) -> String {
         .iter()
         .filter(|block| block.content_origin == "native")
         .count();
+    let visual = blocks
+        .iter()
+        .filter(|block| block.content_origin == "visual_llm")
+        .count();
     let ocr = blocks
         .iter()
         .filter(|block| block.content_origin == "ocr")
         .count();
-    if native > 0 && ocr > 0 {
+    if [native, visual, ocr]
+        .into_iter()
+        .filter(|count| *count > 0)
+        .count()
+        > 1
+    {
         "mixed".to_string()
+    } else if visual > 0 {
+        "visual_llm".to_string()
     } else if ocr > 0 {
         "ocr".to_string()
     } else {
@@ -1196,7 +1291,7 @@ mod tests {
             "source-1",
             &root,
             &path,
-            &OcrProviderConfig::default(),
+            &VisualIndexConfig::default(),
             &ParserProviderConfig::default(),
         )
         .unwrap()

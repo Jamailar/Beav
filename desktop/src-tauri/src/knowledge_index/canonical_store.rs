@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::Value;
 use tauri::State;
 
 use crate::{
@@ -97,6 +98,16 @@ pub(crate) fn delete_documents_for_source(
 ) -> Result<(), String> {
     let conn = connection(state)?;
     conn.execute(
+        "DELETE FROM knowledge_visual_evidence WHERE source_document_id IN (SELECT source_document_id FROM knowledge_visual_units WHERE source_id = ?1)",
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        "DELETE FROM knowledge_visual_units WHERE source_id = ?1",
+        params![source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
         "DELETE FROM knowledge_canonical_documents WHERE source_id = ?1",
         params![source_id],
     )
@@ -181,6 +192,10 @@ pub(crate) fn replace_documents(
 ) -> Result<(), String> {
     let mut conn = connection(state)?;
     let tx = conn.transaction().map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM knowledge_visual_evidence", [])
+        .map_err(|error| error.to_string())?;
+    tx.execute("DELETE FROM knowledge_visual_units", [])
+        .map_err(|error| error.to_string())?;
     tx.execute("DELETE FROM knowledge_canonical_documents", [])
         .map_err(|error| error.to_string())?;
     {
@@ -231,5 +246,164 @@ pub(crate) fn replace_documents(
             .map_err(|error| error.to_string())?;
         }
     }
+    sync_visual_rows(&tx, rows)?;
     tx.commit().map_err(|error| error.to_string())
+}
+
+fn sync_visual_rows(conn: &Connection, rows: &[CanonicalDocumentRow]) -> Result<(), String> {
+    let mut unit_stmt = conn
+        .prepare(
+            r#"
+            INSERT OR REPLACE INTO knowledge_visual_units (
+                unit_id, document_id, source_document_id, source_id, relative_path,
+                absolute_path, unit_kind, page_number, page_count, mime_type,
+                content_hash, rendered_image_hash, manifest_json, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    let mut evidence_stmt = conn
+        .prepare(
+            r#"
+            INSERT OR REPLACE INTO knowledge_visual_evidence (
+                evidence_id, unit_id, source_document_id, document_id, block_id,
+                projection_id, page_number, bbox_json, label, text, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        let Ok(canonical) = serde_json::from_str::<CanonicalDocument>(&row.canonical_json) else {
+            continue;
+        };
+        let Some(manifest) = canonical.visual_manifest.as_ref() else {
+            continue;
+        };
+        for manifest in visual_manifest_items(manifest) {
+            let Some(source) = manifest.get("source") else {
+                continue;
+            };
+            let Some(unit_id) = source.get("unitId").and_then(Value::as_str) else {
+                continue;
+            };
+            let source_document_id = source
+                .get("sourceDocumentId")
+                .and_then(Value::as_str)
+                .unwrap_or(&row.document_id);
+            let document_id = source
+                .get("documentId")
+                .and_then(Value::as_str)
+                .unwrap_or(&row.document_id);
+            let manifest_json =
+                serde_json::to_string(manifest).unwrap_or_else(|_| "{}".to_string());
+            unit_stmt
+                .execute(params![
+                    unit_id,
+                    document_id,
+                    source_document_id,
+                    row.source_id,
+                    source
+                        .get("relativePath")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&row.relative_path),
+                    source
+                        .get("absolutePath")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&row.absolute_path),
+                    source
+                        .get("unitKind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("image_file"),
+                    source.get("pageNumber").and_then(Value::as_i64),
+                    source.get("pageCount").and_then(Value::as_i64),
+                    source.get("mimeType").and_then(Value::as_str),
+                    source
+                        .get("contentHash")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                    source.get("renderedImageHash").and_then(Value::as_str),
+                    manifest_json,
+                    row.updated_at
+                ])
+                .map_err(|error| error.to_string())?;
+            sync_visual_evidence(
+                &mut evidence_stmt,
+                manifest,
+                unit_id,
+                source_document_id,
+                document_id,
+                row.updated_at.as_str(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn visual_manifest_items(manifest: &Value) -> Vec<&Value> {
+    manifest
+        .get("pages")
+        .and_then(Value::as_array)
+        .map(|pages| pages.iter().collect())
+        .unwrap_or_else(|| vec![manifest])
+}
+
+fn sync_visual_evidence(
+    stmt: &mut rusqlite::Statement<'_>,
+    manifest: &Value,
+    unit_id: &str,
+    source_document_id: &str,
+    document_id: &str,
+    updated_at: &str,
+) -> Result<(), String> {
+    let page_number = manifest
+        .get("source")
+        .and_then(|source| source.get("pageNumber"))
+        .and_then(Value::as_i64);
+    let projections = manifest
+        .get("retrievalProjection")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let facts = manifest
+        .get("factBlocks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for fact in facts {
+        let Some(fact_id) = fact.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let projection_id = projections.iter().find_map(|projection| {
+            let ids = projection.get("evidenceIds").and_then(Value::as_array)?;
+            let matched = ids.iter().any(|value| value.as_str() == Some(fact_id));
+            if matched {
+                projection.get("id").and_then(Value::as_str)
+            } else {
+                None
+            }
+        });
+        let evidence_id = format!("{unit_id}:{fact_id}");
+        let bbox_json = fact
+            .get("bbox")
+            .and_then(|value| serde_json::to_string(value).ok());
+        let label = fact
+            .get("title")
+            .or_else(|| fact.get("kind"))
+            .and_then(Value::as_str);
+        let text = fact.get("text").and_then(Value::as_str).unwrap_or("");
+        stmt.execute(params![
+            evidence_id,
+            unit_id,
+            source_document_id,
+            document_id,
+            projection_id,
+            page_number,
+            bbox_json,
+            label,
+            text,
+            updated_at
+        ])
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
