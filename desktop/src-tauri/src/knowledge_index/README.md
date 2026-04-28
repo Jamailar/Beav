@@ -41,6 +41,7 @@
 - canonical visual manifest 需要同步到 `knowledge_visual_units` / `knowledge_visual_evidence`，搜索命中必须能回到原始图片文件或原始 PDF 页码
 - `knowledge_visual_units` 是视觉索引台账，必须记录 `status`、`retry_count`、`last_error`、`next_retry_at`、`model`、`prompt_version`、`config_signature` 和 `payload_policy_version`；后台调度用它做失败冷却和模型配置漂移判断，不从 UI 状态推断
 - `knowledge:get-index-status` 返回 `visualIndex` 摘要，包含 total/indexed/metadata_only/failed/retry_deferred/retry_ready，用于后台诊断视觉索引覆盖率
+- `knowledge:get-file-index-dashboard` 是设置页“文件索引”面板的唯一聚合入口，必须同时覆盖文件发现、内容解析、文本索引、引用锚点、视觉索引、失败重试，以及全局知识库、文档源和 advisor/member knowledge；renderer 不应直接推断 SQLite 台账表。
 - visual index 启用后，后台会在启动和设置保存时巡检 canonical cache；图片或扫描 PDF 只有 `metadata_only` manifest、manifest 缺失、或扫描 PDF 某页未完成 visual LLM 分析时，会触发 visual backfill。backfill 复用 unchanged canonical cache，只重新解析视觉索引不完整的文件。
 - visual backfill 只有在 endpoint/model/prompt/payload policy 可调用且与 manifest 不一致时才会自动重跑；provider 请求失败会写入 `failed` 状态并设置 `next_retry_at`，避免后台守护任务在模型不可用时反复空转
 - `knowledge:list-page` 有查询词时需要同时搜索 indexed blocks，让知识库 UI 能通过视觉语义召回无文字图片和扫描 PDF 页，并在文档源卡片显示 visual match summary

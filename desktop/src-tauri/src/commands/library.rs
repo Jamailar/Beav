@@ -893,6 +893,14 @@ pub async fn knowledge_get_index_status(state: State<'_, AppState>) -> Result<Va
 }
 
 #[tauri::command]
+pub async fn knowledge_get_file_index_dashboard(
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    serde_json::to_value(knowledge_index::file_index_dashboard::dashboard(&state)?)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn knowledge_rebuild_catalog(
     app: AppHandle,
     state: State<'_, AppState>,
