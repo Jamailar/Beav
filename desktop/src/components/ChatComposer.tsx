@@ -76,6 +76,7 @@ export interface ChatComposerHandle {
 
 type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
 type ChatComposerAudioState = 'idle' | 'recording' | 'transcribing';
+type ChatComposerAttachmentStatus = 'uploading' | 'uploaded';
 const RECORDING_WAVE_BARS = [0.3, 0.58, 0.92, 0.42, 0.74, 0.98, 0.5, 0.8, 0.64, 0.9, 0.46, 0.7, 1, 0.62, 0.84, 0.54, 0.95, 0.4, 0.78, 0.34, 0.88, 0.56, 0.72, 0.44];
 
 interface ComposerAttachmentPreviewProps {
@@ -95,6 +96,8 @@ export interface ChatComposerProps {
   onSubmit: () => void;
   placeholder: string;
   attachment?: UploadedFileAttachment | null;
+  attachmentStatus?: ChatComposerAttachmentStatus | null;
+  attachmentPreviewMode?: 'default' | 'compact-status';
   onPickAttachment?: (() => void | Promise<void>) | null;
   onClearAttachment?: (() => void) | null;
   modelOptions?: ChatModelOption[];
@@ -478,6 +481,97 @@ function ComposerAttachmentPreview({
   );
 }
 
+function ComposerCompactAttachmentTray({
+  attachment,
+  status,
+  darkEmbedded,
+  onRemove,
+}: {
+  attachment?: UploadedFileAttachment | null;
+  status?: ChatComposerAttachmentStatus | null;
+  darkEmbedded: boolean;
+  onRemove: () => void;
+}) {
+  const uploading = status === 'uploading';
+  if (!attachment && !uploading) return null;
+
+  const visualKind = attachment ? getAttachmentVisualKind(attachment) : 'file';
+  const previewSrc = attachment && visualKind === 'image' ? getAttachmentSource(attachment) : '';
+  const extLabel = attachment ? getAttachmentExtLabel(attachment) : '';
+  const sizeLabel = attachment ? formatAttachmentSize(attachment.size) : '';
+  const typeLabel = attachment ? getAttachmentKindLabel(visualKind) : '文件';
+  const metaLabel = [typeLabel, sizeLabel].filter(Boolean).join(' · ');
+  const cardClass = darkEmbedded
+    ? 'border-white/10 bg-white/[0.06] text-white shadow-[0_10px_28px_rgba(0,0,0,0.28)]'
+    : 'border-black/[0.06] bg-[#f3f0eb] text-[#2f2b26] shadow-[0_8px_22px_rgba(36,32,24,0.07)]';
+  const mediaClass = darkEmbedded
+    ? 'border-white/10 bg-white/[0.08] text-white/68'
+    : 'border-black/[0.06] bg-white text-[#756b5c]';
+  const metaClass = darkEmbedded ? 'text-white/46' : 'text-[#8a8175]';
+  const statusClass = uploading
+    ? darkEmbedded
+      ? 'text-amber-200'
+      : 'text-amber-700'
+    : darkEmbedded
+      ? 'text-emerald-200'
+      : 'text-emerald-700';
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 px-3.5 pt-3">
+      <div className={clsx(
+        'group/attachment relative flex h-[58px] max-w-full items-center gap-3 rounded-2xl border px-3 pr-9 transition-colors',
+        'sm:max-w-[260px]',
+        cardClass,
+      )}>
+        <div className={clsx('flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border', mediaClass)}>
+          {uploading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : previewSrc ? (
+            <img src={previewSrc} alt={attachment?.name || '附件'} className="h-full w-full object-cover" />
+          ) : (
+            getAttachmentKindIcon(visualKind, 'h-4 w-4')
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium leading-5" title={attachment?.name || undefined}>
+            {attachment?.name || '正在上传文件'}
+          </div>
+          <div className={clsx('mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-4', metaClass)}>
+            <span className="truncate">
+              {uploading ? '正在准备附件' : metaLabel || extLabel || '文件'}
+            </span>
+            {!uploading && extLabel ? <span className="shrink-0">{extLabel}</span> : null}
+          </div>
+        </div>
+
+        <div className={clsx(
+          'absolute bottom-2 right-3 flex items-center gap-1 text-[10px] font-medium',
+          statusClass,
+        )}>
+          <span className={clsx('h-1.5 w-1.5 rounded-full', uploading ? 'bg-amber-400' : 'bg-emerald-500')} />
+          {uploading ? '上传中' : '已上传'}
+        </div>
+
+        {attachment ? (
+          <button
+            type="button"
+            onClick={onRemove}
+            className={clsx(
+              'absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full opacity-70 transition hover:opacity-100',
+              darkEmbedded ? 'text-white/62 hover:bg-white/10' : 'text-[#756b5c] hover:bg-white',
+            )}
+            title="移除文件"
+            aria-label={`移除 ${attachment.name}`}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
   theme = 'default',
   variant = 'main',
@@ -487,6 +581,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   onSubmit,
   placeholder,
   attachment,
+  attachmentStatus,
+  attachmentPreviewMode = 'default',
   onPickAttachment,
   onClearAttachment,
   modelOptions = [],
@@ -517,7 +613,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     () => modelOptions.find((item) => item.key === selectedModelKey) || null,
     [modelOptions, selectedModelKey],
   );
-  const submitDisabled = disabled || isBusy || (!value.trim() && !attachment);
+  const attachmentBusy = attachmentStatus === 'uploading';
+  const submitDisabled = disabled || isBusy || attachmentBusy || (!value.trim() && !attachment);
   const showAttachmentButton = Boolean(onPickAttachment);
   const showModelSelector = Boolean(onSelectedModelKeyChange);
   const showAudioButton = Boolean(onAudioAction);
@@ -594,6 +691,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, [isComposing, onSubmit, submitDisabled]);
 
   const wrapperClass = variant === 'empty' ? 'px-4 pt-4' : 'px-3.5 pt-3';
+  const compactAttachmentMode = attachmentPreviewMode === 'compact-status';
+  const resolvedAttachmentStatus: ChatComposerAttachmentStatus | null = attachmentStatus
+    || (attachment ? 'uploaded' : null);
   const textareaClass = attachment
     ? variant === 'empty'
       ? 'mt-3 w-full bg-transparent pr-1 pb-1 text-[16px] focus:outline-none resize-none min-h-[64px] max-h-[220px] overflow-y-auto'
@@ -637,7 +737,17 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   return (
     <form onSubmit={handleFormSubmit} className={clsx('relative w-full', className)}>
       <ChatComposerFrame theme={theme} variant={variant}>
-        {attachment ? (
+        {compactAttachmentMode ? (
+          <>
+            <ComposerCompactAttachmentTray
+              attachment={attachment}
+              status={resolvedAttachmentStatus}
+              darkEmbedded={darkEmbedded}
+              onRemove={() => onClearAttachment?.()}
+            />
+            {textarea}
+          </>
+        ) : attachment ? (
           <div className={wrapperClass}>
             <ComposerAttachmentPreview
               attachment={attachment}
@@ -653,7 +763,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         <div className={clsx('flex items-center gap-2', variant === 'empty' ? 'px-2 pb-1' : 'px-1.5 pb-0.5')}>
           <div className="flex shrink-0 items-center gap-1">
             {showAttachmentButton ? (
-              <button type="button" onClick={() => void onPickAttachment?.()} className={clsx('p-2 transition-colors', subtleButtonClass)} title="添加文件">
+              <button
+                type="button"
+                onClick={() => void onPickAttachment?.()}
+                disabled={disabled || isBusy || attachmentBusy}
+                className={clsx('p-2 transition-colors disabled:cursor-not-allowed disabled:opacity-45', subtleButtonClass)}
+                title="添加文件"
+              >
                 <Plus className="h-[18px] w-[18px]" />
               </button>
             ) : null}

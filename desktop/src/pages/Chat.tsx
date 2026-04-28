@@ -81,6 +81,7 @@ interface ChatProps {
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
   allowFileUpload?: boolean;
+  attachmentPreviewMode?: 'default' | 'compact-status';
   messageWorkflowPlacement?: 'top' | 'bottom';
   messageWorkflowVariant?: 'default' | 'compact';
   messageWorkflowEmphasis?: 'default' | 'thoughts-first';
@@ -420,6 +421,7 @@ export function Chat({
   contentLayout = 'default',
   contentWidthPreset = 'default',
   allowFileUpload = true,
+  attachmentPreviewMode = 'default',
   messageWorkflowPlacement = 'bottom',
   messageWorkflowVariant = 'compact',
   messageWorkflowEmphasis = 'default',
@@ -463,6 +465,7 @@ export function Chat({
   ));
   const [errorNotice, setErrorNotice] = useState<string | StructuredChatErrorNotice | null>(null);
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
+  const [isAttachmentUploading, setIsAttachmentUploading] = useState(false);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
   const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
@@ -702,6 +705,7 @@ export function Chat({
   ]), []);
 
   const clearPendingAttachment = useCallback(() => {
+    setIsAttachmentUploading(false);
     setPendingAttachment(null);
     requestAnimationFrame(() => {
       composerRef.current?.syncHeight();
@@ -2560,6 +2564,8 @@ export function Chat({
 
   const pickAttachment = useCallback(async () => {
     if (isProcessing) return;
+    setIsAttachmentUploading(true);
+    setErrorNotice(null);
     try {
       const result = await window.ipcRenderer.chat.pickAttachment({
         sessionId: currentSessionId || undefined,
@@ -2579,6 +2585,8 @@ export function Chat({
       }
     } catch (error) {
       setErrorNotice(String(error || '上传文件失败'));
+    } finally {
+      setIsAttachmentUploading(false);
     }
   }, [currentSessionId, isProcessing]);
 
@@ -2691,6 +2699,7 @@ export function Chat({
     setMessages(prev => [...prev, userMsg, aiPlaceholder]);
     setInput('');
     setPendingAttachment(null);
+    setIsAttachmentUploading(false);
     setIsProcessing(true);
 
     let resolvedModelConfig;
@@ -2883,6 +2892,8 @@ export function Chat({
         onSubmit={() => sendMessage(input, pendingAttachment || undefined)}
         placeholder={placeholder}
         attachment={pendingAttachment}
+        attachmentStatus={isAttachmentUploading ? 'uploading' : pendingAttachment ? 'uploaded' : null}
+        attachmentPreviewMode={attachmentPreviewMode}
         onPickAttachment={allowFileUpload ? pickAttachment : undefined}
         onClearAttachment={clearPendingAttachment}
         modelOptions={chatModelOptions}
