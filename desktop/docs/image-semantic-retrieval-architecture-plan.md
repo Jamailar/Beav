@@ -580,6 +580,8 @@ pub(crate) fn parse_visual_source_unit(
 - `visual_index_pdf_render_dpi`
 - `visual_index_concurrency`
 
+当前实现把 `visual_index_concurrency` 接入扫描 PDF 页级 visual LLM 调用，按页分批并发，默认 1，运行时上限 4。
+
 兼容规则：
 
 - `visual_index_enabled=false` 时不调用多模态模型，只生成 metadata-only manifest。
@@ -893,9 +895,11 @@ redbox-visual-llm-indexer:v1
 
 需要在 `migration.rs` 增加 visual index 相关版本键：
 
-- `image_manifest_schema_version`
-- `visual_index_prompt_version`
-- `image_projection_version`
+- `visual_schema_version`
+- `visual_prompt_version`
+- `visual_projection_version`
+
+当前实现已在 `migration.rs` 写入上述三类版本键。缺失新键时只做 schema-only 标记，prompt/schema 变化触发 canonical reparse，projection 变化只触发 block/anchor/FTS 重建。
 
 版本变化决策：
 

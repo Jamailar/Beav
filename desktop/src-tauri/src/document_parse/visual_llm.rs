@@ -19,6 +19,7 @@ pub(crate) struct VisualIndexConfig {
     pub skip_small_images: bool,
     pub pdf_max_pages: usize,
     pub pdf_render_dpi: u32,
+    pub concurrency: usize,
 }
 
 impl Default for VisualIndexConfig {
@@ -34,6 +35,7 @@ impl Default for VisualIndexConfig {
             skip_small_images: true,
             pdf_max_pages: 12,
             pdf_render_dpi: 144,
+            concurrency: 1,
         }
     }
 }

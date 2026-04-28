@@ -1236,6 +1236,16 @@ fn resolve_visual_index_config(state: &State<'_, AppState>) -> Result<VisualInde
         })
         .unwrap_or(144)
         .clamp(72, 300) as u32;
+    let concurrency = payload_field(&settings, "visual_index_concurrency")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|text| text.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(1)
+        .clamp(1, 4) as usize;
     let enabled = payload_field(&settings, "visual_index_enabled")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
@@ -1254,6 +1264,7 @@ fn resolve_visual_index_config(state: &State<'_, AppState>) -> Result<VisualInde
         skip_small_images,
         pdf_max_pages,
         pdf_render_dpi,
+        concurrency,
     })
 }
 
