@@ -3202,14 +3202,8 @@ export function Chat({
           </div>
         )}
 
-        <div className={clsx('flex min-h-0 flex-1 overflow-hidden', hasInlineSidePanel && contentOuterPaddingClass)}>
-          <div className={clsx(
-            hasInlineSidePanel
-              ? 'mx-auto flex min-h-0 w-full gap-3'
-              : 'flex min-h-0 flex-1 overflow-hidden',
-            hasInlineSidePanel && splitContentMaxWidthClass,
-          )}>
-          <div className={clsx('flex min-h-0 flex-1 flex-col overflow-hidden', hasInlineSidePanel && 'basis-0')}>
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             {/* Content Area */}
             {isEmptySession && !dockedEmptyState ? (
               <div className={clsx(
@@ -3254,45 +3248,59 @@ export function Chat({
               </div>
             ) : (
               <>
-                {/* Messages */}
-                <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', paneOuterPaddingClass)}>
-                  <div className={clsx('mx-auto min-w-0', contentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
-                    {dockedEmptyState ? (
-                      <div className="text-center space-y-6 py-10">
-                        {welcomeHeaderBlock}
-                        {welcomeActionsBlock}
-                        {welcomeShortcutsBlock}
+                <div className={clsx('flex min-h-0 flex-1 overflow-hidden', hasInlineSidePanel && contentOuterPaddingClass)}>
+                  <div className={clsx(
+                    hasInlineSidePanel
+                      ? 'mx-auto flex min-h-0 w-full gap-3'
+                      : 'flex min-h-0 flex-1 overflow-hidden',
+                    hasInlineSidePanel && splitContentMaxWidthClass,
+                  )}>
+                    {/* Messages */}
+                    <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className={clsx('flex-1 min-w-0 overflow-y-auto py-4 md:py-5', paneOuterPaddingClass)}>
+                      <div className={clsx('mx-auto min-w-0', contentMaxWidthClass, contentWidthClass, dockedEmptyState ? 'flex min-h-full flex-col justify-center' : 'space-y-4 md:space-y-5')}>
+                        {dockedEmptyState ? (
+                          <div className="text-center space-y-6 py-10">
+                            {welcomeHeaderBlock}
+                            {welcomeActionsBlock}
+                            {welcomeShortcutsBlock}
+                          </div>
+                        ) : (
+                          <>
+                            {messages.map((msg) => (
+                              <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
+                                <MessageItem
+                                  msg={msg}
+                                  copiedMessageId={copiedMessageId}
+                                  onCopyMessage={handleCopyMessage}
+                                  workflowPlacement={messageWorkflowPlacement}
+                                  workflowVariant={messageWorkflowVariant}
+                                  workflowEmphasis={messageWorkflowEmphasis}
+                                  workflowDisplayMode={messageWorkflowDisplayMode}
+                                  workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
+                                  workflowFailureTone={messageWorkflowFailureTone}
+                                  showAttachments={showMessageAttachments}
+                                  linkRenderMode={messageLinkRenderMode}
+                                  onPreviewLink={onMessageLinkPreview}
+                                  activePreviewHref={activePreviewHref}
+                                />
+                              </ErrorBoundary>
+                            ))}
+                            <div ref={messagesEndRef} />
+                          </>
+                        )}
                       </div>
-                    ) : (
-                      <>
-                        {messages.map((msg) => (
-                          <ErrorBoundary key={msg.id} name={`MessageItem-${msg.id}`}>
-                            <MessageItem
-                              msg={msg}
-                              copiedMessageId={copiedMessageId}
-                              onCopyMessage={handleCopyMessage}
-                              workflowPlacement={messageWorkflowPlacement}
-                              workflowVariant={messageWorkflowVariant}
-                              workflowEmphasis={messageWorkflowEmphasis}
-                              workflowDisplayMode={messageWorkflowDisplayMode}
-                              workflowAutoHideWhenComplete={messageWorkflowAutoHideWhenComplete}
-                              workflowFailureTone={messageWorkflowFailureTone}
-                              showAttachments={showMessageAttachments}
-                              linkRenderMode={messageLinkRenderMode}
-                              onPreviewLink={onMessageLinkPreview}
-                              activePreviewHref={activePreviewHref}
-                            />
-                          </ErrorBoundary>
-                        ))}
-                        <div ref={messagesEndRef} />
-                      </>
-                    )}
+                    </div>
+                    {inlineSidePanel ? (
+                      <div className="min-h-0 w-[420px] min-w-[340px] max-w-[38%] shrink-0 py-4 md:py-5">
+                        {inlineSidePanel}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
                 {/* Input Area - Bottom Fixed */}
                 {showComposer ? (
-                <div className={clsx('shrink-0', inputAreaShellClass, paneOuterPaddingClass)}>
+                <div className={clsx('shrink-0', inputAreaShellClass, contentOuterPaddingClass)}>
                   <div className={clsx('mx-auto space-y-3.5', contentMaxWidthClass, contentWidthClass)}>
                     {dockedEmptyState ? (
                       emptyComposerForm
@@ -3355,12 +3363,6 @@ export function Chat({
                 ) : null}
               </>
             )}
-          </div>
-          {inlineSidePanel ? (
-            <div className="min-h-0 w-[420px] min-w-[340px] max-w-[38%] shrink-0">
-              {inlineSidePanel}
-            </div>
-          ) : null}
           </div>
         </div>
       </div>
