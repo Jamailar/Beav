@@ -13,6 +13,7 @@ import {
   buildChatModelOptions,
   ChatComposer,
   type ChatComposerHandle,
+  type ChatKnowledgeMentionOption,
   type ChatMemberMentionOption,
   type ChatModelOption,
   type ChatSettingsSnapshot,
@@ -23,6 +24,7 @@ import {
   Message,
   ToolEvent,
   SkillEvent,
+  type ChatMessageMemberActor,
   type ChatMessageLinkRenderMode,
   type ChatMessageLinkTarget,
 } from '../components/MessageItem';
@@ -60,11 +62,125 @@ interface AdvisorMentionRecord {
   personality?: string;
 }
 
-interface ChatShortcut {
+interface KnowledgeMentionCatalogRecord {
+  itemId?: string;
+  id?: string;
+  kind?: string;
+  noteType?: string;
+  captureKind?: string;
+  title?: string;
+  sourceUrl?: string;
+  folderPath?: string;
+  rootPath?: string;
+  coverUrl?: string;
+  thumbnailUrl?: string;
+  previewText?: string;
+  updatedAt?: string;
+  tags?: string[];
+  fileCount?: number;
+  hasTranscript?: boolean;
+}
+
+interface KnowledgeMentionListPageResponse {
+  items?: KnowledgeMentionCatalogRecord[];
+  nextCursor?: string | null;
+  total?: number;
+}
+
+function memberActorFromMessageMetadata(metadata: unknown): ChatMessageMemberActor | undefined {
+  if (!metadata || typeof metadata !== 'object') return undefined;
+  const object = metadata as Record<string, unknown>;
+  const actor = object.replyActor && typeof object.replyActor === 'object'
+    ? object.replyActor as Record<string, unknown>
+    : object.activeSpeaker && typeof object.activeSpeaker === 'object'
+      ? object.activeSpeaker as Record<string, unknown>
+      : null;
+  if (!actor) return undefined;
+  if (String(actor.type || '').trim() && String(actor.type || '').trim() !== 'member') return undefined;
+  const memberId = String(actor.memberId || actor.speakerId || '').trim();
+  const displayName = String(actor.displayName || '').trim();
+  if (!memberId || !displayName) return undefined;
+  return {
+    type: 'member',
+    memberId,
+    displayName,
+    avatar: String(actor.avatar || '').trim() || undefined,
+    memberSkillRef: String(actor.memberSkillRef || '').trim() || undefined,
+  };
+}
+
+function normalizeKnowledgeMentionRecord(item: KnowledgeMentionCatalogRecord): ChatKnowledgeMentionOption | null {
+  const id = String(item.itemId || item.id || '').trim();
+  if (!id) return null;
+  const sourceKind = String(item.kind || item.captureKind || item.noteType || '').trim();
+  return {
+    id,
+    title: String(item.title || '未命名内容').trim(),
+    sourceKind,
+    summary: String(item.previewText || '').trim() || undefined,
+    cover: String(item.coverUrl || item.thumbnailUrl || '').trim() || undefined,
+    sourceUrl: String(item.sourceUrl || '').trim() || undefined,
+    folderPath: String(item.folderPath || '').trim() || undefined,
+    rootPath: String(item.rootPath || '').trim() || undefined,
+    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
+    updatedAt: String(item.updatedAt || '').trim() || undefined,
+    fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
+    hasTranscript: Boolean(item.hasTranscript),
+  };
+}
+
+function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledgeMentionOption[] {
+  if (!metadata || typeof metadata !== 'object') return [];
+  const object = metadata as Record<string, unknown>;
+  const rawReferences = Array.isArray(object.explicitKnowledgeRefs)
+    ? object.explicitKnowledgeRefs
+    : Array.isArray(object.references)
+      ? object.references.filter((item) => (
+        item
+        && typeof item === 'object'
+        && String((item as Record<string, unknown>).type || '').trim() === 'knowledge'
+      ))
+      : [];
+  return rawReferences
+    .map((raw) => {
+      if (!raw || typeof raw !== 'object') return null;
+      const item = raw as Record<string, unknown>;
+      const id = String(item.knowledgeId || item.id || '').trim();
+      if (!id) return null;
+      const reference: ChatKnowledgeMentionOption = {
+        id,
+        title: String(item.title || '未命名内容').trim(),
+        sourceKind: String(item.sourceKind || '').trim() || undefined,
+        summary: String(item.summary || '').trim() || undefined,
+        cover: String(item.cover || '').trim() || undefined,
+        sourceUrl: String(item.sourceUrl || '').trim() || undefined,
+        folderPath: String(item.folderPath || '').trim() || undefined,
+        rootPath: String(item.rootPath || '').trim() || undefined,
+        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
+        updatedAt: String(item.updatedAt || '').trim() || undefined,
+        fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
+        hasTranscript: Boolean(item.hasTranscript),
+      };
+      return reference;
+    })
+    .filter((item): item is ChatKnowledgeMentionOption => Boolean(item));
+}
+
+export interface ChatShortcut {
   label: string;
   text: string;
   action?: 'send' | 'inject';
 }
+
+export interface ChatShortcutContext {
+  input: string;
+  hasInput: boolean;
+  attachment: UploadedFileAttachment | null;
+  selectedMemberMention: ChatMemberMentionOption | null;
+  selectedKnowledgeMentions: ChatKnowledgeMentionOption[];
+}
+
+export type ChatShortcutProvider = ChatShortcut[] | ((context: ChatShortcutContext) => ChatShortcut[]);
 
 // 选中文字菜单状态
 interface SelectionMenu {
@@ -83,8 +199,8 @@ interface ChatProps {
   fixedSessionId?: string | null;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
-  shortcuts?: ChatShortcut[];
-  welcomeShortcuts?: ChatShortcut[];
+  shortcuts?: ChatShortcutProvider;
+  welcomeShortcuts?: ChatShortcutProvider;
   showWelcomeShortcuts?: boolean;
   showComposerShortcuts?: boolean;
   fixedSessionContextIndicatorMode?: 'top' | 'corner-ring' | 'none';
@@ -116,6 +232,8 @@ interface ChatProps {
   onMessageLinkPreview?: (target: ChatMessageLinkTarget) => void;
   activePreviewHref?: string | null;
   inlineSidePanel?: React.ReactNode;
+  keepComposerInputActive?: boolean;
+  messageListHeader?: React.ReactNode;
 }
 
 interface ChatContextUsage {
@@ -197,6 +315,14 @@ type FixedSessionWarmSnapshot = {
 const FIXED_SESSION_SNAPSHOT_TTL_MS = 30_000;
 const fixedSessionWarmSnapshots = new Map<string, FixedSessionWarmSnapshot>();
 const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null]>>();
+
+function resolveChatShortcutProvider(
+  provider: ChatShortcutProvider | undefined,
+  fallback: ChatShortcut[],
+  context: ChatShortcutContext,
+): ChatShortcut[] {
+  return provider ? (typeof provider === 'function' ? provider(context) : provider) : fallback;
+}
 
 function readFixedSessionWarmSnapshot(sessionId: string | null | undefined): FixedSessionWarmSnapshot | null {
   const key = String(sessionId || '').trim();
@@ -499,6 +625,8 @@ export function Chat({
   onMessageLinkPreview,
   activePreviewHref = null,
   inlineSidePanel,
+  keepComposerInputActive = false,
+  messageListHeader,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -532,6 +660,8 @@ export function Chat({
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const [memberMentionOptions, setMemberMentionOptions] = useState<ChatMemberMentionOption[]>([]);
   const [selectedMemberMention, setSelectedMemberMention] = useState<ChatMemberMentionOption | null>(null);
+  const [knowledgeMentionOptions, setKnowledgeMentionOptions] = useState<ChatKnowledgeMentionOption[]>([]);
+  const [selectedKnowledgeMentions, setSelectedKnowledgeMentions] = useState<ChatKnowledgeMentionOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
   const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
 
@@ -574,6 +704,9 @@ export function Chat({
   const streamStatsRef = useRef<{ startedAt: number; chunks: number; chars: number } | null>(null);
   const responseCompletedRef = useRef(false);
   const responseFinalizeSeqRef = useRef(0);
+  const knowledgeMentionSearchSeqRef = useRef(0);
+  const knowledgeMentionSearchTimerRef = useRef<number | null>(null);
+  const knowledgeMentionSearchQueryRef = useRef('');
   const pendingResponseFinalizeRef = useRef<{
     ticket: number;
     source: string;
@@ -658,14 +791,28 @@ export function Chat({
     }
   }, [debugUi]);
   const suppressComposerFocus = useCallback((reason: string, ms: number) => {
+    if (keepComposerInputActive) {
+      suppressComposerFocusUntilRef.current = 0;
+      debugUi('skip_suppress_composer_focus', { reason, ms });
+      return;
+    }
     suppressComposerFocusUntilRef.current = performance.now() + ms;
     debugUi('suppress_composer_focus', { reason, ms });
     setComposerSuppressed(true);
-  }, [debugUi]);
+  }, [debugUi, keepComposerInputActive]);
   const resumeComposerFocus = useCallback((source: 'empty' | 'composer') => {
     suppressComposerFocusUntilRef.current = 0;
     setComposerSuppressed(false);
     debugUi('resume_composer_focus', { source });
+    requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      composerRef.current?.syncHeight();
+    });
+  }, [debugUi]);
+  const activateComposerInput = useCallback((source: 'empty' | 'composer' = 'composer') => {
+    suppressComposerFocusUntilRef.current = 0;
+    setComposerSuppressed(false);
+    debugUi('activate_composer_input', { source });
     requestAnimationFrame(() => {
       composerRef.current?.focus();
       composerRef.current?.syncHeight();
@@ -796,6 +943,7 @@ export function Chat({
 
   useEffect(() => {
     setSelectedMemberMention(null);
+    setSelectedKnowledgeMentions([]);
   }, [currentSessionId]);
 
   const loadChatModelOptions = useCallback(async () => {
@@ -848,6 +996,75 @@ export function Chat({
       window.ipcRenderer.off('advisors:changed', handleAdvisorsChanged);
     };
   }, [isActive, loadMemberMentionOptions]);
+
+  const loadKnowledgeMentionOptions = useCallback(async (query = '') => {
+    if (!isActiveRef.current) return;
+    const requestId = ++knowledgeMentionSearchSeqRef.current;
+    const normalizedQuery = query.trim();
+    try {
+      const records: KnowledgeMentionCatalogRecord[] = [];
+      let cursor: string | null | undefined = null;
+      const seenCursors = new Set<string>();
+      for (let pageIndex = 0; pageIndex < 250; pageIndex += 1) {
+        const response = await window.ipcRenderer.knowledge.listPage<KnowledgeMentionListPageResponse>({
+          cursor,
+          limit: 200,
+          query: normalizedQuery || undefined,
+          sort: 'updated-desc',
+        });
+        if (!isActiveRef.current || requestId !== knowledgeMentionSearchSeqRef.current) return;
+        records.push(...(Array.isArray(response?.items) ? response.items : []));
+        const nextCursor = typeof response?.nextCursor === 'string' && response.nextCursor.trim()
+          ? response.nextCursor.trim()
+          : null;
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          break;
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      }
+      if (requestId !== knowledgeMentionSearchSeqRef.current) return;
+      setKnowledgeMentionOptions(
+        records
+          .map(normalizeKnowledgeMentionRecord)
+          .filter((item): item is ChatKnowledgeMentionOption => Boolean(item)),
+      );
+    } catch (error) {
+      console.error('Failed to load knowledge mention options:', error);
+      setKnowledgeMentionOptions([]);
+    }
+  }, []);
+
+  const handleKnowledgeMentionSearchQueryChange = useCallback((query: string) => {
+    const normalizedQuery = query.trim();
+    if (knowledgeMentionSearchQueryRef.current === normalizedQuery) return;
+    knowledgeMentionSearchQueryRef.current = normalizedQuery;
+    if (knowledgeMentionSearchTimerRef.current) {
+      window.clearTimeout(knowledgeMentionSearchTimerRef.current);
+      knowledgeMentionSearchTimerRef.current = null;
+    }
+    knowledgeMentionSearchTimerRef.current = window.setTimeout(() => {
+      void loadKnowledgeMentionOptions(normalizedQuery);
+    }, 160);
+  }, [loadKnowledgeMentionOptions]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    void loadKnowledgeMentionOptions(knowledgeMentionSearchQueryRef.current);
+    const handleKnowledgeChanged = () => {
+      void loadKnowledgeMentionOptions(knowledgeMentionSearchQueryRef.current);
+    };
+    window.ipcRenderer.on('knowledge:changed', handleKnowledgeChanged);
+    window.ipcRenderer.on('knowledge:catalog-updated', handleKnowledgeChanged);
+    return () => {
+      window.ipcRenderer.off('knowledge:changed', handleKnowledgeChanged);
+      window.ipcRenderer.off('knowledge:catalog-updated', handleKnowledgeChanged);
+      if (knowledgeMentionSearchTimerRef.current) {
+        window.clearTimeout(knowledgeMentionSearchTimerRef.current);
+        knowledgeMentionSearchTimerRef.current = null;
+      }
+    };
+  }, [isActive, loadKnowledgeMentionOptions]);
 
   const ensureChatModelConfig = useCallback(async () => {
     if (selectedChatModel) {
@@ -992,6 +1209,7 @@ export function Chat({
       name: string;
       avatar?: string;
     };
+    knowledgeReferences?: ChatKnowledgeMentionOption[];
     modelConfig?: {
       apiKey?: string;
       baseURL?: string;
@@ -1004,6 +1222,7 @@ export function Chat({
       chars: payload.message.length,
       hasAttachment: Boolean(payload.attachment),
       targetAdvisorId: payload.memberMention?.advisorId || null,
+      knowledgeReferenceCount: payload.knowledgeReferences?.length || 0,
     });
     const schedule = typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
@@ -1031,6 +1250,36 @@ export function Chat({
 
     // 标记为已处理
     pendingMessageHandledRef.current = true;
+
+    if (pendingMessage.deliveryMode === 'draft') {
+      const draftKnowledgeReferences = (pendingMessage.knowledgeReferences || [])
+        .filter((item) => item.id)
+        .map((item) => ({
+          id: item.id,
+          title: item.title || '未命名内容',
+          sourceKind: item.sourceKind,
+          summary: item.summary,
+          cover: item.cover,
+          sourceUrl: item.sourceUrl,
+          folderPath: item.folderPath,
+          rootPath: item.rootPath,
+          tags: item.tags,
+          updatedAt: item.updatedAt,
+          fileCount: item.fileCount,
+          hasTranscript: item.hasTranscript,
+        }));
+      setInput(String(pendingMessage.content || ''));
+      setSelectedKnowledgeMentions(draftKnowledgeReferences);
+      if (pendingMessage.attachment?.type === 'uploaded-file') {
+        setPendingAttachment(pendingMessage.attachment);
+      }
+      requestAnimationFrame(() => {
+        composerRef.current?.focus();
+        composerRef.current?.syncHeight();
+      });
+      onMessageConsumed?.();
+      return;
+    }
 
     const sendPendingMessage = async () => {
       let sessionId: string;
@@ -1077,6 +1326,22 @@ export function Chat({
         pendingMessage.attachment as UploadedFileAttachment | undefined,
         resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
       );
+      const pendingKnowledgeReferences = (pendingMessage.knowledgeReferences || [])
+        .filter((item) => item.id)
+        .map((item) => ({
+          id: item.id,
+          title: item.title || '未命名内容',
+          sourceKind: item.sourceKind,
+          summary: item.summary,
+          cover: item.cover,
+          sourceUrl: item.sourceUrl,
+          folderPath: item.folderPath,
+          rootPath: item.rootPath,
+          tags: item.tags,
+          updatedAt: item.updatedAt,
+          fileCount: item.fileCount,
+          hasTranscript: item.hasTranscript,
+        }));
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
@@ -1086,6 +1351,7 @@ export function Chat({
         content: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
         attachment: resolvedAttachment as Message['attachment'],
+        knowledgeReferences: pendingKnowledgeReferences,
         tools: [],
         timeline: []
       };
@@ -1120,6 +1386,7 @@ export function Chat({
         message: pendingMessage.content,
         displayContent: pendingMessage.displayContent,
         attachment: stripTransientAttachmentPreview(resolvedAttachment),
+        knowledgeReferences: pendingKnowledgeReferences,
         modelConfig: resolvedModelConfig,
         taskHints: pendingMessage.taskHints,
       });
@@ -1129,7 +1396,7 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig]);
+  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig, setPendingAttachment]);
 
   const loadSessions = async () => {
     if (!isActiveRef.current) return;
@@ -1229,6 +1496,8 @@ export function Chat({
         const createdAt = parseMessageTimestampMs(msg.createdAt ?? msg.created_at ?? msg.timestamp);
         const processingStartedAt = role === 'ai' ? (lastUserCreatedAt ?? createdAt) : undefined;
         const processingFinishedAt = role === 'ai' ? createdAt : undefined;
+        const memberActor = memberActorFromMessageMetadata(msg.metadata);
+        const knowledgeReferences = knowledgeReferencesFromMessageMetadata(msg.metadata);
 
         if (role === 'user') {
           lastUserCreatedAt = createdAt;
@@ -1241,6 +1510,9 @@ export function Chat({
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
+          knowledgeReferences: role === 'user' ? knowledgeReferences : [],
+          memberMention: role === 'user' ? memberActor : undefined,
+          memberActor: role === 'ai' ? memberActor : undefined,
           tools: [], // History tools not fully reconstructed in this simple view yet
           timeline: [], // History timeline not fully reconstructed
           isStreaming: false,
@@ -2789,12 +3061,15 @@ export function Chat({
     content: string,
     attachment?: UploadedFileAttachment,
     memberMention: ChatMemberMentionOption | null = selectedMemberMention,
+    knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
   ) => {
+    const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
     uiTraceInteraction('chat', 'send_message', {
       sessionId: currentSessionId || null,
       chars: String(content || '').trim().length,
       hasAttachment: Boolean(attachment),
       targetAdvisorId: memberMention?.id || null,
+      knowledgeReferenceCount: safeKnowledgeMentions.length,
     });
     suppressComposerFocus('send_message', 5000);
     blurComposer('send_message');
@@ -2802,17 +3077,26 @@ export function Chat({
     setErrorNotice(null);
     const normalizedContent = String(content || '').trim();
     const mentionLabel = memberMention ? `@${memberMention.name}` : '';
-    const displayBody = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
-    const displayText = [mentionLabel, displayBody].filter(Boolean).join(' ').trim();
+    const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
+    const displayBody = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
+    const displayText = [mentionLabel, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
     if (!displayText) return;
     const runtimeMessage = normalizedContent || displayBody || displayText;
     const processingStartedAt = Date.now();
+    const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
+      type: 'member',
+      memberId: memberMention.id,
+      displayName: memberMention.name,
+      avatar: memberMention.avatar,
+    } : undefined;
     const userMsg: Message = {
       id: processingStartedAt.toString(),
       role: 'user',
       content: runtimeMessage,
       displayContent: displayText,
       attachment: attachment as unknown as Message['attachment'],
+      knowledgeReferences: safeKnowledgeMentions,
+      memberMention: memberActor,
       tools: [],
       timeline: []
     };
@@ -2826,12 +3110,14 @@ export function Chat({
       timeline: [],
       isStreaming: true,
       processingStartedAt,
+      memberActor,
     };
 
     localMessageMutationRef.current += 1;
     setMessages(prev => [...prev, userMsg, aiPlaceholder]);
     setInput('');
     setSelectedMemberMention(null);
+    setSelectedKnowledgeMentions([]);
     setPendingAttachment(null);
     setIsAttachmentUploading(false);
     setIsProcessing(true);
@@ -2859,38 +3145,44 @@ export function Chat({
         name: memberMention.name,
         avatar: memberMention.avatar,
       } : undefined,
+      knowledgeReferences: safeKnowledgeMentions,
       modelConfig: resolvedModelConfig || getChatModelConfig(),
       taskHints: fixedSessionTaskHints,
     });
   };
 
-  const shortcuts = shortcutsProp || [
+  const shortcutContext: ChatShortcutContext = {
+    input,
+    hasInput: Boolean(input.trim()),
+    attachment: pendingAttachment,
+    selectedMemberMention,
+    selectedKnowledgeMentions,
+  };
+
+  const shortcuts = resolveChatShortcutProvider(shortcutsProp, [
     { label: '📝 总结内容', text: '请总结以上内容，提炼核心要点。' },
     { label: '💡 提炼观点', text: '请提炼其中的关键观点和洞察。' },
     { label: '✂️ 润色优化', text: '请润色这段内容，使其更具吸引力。' },
     { label: '❓ 延伸提问', text: '基于以上内容，提出3个值得思考的延伸问题。' },
-  ];
+  ], shortcutContext);
 
-  const welcomeShortcuts = welcomeShortcutsProp || [
+  const welcomeShortcuts = resolveChatShortcutProvider(welcomeShortcutsProp, [
     { label: '📄 阅读稿件', text: '请帮我阅读并理解当前的稿件内容。' },
     { label: '✏️ 编辑稿件', text: '我想对当前稿件进行编辑优化，请提供建议。' },
     { label: '🔍 内容分析', text: '请深度分析当前内容，提炼核心观点。' },
     { label: '💡 创作建议', text: '请基于当前内容提供一些创作方向的建议。' }
-  ];
+  ], shortcutContext);
 
   const applyShortcut = useCallback((shortcut: ChatShortcut) => {
     const action = shortcut.action || 'send';
     if (action === 'inject') {
       setErrorNotice(null);
       setInput(shortcut.text);
-      requestAnimationFrame(() => {
-        composerRef.current?.focus();
-        composerRef.current?.syncHeight();
-      });
+      activateComposerInput('composer');
       return;
     }
     void sendMessage(shortcut.text);
-  }, [sendMessage]);
+  }, [activateComposerInput, sendMessage]);
 
   const formatTokenLabel = (value?: number) => {
     const safe = Math.max(0, Math.round(Number(value || 0)));
@@ -3029,7 +3321,7 @@ export function Chat({
         className={options?.className}
         value={input}
         onValueChange={setInput}
-        onSubmit={() => sendMessage(input, pendingAttachment || undefined, selectedMemberMention)}
+        onSubmit={() => sendMessage(input, pendingAttachment || undefined, selectedMemberMention, selectedKnowledgeMentions)}
         placeholder={placeholder}
         attachment={pendingAttachment}
         attachmentStatus={isAttachmentUploading ? 'uploading' : pendingAttachment ? 'uploaded' : null}
@@ -3051,6 +3343,10 @@ export function Chat({
         memberMentionOptions={memberMentionOptions}
         selectedMemberMention={selectedMemberMention}
         onSelectedMemberMentionChange={setSelectedMemberMention}
+        knowledgeMentionOptions={knowledgeMentionOptions}
+        selectedKnowledgeMentions={selectedKnowledgeMentions}
+        onSelectedKnowledgeMentionsChange={setSelectedKnowledgeMentions}
+        onKnowledgeMentionSearchQueryChange={handleKnowledgeMentionSearchQueryChange}
       />
     </>
   );
@@ -3362,6 +3658,7 @@ export function Chat({
                                 />
                               </ErrorBoundary>
                             ))}
+                            {messageListHeader}
                             <div ref={messagesEndRef} />
                           </>
                         )}

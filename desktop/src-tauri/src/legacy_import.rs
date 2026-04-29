@@ -845,6 +845,7 @@ fn import_legacy_store_from_db(
                 content,
                 display_content: None,
                 attachment: None,
+                metadata: None,
                 created_at: ts.to_string(),
             });
         }

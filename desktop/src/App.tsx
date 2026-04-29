@@ -65,7 +65,22 @@ export interface PendingChatMessage {
   content: string;          // 实际发送给 AI 的完整内容
   displayContent?: string;  // UI 上显示的简短内容
   sessionRouting?: 'current' | 'new';
+  deliveryMode?: 'send' | 'draft';
   taskHints?: AuthoringTaskHints;
+  knowledgeReferences?: Array<{
+    id: string;
+    title: string;
+    sourceKind?: string;
+    summary?: string;
+    cover?: string;
+    sourceUrl?: string;
+    folderPath?: string;
+    rootPath?: string;
+    tags?: string[];
+    updatedAt?: string;
+    fileCount?: number;
+    hasTranscript?: boolean;
+  }>;
   attachment?: {
     type: 'youtube-video';
     title: string;
@@ -659,7 +674,6 @@ function App() {
           <div className={currentView === 'knowledge' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'knowledge' ? <ViewLoadingFallback /> : null}>
               <KnowledgePage
-                onNavigateToChat={navigateToChat}
                 onNavigateToRedClaw={navigateToRedClaw}
                 isActive={currentView === 'knowledge'}
               />

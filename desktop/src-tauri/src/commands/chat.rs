@@ -38,19 +38,87 @@ fn payload_member_mention_advisor_id(payload: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn apply_member_mention_session_metadata(
+fn payload_knowledge_references(payload: &Value) -> Vec<Value> {
+    payload
+        .get("knowledgeReferences")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let object = item.as_object()?;
+                    let id = object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?;
+                    let mut reference = serde_json::Map::new();
+                    reference.insert("type".to_string(), json!("knowledge"));
+                    reference.insert("knowledgeId".to_string(), json!(id));
+                    for field in [
+                        "title",
+                        "sourceKind",
+                        "summary",
+                        "cover",
+                        "sourceUrl",
+                        "folderPath",
+                        "rootPath",
+                        "updatedAt",
+                    ] {
+                        if let Some(value) = object.get(field).and_then(Value::as_str) {
+                            let trimmed = value.trim();
+                            if !trimmed.is_empty() {
+                                reference.insert(field.to_string(), json!(trimmed));
+                            }
+                        }
+                    }
+                    if let Some(tags) = object.get("tags").and_then(Value::as_array) {
+                        let normalized_tags = tags
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(|value| json!(value))
+                            .collect::<Vec<_>>();
+                        if !normalized_tags.is_empty() {
+                            reference.insert("tags".to_string(), Value::Array(normalized_tags));
+                        }
+                    }
+                    if let Some(value) = object.get("fileCount").and_then(Value::as_i64) {
+                        reference.insert("fileCount".to_string(), json!(value));
+                    }
+                    if let Some(value) = object.get("hasTranscript").and_then(Value::as_bool) {
+                        reference.insert("hasTranscript".to_string(), json!(value));
+                    }
+                    Some(Value::Object(reference))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn apply_chat_turn_session_metadata(
     state: &State<'_, AppState>,
     session_id: &str,
-    advisor_id: &str,
+    advisor_id: Option<&str>,
+    knowledge_references: &[Value],
 ) -> Result<Option<Value>, String> {
     with_store_mut(state, |store| {
-        let Some(advisor) = store.advisors.iter().find(|item| item.id == advisor_id) else {
-            return Err(format!("未找到 @ 成员：{advisor_id}"));
+        let advisor_snapshot = if let Some(advisor_id) = advisor_id {
+            let Some(advisor) = store.advisors.iter().find(|item| item.id == advisor_id) else {
+                return Err(format!("未找到 @ 成员：{advisor_id}"));
+            };
+            Some((
+                advisor_id.to_string(),
+                advisor.name.clone(),
+                advisor.avatar.clone(),
+                advisor.personality.clone(),
+                advisor.system_prompt.clone(),
+                advisor_member_skill_ref(store, advisor_id).or(advisor.member_skill_ref.clone()),
+            ))
+        } else {
+            None
         };
-        let advisor_name = advisor.name.clone();
-        let fallback_member_skill_ref = advisor.member_skill_ref.clone();
-        let member_skill_ref =
-            advisor_member_skill_ref(store, advisor_id).or(fallback_member_skill_ref);
         let Some(session) = store
             .chat_sessions
             .iter_mut()
@@ -63,19 +131,54 @@ fn apply_member_mention_session_metadata(
             .as_ref()
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        metadata.insert("advisorId".to_string(), json!(advisor_id));
-        metadata.insert("memberMentionMode".to_string(), json!("single-turn"));
-        metadata.insert("memberMentionAdvisorName".to_string(), json!(advisor_name));
-        if let Some(skill_ref) = member_skill_ref {
-            metadata.insert("memberSkillRef".to_string(), json!(skill_ref.clone()));
-            metadata.insert("activeSkills".to_string(), json!([skill_ref]));
+        if let Some((
+            advisor_id,
+            advisor_name,
+            advisor_avatar,
+            advisor_personality,
+            advisor_system_prompt,
+            member_skill_ref,
+        )) = advisor_snapshot
+        {
+            metadata.insert("advisorId".to_string(), json!(advisor_id));
+            metadata.insert("memberMentionMode".to_string(), json!("single-turn"));
+            metadata.insert("memberMentionAdvisorName".to_string(), json!(advisor_name));
+            metadata.insert(
+                "memberMentionAdvisorAvatar".to_string(),
+                json!(advisor_avatar),
+            );
+            let mut active_speaker = json!({
+                "type": "member",
+                "speakerId": advisor_id,
+                "memberId": advisor_id,
+                "displayName": advisor_name,
+                "avatar": advisor_avatar,
+                "personality": advisor_personality,
+                "systemPrompt": advisor_system_prompt,
+                "knowledgeScope": {
+                    "type": "advisor",
+                    "advisorId": advisor_id,
+                },
+            });
+            if let Some(skill_ref) = member_skill_ref {
+                metadata.insert("memberSkillRef".to_string(), json!(skill_ref.clone()));
+                metadata.insert("activeSkills".to_string(), json!([skill_ref]));
+                active_speaker["memberSkillRef"] = json!(skill_ref);
+            }
+            metadata.insert("activeSpeaker".to_string(), active_speaker);
+        }
+        if !knowledge_references.is_empty() {
+            metadata.insert(
+                "explicitKnowledgeRefs".to_string(),
+                Value::Array(knowledge_references.to_vec()),
+            );
         }
         session.metadata = Some(Value::Object(metadata));
         Ok(previous_metadata)
     })
 }
 
-fn restore_member_mention_session_metadata(
+fn restore_chat_turn_session_metadata(
     state: &State<'_, AppState>,
     session_id: &str,
     previous_metadata: Option<Value>,
@@ -272,17 +375,22 @@ pub fn handle_send_channel(
                 );
                 let _ = activated_skills;
             }
-            let member_mention_metadata_restore = if let (
-                Some(active_session_id),
-                Some(advisor_id),
-            ) = (
-                session_id.as_deref(),
-                payload_member_mention_advisor_id(&payload),
-            ) {
-                Some((
-                    active_session_id.to_string(),
-                    apply_member_mention_session_metadata(state, active_session_id, &advisor_id)?,
-                ))
+            let knowledge_references = payload_knowledge_references(&payload);
+            let advisor_id = payload_member_mention_advisor_id(&payload);
+            let turn_metadata_restore = if let Some(active_session_id) = session_id.as_deref() {
+                if advisor_id.is_some() || !knowledge_references.is_empty() {
+                    Some((
+                        active_session_id.to_string(),
+                        apply_chat_turn_session_metadata(
+                            state,
+                            active_session_id,
+                            advisor_id.as_deref(),
+                            &knowledge_references,
+                        )?,
+                    ))
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -295,12 +403,8 @@ pub fn handle_send_channel(
             );
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
             let completed_result = run_chat_send_turn(app, state, &prepared_turn, &message);
-            if let Some((restore_session_id, previous_metadata)) = member_mention_metadata_restore {
-                restore_member_mention_session_metadata(
-                    state,
-                    &restore_session_id,
-                    previous_metadata,
-                )?;
+            if let Some((restore_session_id, previous_metadata)) = turn_metadata_restore {
+                restore_chat_turn_session_metadata(state, &restore_session_id, previous_metadata)?;
             }
             let completed = completed_result?;
             if prepared_turn.is_redclaw_session() {

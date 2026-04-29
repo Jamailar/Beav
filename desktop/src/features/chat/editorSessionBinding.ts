@@ -182,6 +182,21 @@ function findMasterFile(items: MasterRecordLike[] | null | undefined, masterId: 
   return text(exact?.file) || fallback;
 }
 
+function isWritingDraftType(draftType: string): boolean {
+  return draftType === 'longform' || draftType === 'richpost';
+}
+
+function authoringProjectKindForDraft(draftType: string): string | null {
+  if (draftType === 'longform') return 'redarticle';
+  if (draftType === 'richpost') return 'redpost';
+  return null;
+}
+
+function resolveAuthoringContentPath(editorFile: string, packageState?: PackageStateLike | null): string {
+  const entry = text(packageState?.manifest?.entry || 'content.md') || 'content.md';
+  return `${editorFile.replace(/\/+$/, '')}/${entry.replace(/^\/+/, '')}`;
+}
+
 export function buildEditorSessionBinding(
   params: BuildEditorSessionBindingParams,
 ): EditorSessionBindingRequest | null {
@@ -224,6 +239,9 @@ export function buildEditorSessionBinding(
   const currentTitle = pickDraftTitle(params);
   const activeSkills = Array.from(new Set(list(params.editorAiWorkspaceMode.activeSkills).map((item) => text(item)).filter(Boolean)));
   const isMediaDraft = draftType === 'video' || draftType === 'audio';
+  const isWritingDraft = isWritingDraftType(draftType);
+  const authoringProjectKind = isWritingDraft ? authoringProjectKindForDraft(draftType) : null;
+  const authoringContentPath = isWritingDraft ? resolveAuthoringContentPath(editorFile, params.packageState) : null;
   const currentMasters = currentThemeMasterIds(params.packageState);
 
   const metadata: Record<string, unknown> = {
@@ -237,8 +255,19 @@ export function buildEditorSessionBinding(
     associatedFilePath,
     associatedPackageFilePath: editorFile,
     associatedPackageKind: draftType,
-    agentProfile: draftType === 'video' ? 'video-editor' : draftType === 'audio' ? 'audio-editor' : 'default',
+    agentProfile: draftType === 'video'
+      ? 'video-editor'
+      : draftType === 'audio'
+        ? 'audio-editor'
+        : isWritingDraft
+          ? 'manuscript-editor'
+          : 'default',
     associatedPackageTitle: currentTitle,
+    currentAuthoringProjectPath: isWritingDraft ? editorFile : null,
+    currentAuthoringContentPath: authoringContentPath,
+    currentAuthoringEntryPath: authoringContentPath,
+    currentAuthoringProjectKind: authoringProjectKind,
+    currentAuthoringTitle: isWritingDraft ? currentTitle : null,
     associatedPackageWorkspaceMode: text(params.editorAiWorkspaceMode.id),
     associatedPackageWorkspaceModeLabel: text(params.editorAiWorkspaceMode.label),
     associatedPackagePromptProfile:

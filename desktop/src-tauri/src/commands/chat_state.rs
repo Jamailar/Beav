@@ -278,7 +278,12 @@ pub fn resolve_runtime_mode_for_session(store: &AppStore, session_id: &str) -> S
     if let Some(agent_profile) = session_metadata
         .and_then(|metadata| metadata.get("agentProfile"))
         .and_then(|value| value.as_str())
-        .filter(|value| matches!(*value, "video-editor" | "audio-editor"))
+        .filter(|value| {
+            matches!(
+                *value,
+                "video-editor" | "audio-editor" | "manuscript-editor"
+            )
+        })
     {
         return agent_profile.to_string();
     }
@@ -365,6 +370,27 @@ mod tests {
                 .and_then(Value::as_array)
                 .map(|items| items.len()),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_mode_uses_manuscript_editor_agent_profile() {
+        let mut store = AppStore::default();
+        store.chat_sessions.push(ChatSessionRecord {
+            id: "file-session:demo".to_string(),
+            title: "Demo".to_string(),
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            metadata: Some(json!({
+                "contextType": "file",
+                "contextId": "manuscripts/demo.redpost",
+                "agentProfile": "manuscript-editor"
+            })),
+        });
+
+        assert_eq!(
+            resolve_runtime_mode_for_session(&store, "file-session:demo"),
+            "manuscript-editor"
         );
     }
 

@@ -1,7 +1,10 @@
+use std::time::Duration;
+
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
     knowledge_index::{
+        canonical_store::next_visual_retry_at,
         document_blocks::rebuild_fts_index_for_source,
         index_status,
         indexer::{
@@ -164,6 +167,8 @@ fn spawn_rebuild(app: AppHandle, kind: RebuildJobKind) {
         }
         if rerun {
             schedule_rebuild(&app, "pending");
+        } else if matches!(kind, RebuildJobKind::VisualBackfill) {
+            schedule_visual_retry_wakeup(&app, "visual-backfill-finished");
         }
     });
 }
@@ -232,7 +237,10 @@ pub(crate) fn schedule_canonical_reparse(app: &AppHandle) {
 pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
     let state = app.state::<AppState>();
     match visual_maintenance_needed(&state) {
-        Ok(false) => return,
+        Ok(false) => {
+            schedule_visual_retry_wakeup(app, "visual-backfill-deferred");
+            return;
+        }
         Ok(true) => {}
         Err(error) => {
             eprintln!("[RedBox knowledge index] visual backfill check failed: {error}");
@@ -251,6 +259,57 @@ pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
             eprintln!("[RedBox knowledge index] mark visual backfill pending failed: {error}")
         }
     }
+}
+
+fn schedule_visual_retry_wakeup(app: &AppHandle, reason: &str) {
+    let state = app.state::<AppState>();
+    let next_retry_at = match next_visual_retry_at(&state) {
+        Ok(Some(value)) => value,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("[RedBox knowledge index] visual retry wakeup check failed: {error}");
+            return;
+        }
+    };
+    let now_ms = crate::now_i64();
+    if next_retry_at <= now_ms {
+        return;
+    }
+    {
+        let Ok(mut runtime) = state.knowledge_index_state.lock() else {
+            eprintln!("[RedBox knowledge index] visual retry wakeup lock failed");
+            return;
+        };
+        if runtime
+            .visual_retry_wakeup_at
+            .is_some_and(|existing| existing <= next_retry_at && existing > now_ms)
+        {
+            return;
+        }
+        runtime.visual_retry_wakeup_at = Some(next_retry_at);
+    }
+    crate::append_debug_trace_global(format!(
+        "[visual-index] retry_wakeup_scheduled reason={} nextRetryAt={}",
+        reason, next_retry_at
+    ));
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let delay_ms = next_retry_at.saturating_sub(crate::now_i64());
+        tokio::time::sleep(Duration::from_millis(delay_ms as u64)).await;
+        let state = app.state::<AppState>();
+        {
+            let Ok(mut runtime) = state.knowledge_index_state.lock() else {
+                eprintln!("[RedBox knowledge index] visual retry wakeup lock failed");
+                return;
+            };
+            if runtime.visual_retry_wakeup_at != Some(next_retry_at) {
+                return;
+            }
+            runtime.visual_retry_wakeup_at = None;
+        }
+        schedule_visual_backfill(&app, "visual-retry-wakeup");
+    });
 }
 
 pub(crate) fn ensure_catalog_ready_async(

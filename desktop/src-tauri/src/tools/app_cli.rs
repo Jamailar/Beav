@@ -3859,6 +3859,14 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             Some(target.project_kind),
             &payload_string(&merged, "content").unwrap_or_default(),
         )?;
+        let content = payload_string(&merged, "content").unwrap_or_default();
+        if let Some(result) = self.maybe_queue_writing_manuscript_proposal(
+            &target.project_path,
+            content,
+            payload_field(&merged, "metadata"),
+        )? {
+            return Ok(result);
+        }
         let saved = self.call_channel("manuscripts:save", merged.clone())?;
         let saved_bytes = payload_string(&merged, "content")
             .map(|value| value.as_bytes().len() as i64)

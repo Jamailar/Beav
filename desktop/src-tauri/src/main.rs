@@ -172,6 +172,8 @@ struct ChatMessageRecord {
     display_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     attachment: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<Value>,
     created_at: String,
 }
 
@@ -1521,18 +1523,17 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 mod tests {
     use super::{
         append_generated_media_markdown, asset_preview_url_from_result,
-        clear_interactive_execution_contract_metadata, decode_command_json_stdout,
-        build_subject_record_for_workspace, guess_mime_and_kind,
-        interactive_attachment_inline_data_url, interactive_base64_payload_size,
-        interactive_execution_progress_observe_success,
+        build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
+        decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
+        interactive_base64_payload_size, interactive_execution_progress_observe_success,
         interactive_skill_activation_continuation, interactive_skill_activations,
         interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result,
-        normalized_structured_payload_arguments, redbox_fs_profile_read_completed,
-        persist_subjects_workspace, resolve_local_path, structured_tool_error_code,
-        validate_runtime_tool_message_sequence, GeneratedMediaPreview, InteractiveExecutionContract,
-        InteractiveExecutionProgress, SubjectAttribute, SubjectCategory, SubjectMediaInput,
-        SubjectMutationInput, SubjectRecord, SubjectVoiceInput,
+        normalized_structured_payload_arguments, persist_subjects_workspace,
+        redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
+        validate_runtime_tool_message_sequence, GeneratedMediaPreview,
+        InteractiveExecutionContract, InteractiveExecutionProgress, SubjectAttribute,
+        SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord, SubjectVoiceInput,
     };
     use serde_json::json;
     use std::fs;
@@ -1658,8 +1659,7 @@ mod tests {
 
     #[test]
     fn subjects_workspace_bench_persists_and_loads_large_catalog() {
-        let root =
-            std::env::temp_dir().join(format!("redbox-subjects-bench-{}", crate::now_ms()));
+        let root = std::env::temp_dir().join(format!("redbox-subjects-bench-{}", crate::now_ms()));
         let subjects_root = root.join("subjects");
         let categories = (0..25)
             .map(|index| SubjectCategory {
@@ -1957,14 +1957,16 @@ mod tests {
     fn resolve_local_path_decodes_file_url_spaces() {
         let path = resolve_local_path("file:///Users/Jam/My%20Images/demo%201.png")
             .expect("file url path");
-        assert_eq!(path, std::path::PathBuf::from("/Users/Jam/My Images/demo 1.png"));
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/Users/Jam/My Images/demo 1.png")
+        );
     }
 
     #[test]
     fn resolve_local_path_accepts_local_file_and_redbox_asset_urls() {
-        let legacy =
-            resolve_local_path("local-file:///Users/Jam/My%20Images/demo%201.png")
-                .expect("legacy local file url path");
+        let legacy = resolve_local_path("local-file:///Users/Jam/My%20Images/demo%201.png")
+            .expect("legacy local file url path");
         assert_eq!(
             legacy,
             std::path::PathBuf::from("/Users/Jam/My Images/demo 1.png")
@@ -4324,6 +4326,30 @@ fn editor_session_prompt_context(
     let Some(metadata) = metadata else {
         return String::new();
     };
+    if runtime_mode == "manuscript-editor" {
+        let file_path = payload_string(&metadata, "currentAuthoringProjectPath")
+            .or_else(|| payload_string(&metadata, "associatedPackageFilePath"))
+            .or_else(|| payload_string(&metadata, "associatedFilePath"))
+            .or_else(|| payload_string(&metadata, "contextId"))
+            .unwrap_or_default();
+        let content_path = payload_string(&metadata, "currentAuthoringContentPath")
+            .or_else(|| payload_string(&metadata, "currentAuthoringEntryPath"))
+            .unwrap_or_default();
+        let title = payload_string(&metadata, "currentAuthoringTitle")
+            .or_else(|| payload_string(&metadata, "associatedPackageTitle"))
+            .unwrap_or_default();
+        let draft_type = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
+        return format!(
+            "\n\n## 当前稿件编辑绑定\n\
+runtime_mode: {runtime_mode}\n\
+title: {title}\n\
+draftType: {draft_type}\n\
+projectPath: {file_path}\n\
+contentPath: {content_path}\n\
+\n\
+规则：当前会话只服务这个稿件；需要写入时只使用 `Write(path=\"manuscripts://current\", content=\"完整改稿正文\")`，不要创建新稿件，也不要扫描其他稿件来猜当前目标。工具成功后只是生成编辑器待审改稿提案，仍需用户在编辑器中接受。\n"
+        );
+    }
     if runtime_mode == "chatroom" {
         let workspace_mode =
             payload_string(&metadata, "associatedPackageWorkspaceMode").unwrap_or_default();
@@ -8811,7 +8837,10 @@ fn materialize_subject_image_paths(
             paths.push(relative_path);
             continue;
         }
-        let Some(data_url) = image.data_url.as_deref().filter(|value| !value.trim().is_empty())
+        let Some(data_url) = image
+            .data_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
         else {
             continue;
         };
@@ -8823,7 +8852,11 @@ fn materialize_subject_image_paths(
         let fallback_extension = subject_input_file_extension(image.name.as_deref(), "png");
         let extension = subject_data_url_extension(meta, &fallback_extension);
         let file_name = subject_asset_file_name("image", index, image.name.as_deref(), &extension);
-        paths.push(materialize_subject_data_url(subject_dir, data_url, &file_name)?);
+        paths.push(materialize_subject_data_url(
+            subject_dir,
+            data_url,
+            &file_name,
+        )?);
     }
     Ok(paths)
 }
@@ -8842,7 +8875,11 @@ fn materialize_subject_voice_path(
     {
         return Ok(Some(relative_path));
     }
-    let Some(data_url) = voice.data_url.as_deref().filter(|value| !value.trim().is_empty()) else {
+    let Some(data_url) = voice
+        .data_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
         return Ok(None);
     };
     let meta = data_url
@@ -8914,7 +8951,10 @@ fn persist_subjects_workspace(
         &subjects_root.join("categories.json"),
         &json!({ "categories": categories }),
     )?;
-    let catalog_subjects = subjects.iter().map(subject_catalog_item).collect::<Vec<_>>();
+    let catalog_subjects = subjects
+        .iter()
+        .map(subject_catalog_item)
+        .collect::<Vec<_>>();
     write_json_value(
         &subjects_root.join("catalog.json"),
         &json!({ "subjects": catalog_subjects }),
@@ -8926,10 +8966,7 @@ fn build_subject_record_for_workspace(
     input: SubjectMutationInput,
     existing: Option<SubjectRecord>,
 ) -> Result<SubjectRecord, String> {
-    let subject_id = input
-        .id
-        .clone()
-        .unwrap_or_else(|| make_id("subject"));
+    let subject_id = input.id.clone().unwrap_or_else(|| make_id("subject"));
     let subject_dir = subjects_root.join(&subject_id);
     let images = input.images.as_deref().unwrap_or(&[]);
     let image_paths = materialize_subject_image_paths(&subject_dir, images)?;
@@ -8995,8 +9032,9 @@ fn handle_subject_category_create(
         return Ok(json!({ "success": false, "error": "分类名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (mut categories, subjects) =
-        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    let (mut categories, subjects) = with_store(state, |store| {
+        Ok((store.categories.clone(), store.subjects.clone()))
+    })?;
     if categories
         .iter()
         .any(|item| item.name.eq_ignore_ascii_case(&name))
@@ -9034,8 +9072,9 @@ fn handle_subject_category_update(
         return Ok(json!({ "success": false, "error": "分类名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (mut categories, subjects) =
-        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    let (mut categories, subjects) = with_store(state, |store| {
+        Ok((store.categories.clone(), store.subjects.clone()))
+    })?;
     if categories
         .iter()
         .any(|item| item.id != id && item.name.eq_ignore_ascii_case(&next_name))
@@ -9065,8 +9104,9 @@ fn handle_subject_category_delete(
         return Ok(json!({ "success": false, "error": "缺少分类 id" }));
     };
     let subjects_root = subjects_root(state)?;
-    let (mut categories, subjects) =
-        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    let (mut categories, subjects) = with_store(state, |store| {
+        Ok((store.categories.clone(), store.subjects.clone()))
+    })?;
     if subjects
         .iter()
         .any(|subject| subject.category_id.as_deref() == Some(id.as_str()))
@@ -9094,14 +9134,19 @@ fn handle_subject_create(payload: Value, state: &State<'_, AppState>) -> Result<
         return Ok(json!({ "success": false, "error": "主体名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (categories, mut subjects) =
-        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    let (categories, mut subjects) = with_store(state, |store| {
+        Ok((store.categories.clone(), store.subjects.clone()))
+    })?;
     if let Some(id) = input.id.as_deref() {
         if subjects.iter().any(|item| item.id == id) {
             return Ok(json!({ "success": false, "error": "主体已存在" }));
         }
     }
-    if let Some(category_id) = input.category_id.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(category_id) = input
+        .category_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         if !categories.iter().any(|item| item.id == category_id) {
             return Ok(json!({ "success": false, "error": "分类不存在" }));
         }
@@ -9127,9 +9172,14 @@ fn handle_subject_update(payload: Value, state: &State<'_, AppState>) -> Result<
         return Ok(json!({ "success": false, "error": "主体名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
-    let (categories, mut subjects) =
-        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
-    if let Some(category_id) = input.category_id.as_deref().filter(|value| !value.is_empty()) {
+    let (categories, mut subjects) = with_store(state, |store| {
+        Ok((store.categories.clone(), store.subjects.clone()))
+    })?;
+    if let Some(category_id) = input
+        .category_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         if !categories.iter().any(|item| item.id == category_id) {
             return Ok(json!({ "success": false, "error": "分类不存在" }));
         }
@@ -9154,8 +9204,9 @@ fn handle_subject_delete(payload: Value, state: &State<'_, AppState>) -> Result<
         return Ok(json!({ "success": false, "error": "缺少主体 id" }));
     };
     let subjects_root = subjects_root(state)?;
-    let (categories, mut subjects) =
-        with_store(state, |store| Ok((store.categories.clone(), store.subjects.clone())))?;
+    let (categories, mut subjects) = with_store(state, |store| {
+        Ok((store.categories.clone(), store.subjects.clone()))
+    })?;
     let before = subjects.len();
     subjects.retain(|item| item.id != id);
     if subjects.len() == before {

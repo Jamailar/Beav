@@ -35,6 +35,7 @@ pub(crate) struct KnowledgeIndexRuntimeState {
     pub migration_status: Option<String>,
     pub pending_rebuild_reason: Option<String>,
     pub watched_roots: Vec<PathBuf>,
+    pub visual_retry_wakeup_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -2,6 +2,7 @@
 pub enum ToolPack {
     Wander,
     Chatroom,
+    ManuscriptEditor,
     ImageGeneration,
     Knowledge,
     Redclaw,
@@ -13,6 +14,7 @@ pub enum ToolPack {
 pub fn pack_by_name(name: &str) -> Option<ToolPack> {
     match name.trim().to_lowercase().as_str() {
         "wander" => Some(ToolPack::Wander),
+        "manuscript-editor" | "manuscript_editor" => Some(ToolPack::ManuscriptEditor),
         "chatroom" | "default" => Some(ToolPack::Chatroom),
         "image-generation" | "image_generation" => Some(ToolPack::ImageGeneration),
         "knowledge" => Some(ToolPack::Knowledge),
@@ -27,6 +29,7 @@ pub fn pack_by_name(name: &str) -> Option<ToolPack> {
 pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
     match runtime_mode.trim().to_lowercase().as_str() {
         "wander" => ToolPack::Wander,
+        "manuscript-editor" | "manuscript_editor" => ToolPack::ManuscriptEditor,
         "image-generation" | "image_generation" => ToolPack::ImageGeneration,
         "knowledge" => ToolPack::Knowledge,
         "redclaw" => ToolPack::Redclaw,
@@ -40,6 +43,7 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
 pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["redbox_fs"],
+        ToolPack::ManuscriptEditor => &["app_cli"],
         ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
         ToolPack::ImageGeneration => &["bash", "redbox_fs", "app_cli"],
         ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
@@ -59,6 +63,7 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
 pub fn visible_tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["Read", "List", "Search"],
+        ToolPack::ManuscriptEditor => &["Write"],
         ToolPack::Chatroom => &["Read", "List", "Search", "Write", "Redbox", "bash"],
         ToolPack::ImageGeneration => &["Read", "List", "Search", "Redbox", "bash"],
         ToolPack::Knowledge => &["Read", "List", "Search", "Redbox", "bash"],
@@ -97,6 +102,14 @@ mod tests {
     fn audio_editor_runtime_includes_editor_tool_pack() {
         let tools = tool_names_for_runtime_mode("audio-editor");
         assert!(tools.contains(&"redbox_editor"));
+    }
+
+    #[test]
+    fn manuscript_editor_runtime_only_exposes_bound_write() {
+        let tools = tool_names_for_runtime_mode("manuscript-editor");
+        assert_eq!(tools, &["app_cli"]);
+        let visible = visible_tool_names_for_runtime_mode("manuscript-editor");
+        assert_eq!(visible, &["Write"]);
     }
 
     #[test]

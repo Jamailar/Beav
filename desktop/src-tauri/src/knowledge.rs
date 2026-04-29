@@ -271,7 +271,12 @@ fn materialize_note_asset_source(
         ));
     }
 
-    let target_dir = normalize_legacy_workspace_path(&entry_dir.join(target_dir_relative));
+    let normalized_target_dir_relative = normalize_relative_path(target_dir_relative);
+    let target_dir = if normalized_target_dir_relative.is_empty() {
+        entry_dir.to_path_buf()
+    } else {
+        normalize_legacy_workspace_path(&entry_dir.join(&normalized_target_dir_relative))
+    };
     fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
 
     if let Some(data) = trimmed.strip_prefix("data:") {
@@ -2625,10 +2630,12 @@ mod tests {
     use super::{
         author_entry_id, decode_embedded_js_string, existing_entry_id_from_record,
         extract_css_url_near, extract_html_attribute_near, extract_json_string_values,
-        is_supported_social_entry_kind, maybe_backfill_xiaohongshu_assets, note_entry_id,
-        note_transcript_file_from_meta, youtube_entry_id, KnowledgeEntryAssetsInput,
+        is_supported_social_entry_kind, materialize_note_asset_source,
+        maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
+        youtube_entry_id, KnowledgeEntryAssetsInput,
     };
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn extracts_xiaohongshu_embedded_urls() {
@@ -2747,5 +2754,26 @@ mod tests {
         )
         .expect("folder id should be derived");
         assert_eq!(id, "item-CON");
+    }
+
+    #[test]
+    fn note_asset_root_target_does_not_create_dot_directory() {
+        let entry_dir =
+            std::env::temp_dir().join(format!("redbox-note-asset-root-{}", crate::now_ms()));
+        fs::create_dir_all(&entry_dir).expect("entry dir should be created");
+
+        let relative = materialize_note_asset_source(
+            &entry_dir,
+            "data:video/mp4;base64,AAAA",
+            ".",
+            "video",
+            "video",
+        )
+        .expect("video asset should be written to the note root");
+
+        assert_eq!(relative, "video.mp4");
+        assert!(entry_dir.join("video.mp4").exists());
+
+        let _ = fs::remove_dir_all(entry_dir);
     }
 }

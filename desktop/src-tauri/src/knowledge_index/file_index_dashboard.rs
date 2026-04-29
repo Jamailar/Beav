@@ -732,10 +732,12 @@ fn build_scope_status(
         FileIndexLaneStatus {
             lane: "visual_index".to_string(),
             label: "视觉索引".to_string(),
-            status: lane_status(
+            status: visual_lane_status(
                 stats.visual_indexed,
                 visual_total,
                 stats.visual_failed,
+                stats.visual_retry_ready,
+                stats.visual_retry_deferred,
                 is_building,
                 !visual_enabled && visual_total == 0,
             ),
@@ -765,7 +767,9 @@ fn build_scope_status(
         },
     ];
 
-    let failed_count = scope.source_failed_count + stats.visual_failed;
+    let blocked_failures =
+        stats.visual_failed - stats.visual_retry_ready - stats.visual_retry_deferred;
+    let failed_count = scope.source_failed_count + blocked_failures.max(0);
     let status = if failed_count > 0 {
         "partial_failed"
     } else if is_building && lanes.iter().any(|lane| lane.status == "pending") {
@@ -848,10 +852,12 @@ fn build_global_lanes(
         FileIndexLaneStatus {
             lane: "visual_index".to_string(),
             label: "视觉索引".to_string(),
-            status: lane_status(
+            status: visual_lane_status(
                 totals.visual_done,
                 totals.visual_total,
                 totals.visual_failed,
+                totals.retry_ready,
+                totals.retry_deferred,
                 false,
                 !visual_enabled && totals.visual_total == 0,
             ),
@@ -901,6 +907,30 @@ fn lane_status(done: i64, total: i64, failed: i64, is_building: bool, disabled: 
     "pending".to_string()
 }
 
+fn visual_lane_status(
+    done: i64,
+    total: i64,
+    failed: i64,
+    retry_ready: i64,
+    retry_deferred: i64,
+    is_building: bool,
+    disabled: bool,
+) -> String {
+    if disabled {
+        return "disabled".to_string();
+    }
+    if failed > 0 {
+        if retry_ready > 0 {
+            return "pending".to_string();
+        }
+        if retry_deferred >= failed {
+            return "waiting".to_string();
+        }
+        return "partial_failed".to_string();
+    }
+    lane_status(done, total, 0, is_building, false)
+}
+
 fn status_weight(status: &str) -> u8 {
     match status {
         "partial_failed" => 0,
@@ -940,5 +970,15 @@ mod tests {
         assert_eq!(lane_status(10, 10, 0, false, false), "done");
         assert_eq!(lane_status(2, 10, 0, true, false), "indexing");
         assert_eq!(lane_status(0, 0, 0, false, true), "disabled");
+    }
+
+    #[test]
+    fn visual_lane_status_treats_retryable_failures_as_queue_state() {
+        assert_eq!(visual_lane_status(19, 22, 3, 2, 1, false, false), "pending");
+        assert_eq!(visual_lane_status(19, 22, 3, 0, 3, false, false), "waiting");
+        assert_eq!(
+            visual_lane_status(19, 22, 3, 0, 2, false, false),
+            "partial_failed"
+        );
     }
 }

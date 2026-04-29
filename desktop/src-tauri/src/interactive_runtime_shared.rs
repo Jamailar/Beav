@@ -48,7 +48,9 @@ pub(crate) fn interactive_runtime_context_bundle(
         skills_section,
         prompt_prefix,
         prompt_suffix,
-        advisor_context_section,
+        active_speaker_section,
+        explicit_knowledge_section,
+        has_member_speaker,
         host_runtime_context_section,
         subagent_role_overlay_section,
     ) = with_store(state, |store| {
@@ -103,7 +105,9 @@ pub(crate) fn interactive_runtime_context_bundle(
             skill_prompt.skills_section,
             skill_prompt.prompt_prefix,
             skill_prompt.prompt_suffix,
-            advisor_runtime_context_section(metadata, &store.advisors),
+            active_speaker_prompt_section(metadata, &store.advisors),
+            explicit_knowledge_prompt_section(metadata),
+            has_active_member_speaker(metadata),
             render_host_runtime_context_section(&host_context),
             subagent_role_overlay_section(metadata),
         ))
@@ -121,6 +125,8 @@ pub(crate) fn interactive_runtime_context_bundle(
             String::new(),
             String::new(),
             String::new(),
+            String::new(),
+            false,
             render_host_runtime_context_section(&host_context),
             String::new(),
         )
@@ -175,8 +181,11 @@ pub(crate) fn interactive_runtime_context_bundle(
         if let Some(memory_section) = memory_section.as_ref() {
             sections.push(memory_section.summary.trim().to_string());
         }
-        if !advisor_context_section.trim().is_empty() {
-            sections.push(advisor_context_section.trim().to_string());
+        if !explicit_knowledge_section.trim().is_empty() {
+            sections.push(explicit_knowledge_section.trim().to_string());
+        }
+        if !active_speaker_section.trim().is_empty() {
+            sections.push(active_speaker_section.trim().to_string());
         }
         if !prompt_suffix.trim().is_empty() {
             sections.push(prompt_suffix.trim().to_string());
@@ -190,7 +199,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 active_skill_count,
                 &project_context,
                 &host_runtime_context_section,
-                &advisor_context_section,
+                &active_speaker_section,
                 memory_section.as_ref().map(|item| item.summary.as_str()),
                 &subjects_section,
                 &prompt_prefix,
@@ -198,6 +207,55 @@ pub(crate) fn interactive_runtime_context_bundle(
                 &final_prompt,
             ),
         );
+    }
+    if runtime_mode == "manuscript-editor" {
+        if let Some(template) = load_redbox_prompt("runtime/pi/manuscript_editor.txt") {
+            let mut rendered = render_redbox_prompt(
+                &template,
+                &[
+                    ("available_tools", available_tools.clone()),
+                    ("project_context", project_context.clone()),
+                    ("host_runtime_context", host_runtime_context_section.clone()),
+                    ("skills_section", skills_section.clone()),
+                    ("current_date", now_iso()),
+                ],
+            );
+            if !prompt_prefix.trim().is_empty() {
+                rendered = format!("{}\n\n{}", prompt_prefix.trim(), rendered);
+            }
+            if !subagent_role_overlay_section.trim().is_empty() {
+                rendered.push_str("\n\n");
+                rendered.push_str(subagent_role_overlay_section.trim());
+            }
+            if !prompt_suffix.trim().is_empty() {
+                rendered.push_str("\n\n");
+                rendered.push_str(prompt_suffix.trim());
+            }
+            if !explicit_knowledge_section.trim().is_empty() {
+                rendered.push_str("\n\n");
+                rendered.push_str(explicit_knowledge_section.trim());
+            }
+            if !active_speaker_section.trim().is_empty() {
+                rendered.push_str("\n\n");
+                rendered.push_str(active_speaker_section.trim());
+            }
+            return RuntimeContextBundle::new(
+                rendered.clone(),
+                build_runtime_context_bundle_summary(
+                    runtime_mode,
+                    &available_tools,
+                    active_skill_count,
+                    &project_context,
+                    &host_runtime_context_section,
+                    &active_speaker_section,
+                    memory_section.as_ref().map(|item| item.summary.as_str()),
+                    &subjects_section,
+                    &prompt_prefix,
+                    &prompt_suffix,
+                    &rendered,
+                ),
+            );
+        }
     }
     if let Some(template) = load_redbox_prompt("runtime/pi/system_base.txt") {
         let mut rendered = render_redbox_prompt(
@@ -259,10 +317,6 @@ pub(crate) fn interactive_runtime_context_bundle(
             rendered.push_str("\n\n");
             rendered.push_str(subagent_role_overlay_section.trim());
         }
-        if !advisor_context_section.trim().is_empty() {
-            rendered.push_str("\n\n");
-            rendered.push_str(advisor_context_section.trim());
-        }
         if let Some(memory_section) = memory_section.as_ref() {
             rendered.push_str("\n\n");
             rendered.push_str(memory_section.summary.trim());
@@ -280,9 +334,15 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("<redclaw_agent_md>\n");
                 rendered.push_str(&truncate_chars(&bundle.agent, 6000));
                 rendered.push_str("\n</redclaw_agent_md>\n");
-                rendered.push_str("<redclaw_soul_md>\n");
-                rendered.push_str(&truncate_chars(&bundle.soul, 6000));
-                rendered.push_str("\n</redclaw_soul_md>\n");
+                if has_member_speaker {
+                    rendered.push_str("<redclaw_soul_md skipped=\"active-member-speaker\">\n");
+                    rendered.push_str("Soul.md belongs to RedClaw's own speaking persona. It is intentionally not injected for this turn because a member is the active speaker.\n");
+                    rendered.push_str("</redclaw_soul_md>\n");
+                } else {
+                    rendered.push_str("<redclaw_soul_md>\n");
+                    rendered.push_str(&truncate_chars(&bundle.soul, 6000));
+                    rendered.push_str("\n</redclaw_soul_md>\n");
+                }
                 rendered.push_str("<redclaw_identity_md>\n");
                 rendered.push_str(&truncate_chars(&bundle.identity, 4000));
                 rendered.push_str("\n</redclaw_identity_md>\n");
@@ -343,6 +403,14 @@ pub(crate) fn interactive_runtime_context_bundle(
             rendered.push_str("\n\n");
             rendered.push_str(prompt_suffix.trim());
         }
+        if !explicit_knowledge_section.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(explicit_knowledge_section.trim());
+        }
+        if !active_speaker_section.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(active_speaker_section.trim());
+        }
         return RuntimeContextBundle::new(
             rendered.clone(),
             build_runtime_context_bundle_summary(
@@ -351,7 +419,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 active_skill_count,
                 &project_context,
                 &host_runtime_context_section,
-                &advisor_context_section,
+                &active_speaker_section,
                 memory_section.as_ref().map(|item| item.summary.as_str()),
                 &subjects_section,
                 &prompt_prefix,
@@ -360,7 +428,7 @@ pub(crate) fn interactive_runtime_context_bundle(
             ),
         );
     }
-    let fallback = format!(
+    let mut fallback = format!(
         "You are the RedClaw desktop AI runtime inside RedBox for mode `{}`. \
 Use tools when the user asks about app state, knowledge, advisors, work items, memories, sessions, or settings. \
 Do not invent workspace/app facts that you can fetch with tools. \
@@ -373,11 +441,22 @@ Host runtime context: {}\n{}",
         render_host_runtime_context_section(&current_host_runtime_context()),
         team_coordinator_prompt()
     );
+    if !active_speaker_section.trim().is_empty() {
+        if !explicit_knowledge_section.trim().is_empty() {
+            fallback.push_str("\n\n");
+            fallback.push_str(explicit_knowledge_section.trim());
+        }
+        fallback.push_str("\n\n");
+        fallback.push_str(active_speaker_section.trim());
+    } else if !explicit_knowledge_section.trim().is_empty() {
+        fallback.push_str("\n\n");
+        fallback.push_str(explicit_knowledge_section.trim());
+    }
     RuntimeContextBundle::new(
         fallback.clone(),
         build_runtime_context_bundle_summary(
             runtime_mode,
-            "",
+            &active_speaker_section,
             0,
             "",
             "",
@@ -423,43 +502,177 @@ pub(crate) fn interactive_runtime_system_prompt(
     interactive_runtime_context_bundle(state, runtime_mode, session_id).system_prompt
 }
 
-fn advisor_runtime_context_section(
+fn has_active_member_speaker(metadata: Option<&Value>) -> bool {
+    let Some(metadata) = metadata else {
+        return false;
+    };
+    metadata
+        .get("activeSpeaker")
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .map(|value| value == "member")
+        .unwrap_or(false)
+        || metadata
+            .get("memberMentionMode")
+            .and_then(Value::as_str)
+            .map(|value| value == "single-turn")
+            .unwrap_or(false)
+}
+
+fn explicit_knowledge_prompt_section(metadata: Option<&Value>) -> String {
+    let Some(metadata) = metadata else {
+        return String::new();
+    };
+    let Some(items) = metadata
+        .get("explicitKnowledgeRefs")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty())
+    else {
+        return String::new();
+    };
+    let mut lines = vec![
+        "ExplicitKnowledgeReferences:".to_string(),
+        "- The user explicitly mentioned the following knowledge library items with `#` in this turn.".to_string(),
+        "- Treat these references as high-priority context anchors. Use tools to inspect the source files before making detailed factual claims when paths are available.".to_string(),
+        "- If a referenced item cannot be inspected, say so instead of inventing details.".to_string(),
+    ];
+    for (index, item) in items.iter().take(12).enumerate() {
+        let knowledge_id = item
+            .get("knowledgeId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("未命名内容");
+        let source_kind = item
+            .get("sourceKind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let folder_path = item
+            .get("folderPath")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let root_path = item
+            .get("rootPath")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let source_url = item
+            .get("sourceUrl")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        let summary = item
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
+        lines.push(format!(
+            "{}. title: {}; id: {}; kind: {}",
+            index + 1,
+            title,
+            knowledge_id,
+            source_kind
+        ));
+        if !folder_path.is_empty() || !root_path.is_empty() {
+            lines.push(format!(
+                "   paths: folderPath={}, rootPath={}",
+                folder_path, root_path
+            ));
+        }
+        if !source_url.is_empty() {
+            lines.push(format!("   sourceUrl: {}", source_url));
+        }
+        if !summary.is_empty() {
+            lines.push(format!("   summary: {}", truncate_chars(summary, 900)));
+        }
+    }
+    lines.join("\n")
+}
+
+fn active_speaker_prompt_section(
     metadata: Option<&Value>,
     advisors: &[crate::AdvisorRecord],
 ) -> String {
     let Some(metadata) = metadata else {
         return String::new();
     };
-    let advisor_id = crate::payload_string(metadata, "advisorId").or_else(|| {
-        let context_type = crate::payload_string(metadata, "contextType");
-        if context_type.as_deref() == Some("advisor-discussion") {
-            return crate::payload_string(metadata, "contextId");
-        }
-        None
-    });
+    let active_speaker = metadata.get("activeSpeaker").and_then(Value::as_object);
+    let advisor_id = metadata
+        .get("activeSpeaker")
+        .and_then(Value::as_object)
+        .and_then(|object| {
+            object
+                .get("speakerId")
+                .and_then(Value::as_str)
+                .or_else(|| object.get("memberId").and_then(Value::as_str))
+        })
+        .map(ToString::to_string)
+        .or_else(|| crate::payload_string(metadata, "advisorId"))
+        .or_else(|| {
+            let context_type = crate::payload_string(metadata, "contextType");
+            if context_type.as_deref() == Some("advisor-discussion") {
+                return crate::payload_string(metadata, "contextId");
+            }
+            None
+        });
     let Some(advisor_id) = advisor_id.filter(|value| !value.trim().is_empty()) else {
         return String::new();
     };
-    let advisor_name = advisors
-        .iter()
-        .find(|item| item.id == advisor_id)
-        .map(|item| item.name.clone())
+    let advisor = advisors.iter().find(|item| item.id == advisor_id);
+    let advisor_name = active_speaker
+        .and_then(|object| object.get("displayName"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| advisor.map(|item| item.name.clone()))
         .unwrap_or_else(|| "成员".to_string());
-    let member_skill_ref = crate::payload_string(metadata, "memberSkillRef")
+    let advisor_personality = active_speaker
+        .and_then(|object| object.get("personality"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .or_else(|| {
-            advisors
-                .iter()
-                .find(|item| item.id == advisor_id)
-                .and_then(|item| item.member_skill_ref.clone())
+            advisor
+                .map(|item| item.personality.trim())
+                .filter(|value| !value.is_empty())
         })
+        .unwrap_or("保持该成员在团队中的专业视角。");
+    let advisor_system_prompt = active_speaker
+        .and_then(|object| object.get("systemPrompt"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            advisor
+                .map(|item| item.system_prompt.trim())
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("以该成员身份回答，优先结合绑定知识库，不确定时明确说明。");
+    let member_skill_ref = crate::payload_string(metadata, "memberSkillRef")
+        .or_else(|| advisor.and_then(|item| item.member_skill_ref.clone()))
         .unwrap_or_else(|| "(none)".to_string());
     let advisor_knowledge_path = format!(
         "advisors/{}/knowledge",
         slug_from_relative_path(&advisor_id)
     );
     format!(
-        "Advisor knowledge retrieval:\n- Active advisor: {} ({})\n- Member skill ref: {}\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's rules or materials unless you actually inspected them with tools or the user already provided them in chat.",
-        advisor_name, advisor_id, member_skill_ref, advisor_knowledge_path, advisor_id
+        "ActiveSpeakerProfile:\n- type: member\n- You are currently answering as: {} ({})\n- Member skill ref: {}\n- This single turn must use this member's role, voice, priorities, and decision style. Do not answer as RedClaw, a generic assistant, or another member.\n- This section has higher priority than RedClaw Soul.md when both are present.\n\nMember persona:\n{}\n\nMember system prompt:\n{}\n\nAdvisor knowledge retrieval:\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `redbox_fs(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `redbox_fs(scope=\"knowledge\", action=\"list\")` -> `redbox_fs(scope=\"knowledge\", action=\"search\")` -> `redbox_fs(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's source materials unless you actually inspected them with tools or the user already provided them in chat.",
+        advisor_name,
+        advisor_id,
+        member_skill_ref,
+        truncate_chars(advisor_personality, 1800),
+        truncate_chars(advisor_system_prompt, 3000),
+        advisor_knowledge_path,
+        advisor_id
     )
 }
 

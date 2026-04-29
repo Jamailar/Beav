@@ -479,7 +479,10 @@ fn compose_guided_wander_items(store: &AppStore, payload: &Value) -> Value {
         .filter(|(_, score)| *score >= minimum_score)
         .cloned()
         .collect::<Vec<_>>();
-    let seed_items = scored.iter().map(|(item, _)| item.clone()).collect::<Vec<_>>();
+    let seed_items = scored
+        .iter()
+        .map(|(item, _)| item.clone())
+        .collect::<Vec<_>>();
     let mut picked =
         pick_weighted_guided_items(&mut strong_scored, needed, wander_shuffle_seed(&seed_items));
     if picked.len() < needed {
@@ -2580,6 +2583,7 @@ pub fn handle_chat_sessions_wander_channel(
                         content: prompt.clone(),
                         display_content: None,
                         attachment: None,
+                        metadata: None,
                         created_at: now_iso(),
                     });
                     store.chat_messages.push(ChatMessageRecord {
@@ -2589,6 +2593,7 @@ pub fn handle_chat_sessions_wander_channel(
                         content: model_result.clone(),
                         display_content: None,
                         attachment: None,
+                        metadata: None,
                         created_at: now_iso(),
                     });
                     append_session_transcript(

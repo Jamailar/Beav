@@ -59,6 +59,53 @@ pub fn persist_chat_exchange(
         session.updated_at = now_iso();
         let runtime_mode = session_runtime_mode(session);
         runtime_mode_snapshot = runtime_mode.clone();
+        let member_reply_actor = session
+            .metadata
+            .as_ref()
+            .and_then(member_reply_actor_from_session_metadata);
+        let active_speaker_metadata = session
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("activeSpeaker").cloned());
+        let explicit_knowledge_refs = session
+            .metadata
+            .as_ref()
+            .and_then(knowledge_references_from_session_metadata);
+        let mut user_references = Vec::<Value>::new();
+        if let Some(actor) = member_reply_actor.as_ref() {
+            user_references.push(json!({
+                    "type": "member",
+                    "memberId": actor.get("memberId").cloned().unwrap_or(Value::Null),
+                    "displayName": actor.get("displayName").cloned().unwrap_or(Value::Null),
+                    "avatar": actor.get("avatar").cloned().unwrap_or(Value::Null),
+                    "memberSkillRef": actor.get("memberSkillRef").cloned().unwrap_or(Value::Null),
+                    "routeMode": "respond",
+            }));
+        }
+        if let Some(refs) = explicit_knowledge_refs.as_ref() {
+            user_references.extend(refs.iter().cloned());
+        }
+        let user_message_metadata =
+            if member_reply_actor.is_some() || explicit_knowledge_refs.is_some() {
+                Some(json!({
+                    "references": user_references,
+                    "replyActor": member_reply_actor.clone(),
+                    "activeSpeaker": active_speaker_metadata.clone(),
+                    "explicitKnowledgeRefs": explicit_knowledge_refs.clone().unwrap_or_default(),
+                }))
+            } else {
+                None
+            };
+        let assistant_message_metadata =
+            if member_reply_actor.is_some() || explicit_knowledge_refs.is_some() {
+                Some(json!({
+                    "replyActor": member_reply_actor.clone(),
+                    "activeSpeaker": active_speaker_metadata.clone(),
+                    "explicitKnowledgeRefs": explicit_knowledge_refs.clone().unwrap_or_default(),
+                }))
+            } else {
+                None
+            };
 
         if persist_user_message {
             store.chat_messages.push(ChatMessageRecord {
@@ -74,6 +121,7 @@ pub fn persist_chat_exchange(
                     Some(display_content.to_string())
                 },
                 attachment: attachment.clone(),
+                metadata: user_message_metadata.clone(),
                 created_at: now_iso(),
             });
         }
@@ -84,6 +132,7 @@ pub fn persist_chat_exchange(
             content: response.to_string(),
             display_content: None,
             attachment: None,
+            metadata: assistant_message_metadata.clone(),
             created_at: now_iso(),
         });
         if persist_user_message {
@@ -97,6 +146,7 @@ pub fn persist_chat_exchange(
                     "displayContent": display_content,
                     "attachment": attachment,
                     "runtimeMode": runtime_mode.clone(),
+                    "metadata": user_message_metadata,
                 })),
             );
         }
@@ -106,7 +156,10 @@ pub fn persist_chat_exchange(
             "message",
             "assistant",
             response.to_string(),
-            Some(json!({ "runtimeMode": runtime_mode.clone() })),
+            Some(json!({
+                "runtimeMode": runtime_mode.clone(),
+                "metadata": assistant_message_metadata,
+            })),
         );
         append_session_checkpoint(
             store,
@@ -155,6 +208,134 @@ pub fn persist_chat_exchange(
         final_session_id,
         title_update,
     })
+}
+
+fn member_reply_actor_from_session_metadata(metadata: &Value) -> Option<Value> {
+    if let Some(active_speaker) = metadata
+        .get("activeSpeaker")
+        .and_then(Value::as_object)
+        .filter(|object| {
+            object
+                .get("type")
+                .and_then(Value::as_str)
+                .map(|value| value == "member")
+                .unwrap_or(false)
+        })
+    {
+        let member_id = active_speaker
+            .get("memberId")
+            .and_then(Value::as_str)
+            .or_else(|| active_speaker.get("speakerId").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let display_name = active_speaker
+            .get("displayName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("成员");
+        let mut actor = serde_json::Map::new();
+        actor.insert("type".to_string(), json!("member"));
+        actor.insert("memberId".to_string(), json!(member_id));
+        actor.insert("displayName".to_string(), json!(display_name));
+        for field in ["avatar", "memberSkillRef"] {
+            if let Some(value) = active_speaker
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                actor.insert(field.to_string(), json!(value));
+            }
+        }
+        return Some(Value::Object(actor));
+    }
+    let mode = metadata
+        .get("memberMentionMode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if mode != "single-turn" {
+        return None;
+    }
+    let member_id = metadata
+        .get("advisorId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let display_name = metadata
+        .get("memberMentionAdvisorName")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("成员");
+    let avatar = metadata
+        .get("memberMentionAdvisorAvatar")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let member_skill_ref = metadata
+        .get("memberSkillRef")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut actor = serde_json::Map::new();
+    actor.insert("type".to_string(), json!("member"));
+    actor.insert("memberId".to_string(), json!(member_id));
+    actor.insert("displayName".to_string(), json!(display_name));
+    if let Some(value) = avatar {
+        actor.insert("avatar".to_string(), json!(value));
+    }
+    if let Some(value) = member_skill_ref {
+        actor.insert("memberSkillRef".to_string(), json!(value));
+    }
+    Some(Value::Object(actor))
+}
+
+fn knowledge_references_from_session_metadata(metadata: &Value) -> Option<Vec<Value>> {
+    let references = metadata
+        .get("explicitKnowledgeRefs")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|item| {
+            let object = item.as_object()?;
+            let knowledge_id = object
+                .get("knowledgeId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?;
+            let mut reference = serde_json::Map::new();
+            reference.insert("type".to_string(), json!("knowledge"));
+            reference.insert("knowledgeId".to_string(), json!(knowledge_id));
+            for field in [
+                "title",
+                "sourceKind",
+                "summary",
+                "cover",
+                "sourceUrl",
+                "folderPath",
+                "rootPath",
+                "updatedAt",
+            ] {
+                if let Some(value) = object.get(field).and_then(Value::as_str) {
+                    let trimmed = value.trim();
+                    if !trimmed.is_empty() {
+                        reference.insert(field.to_string(), json!(trimmed));
+                    }
+                }
+            }
+            for field in ["tags", "fileCount", "hasTranscript"] {
+                if let Some(value) = object.get(field) {
+                    reference.insert(field.to_string(), value.clone());
+                }
+            }
+            Some(Value::Object(reference))
+        })
+        .collect::<Vec<_>>();
+    if references.is_empty() {
+        None
+    } else {
+        Some(references)
+    }
 }
 
 pub fn update_post_exchange_maintenance(

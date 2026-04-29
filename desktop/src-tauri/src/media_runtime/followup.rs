@@ -19,6 +19,7 @@ const MEDIA_FOLLOWUP_TIMEOUT_MS: u64 = 60 * 60 * 1000;
 #[derive(Clone)]
 struct MediaFollowupCandidate {
     task_id: String,
+    runtime_mode: String,
     session_id: String,
     job_id: String,
     image_count: usize,
@@ -63,6 +64,7 @@ pub(crate) fn tick_media_followups(
                 let metadata = task.metadata.as_ref()?;
                 Some(MediaFollowupCandidate {
                     task_id: task.id.clone(),
+                    runtime_mode: task.runtime_mode.clone(),
                     session_id: metadata.get("sessionId")?.as_str()?.to_string(),
                     job_id: metadata.get("jobId")?.as_str()?.to_string(),
                     image_count: metadata
@@ -158,6 +160,7 @@ pub(crate) fn tick_media_followups(
             candidate.progress_notification_status.as_str(),
             candidate.progress_retry_not_before,
             now_i64(),
+            candidate.runtime_mode.as_str(),
         ) {
             let delivered_count = artifact_count.min(expected_count);
             if mark_media_followup_progress_notifying(
@@ -277,7 +280,11 @@ fn should_send_incremental_progress(
     progress_notification_status: &str,
     progress_retry_not_before: i64,
     now: i64,
+    runtime_mode: &str,
 ) -> bool {
+    if runtime_mode == "redclaw" {
+        return false;
+    }
     artifact_count > progress_notified_count
         && artifact_count < expected_count.max(1)
         && progress_notification_status != "sending"
