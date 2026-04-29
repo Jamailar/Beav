@@ -1522,6 +1522,7 @@ export function RedClaw({
                                     onMessageLinkPreview={handlePreviewLink}
                                     activePreviewHref={previewTarget?.href || null}
                                     keepComposerInputActive={true}
+                                    placeholder="使用 # 调用知识库&#10;使用 @ 召唤团队成员"
                                     messageListHeader={<RedClawImageGenerationProgressPanel jobs={visibleImageJobs} />}
                                     inlineSidePanel={previewTarget ? (
                                         <RedClawFilePreviewPane
