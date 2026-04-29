@@ -19,9 +19,8 @@ use crate::{
     refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
 };
 
-const APP_UPDATE_RELEASES_PAGE_URL: &str = "https://github.com/Jamailar/RedBox/releases";
-const APP_UPDATE_LATEST_RELEASE_API_URL: &str =
-    "https://api.github.com/repos/Jamailar/RedBox/releases/latest";
+const APP_UPDATE_DOWNLOAD_PAGE_URL: &str = "https://redbox.ziz.hk/download";
+const APP_UPDATE_API_URL: &str = "https://redbox.ziz.hk/api/updates/app";
 const APP_UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 const APP_UPDATE_CHECK_MIN_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
@@ -35,19 +34,32 @@ struct AppUpdateCheckState {
 static APP_UPDATE_CHECK_STATE: OnceLock<Mutex<AppUpdateCheckState>> = OnceLock::new();
 
 #[derive(Deserialize)]
-struct GithubReleaseResponse {
-    tag_name: Option<String>,
-    html_url: Option<String>,
-    name: Option<String>,
-    draft: Option<bool>,
-    prerelease: Option<bool>,
+struct RedboxAppUpdateResponse {
+    ready: Option<bool>,
+    #[serde(rename = "updateAvailable")]
+    update_available: Option<bool>,
+    version: Option<String>,
+    tag: Option<String>,
+    #[serde(rename = "releaseName")]
+    release_name: Option<String>,
+    #[serde(rename = "releaseUrl")]
+    release_url: Option<String>,
+    #[serde(rename = "publishedAt")]
     published_at: Option<String>,
-    body: Option<String>,
+    notes: Option<String>,
+    asset: Option<RedboxAppUpdateAsset>,
 }
 
-struct LatestGithubRelease {
+#[derive(Deserialize)]
+struct RedboxAppUpdateAsset {
+    url: Option<String>,
+}
+
+struct LatestAppUpdate {
+    ready: bool,
+    update_available: bool,
     version: String,
-    html_url: String,
+    download_url: String,
     name: String,
     published_at: String,
     body: String,
@@ -82,14 +94,41 @@ fn is_http_url(value: &str) -> bool {
     normalized.starts_with("https://") || normalized.starts_with("http://")
 }
 
-fn fetch_latest_github_release() -> Result<LatestGithubRelease, String> {
+fn app_update_platform() -> Result<&'static str, String> {
+    if cfg!(target_os = "windows") {
+        Ok("windows")
+    } else if cfg!(target_os = "macos") {
+        Ok("macos")
+    } else {
+        Err("当前系统暂不支持自动更新检查".to_string())
+    }
+}
+
+fn app_update_arch() -> Result<&'static str, String> {
+    if cfg!(target_arch = "x86_64") {
+        Ok("x64")
+    } else if cfg!(target_arch = "x86") {
+        Ok("x86")
+    } else if cfg!(target_arch = "aarch64") {
+        Ok("arm64")
+    } else {
+        Err("当前 CPU 架构暂不支持自动更新检查".to_string())
+    }
+}
+
+fn fetch_latest_app_update(current_version: &str) -> Result<LatestAppUpdate, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(APP_UPDATE_CHECK_TIMEOUT)
         .build()
         .map_err(|error| error.to_string())?;
     let response = client
-        .get(APP_UPDATE_LATEST_RELEASE_API_URL)
-        .header("Accept", "application/vnd.github+json")
+        .get(APP_UPDATE_API_URL)
+        .query(&[
+            ("platform", app_update_platform()?),
+            ("arch", app_update_arch()?),
+            ("currentVersion", current_version),
+        ])
+        .header("Accept", "application/json")
         .header(
             "User-Agent",
             format!("RedBox/{}", env!("CARGO_PKG_VERSION")),
@@ -97,39 +136,59 @@ fn fetch_latest_github_release() -> Result<LatestGithubRelease, String> {
         .send()
         .map_err(|error| error.to_string())?;
 
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err("GitHub latest release not found".to_string());
+    let status = response.status();
+    let data = response
+        .json::<RedboxAppUpdateResponse>()
+        .map_err(|error| error.to_string())?;
+
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(LatestAppUpdate {
+            ready: false,
+            update_available: false,
+            version: data
+                .version
+                .map(|value| normalize_version_tag(&value))
+                .unwrap_or_default(),
+            download_url: data
+                .release_url
+                .unwrap_or_else(|| APP_UPDATE_DOWNLOAD_PAGE_URL.to_string()),
+            name: data.release_name.unwrap_or_default(),
+            published_at: data.published_at.unwrap_or_default(),
+            body: data.notes.unwrap_or_default(),
+        });
     }
-    if !response.status().is_success() {
+    if !status.is_success() {
         return Err(format!(
-            "GitHub latest release request failed: HTTP {}",
-            response.status()
+            "更新源请求失败：HTTP {}",
+            status
         ));
     }
 
-    let data = response
-        .json::<GithubReleaseResponse>()
-        .map_err(|error| error.to_string())?;
-    if data.draft.unwrap_or(false) {
-        return Err("Latest release is draft".to_string());
-    }
-    if data.prerelease.unwrap_or(false) {
-        return Err("Latest release is prerelease".to_string());
-    }
-
-    let version = normalize_version_tag(data.tag_name.as_deref().unwrap_or_default());
+    let version = normalize_version_tag(
+        data.version
+            .as_deref()
+            .or(data.tag.as_deref())
+            .unwrap_or_default(),
+    );
     if version.is_empty() {
-        return Err("Latest release tag is empty".to_string());
+        return Err("更新源没有返回有效版本号".to_string());
     }
 
-    Ok(LatestGithubRelease {
+    let download_url = data
+        .asset
+        .and_then(|asset| asset.url)
+        .or(data.release_url)
+        .filter(|url| is_http_url(url))
+        .unwrap_or_else(|| APP_UPDATE_DOWNLOAD_PAGE_URL.to_string());
+
+    Ok(LatestAppUpdate {
+        ready: data.ready.unwrap_or(false),
+        update_available: data.update_available.unwrap_or(false),
         version,
-        html_url: data
-            .html_url
-            .unwrap_or_else(|| APP_UPDATE_RELEASES_PAGE_URL.to_string()),
-        name: data.name.unwrap_or_default(),
+        download_url,
+        name: data.release_name.unwrap_or_default(),
         published_at: data.published_at.unwrap_or_default(),
-        body: data.body.unwrap_or_default(),
+        body: data.notes.unwrap_or_default(),
     })
 }
 
@@ -190,21 +249,23 @@ fn check_app_update(app: &AppHandle, force: bool, force_notify: bool) -> Result<
     }
 
     let result: Result<Value, String> = (|| {
-        let latest = fetch_latest_github_release()?;
         let current_version = normalize_version_tag(env!("CARGO_PKG_VERSION"));
-        let has_update =
-            compare_semver_like(&current_version, &latest.version) == std::cmp::Ordering::Less;
+        let latest = fetch_latest_app_update(&current_version)?;
+        let has_update = latest.ready
+            && (latest.update_available
+                || compare_semver_like(&current_version, &latest.version)
+                    == std::cmp::Ordering::Less);
         let notice = json!({
             "currentVersion": current_version,
-            "latestVersion": latest.version,
-            "htmlUrl": if latest.html_url.is_empty() {
-                APP_UPDATE_RELEASES_PAGE_URL.to_string()
+            "latestVersion": latest.version.clone(),
+            "htmlUrl": if latest.download_url.is_empty() {
+                APP_UPDATE_DOWNLOAD_PAGE_URL.to_string()
             } else {
-                latest.html_url.clone()
+                latest.download_url.clone()
             },
-            "name": latest.name,
-            "publishedAt": latest.published_at,
-            "body": latest.body,
+            "name": latest.name.clone(),
+            "publishedAt": latest.published_at.clone(),
+            "body": latest.body.clone(),
         });
 
         if has_update {
@@ -224,11 +285,6 @@ fn check_app_update(app: &AppHandle, force: bool, force_notify: bool) -> Result<
 
     match result {
         Ok(value) => Ok(value),
-        Err(message) if message == "GitHub latest release not found" => Ok(json!({
-            "success": true,
-            "hasUpdate": false,
-            "message": "No published release found",
-        })),
         Err(message) => {
             eprintln!("[AppUpdate] check failed: {message}");
             Ok(json!({
@@ -385,9 +441,9 @@ pub fn handle_system_channel(
                 "app:open-release-page" => {
                     let url = payload_string(payload, "url")
                         .or_else(|| payload_value_as_string(payload))
-                        .unwrap_or_else(|| APP_UPDATE_RELEASES_PAGE_URL.to_string());
+                        .unwrap_or_else(|| APP_UPDATE_DOWNLOAD_PAGE_URL.to_string());
                     if !is_http_url(&url) {
-                        return Err("Invalid release URL".to_string());
+                        return Err("Invalid download URL".to_string());
                     }
                     open::that(&url).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "url": url }))

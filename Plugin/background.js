@@ -23,8 +23,8 @@ const INLINE_ASSET_MAX_BYTES = 6 * 1024 * 1024;
 const UPDATE_STATE_KEY = 'pluginUpdateState';
 const UPDATE_ALARM_NAME = 'redbox-plugin-auto-update-check';
 const UPDATE_CHECK_INTERVAL_MINUTES = 360;
-const UPDATE_SOURCE_MANIFEST_URL = 'https://raw.githubusercontent.com/Jamailar/RedBox/main/Plugin/manifest.json';
-const UPDATE_SOURCE_REPO_URL = 'https://github.com/Jamailar/RedBox/tree/main/Plugin';
+const UPDATE_SOURCE_API_URL = 'https://redbox.ziz.hk/api/updates/plugin';
+const UPDATE_SOURCE_DOWNLOAD_URL = 'https://redbox.ziz.hk/download';
 const REDBOX_PLUGIN_SETTINGS_KEY = 'redboxPluginSettings';
 const XHS_TASK_HISTORY_KEY = 'xhsCollectorTaskHistory';
 const XHS_TASK_QUEUE_STATE_KEY = 'xhsCollectorTaskQueueState';
@@ -271,7 +271,7 @@ async function handleMessage(message, sender) {
     case 'plugin-update:check':
       return await checkForPluginUpdates({ force: true, reason: 'manual' });
     case 'plugin-update:open-source':
-      await chrome.tabs.create({ url: UPDATE_SOURCE_REPO_URL });
+      await openPluginUpdateSource();
       return { success: true };
     case 'sidepanel:open':
       return await openSidePanelForSender(sender);
@@ -627,7 +627,7 @@ function createDefaultUpdateState() {
     latestVersion: currentVersion,
     hasUpdate: false,
     lastCheckedAt: null,
-    sourceUrl: UPDATE_SOURCE_REPO_URL,
+    sourceUrl: UPDATE_SOURCE_DOWNLOAD_URL,
     lastError: '',
     checkStatus: 'idle',
   };
@@ -645,7 +645,7 @@ function sanitizeUpdateState(input) {
     latestVersion,
     hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
     lastCheckedAt: normalizeText(input.lastCheckedAt) || null,
-    sourceUrl: normalizeText(input.sourceUrl) || UPDATE_SOURCE_REPO_URL,
+    sourceUrl: normalizeText(input.sourceUrl) || UPDATE_SOURCE_DOWNLOAD_URL,
     lastError: normalizeText(input.lastError),
     checkStatus: normalizeText(input.checkStatus) || fallback.checkStatus,
   };
@@ -1644,20 +1644,29 @@ async function initializeUpdateChecks(forceImmediateCheck) {
 }
 
 async function fetchRemotePluginManifest() {
-  const response = await fetch(UPDATE_SOURCE_MANIFEST_URL, {
+  const currentVersion = getCurrentPluginVersion();
+  const url = new URL(UPDATE_SOURCE_API_URL);
+  url.searchParams.set('currentVersion', currentVersion);
+  const response = await fetch(url.toString(), {
     cache: 'no-store',
     headers: {
       'Accept': 'application/json, text/plain, */*',
     },
   });
-  if (!response.ok) {
+  if (response.status !== 404 && !response.ok) {
     throw new Error(`更新源请求失败：HTTP ${response.status}`);
   }
   const data = await response.json();
   if (!data || typeof data !== 'object') {
-    throw new Error('更新源返回了无效的 manifest');
+    throw new Error('更新源返回了无效响应');
   }
   return data;
+}
+
+async function openPluginUpdateSource() {
+  const state = await readPluginUpdateState();
+  const url = normalizeText(state.sourceUrl) || UPDATE_SOURCE_DOWNLOAD_URL;
+  await chrome.tabs.create({ url: isHttpUrl(url) ? url : UPDATE_SOURCE_DOWNLOAD_URL });
 }
 
 async function getPluginUpdateStatus(refresh = false) {
@@ -1691,18 +1700,21 @@ async function checkForPluginUpdates(options = {}) {
   try {
     pluginLog('plugin-update-check-start', {
       reason,
-      source: UPDATE_SOURCE_MANIFEST_URL,
+      source: UPDATE_SOURCE_API_URL,
     });
     const remoteManifest = await fetchRemotePluginManifest();
     const currentVersion = getCurrentPluginVersion();
-    const latestVersion = normalizeText(remoteManifest?.version) || currentVersion;
+    const latestVersion = normalizeText(remoteManifest?.version || remoteManifest?.tag) || currentVersion;
+    const hasUpdate = remoteManifest?.ready !== false
+      && (remoteManifest?.updateAvailable === true || compareVersions(latestVersion, currentVersion) > 0);
+    const sourceUrl = normalizeText(remoteManifest?.plugin?.url || remoteManifest?.releaseUrl) || UPDATE_SOURCE_DOWNLOAD_URL;
     const nextState = await writePluginUpdateState({
       ...checkingState,
       currentVersion,
       latestVersion,
-      hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+      hasUpdate,
       lastCheckedAt: new Date().toISOString(),
-      sourceUrl: UPDATE_SOURCE_REPO_URL,
+      sourceUrl,
       lastError: '',
       checkStatus: 'idle',
     });
@@ -1722,7 +1734,7 @@ async function checkForPluginUpdates(options = {}) {
       currentVersion: getCurrentPluginVersion(),
       latestVersion: currentState.latestVersion,
       lastCheckedAt: new Date().toISOString(),
-      sourceUrl: UPDATE_SOURCE_REPO_URL,
+      sourceUrl: currentState.sourceUrl || UPDATE_SOURCE_DOWNLOAD_URL,
       lastError: error instanceof Error ? error.message : String(error),
       checkStatus: 'idle',
     });

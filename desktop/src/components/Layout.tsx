@@ -719,7 +719,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
             <div className="px-8 py-6 overflow-y-auto min-h-0">
               <div className="text-3xl font-semibold text-text-primary mb-4">
-                {updateNotice.name || 'Release Notes'}
+                {updateNotice.name || '更新说明'}
               </div>
               <div
                 className={clsx(

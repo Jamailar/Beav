@@ -51,7 +51,7 @@
     "https://www.instagram.com/*",
     "https://*.xhscdn.com/*",
     "https://*.rednotecdn.com/*",
-    "https://raw.githubusercontent.com/*"
+    "https://redbox.ziz.hk/*"
   ],
   "background": {
     "service_worker": "background.js"

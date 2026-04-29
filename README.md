@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Jamailar/RedBox/releases">
+  <a href="https://redbox.ziz.hk/download">
     <img src="https://img.shields.io/badge/⬇️%20立即下载-最新版本-E11D48?style=for-the-badge&logo=github&logoColor=white" alt="Download" height="46">
   </a>
 </p>
@@ -128,7 +128,7 @@
 
 ## 快速开始
 
-1. 在 [Releases](https://github.com/Jamailar/RedBox/releases) 下载并安装。
+1. 在 [RedBox 下载页](https://redbox.ziz.hk/download) 下载并安装。
 2. 打开 `设置 -> AI`，填写 Endpoint / Key / Model。
 3. 选择或创建工作空间，测试连接并保存。
 4. 安装并加载 `Plugin/` 里的 Chrome / Edge 扩展。
