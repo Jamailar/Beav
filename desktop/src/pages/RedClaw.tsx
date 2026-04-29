@@ -342,9 +342,12 @@ export function RedClaw({
     const [onboardingState, setOnboardingState] = useState<RedclawOnboardingState | undefined>(undefined);
     const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
     const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
-    const trackedImageJobs = useMediaJobsStore((state) => Object.values(state.jobsById)
-        .filter((job) => job.kind === 'image' && job.ownerSessionId === activeSessionId)
-        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)));
+    const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
+    const trackedImageJobs = useMemo(() => (
+        Object.values(trackedJobsById)
+            .filter((job) => job.kind === 'image' && job.ownerSessionId === activeSessionId)
+            .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    ), [activeSessionId, trackedJobsById]);
     const visibleImageJobs = useMemo(() => {
         const now = Date.now();
         return trackedImageJobs.filter((job) => {
@@ -354,13 +357,15 @@ export function RedClaw({
             return Number.isFinite(updatedAt) && now - updatedAt < 10 * 60_000;
         }).slice(0, 3);
     }, [trackedImageJobs]);
-    useMediaJobSubscription([], {
+    const imageJobSubscriptionIds = useMemo(() => [], []);
+    const imageJobBootstrapFilter = useMemo(() => activeSessionId ? {
+        kind: 'image' as const,
+        ownerSessionId: activeSessionId,
+        limit: 12,
+    } : null, [activeSessionId]);
+    useMediaJobSubscription(imageJobSubscriptionIds, {
         enabled: Boolean(activeSessionId),
-        bootstrapFilter: activeSessionId ? {
-            kind: 'image',
-            ownerSessionId: activeSessionId,
-            limit: 12,
-        } : null,
+        bootstrapFilter: imageJobBootstrapFilter,
     });
     const composerShortcuts = useMemo(
         () => composerShortcutInputs
