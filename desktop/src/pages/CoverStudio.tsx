@@ -100,6 +100,7 @@ interface CoverTemplateListResponse {
 
 interface CoverStudioProps {
     isActive?: boolean;
+    onExecutionStateChange?: (active: boolean) => void;
 }
 
 interface CoverGenerationJob {
@@ -366,7 +367,7 @@ const normalizeTitleEntries = (entries: CoverTitleEntry[]): Array<{ type: string
         .slice(0, 20);
 };
 
-export function CoverStudio({ isActive = false }: CoverStudioProps) {
+export function CoverStudio({ isActive = false, onExecutionStateChange }: CoverStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [spaceId, setSpaceId] = useState('default');
     const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
@@ -424,6 +425,10 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         () => generationJobs.filter((item) => item.status === 'pending').length,
         [generationJobs]
     );
+
+    useEffect(() => {
+        onExecutionStateChange?.(pendingJobCount > 0);
+    }, [onExecutionStateChange, pendingJobCount]);
 
     const resetEditor = useCallback(() => {
         setActiveTemplateId('');
@@ -718,6 +723,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         }
 
         setGenerateError('');
+        onExecutionStateChange?.(true);
         const jobId = createCoverGenerationJobId();
         const submittedAt = new Date().toISOString();
         const summary = titleInputMode === 'prompt'
@@ -786,6 +792,7 @@ export function CoverStudio({ isActive = false }: CoverStudioProps) {
         model,
         normalizedTitlePrompt,
         normalizedTitles,
+        onExecutionStateChange,
         promptSwitches,
         quality,
         settings.image_provider,

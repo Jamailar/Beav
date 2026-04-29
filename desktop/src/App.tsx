@@ -469,6 +469,30 @@ function App() {
     });
   }, []);
 
+  const handleChatExecutionStateChange = useCallback((active: boolean) => {
+    setViewPersistent('chat', active);
+  }, [setViewPersistent]);
+
+  const handleTeamExecutionStateChange = useCallback((active: boolean) => {
+    setViewPersistent('team', active);
+  }, [setViewPersistent]);
+
+  const handleWanderExecutionStateChange = useCallback((active: boolean) => {
+    setViewPersistent('wander', active);
+  }, [setViewPersistent]);
+
+  const handleRedClawExecutionStateChange = useCallback((active: boolean) => {
+    setViewPersistent('redclaw', active);
+  }, [setViewPersistent]);
+
+  const handleGenerationStudioExecutionStateChange = useCallback((active: boolean) => {
+    setViewPersistent('generation-studio', active);
+  }, [setViewPersistent]);
+
+  const handleCoverStudioExecutionStateChange = useCallback((active: boolean) => {
+    setViewPersistent('cover-studio', active);
+  }, [setViewPersistent]);
+
   const enqueueYoutubeFromClipboard = useCallback(async (candidate: YouTubeClipboardCandidate) => {
     const payload = {
       videoId: candidate.videoId,
@@ -646,7 +670,7 @@ function App() {
             <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>
               <ChatPage
                 isActive={currentView === 'chat' || persistentViews.has('chat')}
-                onExecutionStateChange={(active) => setViewPersistent('chat', active)}
+                onExecutionStateChange={handleChatExecutionStateChange}
                 pendingMessage={pendingChatMessage}
                 onMessageConsumed={clearPendingMessage}
               />
@@ -658,7 +682,7 @@ function App() {
             <Suspense fallback={currentView === 'team' ? <ViewLoadingFallback /> : null}>
               <TeamPage
                 isActive={currentView === 'team' || persistentViews.has('team')}
-                onExecutionStateChange={(active) => setViewPersistent('team', active)}
+                onExecutionStateChange={handleTeamExecutionStateChange}
               />
             </Suspense>
           </div>
@@ -719,7 +743,7 @@ function App() {
               <WanderPage
                 onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
-                onExecutionStateChange={(active) => setViewPersistent('wander', active)}
+                onExecutionStateChange={handleWanderExecutionStateChange}
                 isActive={currentView === 'wander'}
               />
             </Suspense>
@@ -732,7 +756,7 @@ function App() {
                 pendingMessage={pendingRedClawMessage}
                 onPendingMessageConsumed={clearPendingRedClawMessage}
                 isActive={currentView === 'redclaw' || persistentViews.has('redclaw')}
-                onExecutionStateChange={(active) => setViewPersistent('redclaw', active)}
+                onExecutionStateChange={handleRedClawExecutionStateChange}
                 onOpenRedClawOnboarding={openRedClawOnboarding}
                 redclawOnboardingVersion={redclawOnboardingVersion}
               />
@@ -759,7 +783,10 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'cover-studio') && (
           <div className={currentView === 'cover-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'cover-studio' ? <ViewLoadingFallback /> : null}>
-              <CoverStudioPage isActive={currentView === 'cover-studio'} />
+              <CoverStudioPage
+                isActive={currentView === 'cover-studio' || persistentViews.has('cover-studio')}
+                onExecutionStateChange={handleCoverStudioExecutionStateChange}
+              />
             </Suspense>
           </div>
         )}
@@ -770,7 +797,7 @@ function App() {
                 isActive={currentView === 'generation-studio' || persistentViews.has('generation-studio')}
                 pendingIntent={pendingGenerationIntent}
                 onIntentConsumed={clearPendingGenerationIntent}
-                onExecutionStateChange={(active) => setViewPersistent('generation-studio', active)}
+                onExecutionStateChange={handleGenerationStudioExecutionStateChange}
               />
             </Suspense>
           </div>
