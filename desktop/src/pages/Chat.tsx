@@ -13,6 +13,7 @@ import {
   buildChatModelOptions,
   ChatComposer,
   type ChatComposerHandle,
+  type ChatMemberMentionOption,
   type ChatModelOption,
   type ChatSettingsSnapshot,
   type UploadedFileAttachment,
@@ -50,6 +51,13 @@ interface ChatRoom {
   name: string;
   advisorIds: string[];
   createdAt: string;
+}
+
+interface AdvisorMentionRecord {
+  id: string;
+  name?: string;
+  avatar?: string;
+  personality?: string;
 }
 
 interface ChatShortcut {
@@ -522,6 +530,8 @@ export function Chat({
   const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
   const [isAttachmentUploading, setIsAttachmentUploading] = useState(false);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
+  const [memberMentionOptions, setMemberMentionOptions] = useState<ChatMemberMentionOption[]>([]);
+  const [selectedMemberMention, setSelectedMemberMention] = useState<ChatMemberMentionOption | null>(null);
   const documentThemeMode = useDocumentThemeMode();
   const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
 
@@ -784,6 +794,10 @@ export function Chat({
     saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachment);
   }, [attachmentDraftScopeId, pendingAttachment]);
 
+  useEffect(() => {
+    setSelectedMemberMention(null);
+  }, [currentSessionId]);
+
   const loadChatModelOptions = useCallback(async () => {
     if (!isActiveRef.current) return;
     try {
@@ -800,6 +814,40 @@ export function Chat({
       console.error('Failed to load chat model options:', error);
     }
   }, []);
+
+  const normalizeMemberMentionOptions = useCallback((records: AdvisorMentionRecord[] | null | undefined): ChatMemberMentionOption[] => (
+    (records || [])
+      .filter((record): record is AdvisorMentionRecord => Boolean(record && typeof record.id === 'string' && record.id.trim()))
+      .map((record) => ({
+        id: record.id.trim(),
+        name: String(record.name || '未命名成员').trim() || '未命名成员',
+        avatar: String(record.avatar || '').trim(),
+        personality: String(record.personality || '').trim(),
+      }))
+  ), []);
+
+  const loadMemberMentionOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
+    try {
+      const advisors = await window.ipcRenderer.advisors.list<AdvisorMentionRecord>();
+      setMemberMentionOptions(normalizeMemberMentionOptions(advisors));
+    } catch (error) {
+      console.error('Failed to load member mention options:', error);
+      setMemberMentionOptions([]);
+    }
+  }, [normalizeMemberMentionOptions]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    void loadMemberMentionOptions();
+    const handleAdvisorsChanged = () => {
+      void loadMemberMentionOptions();
+    };
+    window.ipcRenderer.on('advisors:changed', handleAdvisorsChanged);
+    return () => {
+      window.ipcRenderer.off('advisors:changed', handleAdvisorsChanged);
+    };
+  }, [isActive, loadMemberMentionOptions]);
 
   const ensureChatModelConfig = useCallback(async () => {
     if (selectedChatModel) {
@@ -938,6 +986,12 @@ export function Chat({
     message: string;
     displayContent: string;
     attachment?: Message['attachment'];
+    memberMention?: {
+      type: 'advisor';
+      advisorId: string;
+      name: string;
+      avatar?: string;
+    };
     modelConfig?: {
       apiKey?: string;
       baseURL?: string;
@@ -949,6 +1003,7 @@ export function Chat({
       sessionId: payload.sessionId || null,
       chars: payload.message.length,
       hasAttachment: Boolean(payload.attachment),
+      targetAdvisorId: payload.memberMention?.advisorId || null,
     });
     const schedule = typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
@@ -2730,20 +2785,27 @@ export function Chat({
     void startAudioRecording();
   }, [audioRecording.isRecording, startAudioRecording, stopAudioRecording]);
 
-  const sendMessage = async (content: string, attachment?: UploadedFileAttachment) => {
+  const sendMessage = async (
+    content: string,
+    attachment?: UploadedFileAttachment,
+    memberMention: ChatMemberMentionOption | null = selectedMemberMention,
+  ) => {
     uiTraceInteraction('chat', 'send_message', {
       sessionId: currentSessionId || null,
       chars: String(content || '').trim().length,
       hasAttachment: Boolean(attachment),
+      targetAdvisorId: memberMention?.id || null,
     });
     suppressComposerFocus('send_message', 5000);
     blurComposer('send_message');
     shouldAutoScrollRef.current = true;
     setErrorNotice(null);
     const normalizedContent = String(content || '').trim();
-    const displayText = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
+    const mentionLabel = memberMention ? `@${memberMention.name}` : '';
+    const displayBody = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : '');
+    const displayText = [mentionLabel, displayBody].filter(Boolean).join(' ').trim();
     if (!displayText) return;
-    const runtimeMessage = normalizedContent || displayText;
+    const runtimeMessage = normalizedContent || displayBody || displayText;
     const processingStartedAt = Date.now();
     const userMsg: Message = {
       id: processingStartedAt.toString(),
@@ -2769,6 +2831,7 @@ export function Chat({
     localMessageMutationRef.current += 1;
     setMessages(prev => [...prev, userMsg, aiPlaceholder]);
     setInput('');
+    setSelectedMemberMention(null);
     setPendingAttachment(null);
     setIsAttachmentUploading(false);
     setIsProcessing(true);
@@ -2790,6 +2853,12 @@ export function Chat({
       message: runtimeMessage,
       displayContent: displayText,
       attachment: stripTransientAttachmentPreview(resolvedAttachment),
+      memberMention: memberMention ? {
+        type: 'advisor',
+        advisorId: memberMention.id,
+        name: memberMention.name,
+        avatar: memberMention.avatar,
+      } : undefined,
       modelConfig: resolvedModelConfig || getChatModelConfig(),
       taskHints: fixedSessionTaskHints,
     });
@@ -2960,7 +3029,7 @@ export function Chat({
         className={options?.className}
         value={input}
         onValueChange={setInput}
-        onSubmit={() => sendMessage(input, pendingAttachment || undefined)}
+        onSubmit={() => sendMessage(input, pendingAttachment || undefined, selectedMemberMention)}
         placeholder={placeholder}
         attachment={pendingAttachment}
         attachmentStatus={isAttachmentUploading ? 'uploading' : pendingAttachment ? 'uploaded' : null}
@@ -2979,6 +3048,9 @@ export function Chat({
         onFocus={() => handleComposerFocus(source)}
         suppressed={composerSuppressed}
         onResumeFromSuppressed={() => resumeComposerFocus(source)}
+        memberMentionOptions={memberMentionOptions}
+        selectedMemberMention={selectedMemberMention}
+        onSelectedMemberMentionChange={setSelectedMemberMention}
       />
     </>
   );
