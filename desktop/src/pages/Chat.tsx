@@ -166,6 +166,36 @@ function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledg
     .filter((item): item is ChatKnowledgeMentionOption => Boolean(item));
 }
 
+function knowledgeReferencePrimaryPath(item: ChatKnowledgeMentionOption): string {
+  return String(item.rootPath || item.folderPath || '').trim();
+}
+
+function buildKnowledgeReferenceRuntimeContext(items: ChatKnowledgeMentionOption[]): string {
+  const references = items.filter((item) => item.id);
+  if (references.length === 0) return '';
+  const lines = [
+    '本轮用户明确附带了以下知识库内容。回答时必须优先基于这些附件，不要沿用上一轮引用的知识库内容。',
+    '如果需要核对事实，先读取 primaryPath 指向的目录；笔记/视频类内容优先列目录、读取 meta.json，再读取 transcript/content/description 等文本文件。',
+  ];
+  references.slice(0, 12).forEach((item, index) => {
+    const primaryPath = knowledgeReferencePrimaryPath(item);
+    lines.push(`${index + 1}. title: ${item.title || '未命名内容'}; id: ${item.id}; kind: ${item.sourceKind || 'knowledge'}`);
+    if (primaryPath) {
+      lines.push(`   primaryPath: ${primaryPath}`);
+    }
+    if (item.folderPath || item.rootPath) {
+      lines.push(`   folderPath: ${item.folderPath || ''}; rootPath: ${item.rootPath || ''}`);
+    }
+    if (item.sourceUrl) {
+      lines.push(`   sourceUrl: ${item.sourceUrl}`);
+    }
+    if (item.summary) {
+      lines.push(`   summary: ${item.summary.slice(0, 700)}`);
+    }
+  });
+  return lines.join('\n');
+}
+
 export interface ChatShortcut {
   label: string;
   text: string;
@@ -234,6 +264,7 @@ interface ChatProps {
   inlineSidePanel?: React.ReactNode;
   keepComposerInputActive?: boolean;
   messageListHeader?: React.ReactNode;
+  placeholder?: string;
 }
 
 interface ChatContextUsage {
@@ -627,6 +658,7 @@ export function Chat({
   inlineSidePanel,
   keepComposerInputActive = false,
   messageListHeader,
+  placeholder,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -1342,13 +1374,18 @@ export function Chat({
           fileCount: item.fileCount,
           hasTranscript: item.hasTranscript,
         }));
+      const pendingKnowledgeRuntimeContext = buildKnowledgeReferenceRuntimeContext(pendingKnowledgeReferences);
+      const pendingRuntimeMessage = [
+        pendingMessage.content,
+        pendingKnowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${pendingKnowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
+      ].filter(Boolean).join('');
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
       const userMsg: Message = {
         id: processingStartedAt.toString(),
         role: 'user',
-        content: pendingMessage.content,
+        content: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
         attachment: resolvedAttachment as Message['attachment'],
         knowledgeReferences: pendingKnowledgeReferences,
@@ -1383,7 +1420,7 @@ export function Chat({
       // 发送给后端 - 传递 displayContent 和 attachment 用于持久化
       dispatchChatSend({
         sessionId: sessionId,
-        message: pendingMessage.content,
+        message: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
         attachment: stripTransientAttachmentPreview(resolvedAttachment),
         knowledgeReferences: pendingKnowledgeReferences,
@@ -3081,7 +3118,12 @@ export function Chat({
     const displayBody = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
     const displayText = [mentionLabel, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
     if (!displayText) return;
-    const runtimeMessage = normalizedContent || displayBody || displayText;
+    const baseRuntimeMessage = normalizedContent || displayBody || displayText;
+    const knowledgeRuntimeContext = buildKnowledgeReferenceRuntimeContext(safeKnowledgeMentions);
+    const runtimeMessage = [
+      baseRuntimeMessage,
+      knowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${knowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
+    ].filter(Boolean).join('');
     const processingStartedAt = Date.now();
     const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
       type: 'member',
@@ -3464,7 +3506,7 @@ export function Chat({
   const emptyComposerForm = renderComposer(
     'empty',
     'empty',
-    '问我任何问题，使用 @ 引用文件，/ 执行指令...',
+    placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...',
     { showContextUsage: true, showCancelWhenBusy: false },
   );
 
@@ -3607,7 +3649,7 @@ export function Chat({
                   )}
 
                   {/* 居中的输入框 (Codex Style) */}
-                  {showComposer ? renderComposer('empty', 'empty', '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
+                  {showComposer ? renderComposer('empty', 'empty', placeholder || '问我任何问题，使用 @ 引用文件，/ 执行指令...', {
                     className: 'mt-10',
                     showCancelWhenBusy: false,
                   }) : null}
@@ -3726,7 +3768,7 @@ export function Chat({
                       </div>
                     )}
 
-                    {renderComposer('composer', 'main', '发送消息...', {
+                    {renderComposer('composer', 'main', placeholder || '发送消息...', {
                       showContextUsage: true,
                       showCancelWhenBusy: true,
                     })}
