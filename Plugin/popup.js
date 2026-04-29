@@ -196,12 +196,12 @@ async function refreshUpdateStatus(forceRefresh) {
 
   const lines = [
     `当前版本：${update.currentVersion}`,
-    `开源仓库版本：${update.latestVersion}`,
+    `更新源版本：${update.latestVersion}`,
   ];
   if (update.lastCheckedAt) {
     lines.push(`最近检查：${formatDateTime(update.lastCheckedAt)}`);
   }
-  lines.push('更新方式：打开开源仓库 Plugin 目录，重新加载扩展。');
+  lines.push('更新方式：打开更新页下载安装包，重新加载扩展。');
 
   updateMetaEl.textContent = lines.join('\n');
   updateMetaEl.classList.remove('hidden');

@@ -609,11 +609,11 @@ function GeneralSettingsSectionInner({
                             </button>
                         </p>
                         <p className="text-xs text-text-tertiary mt-1">
-                            启动时自动检查新版本，安装包从 GitHub Releases 下载。
+                            启动时自动检查新版本，安装包从 RedBox 下载源获取。
                         </p>
                     </div>
                     <a
-                        href="https://github.com/Jamailar/RedBox/releases"
+                        href="https://redbox.ziz.hk/download"
                         target="_blank"
                         rel="noreferrer"
                         className="flex items-center gap-2 px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary"

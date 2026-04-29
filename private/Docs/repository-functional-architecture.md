@@ -1,7 +1,7 @@
 ---
 doc_type: architecture
 status: current
-last_updated: 2026-04-22
+last_updated: 2026-04-29
 scope: repository
 ---
 
@@ -72,9 +72,9 @@ scope: repository
 ### 3.4 发布分发链路
 
 1. `desktop/` 生成安装包。
-2. `private/scripts/hybrid-release/` 在本地/远端构建并上传到 GitHub Release。
-3. `RedBoxweb/app/lib/release-sync.ts` 拉 GitHub 最新 Release，把安装包镜像到 OSS，并写 `latest.json` manifest。
-4. `RedBoxweb/app/download/page.tsx` 读取 manifest，向用户展示可下载资产。
+2. `private/scripts/hybrid-release/` 在本地/远端构建发布资产。
+3. `RedBoxweb/app/lib/release-sync.ts` 同步最新版本资产，把安装包镜像到 OSS，并写 `latest.json` manifest。
+4. `RedBoxweb/app/download/page.tsx` 和 `RedBoxweb/app/api/updates/*` 读取 manifest，向用户和客户端展示可下载资产。
 
 ---
 
@@ -602,7 +602,7 @@ scope: repository
 **自动更新模块**
 
 - 每 360 分钟通过 `alarms` 检查一次更新
-- 更新源固定为 GitHub 仓库 `Plugin/manifest.json`
+- 更新源固定为 `https://redbox.ziz.hk/api/updates/plugin`
 - 更新策略是提示用户重新加载插件，不是自动热更新
 
 ### 6.3 插件为什么这样实现
@@ -636,8 +636,8 @@ scope: repository
 | 官网首页 | `RedBoxweb/app/page.tsx` | 品牌表达、核心价值陈述、能力展示 |
 | 下载页 | `RedBoxweb/app/download/page.tsx` | 展示 macOS / Windows 安装包下载入口 |
 | 公共组件 | `RedBoxweb/app/components/*` | Header、视觉区块 |
-| Release 读取 | `RedBoxweb/app/lib/downloads.ts`、`manifest.ts`、`github.ts` | 读取 latest manifest，选出主下载资产 |
-| Release 同步 | `RedBoxweb/app/lib/release-sync.ts` | 从 GitHub Release 拉取安装包并镜像到 OSS |
+| 更新源读取 | `RedBoxweb/app/lib/downloads.ts`、`manifest.ts`、`updates.ts` | 读取 latest manifest，选出主下载资产并构造更新响应 |
+| 版本同步 | `RedBoxweb/app/lib/release-sync.ts` | 从源仓库版本资产拉取安装包并镜像到 OSS |
 | 测试 | `RedBoxweb/tests/release-sync.test.ts` | 验证 release asset 解析与同步流程 |
 
 ### 7.2 功能模块
@@ -664,22 +664,22 @@ scope: repository
 
 ### 7.3 架构选择与推荐
 
-**当前最优方案：GitHub Release 作为源，OSS manifest 作为分发面**
+**当前最优方案：源仓库版本资产作为输入，OSS manifest 作为分发面**
 
 优点：
 
-- GitHub 继续是事实上的发布真源
-- 官网下载不直接依赖 GitHub API 配额和实时性
+- 源仓库继续保存版本资产和更新日志
+- 官网下载和客户端更新不直接依赖源仓库 API 配额和实时性
 - 可以沉淀自己的公开下载域名与缓存策略
 
 替代方案：
 
-- 官网直接调 GitHub API：实现更简单，但稳定性和带宽控制较差
+- 官网直接调源仓库 API：实现更简单，但稳定性和带宽控制较差
 - 官网自建发布后台：过重，不符合当前仓库规模
 
 推荐结论：
 
-- 继续保持 “GitHub Release -> OSS mirror -> latest manifest -> 下载页” 是最优解
+- 继续保持 “版本资产 -> OSS mirror -> latest manifest -> 下载页 / 更新 API” 是最优解
 
 ---
 
@@ -692,7 +692,7 @@ scope: repository
 | 本地 mac 构建 | `private/scripts/hybrid-release/build-mac-local.sh` | 本地打包 macOS 产物 |
 | 远端 win 构建 | `private/scripts/hybrid-release/build-win-on-remote.sh` | SSH 到远端 Linux 构建 Windows 包 |
 | notarize | `private/scripts/hybrid-release/notarize-mac-artifacts.sh` | macOS 公证 |
-| 上传 Release | `private/scripts/hybrid-release/upload-release.sh` | 上传构建产物到 GitHub Release |
+| 上传发布资产 | `private/scripts/hybrid-release/upload-release.sh` | 上传构建产物到源仓库版本资产区 |
 | 总控入口 | `private/scripts/hybrid-release/publish-hybrid.sh` | 串联 win/mac 构建、上传、tag/push |
 
 ### 8.2 发布设计要点
@@ -730,7 +730,7 @@ scope: repository
 | UI 原语 | Radix UI | 对话框、菜单、基础交互组件 |
 | 扩展平台 | Chrome MV3 | 浏览器采集的唯一合理宿主 |
 | 官网框架 | Next.js | SSR/静态混合与下载站实现成本低 |
-| Release 真源 | GitHub Releases | 版本、附件、发布说明天然契合 |
+| 版本资产源 | 源仓库版本资产 | 版本、附件、发布说明天然契合 |
 | MCP 协议生态 | MCP server/client 体系 | 外部工具接入标准化 |
 
 ### 9.2 必须自研的部分

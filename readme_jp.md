@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Jamailar/RedBox/releases">
+  <a href="https://redbox.ziz.hk/download">
     <img src="https://img.shields.io/badge/⬇️%20ダウンロード-最新リリース-E11D48?style=for-the-badge&logo=github&logoColor=white" alt="Download" height="46">
   </a>
 </p>
@@ -81,7 +81,7 @@
 
 ## クイックスタート
 
-1. [Releases](https://github.com/Jamailar/RedBox/releases) からインストーラをダウンロードします。
+1. [RedBox ダウンロードページ](https://redbox.ziz.hk/download) からインストーラをダウンロードします。
 2. `設定 -> AI` を開きます。
 3. 自分の Endpoint / API Key / Model を設定します。
 4. 接続をテストして保存します。

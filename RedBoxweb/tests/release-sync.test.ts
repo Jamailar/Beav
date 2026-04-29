@@ -5,7 +5,7 @@ import type { GithubRelease, ReleaseManifest } from '../app/lib/types';
 const release: GithubRelease = {
     tag_name: 'v1.9.0',
     name: 'v1.9.0',
-    html_url: 'https://github.com/Jamailar/RedBox/releases/tag/v1.9.0',
+    html_url: 'https://source.example.com/RedBox/versions/v1.9.0',
     body: '1. 优化整体 UI 视觉',
     published_at: '2026-04-04T08:59:00Z',
     draft: false,
@@ -60,7 +60,7 @@ const previousRelease: GithubRelease = {
     ...release,
     tag_name: 'v1.8.0',
     name: 'v1.8.0',
-    html_url: 'https://github.com/Jamailar/RedBox/releases/tag/v1.8.0',
+    html_url: 'https://source.example.com/RedBox/versions/v1.8.0',
     body: '1. 修复旧版本问题',
     published_at: '2026-03-28T08:59:00Z',
     assets: [],

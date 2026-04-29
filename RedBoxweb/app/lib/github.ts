@@ -19,7 +19,7 @@ export async function fetchLatestGithubRelease(owner: string, repo: string, toke
 
     if (!response.ok) {
         const body = await response.text();
-        throw new Error(`GitHub latest release request failed (${response.status}): ${body || response.statusText}`);
+        throw new Error(`Latest version request failed (${response.status}): ${body || response.statusText}`);
     }
 
     const release = await response.json() as GithubRelease;

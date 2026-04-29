@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Jamailar/RedBox/releases">
+  <a href="https://redbox.ziz.hk/download">
     <img src="https://img.shields.io/badge/⬇️%20İndir-En%20son%20sürüm-E11D48?style=for-the-badge&logo=github&logoColor=white" alt="Download" height="46">
   </a>
 </p>
@@ -81,7 +81,7 @@ Bu açık kaynak sürüm **kullanıcının yapılandırdığı AI sağlayıcıla
 
 ## Hızlı başlangıç
 
-1. Yükleyiciyi [Releases](https://github.com/Jamailar/RedBox/releases) sayfasından indirin.
+1. Yükleyiciyi [RedBox indirme sayfasından](https://redbox.ziz.hk/download) indirin.
 2. `Ayarlar -> AI` bölümünü açın.
 3. Kendi Endpoint / API Key / Model bilgilerinizi girin.
 4. Bağlantıyı test edip kaydedin.

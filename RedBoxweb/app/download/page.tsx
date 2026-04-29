@@ -82,7 +82,7 @@ export default async function DownloadPage() {
                                     下载 RedBox
                                 </h1>
                                 <p className="mt-2 max-w-[560px] text-sm font-semibold leading-6 text-[#647089] sm:text-base">
-                                    选择对应系统版本。安装包由 GitHub Release 同步到镜像源，优先提供最新稳定版。
+                                    选择对应系统版本。安装包由 RedBox 下载源提供，优先提供最新稳定版。
                                 </p>
                             </div>
                         </div>

@@ -1,5 +1,5 @@
 export type ReleasePlatform = 'macos' | 'windows';
-export type ReleaseArch = 'arm64' | 'x64';
+export type ReleaseArch = 'arm64' | 'x64' | 'x86';
 
 export interface ReleaseAsset {
     platform: ReleasePlatform;

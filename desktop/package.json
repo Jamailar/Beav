@@ -1,7 +1,7 @@
 {
   "name": "redbox",
   "private": true,
-  "version": "1.10.4",
+  "version": "1.10.5",
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420",

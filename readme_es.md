@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Jamailar/RedBox/releases">
+  <a href="https://redbox.ziz.hk/download">
     <img src="https://img.shields.io/badge/⬇️%20Descargar-Última%20versión-E11D48?style=for-the-badge&logo=github&logoColor=white" alt="Download" height="46">
   </a>
 </p>
@@ -81,7 +81,7 @@ Esta versión de código abierto usa **proveedores de IA configurados por el usu
 
 ## Inicio rápido
 
-1. Descarga el instalador desde [Releases](https://github.com/Jamailar/RedBox/releases).
+1. Descarga el instalador desde la [página de descargas de RedBox](https://redbox.ziz.hk/download).
 2. Abre `Configuración -> AI`.
 3. Configura tu propio Endpoint / API Key / Model.
 4. Prueba la conexión y guarda.
