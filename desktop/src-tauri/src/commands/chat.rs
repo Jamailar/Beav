@@ -7,6 +7,7 @@ use crate::commands::chat_state::{
     resolve_runtime_mode_for_session,
 };
 use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_tool_result};
+use crate::member_skill::advisor_member_skill_ref;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     resolve_runtime_approval_by_approval_id, resolve_runtime_approval_by_call_id,
@@ -21,6 +22,76 @@ use crate::{
     append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64, now_iso,
     now_ms, payload_field, payload_string, AppState,
 };
+
+fn payload_member_mention_advisor_id(payload: &Value) -> Option<String> {
+    payload
+        .get("memberMention")
+        .and_then(|value| value.as_object())
+        .and_then(|object| {
+            object
+                .get("advisorId")
+                .and_then(Value::as_str)
+                .or_else(|| object.get("id").and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn apply_member_mention_session_metadata(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    advisor_id: &str,
+) -> Result<Option<Value>, String> {
+    with_store_mut(state, |store| {
+        let Some(advisor) = store.advisors.iter().find(|item| item.id == advisor_id) else {
+            return Err(format!("未找到 @ 成员：{advisor_id}"));
+        };
+        let advisor_name = advisor.name.clone();
+        let fallback_member_skill_ref = advisor.member_skill_ref.clone();
+        let member_skill_ref =
+            advisor_member_skill_ref(store, advisor_id).or(fallback_member_skill_ref);
+        let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        else {
+            return Err(format!("未找到聊天会话：{session_id}"));
+        };
+        let previous_metadata = session.metadata.clone();
+        let mut metadata = previous_metadata
+            .as_ref()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        metadata.insert("advisorId".to_string(), json!(advisor_id));
+        metadata.insert("memberMentionMode".to_string(), json!("single-turn"));
+        metadata.insert("memberMentionAdvisorName".to_string(), json!(advisor_name));
+        if let Some(skill_ref) = member_skill_ref {
+            metadata.insert("memberSkillRef".to_string(), json!(skill_ref.clone()));
+            metadata.insert("activeSkills".to_string(), json!([skill_ref]));
+        }
+        session.metadata = Some(Value::Object(metadata));
+        Ok(previous_metadata)
+    })
+}
+
+fn restore_member_mention_session_metadata(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    previous_metadata: Option<Value>,
+) -> Result<(), String> {
+    with_store_mut(state, |store| {
+        let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        else {
+            return Ok(());
+        };
+        session.metadata = previous_metadata;
+        Ok(())
+    })
+}
 
 fn merge_task_hints_into_session_metadata(
     state: &State<'_, AppState>,
@@ -201,6 +272,20 @@ pub fn handle_send_channel(
                 );
                 let _ = activated_skills;
             }
+            let member_mention_metadata_restore = if let (
+                Some(active_session_id),
+                Some(advisor_id),
+            ) = (
+                session_id.as_deref(),
+                payload_member_mention_advisor_id(&payload),
+            ) {
+                Some((
+                    active_session_id.to_string(),
+                    apply_member_mention_session_metadata(state, active_session_id, &advisor_id)?,
+                ))
+            } else {
+                None
+            };
             let turn = build_chat_send_turn(
                 session_id.clone(),
                 message.clone(),
@@ -209,7 +294,15 @@ pub fn handle_send_channel(
                 payload_field(&payload, "attachment").cloned(),
             );
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
-            let completed = run_chat_send_turn(app, state, &prepared_turn, &message)?;
+            let completed_result = run_chat_send_turn(app, state, &prepared_turn, &message);
+            if let Some((restore_session_id, previous_metadata)) = member_mention_metadata_restore {
+                restore_member_mention_session_metadata(
+                    state,
+                    &restore_session_id,
+                    previous_metadata,
+                )?;
+            }
+            let completed = completed_result?;
             if prepared_turn.is_redclaw_session() {
                 let _ = app.emit(
                     "redclaw:runner-message",

@@ -21,6 +21,7 @@ import {
   Plus,
   Square,
   StopCircle,
+  UserRound,
   X,
 } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -74,6 +75,13 @@ export interface ChatComposerHandle {
   getTextarea: () => HTMLTextAreaElement | null;
 }
 
+export interface ChatMemberMentionOption {
+  id: string;
+  name: string;
+  avatar?: string;
+  personality?: string;
+}
+
 type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
 type ChatComposerAudioState = 'idle' | 'recording' | 'transcribing';
 type ChatComposerAttachmentStatus = 'uploading' | 'uploaded';
@@ -116,6 +124,9 @@ export interface ChatComposerProps {
   suppressedLabel?: string;
   onResumeFromSuppressed?: (() => void) | null;
   textareaMaxHeight?: number;
+  memberMentionOptions?: ChatMemberMentionOption[];
+  selectedMemberMention?: ChatMemberMentionOption | null;
+  onSelectedMemberMentionChange?: (member: ChatMemberMentionOption | null) => void;
 }
 
 const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
@@ -231,6 +242,46 @@ function getAttachmentKindIcon(kind: ComposerAttachmentVisualKind, className: st
     default:
       return <FileIcon className={className} />;
   }
+}
+
+function getActiveMemberMentionTrigger(value: string, caretIndex: number): { start: number; end: number; query: string } | null {
+  const safeCaretIndex = Math.max(0, Math.min(value.length, caretIndex));
+  const beforeCaret = value.slice(0, safeCaretIndex);
+  const match = beforeCaret.match(/(^|\s)@([^\s@#]{0,32})$/);
+  if (!match || match.index == null) return null;
+  const boundary = match[1] || '';
+  const triggerStart = match.index + boundary.length;
+  return {
+    start: triggerStart,
+    end: safeCaretIndex,
+    query: match[2] || '',
+  };
+}
+
+function memberMentionMatches(member: ChatMemberMentionOption, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return [
+    member.name,
+    member.id,
+    member.personality,
+  ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+}
+
+function renderMemberMentionAvatar(member: ChatMemberMentionOption, darkEmbedded: boolean) {
+  const avatar = String(member.avatar || '').trim();
+  const avatarClass = clsx(
+    'flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full text-[13px] font-semibold',
+    darkEmbedded ? 'bg-white/10 text-white/80' : 'bg-[#f2eee5] text-[#6f665a]',
+  );
+  if (avatar && /^(https?:|file:|data:|local-file:|asset:)/i.test(avatar)) {
+    return <img src={resolveAssetUrl(avatar)} alt="" className={clsx(avatarClass, 'object-cover')} />;
+  }
+  return (
+    <span className={avatarClass}>
+      {avatar || member.name.trim().slice(0, 1).toUpperCase() || <UserRound className="h-3.5 w-3.5" />}
+    </span>
+  );
 }
 
 function ComposerRecordingStatus({
@@ -601,10 +652,16 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   suppressedLabel = '对话已完成，点击后继续输入...',
   onResumeFromSuppressed,
   textareaMaxHeight = 300,
+  memberMentionOptions = [],
+  selectedMemberMention = null,
+  onSelectedMemberMentionChange,
 }, ref) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
+  const memberPickerRef = useRef<HTMLDivElement>(null);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [memberMentionTrigger, setMemberMentionTrigger] = useState<{ start: number; end: number; query: string } | null>(null);
+  const [memberMentionActiveIndex, setMemberMentionActiveIndex] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const darkEmbedded = theme === 'dark';
@@ -620,6 +677,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const showAudioButton = Boolean(onAudioAction);
   const showCancelButton = Boolean(onCancel) && showCancelWhenBusy && isBusy;
   const canOpenModelPicker = showModelSelector && modelOptions.length > 0;
+  const memberMentionEnabled = Boolean(onSelectedMemberMentionChange);
+  const filteredMemberMentionOptions = useMemo(() => (
+    memberMentionOptions
+      .filter((member) => memberMentionMatches(member, memberMentionTrigger?.query || ''))
+      .slice(0, 8)
+  ), [memberMentionOptions, memberMentionTrigger?.query]);
+  const showMemberMentionPicker = memberMentionEnabled && Boolean(memberMentionTrigger);
   const modelPickerClass = darkEmbedded
     ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
     : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
@@ -655,6 +719,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, [showModelPicker]);
 
   useEffect(() => {
+    if (!showMemberMentionPicker) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!memberPickerRef.current?.contains(event.target as Node) && !textareaRef.current?.contains(event.target as Node)) {
+        setMemberMentionTrigger(null);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [showMemberMentionPicker]);
+
+  useEffect(() => {
+    setMemberMentionActiveIndex(0);
+  }, [memberMentionTrigger?.query]);
+
+  useEffect(() => {
     if (audioState !== 'recording') {
       setRecordingElapsedMs(0);
       return;
@@ -681,14 +760,70 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     onSubmit();
   }, [onSubmit, submitDisabled]);
 
+  const updateMemberMentionTrigger = useCallback((nextValue: string, caretIndex: number) => {
+    if (!memberMentionEnabled || readOnly || disabled || isBusy) {
+      setMemberMentionTrigger(null);
+      return;
+    }
+    setMemberMentionTrigger(getActiveMemberMentionTrigger(nextValue, caretIndex));
+  }, [disabled, isBusy, memberMentionEnabled, readOnly]);
+
+  const selectMemberMention = useCallback((member: ChatMemberMentionOption) => {
+    const trigger = memberMentionTrigger;
+    onSelectedMemberMentionChange?.(member);
+    setMemberMentionTrigger(null);
+    if (trigger) {
+      const nextValue = `${value.slice(0, trigger.start)}${value.slice(trigger.end)}`;
+      onValueChange(nextValue);
+      window.requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const nextCaret = Math.min(trigger.start, nextValue.length);
+        textarea.focus();
+        textarea.setSelectionRange(nextCaret, nextCaret);
+        syncHeight();
+      });
+    } else {
+      textareaRef.current?.focus();
+    }
+  }, [memberMentionTrigger, onSelectedMemberMentionChange, onValueChange, syncHeight, value]);
+
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showMemberMentionPicker) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setMemberMentionActiveIndex((current) => (
+          filteredMemberMentionOptions.length > 0 ? (current + 1) % filteredMemberMentionOptions.length : 0
+        ));
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setMemberMentionActiveIndex((current) => (
+          filteredMemberMentionOptions.length > 0
+            ? (current - 1 + filteredMemberMentionOptions.length) % filteredMemberMentionOptions.length
+            : 0
+        ));
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMemberMentionTrigger(null);
+        return;
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && filteredMemberMentionOptions.length > 0) {
+        event.preventDefault();
+        selectMemberMention(filteredMemberMentionOptions[Math.min(memberMentionActiveIndex, filteredMemberMentionOptions.length - 1)]);
+        return;
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey && !isComposing && !isImeComposingEvent(event)) {
       event.preventDefault();
       if (!submitDisabled) {
         onSubmit();
       }
     }
-  }, [isComposing, onSubmit, submitDisabled]);
+  }, [filteredMemberMentionOptions, isComposing, memberMentionActiveIndex, onSubmit, selectMemberMention, showMemberMentionPicker, submitDisabled]);
 
   const wrapperClass = variant === 'empty' ? 'px-4 pt-4' : 'px-3.5 pt-3';
   const compactAttachmentMode = attachmentPreviewMode === 'compact-status';
@@ -718,11 +853,16 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     <textarea
       ref={textareaRef}
       value={value}
-      onChange={(event) => onValueChange(event.target.value)}
+      onChange={(event) => {
+        onValueChange(event.target.value);
+        updateMemberMentionTrigger(event.target.value, event.target.selectionStart || 0);
+      }}
       onFocus={onFocus}
       onCompositionStart={() => setIsComposing(true)}
       onCompositionEnd={() => setIsComposing(false)}
       onKeyDown={handleKeyDown}
+      onClick={(event) => updateMemberMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
+      onSelect={(event) => updateMemberMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
       placeholder={placeholder}
       className={clsx(textareaClass, palette.text)}
       spellCheck={false}
@@ -736,7 +876,71 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
 
   return (
     <form onSubmit={handleFormSubmit} className={clsx('relative w-full', className)}>
+      {showMemberMentionPicker ? (
+        <div
+          ref={memberPickerRef}
+          className={clsx(
+            'absolute bottom-full left-3 z-[140] mb-2 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border shadow-xl',
+            darkEmbedded ? 'border-white/10 bg-[#181b20] text-white' : 'border-[#ece6dc] bg-[#fffefa] text-text-primary',
+          )}
+        >
+          <div className={clsx('px-3 py-2 text-[11px] font-medium', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+            选择成员
+          </div>
+          {filteredMemberMentionOptions.length > 0 ? filteredMemberMentionOptions.map((member, index) => {
+            const active = index === memberMentionActiveIndex;
+            return (
+              <button
+                key={member.id}
+                type="button"
+                onMouseEnter={() => setMemberMentionActiveIndex(index)}
+                onClick={() => selectMemberMention(member)}
+                className={clsx(
+                  'flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
+                  active
+                    ? darkEmbedded ? 'bg-white/10' : 'bg-[#f5f0e7]'
+                    : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[#f8f4ec]',
+                )}
+              >
+                {renderMemberMentionAvatar(member, darkEmbedded)}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{member.name}</span>
+                  {member.personality ? (
+                    <span className={clsx('block truncate text-[11px]', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+                      {member.personality}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          }) : (
+            <div className={clsx('px-3 pb-3 text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+              没有匹配的成员
+            </div>
+          )}
+        </div>
+      ) : null}
       <ChatComposerFrame theme={theme} variant={variant}>
+        {selectedMemberMention ? (
+          <div className={clsx('flex items-center px-3 pt-2', variant === 'empty' ? 'pb-1' : 'pb-0.5')}>
+            <span className={clsx(
+              'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+              darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[#e9dfcf] bg-[#f7f2e8] text-[#5f574d]',
+            )}>
+              <UserRound className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">@{selectedMemberMention.name}</span>
+              <button
+                type="button"
+                onClick={() => onSelectedMemberMentionChange?.(null)}
+                className={clsx('ml-0.5 rounded-full p-0.5 transition-colors', darkEmbedded ? 'hover:bg-white/10' : 'hover:bg-black/5')}
+                aria-label={`移除 @${selectedMemberMention.name}`}
+                title="移除成员"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          </div>
+        ) : null}
         {compactAttachmentMode ? (
           <>
             <ComposerCompactAttachmentTray
