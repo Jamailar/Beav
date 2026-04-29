@@ -11,6 +11,8 @@ use crate::{
 
 const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
 const VIDEO_TASK_POLL_TIMEOUT_MS: u64 = 6 * 60 * 1000;
+const IMAGE_TASK_POLL_INTERVAL_MS: u64 = 2000;
+const IMAGE_TASK_POLL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 
 pub(crate) fn resolve_image_generation_settings(
     settings: &Value,
@@ -159,6 +161,11 @@ fn is_official_gemini_endpoint(endpoint: &str) -> bool {
     let normalized = normalize_base_url(endpoint).to_lowercase();
     normalized.contains("generativelanguage.googleapis.com")
         || normalized.contains("googleapis.com")
+}
+
+fn is_redbox_official_image_endpoint(endpoint: &str) -> bool {
+    let normalized = normalize_base_url(endpoint).to_lowercase();
+    normalized.contains("api.ziz.hk") && normalized.contains("/redbox/v1")
 }
 
 fn resolve_gemini_openai_endpoint(endpoint: &str) -> String {
@@ -763,7 +770,11 @@ fn run_form_json(
             "[http][form-json] invalid_json_message method={} url={} status={} body={} error={}",
             method_name, url, status, raw_body_log, message
         ));
-        message
+        format!(
+            "上游返回了非 JSON 响应：status={} body={}",
+            status,
+            raw_body_log
+        )
     })?;
     if !(200..300).contains(&status) {
         let details = crate::http_error_details_from_text(status, normalized_body);
@@ -842,6 +853,20 @@ fn run_openai_image_request(
     let should_use_edit_api = !refs.is_empty()
         && (generation_mode == "image-to-image" || generation_mode == "reference-guided");
     if should_use_edit_api {
+        if is_redbox_official_image_endpoint(endpoint) {
+            return run_openai_json_image_request(
+                &normalize_image_generation_url(endpoint),
+                api_key,
+                model,
+                payload,
+                json!({
+                    "images": refs
+                        .iter()
+                        .map(|item| normalize_media_value_for_remote(item))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }),
+            );
+        }
         let materialized_images = refs
             .iter()
             .map(|item| materialize_transport_value_to_temp_file(item, "image-ref"))
@@ -1223,8 +1248,11 @@ fn resolve_dashscope_task_payload(
     task_id: &str,
 ) -> Result<Value, String> {
     let task_endpoint = resolve_dashscope_task_endpoint(endpoint, task_id);
-    for _ in 0..60 {
-        thread::sleep(std::time::Duration::from_millis(2000));
+    let poll_attempts = IMAGE_TASK_POLL_TIMEOUT_MS / IMAGE_TASK_POLL_INTERVAL_MS;
+    for _ in 0..poll_attempts {
+        thread::sleep(std::time::Duration::from_millis(
+            IMAGE_TASK_POLL_INTERVAL_MS,
+        ));
         if let Ok(response) = run_curl_json("GET", &task_endpoint, api_key, &[], None) {
             let status = response
                 .pointer("/output/task_status")
@@ -1262,7 +1290,10 @@ fn resolve_dashscope_task_payload(
             }
         }
     }
-    Err("DashScope task timeout".to_string())
+    Err(format!(
+        "DashScope task timeout after {}ms",
+        IMAGE_TASK_POLL_TIMEOUT_MS
+    ))
 }
 
 pub(crate) fn run_image_generation_request(
@@ -2266,6 +2297,17 @@ mod tests {
     }
 
     #[test]
+    fn redbox_official_reference_images_use_json_generation_endpoint() {
+        assert!(is_redbox_official_image_endpoint(
+            "https://api.ziz.hk/redbox/v1"
+        ));
+        assert_eq!(
+            normalize_image_generation_url("https://api.ziz.hk/redbox/v1"),
+            "https://api.ziz.hk/redbox/v1/images/generations"
+        );
+    }
+
+    #[test]
     fn run_form_json_posts_multipart_without_external_curl() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -2369,7 +2411,9 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
                 response_body.len()
             );
-            stream.write_all(response.as_bytes()).expect("write headers");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write headers");
             stream.write_all(response_body).expect("write body");
             request
         });
@@ -2381,16 +2425,17 @@ mod tests {
         let request = server.join().expect("server join");
 
         assert_eq!(bytes, b"PNG-REFERENCE");
-        assert_eq!(path.extension().and_then(|value| value.to_str()), Some("png"));
+        assert_eq!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("png")
+        );
         assert!(request.starts_with("GET /template.png "));
     }
 
     #[test]
     fn materialize_file_url_reference_decodes_escaped_path() {
-        let source_path = std::env::temp_dir().join(format!(
-            "redbox file url ref {}.png",
-            crate::now_ms()
-        ));
+        let source_path =
+            std::env::temp_dir().join(format!("redbox file url ref {}.png", crate::now_ms()));
         fs::write(&source_path, b"PNG-FILE-URL").expect("write source image");
         let source_url = crate::file_url_for_path(&source_path);
 
@@ -2401,7 +2446,10 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         assert_eq!(bytes, b"PNG-FILE-URL");
-        assert_eq!(path.extension().and_then(|value| value.to_str()), Some("png"));
+        assert_eq!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("png")
+        );
     }
 
     #[test]
@@ -2421,15 +2469,15 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
                 response_body.len()
             );
-            stream.write_all(response.as_bytes()).expect("write headers");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write headers");
             stream.write_all(response_body).expect("write body");
             request
         });
 
-        let path = std::env::temp_dir().join(format!(
-            "redbox-generated-test-{}.png",
-            crate::now_ms()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("redbox-generated-test-{}.png", crate::now_ms()));
         write_generated_image_asset(&path, &json!({ "url": url })).expect("write asset");
         let bytes = fs::read(&path).expect("read generated asset");
         let _ = fs::remove_file(&path);

@@ -12,6 +12,7 @@ import {
   Globe,
   Image as ImageIcon,
   Music,
+  UserRound,
   Video,
 } from 'lucide-react';
 import { ProcessTimeline, ProcessItem } from './ProcessTimeline';
@@ -153,6 +154,29 @@ export interface SkillEvent {
   description: string;
 }
 
+export interface ChatMessageMemberActor {
+  type?: 'member';
+  memberId: string;
+  displayName: string;
+  avatar?: string;
+  memberSkillRef?: string;
+}
+
+export interface ChatKnowledgeReference {
+  id: string;
+  title: string;
+  sourceKind?: string;
+  summary?: string;
+  cover?: string;
+  sourceUrl?: string;
+  folderPath?: string;
+  rootPath?: string;
+  tags?: string[];
+  updatedAt?: string;
+  fileCount?: number;
+  hasTranscript?: boolean;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'ai';
@@ -209,6 +233,9 @@ export interface Message {
   processingStartedAt?: number;
   processingFinishedAt?: number;
   suppressPendingIndicator?: boolean;
+  memberActor?: ChatMessageMemberActor;
+  memberMention?: ChatMessageMemberActor;
+  knowledgeReferences?: ChatKnowledgeReference[];
 }
 
 export type ChatMessageLinkKind =
@@ -722,6 +749,7 @@ export const MessageItem = memo(({
     && !shouldAutoHideWorkflow
     && displayTimeline.length === 0
     && (msg.thinking || (showWorkflowDetails && (msg.tools.length > 0 || msg.activatedSkill)));
+  const assistantMemberActor = !isUser ? msg.memberActor : undefined;
 
   useEffect(() => {
     if (!imageMenu.visible) return;
@@ -961,6 +989,70 @@ export const MessageItem = memo(({
     </div>
   );
 
+  const knowledgeKindLabel = (item: ChatKnowledgeReference): string => {
+    const sourceKind = String(item.sourceKind || '').trim();
+    if (sourceKind === 'youtube-video' || sourceKind === 'youtube' || sourceKind === 'video') return '视频';
+    if (sourceKind === 'document-source' || sourceKind === 'document') return '文档';
+    if (sourceKind === 'redbook-note' || sourceKind === 'note') return '笔记';
+    return sourceKind || '知识';
+  };
+
+  const renderKnowledgeIcon = (item: ChatKnowledgeReference) => {
+    const sourceKind = String(item.sourceKind || '').trim();
+    if (sourceKind === 'youtube-video' || sourceKind === 'youtube' || sourceKind === 'video') {
+      return <Video className="h-4 w-4" />;
+    }
+    if (sourceKind === 'document-source' || sourceKind === 'document') {
+      return <FileText className="h-4 w-4" />;
+    }
+    return <Archive className="h-4 w-4" />;
+  };
+
+  const renderKnowledgeReferenceCards = (items?: ChatKnowledgeReference[]) => {
+    const references = (items || []).filter((item) => item.id || item.title);
+    if (references.length === 0) return null;
+    return (
+      <div className="mt-2 w-full max-w-[560px] rounded-2xl border border-border bg-surface-primary/95 p-2 shadow-sm">
+        <div className="px-1 pb-2 text-[11px] font-medium text-text-tertiary">
+          提到的知识库内容
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {references.slice(0, 6).map((item) => {
+            const cover = String(item.cover || '').trim();
+            return (
+              <div
+                key={item.id || item.title}
+                className="flex min-w-0 items-start gap-3 rounded-xl border border-border bg-surface-secondary/60 p-2.5"
+              >
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-secondary text-text-tertiary">
+                  {cover ? (
+                    <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    renderKnowledgeIcon(item)
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-text-tertiary">
+                    <span>{knowledgeKindLabel(item)}</span>
+                    {item.hasTranscript ? <span>有转录</span> : null}
+                  </div>
+                  <div className="mt-1 truncate text-sm font-medium text-text-primary" title={item.title}>
+                    {item.title || '未命名内容'}
+                  </div>
+                  {item.summary ? (
+                    <div className="mt-1 line-clamp-2 text-xs text-text-secondary">
+                      {item.summary}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const imageSrc = isUploadedImageAttachment(attachment) ? resolveUploadedAttachmentSource(attachment) : '';
     const actionSource = resolveUploadedAttachmentActionSource(attachment);
@@ -1005,6 +1097,25 @@ export const MessageItem = memo(({
           </div>
         </div>
       </div>
+    );
+  };
+
+  const renderMemberActorAvatar = (actor: ChatMessageMemberActor) => {
+    const avatar = String(actor.avatar || '').trim();
+    const name = String(actor.displayName || '').trim();
+    if (avatar && /^(https?:|file:|data:|local-file:|asset:)/i.test(avatar)) {
+      return (
+        <img
+          src={resolveAssetUrl(avatar)}
+          alt=""
+          className="h-7 w-7 shrink-0 rounded-full border border-border bg-surface-secondary object-cover"
+        />
+      );
+    }
+    return (
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-surface-secondary text-[12px] font-semibold text-text-secondary">
+        {name.slice(0, 1).toUpperCase() || <UserRound className="h-3.5 w-3.5" />}
+      </span>
     );
   };
 
@@ -1138,6 +1249,7 @@ export const MessageItem = memo(({
                     {renderYoutubeCard(msg.attachment)}
                   </div>
                 )}
+                {showAttachments && renderKnowledgeReferenceCards(msg.knowledgeReferences)}
                 {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
                 {showAttachments && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
               </div>
@@ -1146,6 +1258,12 @@ export const MessageItem = memo(({
         ) : (
           /* AI 回复 */
           <div className={clsx('chat-ai-shell group', msg.isStreaming && 'chat-ai-shell-streaming')}>
+            {assistantMemberActor ? (
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-text-secondary">
+                {renderMemberActorAvatar(assistantMemberActor)}
+                <span className="truncate">{assistantMemberActor.displayName}</span>
+              </div>
+            ) : null}
             {showProcessingTimer && (
               <ProcessingTimerBadge
                 startedAt={msg.processingStartedAt as number}
@@ -1276,6 +1394,9 @@ export const MessageItem = memo(({
     prevProps.msg.processingStartedAt !== nextProps.msg.processingStartedAt ||
     prevProps.msg.processingFinishedAt !== nextProps.msg.processingFinishedAt ||
     prevProps.msg.suppressPendingIndicator !== nextProps.msg.suppressPendingIndicator ||
+    prevProps.msg.memberActor !== nextProps.msg.memberActor ||
+    prevProps.msg.memberMention !== nextProps.msg.memberMention ||
+    prevProps.msg.knowledgeReferences !== nextProps.msg.knowledgeReferences ||
     prevProps.msg.thinking !== nextProps.msg.thinking ||
     prevProps.msg.tools !== nextProps.msg.tools ||
     prevProps.msg.plan !== nextProps.msg.plan || // Check plan changes

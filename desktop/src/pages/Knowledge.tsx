@@ -5,7 +5,6 @@ import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { PendingChatMessage } from '../App';
-import { KnowledgeChatModal } from '../components/KnowledgeChatModal';
 import { useFeatureFlag } from '../hooks/useFeatureFlags';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
@@ -234,7 +233,6 @@ interface KnowledgeAuthorView {
 interface KnowledgeProps {
     isEmbedded?: boolean;
     isActive?: boolean;
-    onNavigateToChat?: (message: PendingChatMessage) => void;
     onNavigateToRedClaw?: (message: PendingChatMessage) => void;
     referenceContent?: string; // 用于相似度排序的参考内容
 }
@@ -376,7 +374,7 @@ const hashContent = (content: string): string => {
     return hash.toString(16);
 };
 
-export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = false, isActive = true, referenceContent }: KnowledgeProps) {
+export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = true, referenceContent }: KnowledgeProps) {
     const [notes, setNotes] = useState<Note[]>([]);
     const [youtubeVideos, setYoutubeVideos] = useState<YouTubeVideo[]>([]);
     const [documentSources, setDocumentSources] = useState<DocumentKnowledgeSource[]>([]);
@@ -685,37 +683,56 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
         };
     }, [isEmbedded, referenceContent]);
 
-    // Chat Modal State
-    const [chatModalState, setChatModalState] = useState<{
-        isOpen: boolean;
-        contextId: string;
-        contextType: string;
-        contextTitle: string;
-        contextContent: string;
-    }>({
-        isOpen: false,
-        contextId: '',
-        contextType: 'note',
-        contextTitle: '',
-        contextContent: ''
-    });
+    const buildNoteKnowledgeReference = useCallback((note: Note): NonNullable<PendingChatMessage['knowledgeReferences']>[number] => ({
+        id: note.id,
+        title: note.title || '未命名笔记',
+        sourceKind: 'redbook-note',
+        summary: note.excerpt || note.visualSearchSummary || note.content?.slice(0, 180),
+        cover: note.cover || note.images?.[0] || note.visualSearchThumbnailPath,
+        sourceUrl: note.sourceUrl || note.videoUrl,
+        folderPath: note.folderPath,
+        tags: note.tags,
+        updatedAt: note.updatedAt || note.createdAt,
+        hasTranscript: Boolean(note.transcript),
+    }), []);
 
-    const openChat = (id: string, type: string, title: string, content: string) => {
-        setChatModalState({
-            isOpen: true,
-            contextId: id,
-            contextType: type,
-            contextTitle: title,
-            contextContent: content
+    const buildVideoKnowledgeReference = useCallback((video: YouTubeVideo): NonNullable<PendingChatMessage['knowledgeReferences']>[number] => ({
+        id: video.id,
+        title: video.title || '未命名视频',
+        sourceKind: 'youtube-video',
+        summary: video.summary || video.description?.slice(0, 180),
+        cover: video.thumbnailUrl || video.visualSearchThumbnailPath,
+        sourceUrl: video.videoUrl,
+        folderPath: video.folderPath,
+        updatedAt: video.updatedAt || video.createdAt,
+        hasTranscript: Boolean(video.subtitleContent),
+    }), []);
+
+    const navigateToRedClawWithKnowledge = useCallback((message: PendingChatMessage) => {
+        if (!onNavigateToRedClaw) {
+            void appAlert('RedClaw 页面暂不可用，请稍后重试。', { title: '无法打开 RedClaw' });
+            return;
+        }
+        onNavigateToRedClaw(message);
+    }, [onNavigateToRedClaw]);
+
+    const openNoteInRedClaw = useCallback((note: Note) => {
+        navigateToRedClawWithKnowledge({
+            content: '',
+            sessionRouting: 'current',
+            deliveryMode: 'draft',
+            knowledgeReferences: [buildNoteKnowledgeReference(note)],
         });
-    };
+    }, [buildNoteKnowledgeReference, navigateToRedClawWithKnowledge]);
 
-    const getNoteContextType = useCallback((note: Note): string => {
-        if (note.captureKind === 'wechat-article') return 'wechat-article';
-        if (note.type === 'link-article') return 'link-article';
-        if (note.video) return 'xiaohongshu_video';
-        return 'xiaohongshu_note';
-    }, []);
+    const openVideoInRedClaw = useCallback((video: YouTubeVideo) => {
+        navigateToRedClawWithKnowledge({
+            content: '',
+            sessionRouting: 'current',
+            deliveryMode: 'draft',
+            knowledgeReferences: [buildVideoKnowledgeReference(video)],
+        });
+    }, [buildVideoKnowledgeReference, navigateToRedClawWithKnowledge]);
 
     const isExpandableXiaohongshuNote = useCallback((note: Note): boolean => {
         return !note.type && note.captureKind !== 'wechat-article';
@@ -1781,15 +1798,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     </div>
                 )}
 
-                {/* Chat Modal for Embedded View */}
-                <KnowledgeChatModal
-                    isOpen={chatModalState.isOpen}
-                    onClose={() => setChatModalState(prev => ({ ...prev, isOpen: false }))}
-                    contextId={chatModalState.contextId}
-                    contextType={chatModalState.contextType}
-                    contextTitle={chatModalState.contextTitle}
-                    contextContent={chatModalState.contextContent}
-                />
             </div>
         );
     }
@@ -1804,21 +1812,14 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                         <ChevronLeft className="w-4 h-4" />
                         返回列表
                     </button>
-                    {onNavigateToChat && selectedVideo.hasSubtitle && selectedVideo.subtitleContent && (
+                    {onNavigateToRedClaw && selectedVideo.hasSubtitle && selectedVideo.subtitleContent && (
                         <button
                             onClick={() => {
-                                const videoMeta = `<!--VIDEO_CARD:${JSON.stringify({
-                                    title: selectedVideo.title,
-                                    thumbnailUrl: selectedVideo.thumbnailUrl,
-                                    videoId: selectedVideo.videoId
-                                })}-->`;
-                                onNavigateToChat({
-                                    content: `${videoMeta}\n请总结这个视频的内容。`
-                                });
+                                openVideoInRedClaw(selectedVideo);
                             }}
                             className="text-xs px-2 py-1 bg-surface-secondary border border-border rounded hover:bg-surface-hover"
                         >
-                            AI 总结
+                            RedClaw 总结
                         </button>
                     )}
                 </div>
@@ -1867,15 +1868,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                     </div>
                 )}
 
-                {/* Chat Modal for Embedded View */}
-                <KnowledgeChatModal
-                    isOpen={chatModalState.isOpen}
-                    onClose={() => setChatModalState(prev => ({ ...prev, isOpen: false }))}
-                    contextId={chatModalState.contextId}
-                    contextType={chatModalState.contextType}
-                    contextTitle={chatModalState.contextTitle}
-                    contextContent={chatModalState.contextContent}
-                />
             </div>
         );
     }
@@ -2629,16 +2621,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             </div>
                             <div className="flex items-center gap-2 ml-4">
                                 <button
-                                    onClick={() => openChat(
-                                        selectedNote.id,
-                                        getNoteContextType(selectedNote),
-                                        selectedNote.title,
-                                        selectedNote.content + (selectedNote.transcript ? `\n\nVideo Transcript:\n${selectedNote.transcript}` : '')
-                                    )}
+                                onClick={() => openNoteInRedClaw(selectedNote)}
                                     className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
                                     <MessageCircle className="w-4 h-4" />
-                                    对话
+                                    RedClaw
                                 </button>
                                 <button
                                     onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
@@ -2941,16 +2928,11 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                             </div>
                             <div className="flex items-center gap-2 ml-6">
                                 <button
-                                    onClick={() => openChat(
-                                        selectedVideo.id,
-                                        'youtube_video',
-                                        selectedVideo.title,
-                                        `Title: ${selectedVideo.title}\nDescription: ${selectedVideo.description || 'None'}\n\nSubtitle:\n${selectedVideo.subtitleContent || '(No subtitle)'}`
-                                    )}
+                                    onClick={() => openVideoInRedClaw(selectedVideo)}
                                     className="inline-flex h-11 px-5 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
                                     <MessageCircle className="w-4.5 h-4.5" />
-                                    AI 分析
+                                    RedClaw
                                 </button>
                                 <button
                                     onClick={() => setSelectedVideo(null)}
@@ -3289,15 +3271,6 @@ export function Knowledge({ onNavigateToChat, onNavigateToRedClaw, isEmbedded = 
                 </div>
             )}
 
-            {/* Knowledge Chat Modal */}
-            <KnowledgeChatModal
-                isOpen={chatModalState.isOpen}
-                onClose={() => setChatModalState(prev => ({ ...prev, isOpen: false }))}
-                contextId={chatModalState.contextId}
-                contextType={chatModalState.contextType}
-                contextTitle={chatModalState.contextTitle}
-                contextContent={chatModalState.contextContent}
-            />
         </div>
     );
 }

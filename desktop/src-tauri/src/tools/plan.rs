@@ -651,6 +651,33 @@ mod tests {
     }
 
     #[test]
+    fn manuscript_editor_keeps_direct_actions_to_bound_write_only() {
+        let metadata = json!({
+            "allowedTools": ["app_cli"],
+            "allowedAppCliActions": ["manuscripts.writeCurrent"]
+        });
+
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "manuscript-editor",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let visible = plan
+            .visible_tools
+            .iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        let actions = plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>();
+
+        assert_eq!(visible, vec!["Write"]);
+        assert_eq!(actions, vec!["manuscripts.writeCurrent"]);
+    }
+
+    #[test]
     fn allowed_tools_constrain_visible_tools() {
         let metadata = json!({
             "allowedTools": ["redbox_fs"]

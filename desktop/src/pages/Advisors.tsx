@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Users, Plus, Pencil, Trash2, Upload, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download, MoreHorizontal, History, Loader2 } from 'lucide-react';
+import { Users, Plus, Pencil, Trash2, Upload, FolderOpen, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download, MoreHorizontal, History, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
@@ -537,21 +537,35 @@ export function Advisors({
             }
 
             if (newId && !editingAdvisor && !youtubeParams && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
-                const personaResult = await window.ipcRenderer.advisors.generatePersona({
-                    advisorId: newId,
-                    channelName: data.name,
-                    channelDescription: data.personality || '',
-                    videoTitles: [],
-                    knowledgeLanguage: data.knowledgeLanguage || '中文',
-                }) as { success: boolean; systemPrompt?: string; personality?: string; error?: string };
-                if (!personaResult.success || !personaResult.systemPrompt) {
-                    throw new Error(personaResult.error || '角色创建失败');
-                }
-                await window.ipcRenderer.advisors.update({
-                    id: newId,
-                    systemPrompt: personaResult.systemPrompt,
-                    personality: personaResult.personality || data.personality,
-                });
+                const advisorId = newId;
+                void (async () => {
+                    try {
+                        const personaResult = await window.ipcRenderer.advisors.generatePersona({
+                            advisorId,
+                            channelName: data.name,
+                            channelDescription: data.personality || '',
+                            videoTitles: [],
+                            knowledgeLanguage: data.knowledgeLanguage || '中文',
+                        }) as { success: boolean; systemPrompt?: string; personality?: string; error?: string };
+                        if (!personaResult.success || !personaResult.systemPrompt) {
+                            throw new Error(personaResult.error || '角色设定生成失败');
+                        }
+                        await window.ipcRenderer.advisors.update({
+                            id: advisorId,
+                            systemPrompt: personaResult.systemPrompt,
+                            personality: personaResult.personality || data.personality,
+                        });
+                        const refreshed = await loadAdvisors();
+                        const updated = refreshed.find((item) => item.id === advisorId) || null;
+                        if (updated) {
+                            setSelectedAdvisor(updated);
+                            onSelectedAdvisorIdChange?.(updated.id);
+                        }
+                    } catch (error) {
+                        console.warn('Advisor persona generation skipped after create:', error);
+                        void appAlert('成员已创建，自动生成角色设定超时。你可以稍后在成员详情里手动优化设定。');
+                    }
+                })();
             }
 
             if (newId && youtubeParams && youtubeParams.count > 0) {
@@ -2132,6 +2146,40 @@ function AdvisorModal({
         }
     };
 
+    const handlePickKnowledgeFolder = async () => {
+        try {
+            const result = await window.ipcRenderer.advisors.pickKnowledgeFolder<{
+                success?: boolean;
+                files?: Array<{ path?: string; name?: string }>;
+                error?: string;
+            }>();
+            const nextFiles = Array.isArray(result?.files)
+                ? result.files
+                    .map((file) => ({
+                        path: String(file?.path || '').trim(),
+                        name: String(file?.name || '').trim() || String(file?.path || '').split('/').pop() || '未命名文件',
+                    }))
+                    .filter((file) => file.path)
+                : [];
+            if (nextFiles.length === 0) {
+                if (result?.error) void appAlert(result.error);
+                return;
+            }
+            setPendingKnowledgeFiles((prev) => {
+                const merged = [...prev];
+                nextFiles.forEach((file) => {
+                    if (!merged.some((item) => item.path === file.path)) {
+                        merged.push(file);
+                    }
+                });
+                return merged;
+            });
+        } catch (error) {
+            console.error('Failed to pick knowledge folder:', error);
+            void appAlert('选择知识库文件夹失败，请稍后重试');
+        }
+    };
+
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="w-full max-w-lg mx-4 bg-surface-primary rounded-xl border border-border shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
@@ -2464,14 +2512,24 @@ function AdvisorModal({
                                                 创建成员时可直接导入资料，创建完成后会自动写入该成员的专属知识库。
                                             </p>
                                         </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => void handlePickKnowledgeFiles()}
-                                            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-accent-primary/30 px-3 py-1.5 text-xs text-accent-primary hover:bg-accent-primary/10"
-                                        >
-                                            <Upload className="w-3 h-3" />
-                                            选择文件
-                                        </button>
+                                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => void handlePickKnowledgeFolder()}
+                                                className="flex items-center gap-1.5 rounded-lg border border-accent-primary/30 px-3 py-1.5 text-xs text-accent-primary hover:bg-accent-primary/10"
+                                            >
+                                                <FolderOpen className="w-3 h-3" />
+                                                选择文件夹
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handlePickKnowledgeFiles()}
+                                                className="flex items-center gap-1.5 rounded-lg border border-accent-primary/30 px-3 py-1.5 text-xs text-accent-primary hover:bg-accent-primary/10"
+                                            >
+                                                <Upload className="w-3 h-3" />
+                                                选择文件
+                                            </button>
+                                        </div>
                                     </div>
 
                                     {pendingKnowledgeFiles.length === 0 ? (

@@ -697,15 +697,28 @@ fn execute_curl_json_response_once(
     }
 
     let parsed = serde_json::from_str(normalized_body).map_err(|error| {
-        let message = format!("Invalid JSON response: {error}");
+        let body_head = normalized_body.chars().take(3000).collect::<String>();
+        let raw_body_log = if normalized_body.chars().count() > 3000 {
+            format!(
+                "{}...<truncated:{}>",
+                body_head,
+                normalized_body.chars().count() - 3000
+            )
+        } else {
+            body_head
+        };
+        let message = format!(
+            "上游返回了非 JSON 响应：status={} body={}",
+            status, raw_body_log
+        );
         let line = format!(
             "[http][curl-json] invalid_json method={} url={} transport={} status={} body={} error={}",
             method,
             url,
             transport,
             status,
-            normalized_body,
-            truncate_http_error(&message)
+            raw_body_log.replace('\n', "\\n").replace('\r', "\\r"),
+            error
         );
         eprintln!("{line}");
         crate::append_debug_trace_global(line);

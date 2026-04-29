@@ -1,24 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, MessageSquarePlus, Heart, Sparkles, SlidersHorizontal, X } from 'lucide-react';
+import { Image as ImageIcon, Loader2, MessageSquarePlus, Heart, Sparkles, SlidersHorizontal, X } from 'lucide-react';
+import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import type { PendingChatMessage } from '../App';
 import type { ChatMessageLinkKind, ChatMessageLinkTarget } from '../components/MessageItem';
+import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
+import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { isMediaJobTerminal, isMediaJobSuccessful, type MediaJobProjection } from '../features/media-jobs/types';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import {
     HEARTBEAT_INTERVAL_OPTIONS,
     LONG_TEMPLATES,
     REDCLAW_CONTEXT_TYPE,
-    REDCLAW_SHORTCUTS,
     REDCLAW_WELCOME_ICON_SRC,
-    REDCLAW_WELCOME_SHORTCUTS,
     RUNNER_INTERVAL_OPTIONS,
     RUNNER_MAX_AUTOMATION_OPTIONS,
     SCHEDULE_TEMPLATES,
+    createRedClawComposerShortcuts,
+    createRedClawComposerShortcutsForContext,
     longDraftFromTemplate,
     pickLongTemplate,
     pickScheduleTemplate,
     scheduleDraftFromTemplate,
+    type RedClawComposerShortcutInput,
 } from './redclaw/config';
 import {
     buildRedClawContextId,
@@ -85,6 +90,8 @@ interface RedClawProps {
     onExecutionStateChange?: (active: boolean) => void;
     onOpenRedClawOnboarding?: () => void;
     redclawOnboardingVersion?: number;
+    composerShortcutInputs?: RedClawComposerShortcutInput[];
+    welcomeShortcutInputs?: RedClawComposerShortcutInput[];
 }
 
 interface RedClawSpaceListPayload {
@@ -128,6 +135,172 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     return sessionId || null;
 }
 
+function getRedClawImageJobExpectedCount(job: MediaJobProjection): number {
+    const resultProgress = job.result && typeof job.result === 'object'
+        ? job.result.progress as Record<string, unknown> | undefined
+        : undefined;
+    const expectedFromProgress = Number(resultProgress?.expectedImages);
+    if (Number.isFinite(expectedFromProgress) && expectedFromProgress > 0) {
+        return Math.max(1, Math.floor(expectedFromProgress));
+    }
+    const planItems = Array.isArray(job.request?.imagePlanItems) ? job.request?.imagePlanItems : [];
+    if (planItems.length > 0) return planItems.length;
+    const count = Number(job.request?.count);
+    return Number.isFinite(count) && count > 0 ? Math.max(1, Math.floor(count)) : 1;
+}
+
+function getRedClawImageJobCompletedCount(job: MediaJobProjection): number {
+    const resultProgress = job.result && typeof job.result === 'object'
+        ? job.result.progress as Record<string, unknown> | undefined
+        : undefined;
+    const completedFromProgress = Number(resultProgress?.completedImages);
+    if (Number.isFinite(completedFromProgress) && completedFromProgress >= 0) {
+        return Math.max(0, Math.floor(completedFromProgress));
+    }
+    return job.artifacts.length;
+}
+
+function getRedClawImageJobTitle(job: MediaJobProjection): string {
+    const title = String(job.request?.title || '').trim();
+    if (title) return title;
+    const expected = getRedClawImageJobExpectedCount(job);
+    return expected > 1 ? `批量生图 · ${expected} 张` : '图片生成';
+}
+
+function getRedClawImageJobOverallProgress(job: MediaJobProjection): number {
+    const expected = getRedClawImageJobExpectedCount(job);
+    const completed = Math.min(getRedClawImageJobCompletedCount(job), expected);
+    if (isMediaJobSuccessful(job.status)) return 100;
+    if (completed >= expected) return 96;
+    if (completed > 0) return Math.max(8, Math.round((completed / expected) * 100));
+    if (['submitting', 'submitted', 'polling', 'downloading', 'persisting', 'binding'].includes(String(job.status))) return 12;
+    return 4;
+}
+
+function RedClawImageGenerationPlaceholder({
+    index,
+    job,
+}: {
+    index: number;
+    job: MediaJobProjection;
+}) {
+    const expected = getRedClawImageJobExpectedCount(job);
+    const completed = Math.min(getRedClawImageJobCompletedCount(job), expected);
+    const overallProgress = getRedClawImageJobOverallProgress(job);
+    const artifact = job.artifacts[index];
+    const preview = artifact?.previewUrl || artifact?.absolutePath || artifact?.relativePath || '';
+    const slotProgress = artifact || index < completed
+        ? 100
+        : index === completed
+            ? overallProgress
+            : 0;
+    const barTone = isMediaJobTerminal(job.status) && !isMediaJobSuccessful(job.status)
+        ? 'bg-brand-red'
+        : 'bg-[linear-gradient(90deg,rgb(var(--color-brand-red)/1)_0%,rgb(var(--color-accent-primary)/1)_100%)]';
+
+    return (
+        <div className="relative aspect-square min-w-0 overflow-hidden rounded-[12px] border border-border bg-surface-secondary">
+            <div className="absolute left-1.5 right-1.5 top-1.5 z-20 h-1.5 overflow-hidden rounded-full bg-black/10">
+                <div
+                    className={clsx('h-full rounded-full transition-[width] duration-700 ease-out', barTone)}
+                    style={{ width: `${Math.max(0, Math.min(100, slotProgress))}%` }}
+                />
+            </div>
+
+            {preview ? (
+                <img
+                    src={resolveAssetUrl(preview)}
+                    alt={`生成图片 ${index + 1}`}
+                    className="h-full w-full object-cover"
+                />
+            ) : (
+                <>
+                    <div
+                        className="absolute inset-0"
+                        style={{ background: 'linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.92) 0%, rgb(var(--color-surface-secondary) / 0.98) 100%)' }}
+                    />
+                    <div
+                        className="absolute -left-[18%] top-[-20%] h-[58%] w-[64%] rounded-full blur-[22px] animate-[pulse_2.1s_ease-in-out_infinite]"
+                        style={{ background: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.28) 0%, rgb(var(--color-brand-red) / 0.12) 34%, rgb(var(--color-brand-red) / 0) 74%)' }}
+                    />
+                    <div
+                        className="absolute right-[-18%] top-[12%] h-[50%] w-[54%] rounded-full blur-[20px] animate-[pulse_1.7s_ease-in-out_infinite]"
+                        style={{ background: 'radial-gradient(circle, rgb(var(--color-accent-primary) / 0.24) 0%, rgb(var(--color-accent-primary) / 0.1) 36%, rgb(var(--color-accent-primary) / 0) 74%)' }}
+                    />
+                    <div
+                        className="absolute bottom-[-18%] left-[16%] h-[48%] w-[54%] rounded-full blur-[22px] animate-[pulse_2.4s_ease-in-out_infinite]"
+                        style={{ background: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.18) 0%, rgb(var(--color-brand-red) / 0.08) 34%, rgb(var(--color-brand-red) / 0) 76%)' }}
+                    />
+                    <div
+                        className="absolute inset-0 opacity-90 animate-[pulse_1.35s_linear_infinite]"
+                        style={{
+                            backgroundImage: 'radial-gradient(circle, rgb(var(--color-brand-red) / 0.30) 1px, transparent 1.5px)',
+                            backgroundSize: '16px 16px',
+                            maskImage: 'linear-gradient(180deg, transparent 2%, rgba(0,0,0,0.86) 24%, rgba(0,0,0,0.94) 62%, transparent 98%)',
+                            WebkitMaskImage: 'linear-gradient(180deg, transparent 2%, rgba(0,0,0,0.86) 24%, rgba(0,0,0,0.94) 62%, transparent 98%)',
+                        }}
+                    />
+                    <div
+                        className="absolute inset-0 opacity-70 animate-[pulse_0.9s_ease-in-out_infinite]"
+                        style={{
+                            background: 'linear-gradient(110deg, transparent 12%, rgb(var(--color-surface-primary) / 0.24) 34%, rgb(var(--color-brand-red) / 0.16) 50%, rgb(var(--color-surface-primary) / 0.18) 63%, transparent 82%)',
+                            mixBlendMode: 'screen',
+                        }}
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                        <ImageIcon className="h-5 w-5 text-text-tertiary/45" />
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+function RedClawImageGenerationProgressPanel({
+    jobs,
+}: {
+    jobs: MediaJobProjection[];
+}) {
+    if (jobs.length === 0) return null;
+
+    return (
+        <div className="space-y-3">
+            {jobs.map((job) => {
+                const expected = getRedClawImageJobExpectedCount(job);
+                const completed = Math.min(getRedClawImageJobCompletedCount(job), expected);
+                const progress = getRedClawImageJobOverallProgress(job);
+                const failed = isMediaJobTerminal(job.status) && !isMediaJobSuccessful(job.status);
+                return (
+                    <div key={job.jobId} className="rounded-[18px] border border-border bg-surface-secondary/80 p-3 shadow-sm">
+                        <div className="mb-2.5 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="truncate text-[12px] font-semibold text-text-primary">
+                                    {getRedClawImageJobTitle(job)}
+                                </div>
+                                <div className="mt-0.5 text-[11px] text-text-tertiary">
+                                    {failed ? '生成失败' : `已生成 ${completed}/${expected} 张 · ${progress}%`}
+                                </div>
+                            </div>
+                            <div className={clsx('shrink-0 text-[11px] font-medium', failed ? 'text-brand-red' : 'text-text-tertiary')}>
+                                {failed ? '失败' : '生成中'}
+                            </div>
+                        </div>
+                        <div className="grid max-w-[460px] grid-cols-5 gap-2">
+                            {Array.from({ length: expected }).map((_, index) => (
+                                <RedClawImageGenerationPlaceholder
+                                    key={`${job.jobId}-${index}`}
+                                    index={index}
+                                    job={job}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 export function RedClaw({
     pendingMessage,
     onPendingMessageConsumed,
@@ -135,6 +308,8 @@ export function RedClaw({
     onExecutionStateChange,
     onOpenRedClawOnboarding,
     redclawOnboardingVersion = 0,
+    composerShortcutInputs,
+    welcomeShortcutInputs,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -167,6 +342,38 @@ export function RedClaw({
     const [onboardingState, setOnboardingState] = useState<RedclawOnboardingState | undefined>(undefined);
     const [hideOnboardingPrompt, setHideOnboardingPrompt] = useState(false);
     const [resolvedPendingMessage, setResolvedPendingMessage] = useState<PendingChatMessage | null>(null);
+    const trackedImageJobs = useMediaJobsStore((state) => Object.values(state.jobsById)
+        .filter((job) => job.kind === 'image' && job.ownerSessionId === activeSessionId)
+        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)));
+    const visibleImageJobs = useMemo(() => {
+        const now = Date.now();
+        return trackedImageJobs.filter((job) => {
+            if (isMediaJobSuccessful(job.status)) return false;
+            if (!isMediaJobTerminal(job.status)) return true;
+            const updatedAt = Date.parse(job.updatedAt || job.completedAt || job.createdAt);
+            return Number.isFinite(updatedAt) && now - updatedAt < 10 * 60_000;
+        }).slice(0, 3);
+    }, [trackedImageJobs]);
+    useMediaJobSubscription([], {
+        enabled: Boolean(activeSessionId),
+        bootstrapFilter: activeSessionId ? {
+            kind: 'image',
+            ownerSessionId: activeSessionId,
+            limit: 12,
+        } : null,
+    });
+    const composerShortcuts = useMemo(
+        () => composerShortcutInputs
+            ? createRedClawComposerShortcuts(composerShortcutInputs)
+            : createRedClawComposerShortcutsForContext,
+        [composerShortcutInputs],
+    );
+    const welcomeShortcuts = useMemo(
+        () => welcomeShortcutInputs
+            ? createRedClawComposerShortcuts(welcomeShortcutInputs)
+            : createRedClawComposerShortcutsForContext,
+        [welcomeShortcutInputs],
+    );
 
     const [runnerIntervalMinutes, setRunnerIntervalMinutes] = useState<number>(20);
     const [runnerMaxAutomationPerTick, setRunnerMaxAutomationPerTick] = useState<number>(2);
@@ -1290,8 +1497,8 @@ export function RedClaw({
                                     showWelcomeShortcuts={true}
                                     showComposerShortcuts={true}
                                     fixedSessionContextIndicatorMode="corner-ring"
-                                    shortcuts={REDCLAW_SHORTCUTS}
-                                    welcomeShortcuts={REDCLAW_WELCOME_SHORTCUTS}
+                                    shortcuts={composerShortcuts}
+                                    welcomeShortcuts={welcomeShortcuts}
                                     embeddedTheme="auto"
                                     welcomeTitle="RedClaw 自媒体AI工作台"
                                     welcomeSubtitle=""
@@ -1309,6 +1516,8 @@ export function RedClaw({
                                     messageLinkRenderMode="preview-card"
                                     onMessageLinkPreview={handlePreviewLink}
                                     activePreviewHref={previewTarget?.href || null}
+                                    keepComposerInputActive={true}
+                                    messageListHeader={<RedClawImageGenerationProgressPanel jobs={visibleImageJobs} />}
                                     inlineSidePanel={previewTarget ? (
                                         <RedClawFilePreviewPane
                                             target={previewTarget}

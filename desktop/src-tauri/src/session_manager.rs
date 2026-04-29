@@ -676,6 +676,7 @@ mod tests {
             content: content.to_string(),
             display_content: None,
             attachment: None,
+            metadata: None,
             created_at: created_at.to_string(),
         }
     }

@@ -93,6 +93,24 @@ pub(crate) fn visual_status_summary(
     .map_err(|error| error.to_string())
 }
 
+pub(crate) fn next_visual_retry_at(state: &State<'_, AppState>) -> Result<Option<i64>, String> {
+    let conn = connection(state)?;
+    let value = conn
+        .query_row(
+            r#"
+            SELECT MIN(CAST(next_retry_at AS INTEGER))
+            FROM knowledge_visual_units
+            WHERE status = 'failed'
+              AND next_retry_at IS NOT NULL
+              AND TRIM(next_retry_at) <> ''
+            "#,
+            [],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(value)
+}
+
 pub(crate) fn load_visual_retry_gates(
     state: &State<'_, AppState>,
 ) -> Result<HashMap<String, VisualRetryGate>, String> {

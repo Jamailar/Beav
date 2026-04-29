@@ -92,6 +92,14 @@ const REDCLAW_RUNTIME_MODES: &[&str] = &[
     "knowledge",
     "redclaw",
 ];
+const MANUSCRIPT_AUTHORING_RUNTIME_MODES: &[&str] = &[
+    "chatroom",
+    "default",
+    "image-generation",
+    "knowledge",
+    "redclaw",
+    "manuscript-editor",
+];
 const DIAGNOSTIC_RUNTIME_MODES: &[&str] = &["background-maintenance", "diagnostics"];
 
 fn string_schema(description: &str) -> Value {
@@ -2367,7 +2375,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: manuscripts_output_schema,
         mutating: false,
         concurrency_safe: true,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
+        runtime_modes: MANUSCRIPT_AUTHORING_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -2378,7 +2386,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: manuscripts_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
+        runtime_modes: MANUSCRIPT_AUTHORING_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -2389,7 +2397,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: manuscripts_output_schema,
         mutating: true,
         concurrency_safe: false,
-        runtime_modes: REDCLAW_RUNTIME_MODES,
+        runtime_modes: MANUSCRIPT_AUTHORING_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {

@@ -10,7 +10,9 @@ import React, {
 } from 'react';
 import {
   ArrowUp,
+  BookOpen,
   ChevronDown,
+  Check,
   File as FileIcon,
   FileText,
   Film,
@@ -19,6 +21,7 @@ import {
   Mic,
   Music2,
   Plus,
+  Search,
   Square,
   StopCircle,
   UserRound,
@@ -82,6 +85,21 @@ export interface ChatMemberMentionOption {
   personality?: string;
 }
 
+export interface ChatKnowledgeMentionOption {
+  id: string;
+  title: string;
+  sourceKind?: string;
+  summary?: string;
+  cover?: string;
+  sourceUrl?: string;
+  folderPath?: string;
+  rootPath?: string;
+  tags?: string[];
+  updatedAt?: string;
+  fileCount?: number;
+  hasTranscript?: boolean;
+}
+
 type ComposerAttachmentVisualKind = 'image' | 'video' | 'audio' | 'text' | 'file';
 type ChatComposerAudioState = 'idle' | 'recording' | 'transcribing';
 type ChatComposerAttachmentStatus = 'uploading' | 'uploaded';
@@ -127,6 +145,10 @@ export interface ChatComposerProps {
   memberMentionOptions?: ChatMemberMentionOption[];
   selectedMemberMention?: ChatMemberMentionOption | null;
   onSelectedMemberMentionChange?: (member: ChatMemberMentionOption | null) => void;
+  knowledgeMentionOptions?: ChatKnowledgeMentionOption[];
+  selectedKnowledgeMentions?: ChatKnowledgeMentionOption[];
+  onSelectedKnowledgeMentionsChange?: (items: ChatKnowledgeMentionOption[]) => void;
+  onKnowledgeMentionSearchQueryChange?: (query: string) => void;
 }
 
 const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
@@ -258,6 +280,20 @@ function getActiveMemberMentionTrigger(value: string, caretIndex: number): { sta
   };
 }
 
+function getActiveKnowledgeMentionTrigger(value: string, caretIndex: number): { start: number; end: number; query: string } | null {
+  const safeCaretIndex = Math.max(0, Math.min(value.length, caretIndex));
+  const beforeCaret = value.slice(0, safeCaretIndex);
+  const match = beforeCaret.match(/(^|\s)#([^\s@#]{0,48})$/);
+  if (!match || match.index == null) return null;
+  const boundary = match[1] || '';
+  const triggerStart = match.index + boundary.length;
+  return {
+    start: triggerStart,
+    end: safeCaretIndex,
+    query: match[2] || '',
+  };
+}
+
 function memberMentionMatches(member: ChatMemberMentionOption, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return true;
@@ -266,6 +302,39 @@ function memberMentionMatches(member: ChatMemberMentionOption, query: string): b
     member.id,
     member.personality,
   ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+}
+
+function knowledgeMentionMatches(item: ChatKnowledgeMentionOption, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return [
+    item.title,
+    item.summary,
+    item.sourceKind,
+    item.sourceUrl,
+    item.folderPath,
+    item.rootPath,
+    ...(item.tags || []),
+  ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
+}
+
+function getKnowledgeKindLabel(item: ChatKnowledgeMentionOption): string {
+  const sourceKind = String(item.sourceKind || '').trim();
+  if (sourceKind === 'youtube-video' || sourceKind === 'youtube' || sourceKind === 'video') return '视频';
+  if (sourceKind === 'document-source' || sourceKind === 'document') return '文档';
+  if (sourceKind === 'redbook-note' || sourceKind === 'note') return '笔记';
+  return sourceKind || '知识';
+}
+
+function renderKnowledgeMentionIcon(item: ChatKnowledgeMentionOption, className: string) {
+  const sourceKind = String(item.sourceKind || '').trim();
+  if (sourceKind === 'youtube-video' || sourceKind === 'youtube' || sourceKind === 'video') {
+    return <Film className={className} />;
+  }
+  if (sourceKind === 'document-source' || sourceKind === 'document') {
+    return <FileText className={className} />;
+  }
+  return <BookOpen className={className} />;
 }
 
 function renderMemberMentionAvatar(member: ChatMemberMentionOption, darkEmbedded: boolean) {
@@ -655,13 +724,22 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   memberMentionOptions = [],
   selectedMemberMention = null,
   onSelectedMemberMentionChange,
+  knowledgeMentionOptions = [],
+  selectedKnowledgeMentions = [],
+  onSelectedKnowledgeMentionsChange,
+  onKnowledgeMentionSearchQueryChange,
 }, ref) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const memberPickerRef = useRef<HTMLDivElement>(null);
+  const knowledgePickerRef = useRef<HTMLDivElement>(null);
+  const knowledgeSearchInputRef = useRef<HTMLInputElement>(null);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [memberMentionTrigger, setMemberMentionTrigger] = useState<{ start: number; end: number; query: string } | null>(null);
   const [memberMentionActiveIndex, setMemberMentionActiveIndex] = useState(0);
+  const [knowledgeMentionTrigger, setKnowledgeMentionTrigger] = useState<{ start: number; end: number; query: string } | null>(null);
+  const [knowledgeQuery, setKnowledgeQuery] = useState('');
+  const [knowledgeMentionActiveIndex, setKnowledgeMentionActiveIndex] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const darkEmbedded = theme === 'dark';
@@ -671,19 +749,29 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     [modelOptions, selectedModelKey],
   );
   const attachmentBusy = attachmentStatus === 'uploading';
-  const submitDisabled = disabled || isBusy || attachmentBusy || (!value.trim() && !attachment);
+  const hasKnowledgeMentions = selectedKnowledgeMentions.length > 0;
+  const submitDisabled = disabled || isBusy || attachmentBusy || (!value.trim() && !attachment && !hasKnowledgeMentions);
   const showAttachmentButton = Boolean(onPickAttachment);
   const showModelSelector = Boolean(onSelectedModelKeyChange);
   const showAudioButton = Boolean(onAudioAction);
   const showCancelButton = Boolean(onCancel) && showCancelWhenBusy && isBusy;
   const canOpenModelPicker = showModelSelector && modelOptions.length > 0;
   const memberMentionEnabled = Boolean(onSelectedMemberMentionChange);
+  const knowledgeMentionEnabled = Boolean(onSelectedKnowledgeMentionsChange);
   const filteredMemberMentionOptions = useMemo(() => (
     memberMentionOptions
       .filter((member) => memberMentionMatches(member, memberMentionTrigger?.query || ''))
       .slice(0, 8)
   ), [memberMentionOptions, memberMentionTrigger?.query]);
+  const selectedKnowledgeIds = useMemo(() => new Set(selectedKnowledgeMentions.map((item) => item.id)), [selectedKnowledgeMentions]);
+  const filteredKnowledgeMentionOptions = useMemo(() => (
+    (onKnowledgeMentionSearchQueryChange
+      ? knowledgeMentionOptions
+      : knowledgeMentionOptions.filter((item) => knowledgeMentionMatches(item, knowledgeQuery))
+    ).slice(0, 120)
+  ), [knowledgeMentionOptions, knowledgeQuery, onKnowledgeMentionSearchQueryChange]);
   const showMemberMentionPicker = memberMentionEnabled && Boolean(memberMentionTrigger);
+  const showKnowledgeMentionPicker = knowledgeMentionEnabled && Boolean(knowledgeMentionTrigger);
   const modelPickerClass = darkEmbedded
     ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
     : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
@@ -730,8 +818,40 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, [showMemberMentionPicker]);
 
   useEffect(() => {
+    if (!showKnowledgeMentionPicker) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        !knowledgePickerRef.current?.contains(target)
+        && !textareaRef.current?.contains(target)
+      ) {
+        setKnowledgeMentionTrigger(null);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [showKnowledgeMentionPicker]);
+
+  useEffect(() => {
+    if (!showKnowledgeMentionPicker) return;
+    window.requestAnimationFrame(() => {
+      knowledgeSearchInputRef.current?.focus();
+      knowledgeSearchInputRef.current?.select();
+    });
+  }, [showKnowledgeMentionPicker]);
+
+  useEffect(() => {
     setMemberMentionActiveIndex(0);
   }, [memberMentionTrigger?.query]);
+
+  useEffect(() => {
+    setKnowledgeMentionActiveIndex(0);
+  }, [knowledgeQuery]);
+
+  useEffect(() => {
+    if (!showKnowledgeMentionPicker) return;
+    onKnowledgeMentionSearchQueryChange?.(knowledgeQuery);
+  }, [knowledgeQuery, onKnowledgeMentionSearchQueryChange, showKnowledgeMentionPicker]);
 
   useEffect(() => {
     if (audioState !== 'recording') {
@@ -760,13 +880,36 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     onSubmit();
   }, [onSubmit, submitDisabled]);
 
-  const updateMemberMentionTrigger = useCallback((nextValue: string, caretIndex: number) => {
-    if (!memberMentionEnabled || readOnly || disabled || isBusy) {
+  const updateMentionTrigger = useCallback((nextValue: string, caretIndex: number) => {
+    if (readOnly || disabled || isBusy) {
+      setMemberMentionTrigger(null);
+      setKnowledgeMentionTrigger(null);
+      return;
+    }
+    const memberTrigger = memberMentionEnabled ? getActiveMemberMentionTrigger(nextValue, caretIndex) : null;
+    const knowledgeTrigger = knowledgeMentionEnabled ? getActiveKnowledgeMentionTrigger(nextValue, caretIndex) : null;
+    const nextTrigger = memberTrigger && knowledgeTrigger
+      ? (memberTrigger.start >= knowledgeTrigger.start ? 'member' : 'knowledge')
+      : memberTrigger
+        ? 'member'
+        : knowledgeTrigger
+          ? 'knowledge'
+          : null;
+
+    if (nextTrigger === 'member' && memberTrigger) {
+      setMemberMentionTrigger(memberTrigger);
+      setKnowledgeMentionTrigger(null);
+      return;
+    }
+    if (nextTrigger === 'knowledge' && knowledgeTrigger) {
+      setKnowledgeMentionTrigger(knowledgeTrigger);
+      setKnowledgeQuery(knowledgeTrigger.query);
       setMemberMentionTrigger(null);
       return;
     }
-    setMemberMentionTrigger(getActiveMemberMentionTrigger(nextValue, caretIndex));
-  }, [disabled, isBusy, memberMentionEnabled, readOnly]);
+    setMemberMentionTrigger(null);
+    setKnowledgeMentionTrigger(null);
+  }, [disabled, isBusy, knowledgeMentionEnabled, memberMentionEnabled, readOnly]);
 
   const selectMemberMention = useCallback((member: ChatMemberMentionOption) => {
     const trigger = memberMentionTrigger;
@@ -788,7 +931,47 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
     }
   }, [memberMentionTrigger, onSelectedMemberMentionChange, onValueChange, syncHeight, value]);
 
+  const removeKnowledgeTriggerText = useCallback((keepPickerOpen = false) => {
+    const trigger = knowledgeMentionTrigger;
+    if (!trigger) return;
+    const nextValue = `${value.slice(0, trigger.start)}${value.slice(trigger.end)}`;
+    onValueChange(nextValue);
+    setKnowledgeMentionTrigger(keepPickerOpen ? { start: trigger.start, end: trigger.start, query: '' } : null);
+    window.requestAnimationFrame(() => {
+      const textarea = keepPickerOpen ? null : textareaRef.current;
+      if (!textarea) return;
+      const nextCaret = Math.min(trigger.start, nextValue.length);
+      textarea.focus();
+      textarea.setSelectionRange(nextCaret, nextCaret);
+      syncHeight();
+    });
+  }, [knowledgeMentionTrigger, onValueChange, syncHeight, value]);
+
+  const toggleKnowledgeMention = useCallback((item: ChatKnowledgeMentionOption) => {
+    const exists = selectedKnowledgeIds.has(item.id);
+    const nextItems = exists
+      ? selectedKnowledgeMentions.filter((current) => current.id !== item.id)
+      : [...selectedKnowledgeMentions, item];
+    onSelectedKnowledgeMentionsChange?.(nextItems);
+    removeKnowledgeTriggerText(true);
+    setKnowledgeQuery('');
+    window.requestAnimationFrame(() => knowledgeSearchInputRef.current?.focus());
+  }, [onSelectedKnowledgeMentionsChange, removeKnowledgeTriggerText, selectedKnowledgeIds, selectedKnowledgeMentions]);
+
+  const removeKnowledgeMention = useCallback((itemId: string) => {
+    onSelectedKnowledgeMentionsChange?.(
+      selectedKnowledgeMentions.filter((item) => item.id !== itemId),
+    );
+  }, [onSelectedKnowledgeMentionsChange, selectedKnowledgeMentions]);
+
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (showKnowledgeMentionPicker) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setKnowledgeMentionTrigger(null);
+        return;
+      }
+    }
     if (showMemberMentionPicker) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
@@ -823,7 +1006,37 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         onSubmit();
       }
     }
-  }, [filteredMemberMentionOptions, isComposing, memberMentionActiveIndex, onSubmit, selectMemberMention, showMemberMentionPicker, submitDisabled]);
+  }, [filteredMemberMentionOptions, isComposing, memberMentionActiveIndex, onSubmit, selectMemberMention, showKnowledgeMentionPicker, showMemberMentionPicker, submitDisabled]);
+
+  const handleKnowledgeSearchKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setKnowledgeMentionActiveIndex((current) => (
+        filteredKnowledgeMentionOptions.length > 0 ? (current + 1) % filteredKnowledgeMentionOptions.length : 0
+      ));
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setKnowledgeMentionActiveIndex((current) => (
+        filteredKnowledgeMentionOptions.length > 0
+          ? (current - 1 + filteredKnowledgeMentionOptions.length) % filteredKnowledgeMentionOptions.length
+          : 0
+      ));
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setKnowledgeMentionTrigger(null);
+      textareaRef.current?.focus();
+      return;
+    }
+    if (event.key === 'Enter' && filteredKnowledgeMentionOptions.length > 0) {
+      event.preventDefault();
+      toggleKnowledgeMention(filteredKnowledgeMentionOptions[Math.min(knowledgeMentionActiveIndex, filteredKnowledgeMentionOptions.length - 1)]);
+      return;
+    }
+  }, [filteredKnowledgeMentionOptions, knowledgeMentionActiveIndex, toggleKnowledgeMention]);
 
   const wrapperClass = variant === 'empty' ? 'px-4 pt-4' : 'px-3.5 pt-3';
   const compactAttachmentMode = attachmentPreviewMode === 'compact-status';
@@ -855,14 +1068,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       value={value}
       onChange={(event) => {
         onValueChange(event.target.value);
-        updateMemberMentionTrigger(event.target.value, event.target.selectionStart || 0);
+        updateMentionTrigger(event.target.value, event.target.selectionStart || 0);
       }}
       onFocus={onFocus}
       onCompositionStart={() => setIsComposing(true)}
       onCompositionEnd={() => setIsComposing(false)}
       onKeyDown={handleKeyDown}
-      onClick={(event) => updateMemberMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
-      onSelect={(event) => updateMemberMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
+      onClick={(event) => updateMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
+      onSelect={(event) => updateMentionTrigger(event.currentTarget.value, event.currentTarget.selectionStart || 0)}
       placeholder={placeholder}
       className={clsx(textareaClass, palette.text)}
       spellCheck={false}
@@ -920,25 +1133,148 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           )}
         </div>
       ) : null}
+      {showKnowledgeMentionPicker ? (
+        <div
+          ref={knowledgePickerRef}
+          className={clsx(
+            'absolute bottom-full left-0 right-0 z-[150] mb-3 max-h-[min(70vh,560px)] overflow-hidden rounded-2xl border shadow-2xl',
+            darkEmbedded ? 'border-white/10 bg-[#15191e] text-white' : 'border-[#e9dfcf] bg-[#fffefa] text-text-primary',
+          )}
+        >
+          <div className={clsx('flex items-center gap-2 border-b px-4 py-3', darkEmbedded ? 'border-white/10' : 'border-[#eee6da]')}>
+            <Search className={clsx('h-4 w-4 shrink-0', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')} />
+            <input
+              ref={knowledgeSearchInputRef}
+              value={knowledgeQuery}
+              onChange={(event) => setKnowledgeQuery(event.target.value)}
+              onKeyDown={handleKnowledgeSearchKeyDown}
+              className={clsx(
+                'h-9 min-w-0 flex-1 bg-transparent text-sm outline-none',
+                darkEmbedded ? 'text-white placeholder:text-white/30' : 'text-text-primary placeholder:text-text-tertiary',
+              )}
+              placeholder="搜索知识库内容"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <div className={clsx('shrink-0 text-[11px]', darkEmbedded ? 'text-white/38' : 'text-text-tertiary')}>
+              {selectedKnowledgeMentions.length > 0 ? `已选 ${selectedKnowledgeMentions.length}` : 'Enter 选择'}
+            </div>
+          </div>
+          <div className="max-h-[calc(min(70vh,560px)-64px)] overflow-auto p-3">
+            {filteredKnowledgeMentionOptions.length > 0 ? (
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                {filteredKnowledgeMentionOptions.map((item, index) => {
+                  const active = index === knowledgeMentionActiveIndex;
+                  const selected = selectedKnowledgeIds.has(item.id);
+                  const cover = String(item.cover || '').trim();
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onMouseEnter={() => setKnowledgeMentionActiveIndex(index)}
+                      onClick={() => toggleKnowledgeMention(item)}
+                      className={clsx(
+                        'group flex h-[58px] w-full items-center gap-2 overflow-hidden rounded-xl border px-2 py-1.5 text-left transition-colors',
+                        selected
+                          ? darkEmbedded ? 'border-emerald-400/45 bg-emerald-400/10' : 'border-emerald-500/35 bg-emerald-50'
+                          : active
+                            ? darkEmbedded ? 'border-white/18 bg-white/[0.08]' : 'border-[#ded2c1] bg-[#f7f1e8]'
+                            : darkEmbedded ? 'border-white/10 bg-white/[0.04] hover:bg-white/[0.07]' : 'border-[#eee6da] bg-white/75 hover:bg-[#faf6ef]',
+                      )}
+                    >
+                      <div className={clsx('relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border', darkEmbedded ? 'border-white/10 bg-white/[0.06]' : 'border-[#eee6da] bg-[#f5efe5]')}>
+                        {cover ? (
+                          <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className={clsx('flex h-full w-full items-center justify-center', darkEmbedded ? 'text-white/58' : 'text-[#827666]')}>
+                            {renderKnowledgeMentionIcon(item, 'h-4 w-4')}
+                          </div>
+                        )}
+                        {selected ? (
+                          <span className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm">
+                            <Check className="h-3 w-3" />
+                          </span>
+                        ) : null}
+                      </div>
+                      <span
+                        className={clsx(
+                          'block min-w-0 flex-1 text-sm font-medium leading-5 line-clamp-2',
+                          darkEmbedded ? 'text-white/86' : 'text-[#322d26]',
+                        )}
+                        title={item.title}
+                      >
+                        {item.title || '未命名内容'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className={clsx('px-3 py-8 text-center text-sm', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
+                没有匹配的知识库内容
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       <ChatComposerFrame theme={theme} variant={variant}>
-        {selectedMemberMention ? (
-          <div className={clsx('flex items-center px-3 pt-2', variant === 'empty' ? 'pb-1' : 'pb-0.5')}>
-            <span className={clsx(
-              'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-              darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[#e9dfcf] bg-[#f7f2e8] text-[#5f574d]',
-            )}>
-              <UserRound className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">@{selectedMemberMention.name}</span>
-              <button
-                type="button"
-                onClick={() => onSelectedMemberMentionChange?.(null)}
-                className={clsx('ml-0.5 rounded-full p-0.5 transition-colors', darkEmbedded ? 'hover:bg-white/10' : 'hover:bg-black/5')}
-                aria-label={`移除 @${selectedMemberMention.name}`}
-                title="移除成员"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
+        {selectedMemberMention || selectedKnowledgeMentions.length > 0 ? (
+          <div className={clsx('flex flex-wrap items-center gap-2 px-3 pt-2', variant === 'empty' ? 'pb-1' : 'pb-0.5')}>
+            {selectedMemberMention ? (
+              <span className={clsx(
+                'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
+                darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[#e9dfcf] bg-[#f7f2e8] text-[#5f574d]',
+              )}>
+                {renderMemberMentionAvatar(selectedMemberMention, darkEmbedded)}
+                <span className="truncate">@{selectedMemberMention.name}</span>
+                <button
+                  type="button"
+                  onClick={() => onSelectedMemberMentionChange?.(null)}
+                  className={clsx('ml-0.5 rounded-full p-0.5 transition-colors', darkEmbedded ? 'hover:bg-white/10' : 'hover:bg-black/5')}
+                  aria-label={`移除 @${selectedMemberMention.name}`}
+                  title="移除成员"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ) : null}
+            {selectedKnowledgeMentions.map((item) => {
+              const cover = String(item.cover || '').trim();
+              return (
+                <span
+                  key={item.id}
+                  className={clsx(
+                    'group/knowledge inline-flex h-12 max-w-full items-center gap-2 rounded-xl border px-2 pr-1.5 text-xs',
+                    darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[#e9dfcf] bg-[#f7f2e8] text-[#5f574d]',
+                  )}
+                >
+                  <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border', darkEmbedded ? 'border-white/10 bg-white/[0.06]' : 'border-[#eadfcc] bg-white/80')}>
+                    {cover ? (
+                      <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      renderKnowledgeMentionIcon(item, clsx('h-4 w-4', darkEmbedded ? 'text-white/58' : 'text-[#827666]'))
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    <span className={clsx('block text-[10px] leading-3', darkEmbedded ? 'text-white/42' : 'text-[#908575]')}>
+                      #{getKnowledgeKindLabel(item)}
+                    </span>
+                    <span className="block max-w-[180px] truncate font-medium leading-4" title={item.title}>
+                      {item.title || '未命名内容'}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeKnowledgeMention(item.id)}
+                    className={clsx('ml-0.5 rounded-full p-0.5 transition-colors', darkEmbedded ? 'hover:bg-white/10' : 'hover:bg-black/5')}
+                    aria-label={`移除 #${item.title || '知识库内容'}`}
+                    title="移除知识库内容"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              );
+            })}
           </div>
         ) : null}
         {compactAttachmentMode ? (

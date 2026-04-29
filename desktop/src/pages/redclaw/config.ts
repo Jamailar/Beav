@@ -1,3 +1,4 @@
+import type { ChatShortcut, ChatShortcutContext } from '../Chat';
 import type { LongDraft, LongTemplate, ScheduleDraft, ScheduleTemplate } from './types';
 
 export const REDCLAW_CONTEXT_ID = 'redclaw-singleton';
@@ -9,12 +10,96 @@ export const REDCLAW_CONTEXT = [
     '当产出、保存或更新可交付文件时，必须用 Markdown 链接报告路径，优先使用 workspace://、media://、manuscripts://、knowledge://、cover:// 或 redclaw:// 这类 app 内虚拟路径。',
 ].join('\n');
 
-export const REDCLAW_SHORTCUTS = [
-    { label: '电商套图', text: '给这个商品生成一套电商套图', action: 'inject' as const },
-    { label: '文章卡片', text: '给这篇文章做成文章卡片', action: 'inject' as const },
-    { label: '图解卡片', text: '给这个内容做成图解卡片', action: 'inject' as const },
-    { label: '演示卡片', text: '把这个内容做成小红书演示卡片', action: 'inject' as const },
+export interface RedClawComposerShortcutInput {
+    label: string;
+    text: string;
+    action?: ChatShortcut['action'];
+}
+
+export type RedClawComposerShortcutScene =
+    | 'uploaded_file'
+    | 'uploaded_image'
+    | 'empty_new_chat'
+    | 'member_mention'
+    | 'knowledge_context';
+
+export const REDCLAW_DEFAULT_COMPOSER_SHORTCUT_INPUTS: RedClawComposerShortcutInput[] = [
+    { label: '电商套图', text: '请围绕一个商品或服务，设计一套可用于电商详情页/社媒投放的套图方案。请先明确目标用户、核心卖点、视觉风格和转化目标，再输出每张图的主题、画面构图、主标题、副文案、素材需求和生成提示词。' },
+    { label: '文章卡片', text: '请围绕一个内容主题，设计一组适合社媒发布的文章卡片。请先梳理核心观点和读者收益，再输出卡片数量、每张卡片的标题、正文要点、视觉建议、版式结构和最终发布文案。' },
+    { label: '图解卡片', text: '请把一个复杂概念、流程或观点拆解成一组图解卡片。请先提炼逻辑主线，再输出每张卡片的信息层级、图解方式、标题、关键文案、配图建议和适合直接生成视觉稿的提示词。' },
+    { label: '演示卡片', text: '请把一个产品、方法或案例做成小红书/短图文风格的演示卡片。请先设计演示路径，再输出封面、步骤页、对比页、总结页的内容结构、页面文案、视觉风格和生成提示词。' },
 ];
+
+export const REDCLAW_COMPOSER_SHORTCUT_INPUTS_BY_SCENE: Record<RedClawComposerShortcutScene, RedClawComposerShortcutInput[]> = {
+    uploaded_file: [
+        { label: '总结文档内容', text: '请阅读我上传的文件，先判断文件类型和主要用途，再总结核心内容、关键结论、重要数据、可复用素材和潜在创作角度。最后给出一版适合我快速决策的结构化摘要。' },
+        { label: '做成文章卡片', text: '请基于我上传的文件内容，提炼最适合对外传播的主题，并设计一组文章卡片。请输出卡片标题、每张卡片的正文要点、视觉建议、适合平台的发布文案和需要补充的信息。' },
+        { label: '做成图解卡片', text: '请把我上传的文件内容整理成图解卡片。请先找出最适合图解表达的流程、结构、对比或方法论，再输出每张卡片的图解形式、标题、关键文案、版式建议和生成提示词。' },
+        { label: '改写成文案', text: '请把我上传的文件改写成适合社媒发布的文案。请保留核心信息，压缩冗余表达，强化开头钩子、读者收益、行动号召和平台语气，并给出 3 个标题备选。' },
+    ],
+    uploaded_image: [
+        { label: '做电商套图', text: '请基于我上传的图片，设计一套电商套图。请先分析图片里的主体、卖点、适用人群和视觉风格，再输出主图、卖点图、场景图、对比图、细节图的画面方案、文案和生成提示词。' },
+        { label: '做封面图', text: '请基于我上传的图片，设计一张适合社媒或内容封面的封面图。请给出封面定位、标题文案、构图方案、字体和色彩建议、需要保留/弱化的画面元素，以及可直接用于生成封面的提示词。' },
+    ],
+    empty_new_chat: REDCLAW_DEFAULT_COMPOSER_SHORTCUT_INPUTS,
+    member_mention: [
+        { label: '请TA提建议', text: '请这位成员以自己的专业视角，针对当前内容、方案或目标提出建议。请重点指出最值得优化的 3-5 个问题、原因、优先级和具体修改方向。' },
+        { label: '请TA出方案', text: '请这位成员基于当前目标，给出一套可执行方案。请包含目标判断、核心策略、执行步骤、需要的素材或工具、风险点和验收标准。' },
+        { label: '按风格重写', text: '请这位成员按自己的表达风格和专业判断，重写当前内容。请保留原始目标，优化结构、语气、重点和转化表达，并说明主要改动理由。' },
+        { label: '请TA复盘', text: '请这位成员复盘当前内容或执行过程。请指出已经做对的地方、主要问题、根因判断、下一步动作，以及最应该立刻调整的一项。' },
+    ],
+    knowledge_context: [
+        { label: '总结内容', text: '请结合我已附带的知识库内容，提炼核心观点、关键事实、可引用素材和适合后续创作的结论。请区分确定信息、推断信息和需要补充验证的信息。' },
+        { label: '分析内容', text: '请结合我已附带的知识库内容，分析它的主题价值、目标受众、传播角度、内容结构、可复用素材和潜在风险，并给出下一步创作建议。' },
+        { label: '分析封面', text: '请结合我已附带的知识库内容，分析适合它的封面方向。请输出封面主标题、视觉钩子、构图建议、色彩和字体风格、素材需求，以及 3 个封面方案。' },
+        { label: '选题延展', text: '请结合我已附带的知识库内容，延展出一组可发布选题。请按选题标题、目标人群、核心卖点、内容角度、适合平台和优先级输出，并标出最推荐先做的 3 个。' },
+    ],
+};
+
+function isImageShortcutAttachment(context: ChatShortcutContext): boolean {
+    const attachment = context.attachment;
+    if (!attachment) return false;
+    const kind = String(attachment.kind || '').trim().toLowerCase();
+    const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+    const name = String(
+        attachment.name
+        || attachment.localUrl
+        || attachment.absolutePath
+        || attachment.originalAbsolutePath
+        || '',
+    ).trim();
+    return kind === 'image'
+        || mimeType.startsWith('image/')
+        || /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i.test(name);
+}
+
+export function resolveRedClawComposerShortcutScene(context: ChatShortcutContext): RedClawComposerShortcutScene {
+    if (context.attachment) {
+        return isImageShortcutAttachment(context) ? 'uploaded_image' : 'uploaded_file';
+    }
+    if (context.selectedMemberMention) return 'member_mention';
+    if (context.selectedKnowledgeMentions.length > 0) return 'knowledge_context';
+    return 'empty_new_chat';
+}
+
+export function createRedClawComposerShortcuts(
+    inputs: RedClawComposerShortcutInput[] = REDCLAW_DEFAULT_COMPOSER_SHORTCUT_INPUTS,
+): ChatShortcut[] {
+    return inputs
+        .map((item) => ({
+            label: String(item.label || '').trim(),
+            text: String(item.text || '').trim(),
+            action: item.action || 'inject' as const,
+        }))
+        .filter((item) => item.label && item.text);
+}
+
+export function createRedClawComposerShortcutsForContext(context: ChatShortcutContext): ChatShortcut[] {
+    const scene = resolveRedClawComposerShortcutScene(context);
+    return createRedClawComposerShortcuts(REDCLAW_COMPOSER_SHORTCUT_INPUTS_BY_SCENE[scene]);
+}
+
+export const REDCLAW_SHORTCUTS = createRedClawComposerShortcuts();
 
 export const REDCLAW_WELCOME_SHORTCUTS = REDCLAW_SHORTCUTS;
 

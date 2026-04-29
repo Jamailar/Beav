@@ -962,6 +962,7 @@ mod tests {
             content: "hello".to_string(),
             display_content: None,
             attachment: None,
+            metadata: None,
             created_at: "1".to_string(),
         });
         store

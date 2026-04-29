@@ -635,6 +635,9 @@ declare global {
     session_id: string;
     role: string;
     content: string;
+    display_content?: string;
+    attachment?: unknown;
+    metadata?: unknown;
     tool_call_id?: string;
     created_at: string;
   }
@@ -1299,6 +1302,8 @@ declare global {
         create: (payload: Record<string, unknown>) => Promise<unknown>;
         update: (payload: Record<string, unknown>) => Promise<unknown>;
         delete: (advisorId: string) => Promise<unknown>;
+        pickKnowledgeFiles: <T = Record<string, unknown>>() => Promise<T>;
+        pickKnowledgeFolder: <T = Record<string, unknown>>() => Promise<T>;
         uploadKnowledge: (payload: string | { advisorId: string; filePaths?: string[] }) => Promise<unknown>;
         deleteKnowledge: (payload: { advisorId: string; fileName: string }) => Promise<unknown>;
         inspectMemberSkill: (payload: { advisorId: string }) => Promise<unknown>;

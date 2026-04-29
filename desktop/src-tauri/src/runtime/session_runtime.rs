@@ -1790,6 +1790,7 @@ mod tests {
             content: content.to_string(),
             display_content: None,
             attachment: None,
+            metadata: None,
             created_at: created_at.to_string(),
         }
     }
@@ -1992,6 +1993,7 @@ mod tests {
                 "originalAbsolutePath": "/Users/jam/Desktop/WechatIMG174.jpg",
                 "workspaceRelativePath": ".redbox/chat-attachments/WechatIMG174.jpg"
             })),
+            metadata: None,
             created_at: "10".to_string(),
         });
 
