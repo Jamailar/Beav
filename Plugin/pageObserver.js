@@ -1132,7 +1132,10 @@ function setXhsDomStatus(container, message, state = 'idle') {
 
 function summarizeActionResponse(response, fallback) {
     if (response?.noteId) {
-        return response.duplicate ? '知识库中已存在' : '已保存到 RedBox';
+        if (response.duplicate) {
+            return response.updated ? '知识库中已存在，已更新' : '知识库中已存在';
+        }
+        return '已保存到 RedBox';
     }
     if (response?.mode === 'xhs-link-batch') {
         return `成功 ${Number(response.count || 0)} 条，失败 ${Number(response.failed || 0)} 条`;
@@ -1147,7 +1150,10 @@ function summarizeActionResponse(response, fallback) {
         return `评论 ${Number(response.count || 0)} 条`;
     }
     if (/^(bilibili|kuaishou|tiktok|reddit|x|instagram)-/.test(String(response?.mode || ''))) {
-        return response.duplicate ? '知识库中已存在' : fallback;
+        if (response.duplicate) {
+            return response.updated ? '知识库中已存在，已更新' : '知识库中已存在';
+        }
+        return fallback;
     }
     return fallback;
 }

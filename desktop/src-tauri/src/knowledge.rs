@@ -1500,22 +1500,34 @@ fn resolve_note_seed(request: &KnowledgeEntryIngestRequest) -> String {
         .unwrap_or_else(|| make_id("knowledge"))
 }
 
+#[derive(Debug, Clone)]
+struct ExistingNoteMatch {
+    entry_id: String,
+    matched_by: &'static str,
+}
+
 fn find_existing_note_entry_id(
     state: &State<'_, AppState>,
     request: &KnowledgeEntryIngestRequest,
-) -> Result<Option<String>, String> {
+) -> Result<Option<ExistingNoteMatch>, String> {
     if let Some(dedupe_key) = normalize_string(request.options.dedupe_key.clone()) {
         if let Some(entry_id) =
             find_redbook_entry_id_by_meta_field(state, "dedupeKey", &dedupe_key)?
         {
-            return Ok(Some(entry_id));
+            return Ok(Some(ExistingNoteMatch {
+                entry_id,
+                matched_by: "dedupeKey",
+            }));
         }
     }
     if let Some(external_id) = normalize_string(request.source.external_id.clone()) {
         if let Some(entry_id) =
             find_redbook_entry_id_by_meta_field(state, "externalId", &external_id)?
         {
-            return Ok(Some(entry_id));
+            return Ok(Some(ExistingNoteMatch {
+                entry_id,
+                matched_by: "externalId",
+            }));
         }
     }
     if let Some(source_url) = source_link_from_input(&request.source) {
@@ -1528,13 +1540,19 @@ fn find_existing_note_entry_id(
                     existing_entry_id_from_record(&item.id, item.folder_path.as_deref())
                 }))
         })?;
-        if existing.is_some() {
-            return Ok(existing);
+        if let Some(entry_id) = existing {
+            return Ok(Some(ExistingNoteMatch {
+                entry_id,
+                matched_by: "sourceUrl:store",
+            }));
         }
         if let Some(entry_id) =
             find_redbook_entry_id_by_meta_field(state, "sourceUrl", &source_url)?
         {
-            return Ok(Some(entry_id));
+            return Ok(Some(ExistingNoteMatch {
+                entry_id,
+                matched_by: "sourceUrl:meta",
+            }));
         }
     }
     Ok(None)
@@ -1705,14 +1723,15 @@ fn ingest_note_entry(
 ) -> Result<Value, String> {
     ensure_supported_space(state, request.space_id.as_deref())?;
     let _ = ensure_store_hydrated_for_knowledge(state);
-    let existing_entry_id = find_existing_note_entry_id(state, request)?;
-    if existing_entry_id.is_some() && !request.options.allow_update {
+    let existing_match = find_existing_note_entry_id(state, request)?;
+    if existing_match.is_some() && !request.options.allow_update {
         return Ok(json!({
             "success": true,
             "kind": request.kind,
             "duplicate": true,
             "updated": false,
-            "entryId": existing_entry_id,
+            "entryId": existing_match.as_ref().map(|item| item.entry_id.clone()),
+            "duplicateBy": existing_match.as_ref().map(|item| item.matched_by),
         }));
     }
 
@@ -1726,8 +1745,9 @@ fn ingest_note_entry(
         source_link.as_deref(),
         &request.assets,
     );
-    let entry_id = existing_entry_id
-        .clone()
+    let entry_id = existing_match
+        .as_ref()
+        .map(|item| item.entry_id.clone())
         .unwrap_or_else(|| note_entry_id(&resolve_note_seed(request)));
     let entry_dir = redbook_entry_dir(state, &entry_id)?;
     let existing_meta = read_json_file(entry_dir.join("meta.json").as_path());
@@ -1883,8 +1903,9 @@ fn ingest_note_entry(
     Ok(json!({
         "success": true,
         "kind": normalized_kind,
-        "duplicate": existing_entry_id.is_some(),
-        "updated": existing_entry_id.is_some(),
+        "duplicate": existing_match.is_some(),
+        "updated": existing_match.is_some(),
+        "duplicateBy": existing_match.as_ref().map(|item| item.matched_by),
         "entryId": entry_id,
         "authorId": author_profile.as_ref().map(|item| item.id.clone()),
         "requestedActions": {

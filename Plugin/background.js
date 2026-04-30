@@ -3918,6 +3918,8 @@ async function exportCurrentXhsNoteJson(tabId) {
 async function saveDouyinVideoFromTab(tabId) {
   const payload = await runExtraction(tabId, extractDouyinVideoPayload, { world: 'MAIN' });
   console.log('[redbox-plugin][douyin] payload', {
+    noteId: payload?.noteId || '',
+    source: payload?.source || '',
     title: payload?.title || '',
     hasCoverUrl: Boolean(payload?.coverUrl || payload?.coverDataUrl),
     videoUrl: String(payload?.videoUrl || ''),
@@ -3929,6 +3931,8 @@ async function saveDouyinVideoFromTab(tabId) {
     mode: 'douyin',
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
+    updated: Boolean(response.updated),
+    duplicateBy: response.duplicateBy || '',
   };
 }
 
@@ -6538,6 +6542,33 @@ async function extractDouyinVideoPayload() {
     }
   }
 
+  function extractDouyinVideoIdFromUrl(value) {
+    const raw = normalizeText(value);
+    if (!raw) return '';
+    try {
+      const parsed = new URL(raw, location.href);
+      for (const key of ['modal_id', 'aweme_id', 'awemeId', 'item_id', 'itemId', 'vid']) {
+        const queryValue = normalizeText(parsed.searchParams.get(key));
+        if (/^\d{8,}$/.test(queryValue)) return queryValue;
+      }
+      const pathMatch = String(parsed.pathname || '').match(/\/(?:video|note)\/(\d{8,})/i);
+      if (pathMatch?.[1]) return pathMatch[1];
+      const anyMatch = raw.match(/(?:modal_id|aweme_id|item_id|video_id|vid)[=:](\d{8,})/i);
+      if (anyMatch?.[1]) return anyMatch[1];
+    } catch {
+      const fallbackMatch = raw.match(/\/(?:video|note)\/(\d{8,})/i)
+        || raw.match(/(?:modal_id|aweme_id|item_id|video_id|vid)[=:](\d{8,})/i);
+      if (fallbackMatch?.[1]) return fallbackMatch[1];
+    }
+    return '';
+  }
+
+  function createCanonicalDouyinVideoUrl(videoId) {
+    const id = normalizeText(videoId);
+    if (!id) return location.href;
+    return `https://www.douyin.com/video/${encodeURIComponent(id)}`;
+  }
+
   function pushUniqueUrl(list, value) {
     const url = toAbsoluteUrl(value);
     if (!url || list.includes(url)) return;
@@ -6856,7 +6887,8 @@ async function extractDouyinVideoPayload() {
     }
   }
 
-  const sourceUrl = location.href;
+  const currentUrlVideoId = extractDouyinVideoIdFromUrl(location.href);
+  const sourceUrl = createCanonicalDouyinVideoUrl(currentUrlVideoId);
   const videoEl = getMainVideoElement();
   const renderData = getRenderData();
   const videoCandidates = [];
@@ -6889,12 +6921,13 @@ async function extractDouyinVideoPayload() {
     ? (await fetchBinaryAsDataUrl(blobVideoUrl))
     : '';
 
-  const pathnameSegments = String(location.pathname || '').split('/').filter(Boolean);
-  const pathId = pathnameSegments[pathnameSegments.length - 1] || '';
   const detailId = normalizeText(
     document.querySelector('[data-e2e="detail-video-info"]')?.getAttribute('data-e2e-aweme-id') || '',
   );
-  const videoId = detailId || normalizeText(pathId) || `douyin-${Date.now()}`;
+  const videoId = currentUrlVideoId
+    || extractDouyinVideoIdFromUrl(detailId)
+    || extractDouyinVideoIdFromUrl(videoUrl)
+    || normalizeText(detailId);
   const title = getTitle();
   const description = normalizeText(
     document.querySelector('meta[name="description"]')?.getAttribute('content')

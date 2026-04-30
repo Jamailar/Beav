@@ -126,7 +126,7 @@ async function runAction(type) {
       throw new Error(result?.error || '保存失败');
     }
     const detail = result.duplicate
-      ? '已存在于知识库，已跳过重复保存。'
+      ? (result.updated ? '已存在于知识库，已更新已有内容。' : '已存在于知识库，已跳过重复保存。')
       : `保存成功${result.noteId ? `：${result.noteId}` : ''}`;
     showResult(detail, 'success');
   } catch (error) {
