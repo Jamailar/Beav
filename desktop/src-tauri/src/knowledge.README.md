@@ -39,8 +39,23 @@
 - `POST /api/knowledge/document-sources`
 - `POST /api/knowledge/media-assets`
 - `POST /api/knowledge/batch-ingest`
+- `GET /api/accounts/health`
+- `POST /api/accounts/import-sessions`
+- `POST /api/accounts/{accountId}/posts/batch`
+- `POST /api/accounts/import-sessions/{sessionId}/complete`
 
 本地 HTTP 响应会附带浏览器插件所需的 CORS / Private Network Access 响应头，避免出现 `health` 可访问但 `POST` 被浏览器预检拦截的情况。
+
+`GET /api/knowledge/health` 供浏览器插件判断连接和当前空间账号状态。除原有 `counts`、`limits`、`routes` 外，响应包含：
+
+- `connectionStatus`: `connected_without_account_profile` 或 `connected_with_account_profile`
+- `accountBindingStatus`: `noAccountProfile` 或 `hasAccountProfile`
+- `workspace`: 当前空间 `{ id, name }`
+- `platformAccounts`: 当前空间的小红书、抖音、Bilibili 账号摘要；未绑定的平台返回 `bound: false`
+
+账号档案主数据通过 `/api/accounts/*` 写入当前空间的 `accounts/{platform}/{accountId}/`。导入后由 `profile_learning` 写入 `distillation/evidence-pack.json`、`stats.json`、`data-draft.md`、`ai-distillation-task.md` 和 `quality-report.json`，再更新 `CreatorProfile.md`、`writing-style-skill/SKILL.md` 与 `memory-candidates.json`。知识库保存仍保留为兼容投影，不作为账号历史的主存储。
+
+Renderer 可通过 `accounts:health` 和 `accounts:list` 读取同一份账号 catalog。
 
 ## 当前 ingest 类型
 
