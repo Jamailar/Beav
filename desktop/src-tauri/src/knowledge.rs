@@ -2183,8 +2183,38 @@ pub(crate) fn knowledge_http_health(
     let _ = ensure_store_hydrated_for_media(state);
     let page = crate::knowledge_index::catalog::list_page(state, None, 1, None, None, None)?;
     let snapshot = with_store(state, |store| {
+        let active_space_id = store.active_space_id.clone();
+        let active_space_name = store
+            .spaces
+            .iter()
+            .find(|space| space.id == active_space_id)
+            .map(|space| space.name.clone())
+            .unwrap_or_else(|| active_space_id.clone());
+        let account_catalog_accounts = crate::accounts::platform_accounts_for_active_space(state);
+        let platform_accounts = merge_platform_accounts(
+            account_catalog_accounts,
+            plugin_platform_accounts_value(&store),
+        );
+        let has_account_profile = platform_accounts
+            .as_object()
+            .map(|accounts| {
+                accounts.values().any(|account| {
+                    account
+                        .get("bound")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
         Ok(json!({
             "success": true,
+            "connectionStatus": if has_account_profile { "connected_with_account_profile" } else { "connected_without_account_profile" },
+            "accountBindingStatus": if has_account_profile { "hasAccountProfile" } else { "noAccountProfile" },
+            "workspace": {
+                "id": active_space_id,
+                "name": active_space_name,
+            },
+            "platformAccounts": platform_accounts,
             "counts": {
                 "entries": page.kind_counts.get("redbook-note").and_then(|value| value.as_i64()).unwrap_or(0),
                 "youtubeVideos": page.kind_counts.get("youtube-video").and_then(|value| value.as_i64()).unwrap_or(0),
@@ -2237,6 +2267,94 @@ pub(crate) fn knowledge_http_health(
         }))
     })?;
     Ok(snapshot)
+}
+
+fn plugin_platform_accounts_value(store: &crate::AppStore) -> Value {
+    let platforms = [
+        ("xiaohongshu", &["xiaohongshu", "xhs", "rednote"][..]),
+        ("douyin", &["douyin"][..]),
+        ("bilibili", &["bilibili", "b站", "哔哩哔哩"][..]),
+    ];
+    let mut result = serde_json::Map::new();
+    for (canonical, aliases) in platforms {
+        let account = store
+            .archive_profiles
+            .iter()
+            .filter(|profile| {
+                profile
+                    .platform
+                    .as_deref()
+                    .map(|platform| platform_matches(platform, aliases))
+                    .unwrap_or(false)
+            })
+            .max_by_key(|profile| profile.updated_at)
+            .map(|profile| {
+                json!({
+                    "bound": true,
+                    "source": "archive_profile",
+                    "profileId": profile.id,
+                    "username": profile.name,
+                    "id": Value::Null,
+                    "platform": canonical,
+                })
+            })
+            .or_else(|| {
+                store
+                    .knowledge_authors
+                    .iter()
+                    .filter(|author| platform_matches(&author.platform, aliases))
+                    .max_by_key(|author| author.note_count)
+                    .map(|author| {
+                        json!({
+                            "bound": true,
+                            "source": "knowledge_author",
+                            "profileId": author.id,
+                            "username": author.name,
+                            "id": author.platform_user_id,
+                            "platform": canonical,
+                        })
+                    })
+            })
+            .unwrap_or_else(|| {
+                json!({
+                    "bound": false,
+                    "source": Value::Null,
+                    "profileId": Value::Null,
+                    "username": Value::Null,
+                    "id": Value::Null,
+                    "platform": canonical,
+                })
+            });
+        result.insert(canonical.to_string(), account);
+    }
+    Value::Object(result)
+}
+
+fn merge_platform_accounts(primary: Value, fallback: Value) -> Value {
+    let mut result = serde_json::Map::new();
+    let platforms = ["xiaohongshu", "douyin", "bilibili"];
+    for platform in platforms {
+        let primary_account = primary.get(platform).cloned().unwrap_or(Value::Null);
+        let fallback_account = fallback.get(platform).cloned().unwrap_or(Value::Null);
+        let selected = if primary_account
+            .get("bound")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            primary_account
+        } else {
+            fallback_account
+        };
+        result.insert(platform.to_string(), selected);
+    }
+    Value::Object(result)
+}
+
+fn platform_matches(value: &str, aliases: &[&str]) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    aliases
+        .iter()
+        .any(|alias| normalized == alias.to_ascii_lowercase())
 }
 
 pub(crate) fn knowledge_http_body_limit() -> usize {

@@ -161,6 +161,11 @@ fn is_knowledge_api_path(path: &str, state: &AssistantStateRecord) -> bool {
     normalized == base_path || normalized.starts_with(&format!("{base_path}/"))
 }
 
+fn is_accounts_api_path(path: &str) -> bool {
+    let normalized = normalize_request_path(path);
+    normalized == "/api/accounts" || normalized.starts_with("/api/accounts/")
+}
+
 fn extract_bearer_or_token(headers: &HashMap<String, String>) -> String {
     let auth = headers
         .get("authorization")
@@ -726,6 +731,16 @@ fn handle_knowledge_http_request(
     }
 }
 
+fn handle_accounts_http_request(
+    app: &AppHandle,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> Result<(u16, &'static str, Value), String> {
+    let state = app.state::<AppState>();
+    crate::accounts::handle_accounts_http_request(&state, method, path, body)
+}
+
 pub(crate) fn execute_assistant_message(
     app: &AppHandle,
     route_kind: &str,
@@ -835,6 +850,35 @@ pub(crate) fn run_assistant_listener(
                     .unwrap_or_else(|_| AssistantStateRecord::default());
                     let (raw_headers, body) = parse_http_request_parts(&request);
                     let (method, _path, headers) = parse_http_request_meta(&raw_headers);
+                    if is_accounts_api_path(&path) {
+                        emit_assistant_log(
+                            &app,
+                            "assistant daemon matched route kind: accounts-api",
+                        );
+                        let response =
+                            match handle_accounts_http_request(&app, &method, &path, &body) {
+                                Ok((status, status_text, body)) => {
+                                    if status == 204 {
+                                        http_empty_response(&mut stream, status, status_text)
+                                    } else {
+                                        http_json_response(&mut stream, status, status_text, body)
+                                    }
+                                }
+                                Err(error) => http_json_response(
+                                    &mut stream,
+                                    400,
+                                    "Bad Request",
+                                    json!({ "success": false, "error": error }),
+                                ),
+                            };
+                        if let Err(error) = response {
+                            emit_assistant_log(
+                                &app,
+                                &format!("assistant daemon accounts response failed: {}", error),
+                            );
+                        }
+                        continue;
+                    }
                     if is_knowledge_api_path(&path, &assistant_snapshot) {
                         emit_assistant_log(
                             &app,

@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod accounts;
 mod agent;
 mod agent_hub;
 mod app_shared;
@@ -19,6 +20,7 @@ mod events;
 mod helpers;
 mod http_utils;
 mod interactive_runtime_shared;
+mod json_util;
 mod knowledge;
 mod knowledge_index;
 mod legacy_import;
@@ -34,6 +36,7 @@ mod memory_maintenance;
 mod official_support;
 mod persistence;
 mod process_utils;
+mod profile_learning;
 mod provider_compat;
 mod provider_runtime;
 mod redclaw_profile;
@@ -9267,6 +9270,9 @@ fn handle_channel(
     if let Some(result) =
         commands::assistant_daemon::handle_assistant_daemon_channel(app, state, channel, &payload)
     {
+        return result;
+    }
+    if let Some(result) = accounts::handle_accounts_channel(state, channel, &payload) {
         return result;
     }
     if let Some(result) =
