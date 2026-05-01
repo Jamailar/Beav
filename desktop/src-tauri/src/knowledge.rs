@@ -1181,6 +1181,10 @@ fn spawn_note_transcription_processing(
 
         if let Err(error) = outcome {
             let _ = write_note_transcription_meta_status(&entry_dir, "failed", None, Some(&error));
+            let meta = read_json_value_or(&entry_dir.join("meta.json"), json!({ "id": note_id }));
+            let _ = crate::accounts::sync_failed_transcription_from_knowledge(
+                &state, &note_id, &meta, &error,
+            );
             let _ =
                 emit_note_transcription_event(&app_handle, &note_id, "failed", false, Some(&error));
             append_debug_log_state(
@@ -2737,6 +2741,9 @@ pub(crate) fn persist_note_transcript(
                 }),
             )),
         )?;
+        let _ = crate::accounts::sync_completed_transcript_from_knowledge(
+            state, note_id, &meta, transcript,
+        );
         return Ok(json!({ "success": true, "transcript": transcript }));
     }
 
@@ -2761,6 +2768,12 @@ pub(crate) fn persist_note_transcript(
         }),
     );
     let _ = app.emit("knowledge:changed", json!({ "at": now_iso() }));
+    let _ = crate::accounts::sync_completed_transcript_from_knowledge(
+        state,
+        note_id,
+        &json!({ "id": note_id }),
+        transcript,
+    );
     Ok(json!({ "success": true, "transcript": transcript, "legacyFallback": true }))
 }
 

@@ -88,6 +88,19 @@ pub(crate) fn normalize_post(value: &Value) -> NormalizedPost {
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let mut content = json_string(value, "content")
+        .or_else(|| json_string(value, "text"))
+        .or_else(|| json_string(value, "description"))
+        .unwrap_or_default();
+    if let Some(transcript) = json_string(value, "transcript") {
+        if !transcript.trim().is_empty() {
+            if !content.trim().is_empty() {
+                content.push_str("\n\n");
+            }
+            content.push_str("视频转录：\n");
+            content.push_str(transcript.trim());
+        }
+    }
     NormalizedPost {
         id: json_string(value, "platformPostId")
             .or_else(|| json_string(value, "noteId"))
@@ -95,10 +108,7 @@ pub(crate) fn normalize_post(value: &Value) -> NormalizedPost {
             .or_else(|| json_string(value, "url"))
             .unwrap_or_default(),
         title: json_string(value, "title").unwrap_or_default(),
-        content: json_string(value, "content")
-            .or_else(|| json_string(value, "text"))
-            .or_else(|| json_string(value, "description"))
-            .unwrap_or_default(),
+        content,
         url: json_string(value, "url").unwrap_or_default(),
         published_at: json_string(value, "publishedAt").unwrap_or_default(),
         kind: json_string(value, "kind")
