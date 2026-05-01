@@ -1441,6 +1441,38 @@ export function RedClaw({
         }
     }, []);
 
+    const handleRedClawDispatchOverride = useCallback(async (payload: {
+        sessionId?: string;
+        message: string;
+        displayContent: string;
+    }) => {
+        const goal = String(payload.message || payload.displayContent || '').trim();
+        if (!goal) return false;
+        const result = await window.ipcRenderer.redclawOrchestration.createRun({
+            goal,
+            sessionId: payload.sessionId || activeSessionId || undefined,
+        });
+        if (!result?.success || !result.runtimeTaskId) {
+            throw new Error(String(result?.error || 'RedClaw 临时团队创建失败'));
+        }
+        const resumeResult = await window.ipcRenderer.tasks.resume({ taskId: result.runtimeTaskId }) as {
+            success?: boolean;
+            error?: string;
+        };
+        if (resumeResult && resumeResult.success === false) {
+            throw new Error(resumeResult.error || 'RedClaw 临时团队启动失败');
+        }
+        const roleCount = Array.isArray(result.graph?.nodes) ? result.graph.nodes.length : 0;
+        return {
+            handled: true,
+            assistantContent: [
+                `已组建 RedClaw 临时创作团队，开始执行：${goal}`,
+                roleCount > 0 ? `本次会由 ${roleCount} 个岗位接力完成，进度会同步到右下角团队运行面板和左下角创作项目。` : '进度会同步到团队运行面板和创作项目。',
+                result.runtimeTaskId ? `任务 ID：${result.runtimeTaskId}` : '',
+            ].filter(Boolean).join('\n\n'),
+        };
+    }, [activeSessionId]);
+
 
     return (
         <div className="h-full min-h-0 flex overflow-hidden bg-surface-primary">
@@ -1526,6 +1558,7 @@ export function RedClaw({
                                     activePreviewHref={previewTarget?.href || null}
                                     keepComposerInputActive={true}
                                     placeholder="使用 # 调用知识库&#10;使用 @ 召唤团队成员"
+                                    onDispatchOverride={handleRedClawDispatchOverride}
                                     messageListHeader={<RedClawImageGenerationProgressPanel jobs={visibleImageJobs} />}
                                     inlineSidePanel={previewTarget ? (
                                         <RedClawFilePreviewPane
