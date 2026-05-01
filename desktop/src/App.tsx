@@ -26,8 +26,9 @@ const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/Cove
 const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages/GenerationStudio')).GenerationStudio }));
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
+const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
 
-export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard';
+export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard' | 'approval';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'group-chat' | 'members';
 type SettingsNavigationTarget = {
@@ -54,6 +55,7 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'generation-studio',
   'subjects',
   'workboard',
+  'approval',
 ]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 const OFFICIAL_AUTH_NOTICE_ENABLED = false;
@@ -814,7 +816,17 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'workboard') && (
           <div className={currentView === 'workboard' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'workboard' ? <ViewLoadingFallback /> : null}>
-              <WorkboardPage isActive={currentView === 'workboard'} />
+              <WorkboardPage
+                isActive={currentView === 'workboard'}
+                onNavigateToApproval={() => setCurrentView('approval')}
+              />
+            </Suspense>
+          </div>
+        )}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'approval') && (
+          <div className={currentView === 'approval' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'approval' ? <ViewLoadingFallback /> : null}>
+              <ApprovalPage isActive={currentView === 'approval'} />
             </Suspense>
           </div>
         )}

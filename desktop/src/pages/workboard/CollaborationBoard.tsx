@@ -13,7 +13,7 @@ type BoardStatus = 'todo' | 'ready' | 'running' | 'blocked' | 'review' | 'comple
 interface CollaborationBoardProps {
   isActive?: boolean;
   onSwitchRedclaw?: () => void;
-  onSwitchReview?: () => void;
+  onOpenApproval?: () => void;
 }
 
 const boardColumns: Array<{ key: BoardStatus; label: string }> = [
@@ -137,7 +137,7 @@ function completionClaimFor(report: CollabProgressReportRecord): Record<string, 
   return asRecord(asRecord(report.payload).completionClaim);
 }
 
-export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onSwitchReview }: CollaborationBoardProps) {
+export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onOpenApproval }: CollaborationBoardProps) {
   const [sessions, setSessions] = useState<CollabSessionRecord[]>([]);
   const [snapshot, setSnapshot] = useState<CollabSessionSnapshot | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState('');
@@ -392,13 +392,13 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onSwitchR
         },
       });
       await loadSnapshot(selectedTask.sessionId);
-      onSwitchReview?.();
+      onOpenApproval?.();
     } catch (reviewError) {
       setError(reviewError instanceof Error ? reviewError.message : String(reviewError));
     } finally {
       setBusy('');
     }
-  }, [loadSnapshot, onSwitchReview, reports, selectedTask]);
+  }, [loadSnapshot, onOpenApproval, reports, selectedTask]);
 
   const setSessionStatus = useCallback(async (status: 'active' | 'paused' | 'archived') => {
     if (!snapshot?.session?.id) return;
@@ -609,10 +609,10 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onSwitchR
                 RedClaw 任务
               </button>
             )}
-            {onSwitchReview && (
-              <button onClick={onSwitchReview} className="inline-flex items-center rounded-full border border-[#e8dccb] bg-white px-3 py-1.5 text-[12px] text-[#74634f]">
+            {onOpenApproval && (
+              <button onClick={onOpenApproval} className="inline-flex items-center rounded-full border border-[#e8dccb] bg-white px-3 py-1.5 text-[12px] text-[#74634f]">
                 <ScrollText className="mr-1.5 h-3.5 w-3.5" />
-                御批台
+                审批
               </button>
             )}
             {snapshot?.session?.id && (

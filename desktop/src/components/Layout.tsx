@@ -27,6 +27,7 @@ const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; grou
   { id: 'creator-profiles', label: '创作档案', icon: BookOpenText },
   { id: 'redclaw', label: 'RedClaw', icon: Bot },
   { id: 'workboard', label: '任务', icon: ListTodo },
+  { id: 'approval', label: '审批', icon: Bell },
   { id: 'subjects', label: '主体', icon: Package },
   { id: 'team', label: '团队', icon: Users },
   { id: 'cover-studio', label: '封面', icon: ImagePlus },
@@ -56,7 +57,6 @@ type ThemeMode = 'light' | 'dark';
 
 const THEME_STORAGE_KEY = 'redbox:theme-mode:v1';
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
-const WORKBOARD_MODE_HINT_STORAGE_KEY = 'redbox:workboard-mode-hint';
 const SIDEBAR_CONTENT_ANIMATION_MS = 170;
 
 function readInitialThemeMode(): ThemeMode {
@@ -446,15 +446,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 key={id}
                 type="button"
                 data-guide-id={`nav-${id}`}
-                onClick={() => {
-                  if (id === 'workboard' && pendingReviewCount > 0) {
-                    window.sessionStorage.setItem(WORKBOARD_MODE_HINT_STORAGE_KEY, 'review');
-                    window.dispatchEvent(new CustomEvent('redbox:workboard-mode-hint', {
-                      detail: { mode: 'review' },
-                    }));
-                  }
-                  onNavigate(id);
-                }}
+                onClick={() => onNavigate(id)}
                 title={label}
                 aria-label={label}
                 className={clsx(
@@ -482,7 +474,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 >
                   {label}
                 </span>
-                {id === 'workboard' && pendingReviewCount > 0 && (
+                {id === 'approval' && pendingReviewCount > 0 && (
                   <span
                     className={clsx(
                       'shrink-0 rounded-full bg-[#c75d43] text-white',
