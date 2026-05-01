@@ -790,6 +790,7 @@ declare global {
     id: string;
     title: string;
     updatedAt: string;
+    createdAt?: string;
   }
 
   interface ContextChatSessionListItem {
@@ -803,6 +804,7 @@ declare global {
       id: string;
       title?: string;
       updatedAt?: string;
+      createdAt?: string;
     } | null;
   }
 

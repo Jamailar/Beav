@@ -120,10 +120,33 @@ function buildAdvisorSessionMetadata(advisor: AdvisorProfile): Record<string, un
     return metadata;
 }
 
-function sessionUpdatedAtMs(item: ContextChatSessionListItem): number {
-    const value = String(item.chatSession?.updatedAt || '').trim();
-    const time = value ? Date.parse(value) : 0;
+function sessionTimestampMs(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value > 1_000_000_000_000 ? value : value * 1000;
+    }
+    const text = String(value || '').trim();
+    if (!text) return 0;
+    if (/^\d+$/.test(text)) {
+        const numeric = Number(text);
+        if (!Number.isFinite(numeric)) return 0;
+        return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+    }
+    const time = Date.parse(text);
     return Number.isFinite(time) ? time : 0;
+}
+
+function sessionIdTimestampMs(sessionId: string): number {
+    const matches = String(sessionId || '').match(/\d{10,}/g);
+    if (!matches || matches.length === 0) return 0;
+    return Math.max(...matches.map(sessionTimestampMs));
+}
+
+function sessionUpdatedAtMs(item: ContextChatSessionListItem): number {
+    return Math.max(
+        sessionTimestampMs(item.chatSession?.updatedAt),
+        sessionTimestampMs(item.chatSession?.createdAt),
+        sessionIdTimestampMs(item.id),
+    );
 }
 
 const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
@@ -1260,6 +1283,7 @@ export function RedClaw({
                             id: item.chatSession?.id || item.id,
                             title: nextTitle,
                             updatedAt: new Date().toISOString(),
+                            createdAt: item.chatSession?.createdAt,
                         },
                     }
             ))));
@@ -1371,6 +1395,7 @@ export function RedClaw({
                         id: item.chatSession?.id || item.id,
                         title: item.chatSession?.title || '未命名会话',
                         updatedAt: nextUpdatedAt,
+                        createdAt: item.chatSession?.createdAt,
                     },
                 }
         );
@@ -1426,6 +1451,7 @@ export function RedClaw({
                     id: created.id,
                     title: created.title,
                     updatedAt: created.updatedAt,
+                    createdAt: created.createdAt,
                 },
                 surface: 'advisor',
                 speakerLabel: advisor.name || '成员',
@@ -1491,6 +1517,7 @@ export function RedClaw({
                     id: created.id,
                     title: created.title,
                     updatedAt: created.updatedAt,
+                    createdAt: created.createdAt,
                 },
                 surface: 'advisor',
                 speakerLabel: advisor.name || '成员',
@@ -1567,6 +1594,7 @@ export function RedClaw({
                     id: created.id,
                     title: created.title,
                     updatedAt: created.updatedAt,
+                    createdAt: created.createdAt,
                 },
                 surface: 'room',
                 speakerLabel: room.name || '团队群聊',

@@ -49,6 +49,31 @@ pub struct SessionSummary {
     pub checkpoint_count: i64,
 }
 
+fn session_timestamp_score(value: &str) -> i64 {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    if let Ok(number) = trimmed.parse::<i64>() {
+        return if number > 1_000_000_000_000 {
+            number
+        } else {
+            number.saturating_mul(1000)
+        };
+    }
+    chrono::DateTime::parse_from_rfc3339(trimmed)
+        .map(|time| time.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn latest_session_timestamp<'a>(primary: &'a str, fallback: &'a str) -> String {
+    if session_timestamp_score(fallback) > session_timestamp_score(primary) {
+        fallback.to_string()
+    } else {
+        primary.to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SessionSnapshot {
@@ -328,12 +353,22 @@ pub(crate) fn build_session_summary(
     let store_message_count = chat_messages_for_session(store, &session.id).len() as i64;
     let transcript_message_count = transcript_meta.map(|meta| meta.message_count).unwrap_or(0);
     let store_transcript_count = transcript_count_for_session(store, &session.id);
+    let transcript_created_at = transcript_meta
+        .map(|meta| meta.created_at.as_str())
+        .unwrap_or("");
+    let transcript_updated_at = transcript_meta
+        .map(|meta| meta.updated_at.as_str())
+        .unwrap_or("");
     SessionSummary {
         chat_session: SessionChatSummary {
             id: session.id.clone(),
             title: session.title.clone(),
-            created_at: session.created_at.clone(),
-            updated_at: session.updated_at.clone(),
+            created_at: if session.created_at.trim().is_empty() {
+                transcript_created_at.to_string()
+            } else {
+                session.created_at.clone()
+            },
+            updated_at: latest_session_timestamp(&session.updated_at, transcript_updated_at),
         },
         provider: resolve_session_provider(session, transcript_meta),
         model: resolve_session_model(session, transcript_meta),

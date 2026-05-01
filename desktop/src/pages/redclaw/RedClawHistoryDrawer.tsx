@@ -183,7 +183,7 @@ export function RedClawHistoryDrawer({
                                         {sessionList.map((session) => {
                                             const isActive = session.id === activeSessionId;
                                             const title = session.chatSession?.title?.trim() || '未命名会话';
-                                            const time = formatDateTime(session.chatSession?.updatedAt || null);
+                                            const time = formatDateTime(session.chatSession?.updatedAt || session.chatSession?.createdAt || null);
                                             const summary = session.summary?.trim();
                                             const speakerLabel = session.speakerLabel || 'RedClaw';
                                             
