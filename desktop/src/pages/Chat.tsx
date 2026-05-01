@@ -3201,7 +3201,7 @@ export function Chat({
             message.id === aiPlaceholder.id
               ? {
                 ...message,
-                content: assistantContent || '任务已交给 RedClaw 临时团队执行。',
+                content: assistantContent || '任务已交给 RedClaw 自动团队执行。',
                 isStreaming: false,
                 processingFinishedAt: now,
               }
@@ -3219,7 +3219,7 @@ export function Chat({
           message.id === aiPlaceholder.id
             ? {
               ...message,
-              content: `RedClaw 临时团队启动失败：${detail}`,
+              content: `RedClaw 自动执行失败：${detail}`,
               isStreaming: false,
               processingFinishedAt: now,
             }
