@@ -1688,11 +1688,18 @@ fn redclaw_agent_role_id(agent_id: &RedclawAgentId) -> &'static str {
     match agent_id {
         RedclawAgentId::ResearchAgent => "research_agent",
         RedclawAgentId::InsightAgent => "insight_agent",
+        RedclawAgentId::TopicAgent => "topic_agent",
+        RedclawAgentId::NoteArchitectAgent => "note_architect_agent",
         RedclawAgentId::ScriptAgent => "script_agent",
+        RedclawAgentId::CopyAgent => "copy_agent",
         RedclawAgentId::StoryboardAgent => "storyboard_agent",
+        RedclawAgentId::VisualDirectorAgent => "visual_director_agent",
         RedclawAgentId::MediaAgent => "media_agent",
+        RedclawAgentId::ImageAgent => "image_agent",
+        RedclawAgentId::LayoutAgent => "layout_agent",
         RedclawAgentId::EditorAgent => "editor_agent",
         RedclawAgentId::PublishAgent => "publish_agent",
+        RedclawAgentId::ComplianceAgent => "compliance_agent",
         RedclawAgentId::ReviewAgent => "review_agent",
     }
 }
@@ -1701,11 +1708,18 @@ fn redclaw_agent_display_name(agent_id: &RedclawAgentId) -> &'static str {
     match agent_id {
         RedclawAgentId::ResearchAgent => "Research Agent",
         RedclawAgentId::InsightAgent => "Insight Agent",
+        RedclawAgentId::TopicAgent => "Topic Agent",
+        RedclawAgentId::NoteArchitectAgent => "Note Architect Agent",
         RedclawAgentId::ScriptAgent => "Script Agent",
+        RedclawAgentId::CopyAgent => "Copy Agent",
         RedclawAgentId::StoryboardAgent => "Storyboard Agent",
+        RedclawAgentId::VisualDirectorAgent => "Visual Director Agent",
         RedclawAgentId::MediaAgent => "Media Agent",
+        RedclawAgentId::ImageAgent => "Image Agent",
+        RedclawAgentId::LayoutAgent => "Layout Agent",
         RedclawAgentId::EditorAgent => "Editor Agent",
         RedclawAgentId::PublishAgent => "Publish Agent",
+        RedclawAgentId::ComplianceAgent => "Compliance Agent",
         RedclawAgentId::ReviewAgent => "Review Agent",
     }
 }
@@ -1761,7 +1775,17 @@ fn create_redclaw_team_records(
     )?;
 
     let mut member_by_role = std::collections::HashMap::<String, String>::new();
-    for spec in &plan.agent_specs {
+    let selected_agent_ids = plan
+        .graph
+        .nodes
+        .iter()
+        .map(|node| node.agent_id.clone())
+        .collect::<Vec<_>>();
+    for spec in plan.agent_specs.iter().filter(|spec| {
+        selected_agent_ids
+            .iter()
+            .any(|agent_id| agent_id == &spec.id)
+    }) {
         let role_id = redclaw_agent_role_id(&spec.id).to_string();
         if member_by_role.contains_key(&role_id) {
             continue;

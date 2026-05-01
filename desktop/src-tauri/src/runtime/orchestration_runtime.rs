@@ -76,6 +76,24 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
                 "你是 RedClaw 临时创作团队的 Insight Agent。优先做取舍和定位，不直接写完整稿件。"
                     .to_string(),
         },
+        "topic_agent" => RuntimeSubagentRoleSpec {
+            role_id: "topic_agent".to_string(),
+            purpose: "负责小红书选题、爆点、人群痛点、搜索关键词和内容类型判断。".to_string(),
+            handoff_contract: "输出必须包含推荐笔记类型、目标人群、痛点、搜索词、标题 hook、角度理由和给 Note Architect Agent 的 brief。".to_string(),
+            output_schema: "XhsTopicBrief: topic, targetAudience[], userPainPoints[], contentAngle, searchKeywords[], titleHooks[], recommendedFormat, reason".to_string(),
+            system_prompt:
+                "你是 RedClaw 小红书团队的 Topic Agent。只做选题和机会判断，不写完整正文；优先贴近小红书搜索、收藏和转化语境。"
+                    .to_string(),
+        },
+        "note_architect_agent" => RuntimeSubagentRoleSpec {
+            role_id: "note_architect_agent".to_string(),
+            purpose: "负责把小红书选题拆成文章或图文笔记结构、页面目的和内容顺序。".to_string(),
+            handoff_contract: "输出必须包含 openingStrategy、sections[]、imagePlan[]，交给 Copy/Visual Director 使用。".to_string(),
+            output_schema: "XhsNoteArchitecture: format, openingStrategy, sections[], imagePlan[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 小红书团队的 Note Architect Agent。负责结构，不直接铺开全文；让每个段落或图片页都有明确转化目的。"
+                    .to_string(),
+        },
         "script_agent" => RuntimeSubagentRoleSpec {
             role_id: "script_agent".to_string(),
             purpose: "负责把 CreativeBrief 转成符合用户风格和平台格式的脚本或正文。".to_string(),
@@ -83,6 +101,15 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
             output_schema: "ScriptDocument: hook, sections[], alternatives, evidenceRefs[]".to_string(),
             system_prompt:
                 "你是 RedClaw 临时创作团队的 Script Agent。使用用户风格和平台策略写可生产稿件，不把临时偏好写成长期记忆。"
+                    .to_string(),
+        },
+        "copy_agent" => RuntimeSubagentRoleSpec {
+            role_id: "copy_agent".to_string(),
+            purpose: "负责把小红书笔记结构写成标题、封面标题、正文、CTA、标签和评论引导。".to_string(),
+            handoff_contract: "输出必须是 XhsCopyPackage，并保留语气依据、标题变体和平台标签。".to_string(),
+            output_schema: "XhsCopyPackage: titles[], coverTitle, openingHook, body, cta, hashtags[], commentPrompt, toneNotes[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 小红书团队的 Copy Agent。写可直接发布的笔记文案，但不决定图片执行和不绕过后续合规检查。"
                     .to_string(),
         },
         "storyboard_agent" => RuntimeSubagentRoleSpec {
@@ -94,6 +121,15 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
                 "你是 RedClaw 临时创作团队的 Storyboard Agent。只做分镜和生产需求，不调用渲染或剪辑工具。"
                     .to_string(),
         },
+        "visual_director_agent" => RuntimeSubagentRoleSpec {
+            role_id: "visual_director_agent".to_string(),
+            purpose: "负责小红书封面、配图策略、图片 prompt、文字安全区和视觉执行 brief。".to_string(),
+            handoff_contract: "输出必须告诉 Image/Layout Agent 每张图的目的、类型、画面方向、可见文字和限制。".to_string(),
+            output_schema: "XhsVisualBrief: cover, images[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 小红书团队的 Visual Director Agent。决定视觉策略，不直接冒充已生成图片；所有图片要求必须可执行。"
+                    .to_string(),
+        },
         "media_agent" => RuntimeSubagentRoleSpec {
             role_id: "media_agent".to_string(),
             purpose: "负责匹配素材、指出缺失素材，并生成粗剪或时间线计划。".to_string(),
@@ -101,6 +137,24 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
             output_schema: "MediaPlan: matchedAssets[], missingAssets[], timelinePlan, productionRisks[]".to_string(),
             system_prompt:
                 "你是 RedClaw 临时创作团队的 Media Agent。优先基于已有素材和结构化计划，不承诺不存在的成片。"
+                    .to_string(),
+        },
+        "image_agent" => RuntimeSubagentRoleSpec {
+            role_id: "image_agent".to_string(),
+            purpose: "负责根据视觉 brief 查找、生成、整理或声明缺失的小红书配图资产。".to_string(),
+            handoff_contract: "输出必须包含 coverImage、pages[]、missingAssets[]，并用真实路径或明确缺失项表达资产状态。".to_string(),
+            output_schema: "XhsImageAssets: coverImage, pages[], missingAssets[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 小红书团队的 Image Agent。你是执行型图片代理，优先真实资产路径、生成 prompt 和缺失清单，不做内容策略。"
+                    .to_string(),
+        },
+        "layout_agent" => RuntimeSubagentRoleSpec {
+            role_id: "layout_agent".to_string(),
+            purpose: "负责小红书多图顺序、卡片文案、版式 manifest 和移动端可读性。".to_string(),
+            handoff_contract: "输出必须包含页面顺序、页面角色、绑定图片、标题/正文文字和版式类型。".to_string(),
+            output_schema: "XhsCarouselLayout: aspectRatio, pages[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 小红书团队的 Layout Agent。把文案和图片变成可执行图文排版，不生成空泛设计建议。"
                     .to_string(),
         },
         "editor_agent" => RuntimeSubagentRoleSpec {
@@ -119,6 +173,15 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
             output_schema: "PublishPackage: titleOptions[], coverOptions[], body, hashtags[], checklist[]".to_string(),
             system_prompt:
                 "你是 RedClaw 临时创作团队的 Publish Agent。做平台适配和发布包，不执行自动发布。"
+                    .to_string(),
+        },
+        "compliance_agent" => RuntimeSubagentRoleSpec {
+            role_id: "compliance_agent".to_string(),
+            purpose: "负责检查小红书平台风险、敏感词、夸张承诺、商业合规和事实风险。".to_string(),
+            handoff_contract: "输出必须包含风险等级、阻塞项、建议改法和是否允许进入最终 Review。".to_string(),
+            output_schema: "ComplianceReport: riskLevel, blockingIssues[], sensitiveTerms[], suggestedRewrites[], approved".to_string(),
+            system_prompt:
+                "你是 RedClaw 小红书团队的 Compliance Agent。严格检查平台风险和夸张承诺；发现阻塞问题时不要放行。"
                     .to_string(),
         },
         "review_agent" => RuntimeSubagentRoleSpec {
