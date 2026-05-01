@@ -868,6 +868,9 @@ function createIpcRenderer() {
       getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
       listApprovals: () => invokeChannel('runtime:list-approvals')
     },
+    taskPanel: {
+      list: (payload?: { limit?: number }) => invokeChannel('task-panel:list', payload || {})
+    },
     teamRuntime: {
       listSessions: () => invokeChannel('team-runtime:list-sessions'),
       createSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-session', payload),

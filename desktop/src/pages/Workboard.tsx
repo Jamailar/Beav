@@ -4,6 +4,7 @@ import type {
     CollabSessionSnapshot,
     CollabTaskRecord,
     ReviewDocketRecord,
+    TaskPanelItem,
 } from '../types';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { CollaborationBoard } from './workboard/CollaborationBoard';
@@ -858,6 +859,7 @@ export function Workboard({
     const [stats, setStats] = useState<TaskStatsResponse | null>(null);
     const [collabSnapshots, setCollabSnapshots] = useState<CollabSessionSnapshot[]>([]);
     const [reviewDockets, setReviewDockets] = useState<ReviewDocketRecord[]>([]);
+    const [backendUnifiedTasks, setBackendUnifiedTasks] = useState<TaskPanelItem[] | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [lastUpdatedAt, setLastUpdatedAt] = useState('');
@@ -885,11 +887,12 @@ export function Workboard({
         }
         setError('');
         try {
-            const [taskListResult, taskStatsResult, collabSessionsResult, docketsResult] = await Promise.all([
+            const [taskListResult, taskStatsResult, collabSessionsResult, docketsResult, taskPanelResult] = await Promise.all([
                 window.ipcRenderer.redclawRunner.taskList({ includeDrafts: true }),
                 window.ipcRenderer.redclawRunner.taskStats(),
                 window.ipcRenderer.teamRuntime.listSessions().catch(() => []),
                 window.ipcRenderer.teamRuntime.listReviewDockets({ limit: 80 }).catch(() => []),
+                window.ipcRenderer.taskPanel.list({ limit: 500 }).catch(() => null),
             ]);
             if (requestId !== loadRequestRef.current) return;
             const nextItems = Array.isArray(taskListResult?.items) ? [...taskListResult.items] : [];
@@ -921,6 +924,7 @@ export function Workboard({
             setStats(taskStatsResult || null);
             setCollabSnapshots(nextSnapshots.filter((snapshot): snapshot is CollabSessionSnapshot => Boolean(snapshot)));
             setReviewDockets(Array.isArray(docketsResult) ? docketsResult : []);
+            setBackendUnifiedTasks(Array.isArray(taskPanelResult?.items) ? taskPanelResult.items : null);
             setLastUpdatedAt(new Date().toISOString());
             setSelectedId((prev) => (prev && nextItems.some((item) => item.definitionId === prev) ? prev : nextItems[0]?.definitionId || ''));
         } catch (loadError) {
@@ -988,6 +992,42 @@ export function Workboard({
     }), [items, stats]);
 
     const unifiedTasks = useMemo<UnifiedTaskItem[]>(() => {
+        if (backendUnifiedTasks) {
+            const redclawById = new Map(items.map((item) => [`redclaw:${item.definitionId}`, item]));
+            const collabById = new Map<string, CollabTaskRecord>(
+                collabSnapshots.flatMap((snapshot) => snapshot.tasks.map((task) => [`collab:${task.id}`, task] as const)),
+            );
+            return backendUnifiedTasks.map((item): UnifiedTaskItem => ({
+                id: item.id,
+                source: item.source === 'approval' || item.source === 'collaboration' || item.source === 'redclaw'
+                    ? item.source
+                    : 'collaboration',
+                sourceLabel: item.sourceLabel || item.source,
+                title: item.title || '未命名任务',
+                summary: item.summary || '',
+                status: item.status === 'queued'
+                    || item.status === 'running'
+                    || item.status === 'review'
+                    || item.status === 'blocked'
+                    || item.status === 'completed'
+                    || item.status === 'failed'
+                    || item.status === 'paused'
+                    ? item.status
+                    : 'queued',
+                owner: item.owner || '-',
+                sessionTitle: item.sessionTitle || '-',
+                priorityLabel: item.priorityLabel || '-',
+                progress: Math.max(0, Math.min(100, Number(item.progress || 0))),
+                artifactCount: Number(item.artifactCount || 0),
+                updatedAt: Number(item.updatedAt || 0),
+                createdAt: Number(item.createdAt || 0),
+                reviewCount: Number(item.reviewCount || 0),
+                rawRedclaw: redclawById.get(item.id),
+                rawCollab: collabById.get(item.id),
+                latestReportSummary: item.latestReportSummary || '',
+            }));
+        }
+
         const docketByTask = new Map<string, ReviewDocketRecord[]>();
         reviewDockets.forEach((docket) => {
             if (!docket.taskId) return;
@@ -1074,7 +1114,7 @@ export function Workboard({
             if (rankDelta !== 0) return rankDelta;
             return right.updatedAt - left.updatedAt;
         });
-    }, [collabSnapshots, items, reviewDockets]);
+    }, [backendUnifiedTasks, collabSnapshots, items, reviewDockets]);
 
     const filteredUnifiedTasks = useMemo(
         () => unifiedTasks.filter((item) => matchesUnifiedFilter(item, unifiedFilter)),

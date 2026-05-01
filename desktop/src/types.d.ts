@@ -436,6 +436,41 @@ export interface ReviewDocketStats {
   linkedTasks: number;
 }
 
+export interface TaskPanelItem {
+  id: string;
+  source: 'redclaw' | 'collaboration' | 'approval' | string;
+  sourceLabel: string;
+  sourceId?: string | null;
+  sourceTaskId?: string | null;
+  title: string;
+  summary: string;
+  status: 'queued' | 'running' | 'review' | 'blocked' | 'completed' | 'failed' | 'paused' | string;
+  owner: string;
+  sessionTitle: string;
+  priorityLabel: string;
+  progress: number;
+  artifactCount: number;
+  updatedAt: number;
+  createdAt: number;
+  reviewCount: number;
+  taskId?: string | null;
+  definitionId?: string | null;
+  latestReportSummary?: string;
+  failureReason?: string | null;
+  latestExecution?: {
+    status?: string;
+    scheduledForAt?: string | null;
+    lastHeartbeatAt?: string | null;
+    lastError?: string | null;
+  } | null;
+}
+
+export interface TaskPanelListResponse {
+  success?: boolean;
+  items?: TaskPanelItem[];
+  count?: number;
+}
+
 export interface CollabMemberMatchCandidate {
   memberId: string;
   displayName?: string;
@@ -1024,6 +1059,9 @@ declare global {
         getTrace: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionRuntimeRecord[]>;
         getCheckpoints: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionCheckpointRecord[]>;
         getToolResults: (payload: { sessionId: string; runtimeId?: string; limit?: number; includeChildSessions?: boolean }) => Promise<SessionToolResultItem[]>;
+      };
+      taskPanel: {
+        list: (payload?: { limit?: number }) => Promise<TaskPanelListResponse>;
       };
       teamRuntime: {
         listSessions: () => Promise<CollabSessionRecord[]>;

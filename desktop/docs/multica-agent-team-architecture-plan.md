@@ -804,7 +804,7 @@ Acceptance:
 
 Goal: make Workboard read the canonical task object before adding more UI.
 
-2026-05-01 implementation note: Workboard now defaults to a Multica-style unified task projection that combines RedClaw automation tasks, Collaboration tasks and pending ReviewDocket records into one task stream. RedClaw management and CollaborationBoard remain available as drill-down surfaces. The next deeper step is to move this projection from frontend aggregation into a Rust-side canonical `TeamTaskExecution` query.
+2026-05-01 implementation note: Workboard now defaults to a Multica-style unified task projection that combines RedClaw automation tasks, Collaboration tasks and pending ReviewDocket records into one task stream. RedClaw management and CollaborationBoard remain available as drill-down surfaces. The projection is now served by the Rust-side `task-panel:list` query; the next deeper step is turning this projection into the canonical `TeamTaskExecution` write model instead of only a read model.
 
 Atomic commits:
 
