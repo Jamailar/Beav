@@ -63,11 +63,11 @@ RedClaw 页面需要从单一聊天页演化为通用创作协作入口，但不
 
 ```text
 RedClaw Page
-├── Command Bar            用户发起目标
-├── Team Run Timeline      当前自动组队和执行状态
-├── Creation Workspace     当前项目成果：brief/script/storyboard/media/publish
-├── Evidence And Memory    引用资料、素材、用户偏好、策略依据
-└── Review And Learnings   质检、复盘、可保存的长期偏好
+├── Chat Command Surface       用户发起目标和继续追问
+├── Run Status Message Card    当前自动组队、节点状态、失败原因
+├── Artifact Message Cards     brief/copy/media/publish/review/xhs package
+├── Evidence Drawer            引用资料、素材、用户偏好、策略依据
+└── Learning Confirmation      质检、复盘、可保存的长期偏好
 ```
 
 用户不需要手动选择 Research Agent 或 Script Agent，也不需要手动预览团队、建队或启动团队。RedClaw 在收到任务后自动决定需要哪些岗位，并直接创建 run 执行。页面只展示：
@@ -755,7 +755,9 @@ type TimelineClip = {
 
 ## UI Implementation Details
 
-RedClaw 页面应展示自动团队执行，而不是要求用户手动管理 Agent。页面保持通用协作壳，不为小红书单独做专属 UI；小红书的文章、图文、配图差异由 `contentFormat`、任务图、角色输出 schema 和导出包表达。
+RedClaw 页面应展示自动团队执行，而不是要求用户手动管理 Agent。页面保持通用对话协作壳，不为小红书单独做专属 UI；小红书的文章、图文、配图差异由 `contentFormat`、任务图、角色输出 schema 和导出包表达。
+
+不要使用右上角、右下角、左下角这类浮动大面板承载核心流程。用户主要在消息流里理解 RedClaw 做了什么，运行状态和交付物应以内联消息卡展示；浮层只能作为临时调试入口，不应成为默认产品体验。
 
 ### Command Bar
 
@@ -765,7 +767,7 @@ RedClaw 页面应展示自动团队执行，而不是要求用户手动管理 Ag
 - 支持选择当前项目/平台/格式。
 - 支持附加素材或引用灵感。
 
-### Team Run Timeline
+### Run Status Message Card
 
 展示：
 
@@ -777,7 +779,7 @@ RedClaw 页面应展示自动团队执行，而不是要求用户手动管理 Ag
 
 不要把 Agent 内部推理写进 UI。只展示对用户决策有用的状态。
 
-### Creation Workspace
+### Artifact Message Cards
 
 按 artifact 展示：
 
@@ -797,6 +799,7 @@ XHS Package
 - 接受/拒绝建议 patch。
 - 对比 AI 版本和用户编辑版本。
 - 继续要求 RedClaw 自动推进下一步。
+- 导出对应交付包。
 
 ### Evidence And Memory
 
@@ -893,7 +896,7 @@ type RedClawJob = {
 - 用户在 RedClaw 输入任务后，可由 RedClaw 自动创建临时团队 run，而不是要求用户手动预览团队、建队、启动或激活各 Agent。
 - Team Planner 会生成固定 Agent 枚举和依赖图，Research、Insight、Script、Storyboard、Media、Editor、Publish、Review 按依赖顺序交接。
 - RedClaw 子 Agent 会收到当前节点、上下游、平台、内容格式和任务图上下文。
-- 创作项目会同步 runtime task 的 orchestration outputs，并在 Creation Workspace 中展示 Brief、Script、Storyboard、Media、Publish、Review。
+- 创作项目会同步 runtime task 的 orchestration outputs；默认产品形态应通过消息内 artifact cards 展示 Brief、Script、Storyboard、Media、Publish、Review，而不是浮动工作区面板。
 - 用户可保存各 section 的人工编辑草稿，刷新后仍保留。
 - Review Agent 产生的 learning candidates 可由用户接受或拒绝；接受后写入统一 RedClaw memory，而不是写入 Agent 私有记忆。
 - Media section 可导出 `redclaw.mediaPlan.v1` 包，包含 `media-plan.json`、`rough-cut.ffconcat` 和 README；可用 ffmpeg 渲染第一版 rough cut。
@@ -1110,10 +1113,10 @@ RedClaw 自研部分：
 实现：
 
 - Command Bar。
-- Team Run Timeline。
-- Creation Workspace。
-- Evidence And Memory panel。
-- Learning confirmation panel。
+- Run status message card。
+- Artifact message cards。
+- Evidence drawer。
+- Learning confirmation card。
 - 通用 export action：按项目内容格式导出 media plan、publish package、review report 或 xhs package。
 
 验收：
@@ -1122,7 +1125,7 @@ RedClaw 自研部分：
 - 页面不提供团队预览、手动建队或手动启动入口；团队构成必须由 RedClaw Orchestrator 自动决定。
 - 页面刷新不清空已有 run/project。
 - 失败节点能展示原因和重试入口。
-- 小红书任务不需要跳转到专属页面；在同一个 RedClaw 页面内可以看到团队执行、产物摘要、质检结果和导出入口。
+- 小红书任务不需要跳转到专属页面；在同一个 RedClaw 消息流内可以看到团队执行、产物摘要、质检结果和导出入口。
 
 ### Step 9. Full Flow Verification
 
