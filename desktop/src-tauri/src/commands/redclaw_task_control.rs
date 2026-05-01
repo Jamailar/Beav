@@ -1,10 +1,11 @@
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, State};
 
-use crate::events::emit_runtime_task_checkpoint_saved;
+use crate::events::{emit_runtime_event, emit_runtime_task_checkpoint_saved};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
+    create_review_docket, RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord,
+    RedclawScheduledTaskRecord,
 };
 use crate::scheduler::task_policy::{
     preview_task_intent, task_contract_version, TaskIntentSchema, TaskPolicyDecisionKind,
@@ -97,13 +98,25 @@ pub fn handle_task_create(
 
         let draft = build_draft_definition(&intent, &preview);
         store.redclaw_job_definitions.push(draft.clone());
+        let review_docket_id =
+            maybe_create_review_docket_for_draft(store, &draft, &intent, &preview)?;
         Ok(json!({
             "draftId": draft.id,
             "definition": draft,
             "created": true,
             "preview": preview,
+            "reviewDocketId": review_docket_id,
         }))
     })?;
+    if let Some(docket_id) = created.get("reviewDocketId").and_then(Value::as_str) {
+        emit_runtime_event(
+            app,
+            "runtime:review-docket-changed",
+            None,
+            None,
+            json!({ "docketId": docket_id, "sourceKind": "redclaw_task_draft" }),
+        );
+    }
 
     emit_runtime_task_checkpoint_saved(
         app,
@@ -143,6 +156,7 @@ pub fn handle_task_confirm(
             .ok_or_else(|| "任务草稿不存在".to_string())?;
 
         if !confirm {
+            mark_review_dockets_for_draft(store, &draft_id, "rejected");
             store
                 .redclaw_job_definitions
                 .retain(|item| item.id != draft_id);
@@ -169,6 +183,7 @@ pub fn handle_task_confirm(
         }
 
         let definition = promote_draft_definition(store, &draft, &intent, &preview)?;
+        mark_review_dockets_for_draft(store, &draft_id, "approved");
         store
             .redclaw_job_definitions
             .retain(|item| item.id != draft_id);
@@ -586,7 +601,13 @@ fn parse_task_intent(payload: &Value) -> Result<TaskIntentSchema, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_task_intent;
+    use super::{
+        build_draft_definition, mark_review_dockets_for_draft,
+        maybe_create_review_docket_for_draft, parse_task_intent,
+        should_create_review_docket_for_draft,
+    };
+    use crate::scheduler::task_policy::preview_task_intent;
+    use crate::{now_i64, AppStore};
     use serde_json::json;
 
     #[test]
@@ -629,6 +650,70 @@ mod tests {
         assert_eq!(intent.cron.as_deref(), Some("25 20 * * *"));
         assert_eq!(intent.prompt.as_deref(), Some("每天晚上 20:25 和我打招呼"));
         assert_eq!(intent.action_type, "greeting");
+    }
+
+    #[test]
+    fn redclaw_non_manual_draft_creates_review_docket() {
+        let mut store = AppStore::default();
+        let intent = parse_task_intent(&json!({
+            "name": "AI 自动巡检",
+            "cron": "0 9 * * *",
+            "prompt": "每天检查素材库异常并总结。",
+            "actionType": "redclaw_prompt",
+            "ownerScope": "agent:redclaw",
+            "creatorMode": "redclaw_auto",
+            "createdBy": "redclaw-agent",
+        }))
+        .unwrap();
+        let preview = preview_task_intent(&store, &intent, now_i64()).unwrap();
+        let draft = build_draft_definition(&intent, &preview);
+
+        assert!(should_create_review_docket_for_draft(&intent));
+        let docket_id = maybe_create_review_docket_for_draft(&mut store, &draft, &intent, &preview)
+            .unwrap()
+            .expect("non-manual draft should create a docket");
+
+        let docket = store
+            .review_dockets
+            .iter()
+            .find(|item| item.id == docket_id)
+            .unwrap();
+        assert_eq!(docket.source_kind, "redclaw_task_draft");
+        assert_eq!(docket.source_id.as_deref(), Some(draft.id.as_str()));
+        assert_eq!(docket.status, "pending");
+
+        mark_review_dockets_for_draft(&mut store, &draft.id, "approved");
+        let docket = store
+            .review_dockets
+            .iter()
+            .find(|item| item.id == docket_id)
+            .unwrap();
+        assert_eq!(docket.status, "approved");
+        assert!(docket.decided_at.is_some());
+    }
+
+    #[test]
+    fn redclaw_manual_draft_does_not_create_review_docket() {
+        let mut store = AppStore::default();
+        let intent = parse_task_intent(&json!({
+            "name": "手动任务",
+            "cron": "0 9 * * *",
+            "prompt": "每天整理一次素材。",
+            "actionType": "redclaw_prompt",
+            "ownerScope": "manual:redclaw",
+            "creatorMode": "ui-manual",
+            "createdBy": "redclaw-task-center",
+        }))
+        .unwrap();
+        let preview = preview_task_intent(&store, &intent, now_i64()).unwrap();
+        let draft = build_draft_definition(&intent, &preview);
+
+        assert!(!should_create_review_docket_for_draft(&intent));
+        let docket_id =
+            maybe_create_review_docket_for_draft(&mut store, &draft, &intent, &preview).unwrap();
+
+        assert!(docket_id.is_none());
+        assert!(store.review_dockets.is_empty());
     }
 }
 
@@ -703,6 +788,104 @@ fn build_draft_definition(
         missed_run_policy: Some(preview.normalized.missed_run_policy.clone()),
         created_at: now.clone(),
         updated_at: now,
+    }
+}
+
+fn should_create_review_docket_for_draft(intent: &TaskIntentSchema) -> bool {
+    let creator_mode = intent.creator_mode.as_deref().unwrap_or_default();
+    let created_by = intent.created_by.as_deref().unwrap_or_default();
+    creator_mode != "ui-manual" && created_by != "redclaw-task-center"
+}
+
+fn maybe_create_review_docket_for_draft(
+    store: &mut crate::AppStore,
+    draft: &RedclawJobDefinitionRecord,
+    intent: &TaskIntentSchema,
+    preview: &TaskPreviewResult,
+) -> Result<Option<String>, String> {
+    if !should_create_review_docket_for_draft(intent) {
+        return Ok(None);
+    }
+    if let Some(existing) = store.review_dockets.iter().find(|docket| {
+        docket.source_kind == "redclaw_task_draft"
+            && docket.source_id.as_deref() == Some(draft.id.as_str())
+            && docket.status == "pending"
+    }) {
+        return Ok(Some(existing.id.clone()));
+    }
+
+    let docket = create_review_docket(
+        store,
+        &json!({
+            "sourceKind": "redclaw_task_draft",
+            "sourceId": draft.id,
+            "title": draft.title,
+            "summary": format!("RedClaw 请求创建 {}。", if preview.normalized.kind == "long_cycle" { "长周期任务" } else { "定时任务" }),
+            "body": redclaw_draft_review_body(intent, preview),
+            "decisionType": "redclaw_task_confirm",
+            "priority": if matches!(&preview.policy_decision, TaskPolicyDecisionKind::RequireConfirm) { "high" } else { "normal" },
+            "riskLevel": if preview.policy_warnings.is_empty() { "normal" } else { "medium" },
+            "evidenceRefs": preview.conflict_tasks.iter().map(|item| json!({
+                "kind": "conflict_task",
+                "definitionId": item.definition_id,
+                "title": item.title,
+                "lifecycleState": item.lifecycle_state,
+            })).collect::<Vec<_>>(),
+            "proposedAction": {
+                "kind": "redclaw_task_draft",
+                "draftId": draft.id,
+                "onDecisionConfirm": {
+                    "approved": true,
+                    "rejected": false
+                }
+            },
+            "createdByAgentId": intent.created_by,
+        }),
+    )?;
+    Ok(Some(docket.id))
+}
+
+fn redclaw_draft_review_body(intent: &TaskIntentSchema, preview: &TaskPreviewResult) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("名称：{}", intent.name));
+    lines.push(format!("类型：{}", preview.normalized.kind));
+    lines.push(format!("调度：{}", preview.normalized.preview_label));
+    lines.push(format!("动作：{}", intent.action_type));
+    lines.push(format!("Owner：{}", intent.owner_scope));
+    if let Some(prompt) = intent
+        .prompt
+        .as_deref()
+        .or(intent.goal.as_deref())
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("提示词：{prompt}"));
+    }
+    if let Some(objective) = intent
+        .objective
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("目标：{objective}"));
+    }
+    if !preview.policy_warnings.is_empty() {
+        lines.push(format!("策略提醒：{}", preview.policy_warnings.join("；")));
+    }
+    if !preview.conflict_tasks.is_empty() {
+        lines.push(format!("相似任务：{} 个", preview.conflict_tasks.len()));
+    }
+    lines.join("\n")
+}
+
+fn mark_review_dockets_for_draft(store: &mut crate::AppStore, draft_id: &str, status: &str) {
+    let now = now_i64();
+    for docket in store.review_dockets.iter_mut().filter(|docket| {
+        docket.source_kind == "redclaw_task_draft"
+            && docket.source_id.as_deref() == Some(draft_id)
+            && docket.status == "pending"
+    }) {
+        docket.status = status.to_string();
+        docket.updated_at = now;
+        docket.decided_at = Some(now);
     }
 }
 

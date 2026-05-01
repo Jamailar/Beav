@@ -319,7 +319,9 @@ export interface CollabTaskRecord {
   id: string;
   sessionId: string;
   parentTaskId?: string | null;
+  source: string;
   memberId?: string | null;
+  assigneeAgentId?: string | null;
   reviewerMemberId?: string | null;
   title: string;
   objective: string;
@@ -332,6 +334,13 @@ export interface CollabTaskRecord {
   blocksTaskIds: string[];
   runtimeTaskId?: string | null;
   externalTaskRef?: string | null;
+  attempt: number;
+  maxAttempts: number;
+  leaseOwner?: string | null;
+  leaseExpiresAt?: number | null;
+  sessionResumeId?: string | null;
+  workDir?: string | null;
+  failureReason?: string | null;
   resultSummary?: string | null;
   progressPercent?: number | null;
   artifacts: unknown[];
@@ -378,6 +387,53 @@ export interface CollabProgressReportRecord {
   artifactIds: string[];
   payload?: Record<string, unknown> | null;
   createdAt: number;
+}
+
+export interface ReviewDocketRecord {
+  id: string;
+  sourceKind: string;
+  sourceId?: string | null;
+  sessionId?: string | null;
+  taskId?: string | null;
+  title: string;
+  summary: string;
+  body: string;
+  decisionType: string;
+  priority: string;
+  status: string;
+  riskLevel: string;
+  proposedAction?: Record<string, unknown> | null;
+  evidenceRefs: unknown[];
+  artifactRefs: string[];
+  options: unknown[];
+  createdByAgentId?: string | null;
+  assignedToUserId?: string | null;
+  expiresAt?: number | null;
+  createdAt: number;
+  updatedAt: number;
+  decidedAt?: number | null;
+}
+
+export interface ReviewDecisionRecord {
+  id: string;
+  docketId: string;
+  decision: string;
+  comment?: string | null;
+  selectedOptionId?: string | null;
+  patch?: Record<string, unknown> | null;
+  decidedAt: number;
+}
+
+export interface ReviewDocketStats {
+  total: number;
+  pending: number;
+  approved: number;
+  rejected: number;
+  changesRequested: number;
+  skipped: number;
+  archived: number;
+  expiredPending: number;
+  linkedTasks: number;
 }
 
 export interface CollabMemberMatchCandidate {
@@ -981,6 +1037,21 @@ declare global {
         listTasks: (payload: { sessionId: string }) => Promise<CollabTaskRecord[]>;
         createTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
         updateTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        claimTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        startTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        waitReviewTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        completeTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        failTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        cancelTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        pinTaskSession: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        retryTask: (payload: Record<string, unknown>) => Promise<CollabTaskRecord>;
+        listReviewDockets: (payload?: Record<string, unknown>) => Promise<ReviewDocketRecord[]>;
+        getReviewDocket: (payload: { docketId: string }) => Promise<ReviewDocketRecord>;
+        reviewDocketStats: () => Promise<ReviewDocketStats>;
+        createReviewDocket: (payload: Record<string, unknown>) => Promise<ReviewDocketRecord>;
+        decideReviewDocket: (payload: Record<string, unknown>) => Promise<ReviewDecisionRecord>;
+        skipReviewDocket: (payload: { docketId: string }) => Promise<ReviewDocketRecord>;
+        archiveReviewDocket: (payload: { docketId: string }) => Promise<ReviewDocketRecord>;
         listMessages: (payload: { sessionId: string; memberId?: string; taskId?: string; unreadOnly?: boolean; limit?: number }) => Promise<CollabMailboxMessageRecord[]>;
         readMailbox: (payload: { sessionId: string; memberId?: string; taskId?: string; unreadOnly?: boolean; markRead?: boolean; limit?: number }) => Promise<CollabMailboxMessageRecord[]>;
         sendMessage: (payload: Record<string, unknown>) => Promise<CollabMailboxMessageRecord>;

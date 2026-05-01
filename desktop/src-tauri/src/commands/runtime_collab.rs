@@ -1,13 +1,16 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
+use crate::commands::redclaw::redclaw_task_control;
 use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    add_collab_member, collab_session_snapshot, create_collab_session, create_collab_task,
+    add_collab_member, archive_review_docket, collab_session_snapshot, create_collab_session,
+    create_collab_task, create_review_docket, decide_review_docket, get_review_docket,
     list_collab_members, list_collab_messages, list_collab_reports, list_collab_sessions,
-    list_collab_tasks, post_collab_message, read_collab_mailbox, request_collab_report,
-    submit_collab_report, update_collab_session_status, update_collab_task,
+    list_collab_tasks, list_review_dockets, pin_collab_task_session, post_collab_message,
+    read_collab_mailbox, request_collab_report, retry_collab_task, review_docket_stats,
+    submit_collab_report, transition_collab_task, update_collab_session_status, update_collab_task,
 };
 use crate::subagents::{execute_team_tool, team_tool_descriptors, tick_team_wake_runtime};
 use crate::{payload_string, AppState};
@@ -167,6 +170,166 @@ pub fn update_task_value(
         json!({ "collabSessionId": task.session_id, "task": task }),
     );
     Ok(json!(task))
+}
+
+pub fn transition_task_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+    transition: &str,
+) -> Result<Value, String> {
+    let task = with_store_mut(state, |store| {
+        transition_collab_task(store, payload, transition)
+    })?;
+    emit_collab_event(
+        app,
+        "runtime:collab-task-changed",
+        None,
+        json!({ "collabSessionId": task.session_id, "task": task, "transition": transition }),
+    );
+    Ok(json!(task))
+}
+
+pub fn pin_task_session_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let task = with_store_mut(state, |store| pin_collab_task_session(store, payload))?;
+    emit_collab_event(
+        app,
+        "runtime:collab-task-changed",
+        None,
+        json!({ "collabSessionId": task.session_id, "task": task, "transition": "pin-session" }),
+    );
+    Ok(json!(task))
+}
+
+pub fn retry_task_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let task = with_store_mut(state, |store| retry_collab_task(store, payload))?;
+    emit_collab_event(
+        app,
+        "runtime:collab-task-changed",
+        None,
+        json!({ "collabSessionId": task.session_id, "task": task, "transition": "retry" }),
+    );
+    Ok(json!(task))
+}
+
+pub fn list_review_dockets_value(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    with_store(state, |store| {
+        Ok(json!(list_review_dockets(&store, payload)))
+    })
+}
+
+pub fn get_review_docket_value(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let docket_id =
+        payload_string(payload, "docketId").ok_or_else(|| "缺少 docketId".to_string())?;
+    with_store(state, |store| {
+        get_review_docket(&store, &docket_id)
+            .map(|docket| json!(docket))
+            .ok_or_else(|| "审批项不存在".to_string())
+    })
+}
+
+pub fn review_docket_stats_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    with_store(state, |store| Ok(review_docket_stats(&store)))
+}
+
+pub fn create_review_docket_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let docket = with_store_mut(state, |store| create_review_docket(store, payload))?;
+    emit_collab_event(
+        app,
+        "runtime:review-docket-changed",
+        None,
+        json!({ "docketId": docket.id, "docket": docket }),
+    );
+    Ok(json!(docket))
+}
+
+pub fn decide_review_docket_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let decision = with_store_mut(state, |store| decide_review_docket(store, payload))?;
+    apply_review_docket_action(app, state, &decision.docket_id, &decision.decision)?;
+    emit_collab_event(
+        app,
+        "runtime:review-docket-changed",
+        None,
+        json!({ "docketId": decision.docket_id, "decision": decision }),
+    );
+    Ok(json!(decision))
+}
+
+fn apply_review_docket_action(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    docket_id: &str,
+    decision: &str,
+) -> Result<(), String> {
+    let docket = with_store(state, |store| {
+        get_review_docket(&store, docket_id).ok_or_else(|| "审批项不存在".to_string())
+    })?;
+    let proposed_action = docket.proposed_action.as_ref().and_then(Value::as_object);
+    let Some(action) = proposed_action else {
+        return Ok(());
+    };
+    if action.get("kind").and_then(Value::as_str) != Some("redclaw_task_draft") {
+        return Ok(());
+    }
+    let draft_id = action
+        .get("draftId")
+        .and_then(Value::as_str)
+        .or(docket.source_id.as_deref())
+        .ok_or_else(|| "RedClaw 审批项缺少 draftId".to_string())?;
+    let confirm = match decision {
+        "approved" => Some(true),
+        "rejected" => Some(false),
+        _ => None,
+    };
+    if let Some(confirm) = confirm {
+        redclaw_task_control::handle_task_confirm(
+            app,
+            state,
+            &json!({
+                "draftId": draft_id,
+                "confirm": confirm,
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+pub fn archive_review_docket_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+    status: &str,
+) -> Result<Value, String> {
+    let docket = with_store_mut(state, |store| archive_review_docket(store, payload, status))?;
+    emit_collab_event(
+        app,
+        "runtime:review-docket-changed",
+        None,
+        json!({ "docketId": docket.id, "docket": docket }),
+    );
+    Ok(json!(docket))
 }
 
 pub fn post_message_value(

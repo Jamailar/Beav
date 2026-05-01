@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, Ban, Clock3, MessageSquare, Paperclip, Plus, RefreshCw, Send, Target, Users } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Ban, Clock3, MessageSquare, Paperclip, Plus, RefreshCw, ScrollText, Send, Target, Users } from 'lucide-react';
 import type {
   CollabMemberRecord,
   CollabProgressReportRecord,
@@ -13,6 +13,7 @@ type BoardStatus = 'todo' | 'ready' | 'running' | 'blocked' | 'review' | 'comple
 interface CollaborationBoardProps {
   isActive?: boolean;
   onSwitchRedclaw?: () => void;
+  onSwitchReview?: () => void;
 }
 
 const boardColumns: Array<{ key: BoardStatus; label: string }> = [
@@ -40,7 +41,12 @@ function statusLabel(value?: string | null): string {
     case 'blocked':
       return '阻塞';
     case 'review':
+    case 'waiting_for_review':
       return '评审';
+    case 'claimed':
+      return '已领取';
+    case 'queued':
+      return '排队';
     case 'completed':
       return '完成';
     case 'failed':
@@ -58,11 +64,17 @@ function statusLabel(value?: string | null): string {
 
 function taskColumn(status?: string | null): BoardStatus {
   const normalized = String(status || '').trim();
+  if (normalized === 'queued' || normalized === 'claimed') return 'ready';
   if (normalized === 'in_progress' || normalized === 'active' || normalized === 'working') return 'running';
   if (normalized === 'done') return 'completed';
-  if (normalized === 'reviewing') return 'review';
+  if (normalized === 'reviewing' || normalized === 'waiting_for_review') return 'review';
   if (boardColumns.some((column) => column.key === normalized)) return normalized as BoardStatus;
   return 'todo';
+}
+
+function canonicalStatusForColumn(status: BoardStatus): string {
+  if (status === 'review') return 'waiting_for_review';
+  return status;
 }
 
 function latestReportForMember(reports: CollabProgressReportRecord[], memberId: string): CollabProgressReportRecord | null {
@@ -125,7 +137,7 @@ function completionClaimFor(report: CollabProgressReportRecord): Record<string, 
   return asRecord(asRecord(report.payload).completionClaim);
 }
 
-export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: CollaborationBoardProps) {
+export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onSwitchReview }: CollaborationBoardProps) {
   const [sessions, setSessions] = useState<CollabSessionRecord[]>([]);
   const [snapshot, setSnapshot] = useState<CollabSessionSnapshot | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState('');
@@ -331,7 +343,16 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
   const moveTask = useCallback(async (task: CollabTaskRecord, status: string) => {
     setBusy(`task:${task.id}`);
     try {
-      await window.ipcRenderer.teamRuntime.updateTask({ taskId: task.id, status });
+      const canonicalStatus = canonicalStatusForColumn(status as BoardStatus);
+      if (canonicalStatus === 'running') {
+        await window.ipcRenderer.teamRuntime.startTask({ taskId: task.id });
+      } else if (canonicalStatus === 'waiting_for_review') {
+        await window.ipcRenderer.teamRuntime.waitReviewTask({ taskId: task.id });
+      } else if (canonicalStatus === 'completed') {
+        await window.ipcRenderer.teamRuntime.completeTask({ taskId: task.id });
+      } else {
+        await window.ipcRenderer.teamRuntime.updateTask({ taskId: task.id, status: canonicalStatus });
+      }
       await loadSnapshot(task.sessionId);
     } catch (moveError) {
       setError(moveError instanceof Error ? moveError.message : String(moveError));
@@ -339,6 +360,45 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
       setBusy('');
     }
   }, [loadSnapshot]);
+
+  const submitTaskForReview = useCallback(async () => {
+    if (!selectedTask) return;
+    setBusy(`review:${selectedTask.id}`);
+    try {
+      const latest = latestReportForTask(reports, selectedTask.id);
+      await window.ipcRenderer.teamRuntime.createReviewDocket({
+        sourceKind: 'collab_task',
+        sourceId: selectedTask.id,
+        sessionId: selectedTask.sessionId,
+        taskId: selectedTask.id,
+        title: selectedTask.title,
+        summary: latest?.summary || selectedTask.resultSummary || selectedTask.description || selectedTask.objective || selectedTask.title,
+        body: [
+          selectedTask.objective || selectedTask.description || selectedTask.title,
+          latest?.summary ? `\n最新汇报：${latest.summary}` : '',
+          selectedTask.failureReason ? `\n失败原因：${selectedTask.failureReason}` : '',
+        ].filter(Boolean).join('\n'),
+        decisionType: 'completion_review',
+        priority: selectedTask.priority > 0 ? 'high' : 'normal',
+        riskLevel: selectedTask.status === 'failed' ? 'high' : 'normal',
+        artifactRefs: [...selectedTask.artifactIds, ...selectedTask.artifacts.map(artifactText)],
+        createdByAgentId: selectedTask.assigneeAgentId,
+        proposedAction: {
+          onDecisionTaskStatus: {
+            approved: 'completed',
+            rejected: 'failed',
+            changes_requested: 'claimed',
+          },
+        },
+      });
+      await loadSnapshot(selectedTask.sessionId);
+      onSwitchReview?.();
+    } catch (reviewError) {
+      setError(reviewError instanceof Error ? reviewError.message : String(reviewError));
+    } finally {
+      setBusy('');
+    }
+  }, [loadSnapshot, onSwitchReview, reports, selectedTask]);
 
   const setSessionStatus = useCallback(async (status: 'active' | 'paused' | 'archived') => {
     if (!snapshot?.session?.id) return;
@@ -547,6 +607,12 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
             {onSwitchRedclaw && (
               <button onClick={onSwitchRedclaw} className="rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[12px] text-[#607166]">
                 RedClaw 任务
+              </button>
+            )}
+            {onSwitchReview && (
+              <button onClick={onSwitchReview} className="inline-flex items-center rounded-full border border-[#e8dccb] bg-white px-3 py-1.5 text-[12px] text-[#74634f]">
+                <ScrollText className="mr-1.5 h-3.5 w-3.5" />
+                御批台
               </button>
             )}
             {snapshot?.session?.id && (
@@ -853,6 +919,14 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw }: Collabo
                       完成并声明
                     </button>
                   )}
+                  <button
+                    onClick={() => void submitTaskForReview()}
+                    disabled={busy === `review:${selectedTask.id}`}
+                    className="rounded-full border border-[#e8dccb] bg-[#fffaf2] px-2 py-1 text-[10px] text-[#74634f] disabled:cursor-wait disabled:opacity-60"
+                  >
+                    <ScrollText className="mr-1 inline h-3 w-3" />
+                    呈批
+                  </button>
                 </div>
                 {selectedTask.memberId && (
                   <div className="mt-3 space-y-2">

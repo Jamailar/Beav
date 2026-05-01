@@ -50,6 +50,49 @@ pub fn handle_runtime_session_channel(
         "team-runtime:update-task" | "collab:tasks:update" => {
             runtime_collab::update_task_value(app, state, payload)
         }
+        "team-runtime:claim-task" => {
+            runtime_collab::transition_task_value(app, state, payload, "claim")
+        }
+        "team-runtime:start-task" => {
+            runtime_collab::transition_task_value(app, state, payload, "start")
+        }
+        "team-runtime:wait-review-task" => {
+            runtime_collab::transition_task_value(app, state, payload, "wait-review")
+        }
+        "team-runtime:complete-task" => {
+            runtime_collab::transition_task_value(app, state, payload, "complete")
+        }
+        "team-runtime:fail-task" => {
+            runtime_collab::transition_task_value(app, state, payload, "fail")
+        }
+        "team-runtime:cancel-task" => {
+            runtime_collab::transition_task_value(app, state, payload, "cancel")
+        }
+        "team-runtime:pin-task-session" => {
+            runtime_collab::pin_task_session_value(app, state, payload)
+        }
+        "team-runtime:retry-task" => runtime_collab::retry_task_value(app, state, payload),
+        "review:dockets:list" | "team-runtime:list-review-dockets" => {
+            runtime_collab::list_review_dockets_value(state, payload)
+        }
+        "review:dockets:get" | "team-runtime:get-review-docket" => {
+            runtime_collab::get_review_docket_value(state, payload)
+        }
+        "review:dockets:stats" | "team-runtime:review-docket-stats" => {
+            runtime_collab::review_docket_stats_value(state)
+        }
+        "review:dockets:create" | "team-runtime:create-review-docket" => {
+            runtime_collab::create_review_docket_value(app, state, payload)
+        }
+        "review:dockets:decide" | "team-runtime:decide-review-docket" => {
+            runtime_collab::decide_review_docket_value(app, state, payload)
+        }
+        "review:dockets:skip" | "team-runtime:skip-review-docket" => {
+            runtime_collab::archive_review_docket_value(app, state, payload, "skipped")
+        }
+        "review:dockets:archive" | "team-runtime:archive-review-docket" => {
+            runtime_collab::archive_review_docket_value(app, state, payload, "archived")
+        }
         "team-runtime:send-message" | "collab:mailbox:post" => {
             runtime_collab::post_message_value(app, state, payload)
         }
