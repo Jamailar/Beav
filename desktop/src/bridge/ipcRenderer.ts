@@ -1131,6 +1131,8 @@ function createIpcRenderer() {
       list: () => invokeChannel('redclaw:list-projects'),
       updateLearningCandidate: (payload: { projectId: string; candidateId: string; status: 'accepted' | 'rejected' | 'pending' }) =>
         invokeChannel('redclaw:learning-candidate-update', payload),
+      updateSection: (payload: { projectId: string; sectionId: string; content: string }) =>
+        invokeChannel('redclaw:project-section-update', payload),
     },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
