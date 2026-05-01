@@ -896,6 +896,9 @@ type RedClawJob = {
 - Media section 可导出 `redclaw.mediaPlan.v1` 包，包含 `media-plan.json`、`rough-cut.ffconcat` 和 README；可用 ffmpeg 渲染第一版 rough cut。
 - Publish section 可导出 `redclaw.publishPackage.v1` 包，包含 `publish-package.json`、`publish-package.md` 和 `cover-brief.md`。
 - Review section 可导出 `redclaw.reviewReport.v1` 包，包含 `review-report.json` 和 `review-report.md`。
+- 小红书 Agent 已补完整运行提示词边界，子 Agent 会读取 `node`、`skillProfiles`、上下游节点、平台和内容格式。
+- Skill Profile 已从名称声明升级为 contract，包含 `instruction`、`inputContract`、`outputContract` 和评估维度。
+- 小红书项目可导出 `redclaw.xhsPackage.v1` 包，包含 `xhs-package.json`、`xhs-package.md`、`carousel-layout.json` 和 `image-manifest.json`。
 
 当前新增/使用的 RedClaw orchestration IPC：
 
@@ -910,6 +913,7 @@ type RedClawJob = {
 - `redclaw:media-plan-render`
 - `redclaw:publish-package-export`
 - `redclaw:review-report-export`
+- `redclaw:xhs-package-export`
 
 仍未做的边界保持不变：不自动发布到平台，不自研完整剪辑器，不自研 ASR/OCR/编码器，不允许 Agent 静默写长期记忆。
 
@@ -980,6 +984,7 @@ RedClaw 自研部分：
 - 小红书 AgentSpec / SkillProfile / output schema。
 - 小红书图文结构、视觉 brief、图片资产 manifest、carousel layout manifest。
 - 项目状态同步、section 草稿、学习候选、发布包、质检报告。
+- 小红书交付包导出：`xhs-package` 聚合选题、结构、文案、视觉、图片、版式、合规、发布和复盘结果。
 
 ### Step 1. Contracts
 
