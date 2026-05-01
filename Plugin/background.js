@@ -2635,6 +2635,7 @@ function buildXhsAccountPostFromEntry(entryPayload) {
   const noteId = normalizeText(entryPayload?.noteId) || hashString(normalizeText(entryPayload?.source));
   return {
     id: noteId,
+    platform: 'xiaohongshu',
     platformPostId: noteId,
     title: normalizeText(entryPayload?.title),
     content: normalizeText(entryPayload?.content || entryPayload?.text || entryPayload?.description),
@@ -2735,6 +2736,7 @@ function buildAccountPostFromSocialPayload(payload = {}, platformHint = '') {
   ].filter((item) => item.url);
   return {
     id: postId,
+    platform,
     platformPostId: postId,
     title: normalizeText(payload?.title),
     content: normalizeText(payload?.text || payload?.content || payload?.description || payload?.title),
@@ -2746,6 +2748,64 @@ function buildAccountPostFromSocialPayload(payload = {}, platformHint = '') {
     media,
     raw: payload || {},
   };
+}
+
+function buildAccountMediaFromPost(post = {}) {
+  const postId = normalizeText(post?.platformPostId || post?.id || post?.url);
+  const platform = normalizeAccountPlatform(post?.platform);
+  const media = Array.isArray(post?.media) ? post.media : [];
+  return media
+    .map((item, index) => {
+      const url = normalizeText(item?.url || item?.src || item?.localPath);
+      const kind = normalizeText(item?.kind) || 'media';
+      if (!url) return null;
+      return {
+        mediaId: normalizeText(item?.mediaId || item?.id) || hashString(`${postId}:${kind}:${url}:${index}`),
+        postId,
+        platform,
+        kind,
+        url,
+        index: Number.isFinite(Number(item?.index)) ? Number(item.index) : index,
+        raw: item || {},
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildAccountCommentsFromPayload(payload = {}, postIdInput = '', platformHint = '') {
+  const postId = normalizeText(postIdInput)
+    || normalizeText(payload?.noteId)
+    || normalizeText(payload?.externalId)
+    || normalizeText(payload?.source)
+    || normalizeText(payload?.url);
+  const platform = normalizeAccountPlatform(payload?.platform || platformHint);
+  const comments = Array.isArray(payload?.comments)
+    ? payload.comments
+    : Array.isArray(payload?.commentsSnapshot)
+      ? payload.commentsSnapshot
+      : [];
+  return comments
+    .map((item, index) => {
+      const author = normalizeText(item?.author || item?.username || item?.userName);
+      const text = normalizeText(item?.text || item?.content || item?.comment);
+      if (!author && !text) return null;
+      const commentId = normalizeText(item?.commentId || item?.platformCommentId || item?.id)
+        || hashString(`${postId}:${author}:${text}:${index}`);
+      return {
+        commentId,
+        id: commentId,
+        postId,
+        platform,
+        author,
+        text,
+        likes: Number(item?.likes || item?.likeCount || 0),
+        replies: Number(item?.replies || item?.replyCount || 0),
+        createdAt: normalizeText(item?.createdAt || item?.publishedAt),
+        location: normalizeText(item?.location),
+        raw: item || {},
+      };
+    })
+    .filter(Boolean);
 }
 
 function buildDouyinEntry(payload) {
@@ -4102,6 +4162,13 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
     });
     return null;
   });
+  const accountMedia = accountPosts.flatMap((post) => buildAccountMediaFromPost(post));
+  const accountMediaBatch = await postAccountMediaBatch(options.accountSession, accountMedia).catch((error) => {
+    pluginWarn('xhs-account-media-batch-failed', {
+      error: describeError(error),
+    });
+    return null;
+  });
   await completeAccountImportSession(options.accountSession, {
     status: failures.length > 0 ? (results.length > 0 ? 'partial' : 'failed') : 'completed',
     importedPostCount: accountBatch?.postCount || results.length,
@@ -4134,7 +4201,10 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       apiError: normalizeText(payloadState?.apiError),
       collectionMode: 'api',
     },
-    account: accountBatch,
+    account: {
+      posts: accountBatch,
+      media: accountMediaBatch,
+    },
     error: failures.length > 0 ? `API 模式采集完成，但有 ${failures.length} 条失败` : undefined,
   };
 }
@@ -6830,7 +6900,7 @@ async function createAccountImportSessionFromSocialPayload(payload, options = {}
       profile: profile.profile,
       options: {
         postLimit: 1,
-        includeComments: false,
+        includeComments: Boolean(options?.includeComments),
         includeMedia: Boolean(options?.includeMedia),
       },
     }),
@@ -6891,12 +6961,30 @@ async function bindCurrentPlatformAccountFromTab(tabId, platformHint = '', optio
   const { response, accountSession } = await createAccountImportSessionFromSocialPayload(payload, {
     ...options,
     platform,
+    includeComments: true,
+    includeMedia: true,
   });
   const post = buildAccountPostFromSocialPayload(payload, accountSession.platform);
   let batchResponse = null;
   if (post.title || post.content || post.url) {
     batchResponse = await postAccountPostsBatch(accountSession, [post]);
   }
+  const mediaItems = buildAccountMediaFromPost(post);
+  const mediaResponse = await postAccountMediaBatch(accountSession, mediaItems).catch((error) => {
+    pluginWarn('account-bind-media-batch-failed', {
+      platform: accountSession.platform,
+      error: describeError(error),
+    });
+    return null;
+  });
+  const comments = buildAccountCommentsFromPayload(payload, post.platformPostId || post.id, accountSession.platform);
+  const commentsResponse = await postAccountCommentsBatch(accountSession, post.platformPostId || post.id, comments).catch((error) => {
+    pluginWarn('account-bind-comments-batch-failed', {
+      platform: accountSession.platform,
+      error: describeError(error),
+    });
+    return null;
+  });
   const completeResponse = await completeAccountImportSession(accountSession, {
     importedPostCount: Number(batchResponse?.postCount || (post.title || post.content || post.url ? 1 : 0)),
     failedPostCount: 0,
@@ -6911,6 +6999,8 @@ async function bindCurrentPlatformAccountFromTab(tabId, platformHint = '', optio
       username: accountSession.username,
     },
     postCount: Number(batchResponse?.postCount || 0),
+    mediaCount: Number(mediaResponse?.mediaCount || 0),
+    commentCount: Number(commentsResponse?.commentCount || 0),
     syncedMemoryCount: Number(completeResponse?.syncedMemoryCount || batchResponse?.syncedMemoryCount || 0),
     summary: `${accountSession.username || '当前账号'} 已绑定${batchResponse ? '，当前内容已加入账号档案' : ''}`,
   };
@@ -6925,8 +7015,39 @@ async function postAccountPostsBatch(accountSession, posts) {
     method: 'POST',
     body: JSON.stringify({
       sessionId: normalizeText(accountSession?.sessionId) || undefined,
-      platform: 'xiaohongshu',
+      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
       posts,
+    }),
+  });
+}
+
+async function postAccountCommentsBatch(accountSession, postId, comments) {
+  const accountId = normalizeText(accountSession?.accountId);
+  if (!accountId || !Array.isArray(comments) || comments.length === 0) {
+    return null;
+  }
+  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/comments/batch`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: normalizeText(accountSession?.sessionId) || undefined,
+      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
+      postId: normalizeText(postId) || undefined,
+      comments,
+    }),
+  });
+}
+
+async function postAccountMediaBatch(accountSession, media) {
+  const accountId = normalizeText(accountSession?.accountId);
+  if (!accountId || !Array.isArray(media) || media.length === 0) {
+    return null;
+  }
+  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/media/batch`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: normalizeText(accountSession?.sessionId) || undefined,
+      platform: normalizeAccountPlatform(accountSession?.platform) || 'xiaohongshu',
+      media,
     }),
   });
 }
