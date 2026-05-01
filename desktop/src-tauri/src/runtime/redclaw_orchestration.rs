@@ -117,6 +117,177 @@ fn includes_any(text: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|pattern| text.contains(pattern))
 }
 
+fn count_matching_terms(text: &str, patterns: &[&str]) -> usize {
+    patterns
+        .iter()
+        .filter(|pattern| text.contains(**pattern))
+        .count()
+}
+
+fn compact_redclaw_goal(text: &str) -> String {
+    text.chars()
+        .filter(|ch| {
+            !ch.is_whitespace()
+                && !matches!(
+                    ch,
+                    ',' | '.'
+                        | '!'
+                        | '?'
+                        | ';'
+                        | ':'
+                        | '\''
+                        | '"'
+                        | '`'
+                        | '~'
+                        | '，'
+                        | '。'
+                        | '！'
+                        | '？'
+                        | '；'
+                        | '：'
+                        | '、'
+                        | '“'
+                        | '”'
+                        | '‘'
+                        | '’'
+                        | '('
+                        | ')'
+                        | '（'
+                        | '）'
+                        | '['
+                        | ']'
+                        | '【'
+                        | '】'
+                )
+        })
+        .collect()
+}
+
+pub fn should_auto_orchestrate_redclaw_goal(goal: &str) -> bool {
+    let lower = goal.trim().to_lowercase();
+    if lower.is_empty() {
+        return false;
+    }
+
+    let compact = compact_redclaw_goal(&lower);
+    let direct_goals = [
+        "hi",
+        "hello",
+        "hey",
+        "你好",
+        "嗨",
+        "哈喽",
+        "在吗",
+        "ok",
+        "好的",
+        "收到",
+        "谢谢",
+        "thanks",
+        "辛苦了",
+        "嗯",
+        "啊",
+    ];
+    if direct_goals.contains(&compact.as_str()) {
+        return false;
+    }
+    if compact.chars().count() <= 8 && !includes_any(&lower, &["全流程", "发布包"]) {
+        return false;
+    }
+
+    let team_triggers = [
+        "团队",
+        "组队",
+        "协作",
+        "多agent",
+        "multi-agent",
+        "全流程",
+        "端到端",
+        "一站式",
+        "工作流",
+        "发布包",
+        "复盘",
+        "质检",
+        "合规",
+        "知识库",
+        "研究",
+        "资料",
+        "素材匹配",
+        "分镜",
+        "粗剪",
+        "剪辑计划",
+    ];
+    let deliverables = [
+        "选题", "标题", "封面", "正文", "脚本", "文案", "标签", "配图", "图片", "分镜", "素材",
+        "发布", "质检", "复盘",
+    ];
+    let simple_direct_patterns = [
+        "改一下",
+        "润色",
+        "优化",
+        "缩短",
+        "扩写",
+        "翻译",
+        "总结",
+        "起个标题",
+        "写个标题",
+        "给我标题",
+        "写一句",
+        "写一段",
+        "简单写",
+        "帮我看看",
+    ];
+
+    let has_explicit_team_trigger = includes_any(&lower, &team_triggers);
+    let has_end_to_end_shape = (lower.contains('从') && lower.contains('到'))
+        || (lower.contains("包含")
+            && includes_any(&lower, &["发布", "质检", "复盘", "配图", "分镜", "素材"]));
+    let deliverable_count = count_matching_terms(&lower, &deliverables);
+    let has_source_grounding = includes_any(&lower, &["基于", "根据", "结合"])
+        && includes_any(
+            &lower,
+            &[
+                "收藏",
+                "知识库",
+                "资料",
+                "素材",
+                "文章",
+                "笔记",
+                "链接",
+                "文件",
+            ],
+        );
+    let has_complex_creation_target =
+        includes_any(&lower, &["小红书", "视频", "图文", "文章", "笔记", "发布"])
+            && includes_any(
+                &lower,
+                &[
+                    "完整", "一套", "一条", "生成", "创作", "策划", "制作", "发布",
+                ],
+            );
+
+    if has_explicit_team_trigger || has_end_to_end_shape || has_source_grounding {
+        return true;
+    }
+    if deliverable_count >= 3 {
+        return true;
+    }
+    if has_complex_creation_target && deliverable_count >= 2 {
+        return true;
+    }
+    if lower.chars().count() >= 120 && deliverable_count >= 2 {
+        return true;
+    }
+
+    let is_simple_direct = lower.chars().count() <= 80
+        && includes_any(&lower, &simple_direct_patterns)
+        && deliverable_count <= 1;
+    if is_simple_direct {
+        return false;
+    }
+
+    false
+}
+
 fn detect_platform(text: &str) -> Option<String> {
     if includes_any(text, &["小红书", "xiaohongshu", "rednote"]) {
         return Some("xiaohongshu".to_string());
@@ -1264,6 +1435,9 @@ pub fn plan_redclaw_orchestration(payload: &Value) -> Result<RedclawOrchestratio
         .or_else(|| payload_string(payload, "task"))
         .or_else(|| payload_string(payload, "message"))
         .ok_or_else(|| "goal is required".to_string())?;
+    if !should_auto_orchestrate_redclaw_goal(&goal) {
+        return Err("goal does not require RedClaw team orchestration".to_string());
+    }
     let graph = build_redclaw_task_graph(&goal);
     Ok(RedclawOrchestrationPlan {
         success: true,
@@ -1542,6 +1716,34 @@ pub fn sync_redclaw_project_from_runtime_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn trivial_goal_does_not_require_orchestration() {
+        assert!(!should_auto_orchestrate_redclaw_goal("hi"));
+        assert!(!should_auto_orchestrate_redclaw_goal("你好"));
+        assert!(!should_auto_orchestrate_redclaw_goal("谢谢"));
+        assert!(!should_auto_orchestrate_redclaw_goal("给我三个标题"));
+        assert!(!should_auto_orchestrate_redclaw_goal(
+            "润色这句话：今天状态很好"
+        ));
+    }
+
+    #[test]
+    fn multi_deliverable_goal_requires_orchestration() {
+        assert!(should_auto_orchestrate_redclaw_goal(
+            "基于最近收藏的内容，做一条适合小红书的 60 秒口播视频，并给我标题、封面文案和发布正文。"
+        ));
+        assert!(should_auto_orchestrate_redclaw_goal(
+            "做一个小红书图文全流程，包含选题、正文、配图、发布包、质检"
+        ));
+    }
+
+    #[test]
+    fn plan_redclaw_orchestration_rejects_trivial_goal() {
+        let result = plan_redclaw_orchestration(&json!({ "goal": "hi" }));
+        assert!(result.is_err());
+    }
 
     #[test]
     fn video_publish_goal_builds_full_creative_team_graph() {
