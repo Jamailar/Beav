@@ -42,6 +42,8 @@
 - `GET /api/accounts/health`
 - `POST /api/accounts/import-sessions`
 - `POST /api/accounts/{accountId}/posts/batch`
+- `POST /api/accounts/{accountId}/comments/batch`
+- `POST /api/accounts/{accountId}/media/batch`
 - `POST /api/accounts/import-sessions/{sessionId}/complete`
 
 本地 HTTP 响应会附带浏览器插件所需的 CORS / Private Network Access 响应头，避免出现 `health` 可访问但 `POST` 被浏览器预检拦截的情况。

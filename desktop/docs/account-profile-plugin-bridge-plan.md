@@ -1,14 +1,14 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-30
+last_updated: 2026-05-01
 ---
 
 # 账号档案与插件双向通讯实施计划
 
-## 2026-04-30 落地状态
+## 2026-05-01 落地状态
 
-本计划的核心链路已经完成：插件可以读取当前空间健康状态，在 sidepanel 展示空间名和账号绑定提示；用户在账号主页点击绑定后，会复用保存博主流程创建账号导入会话、批量上传历史内容并完成导入。App 会把主数据保存到当前 workspace 的 `accounts/{platform}/{accountId}/`，通过 `profile_learning` 生成 `distillation/` 证据包、统计、AI 蒸馏任务和质量报告，再自动更新 `CreatorProfile.md`、`writing-style-skill/SKILL.md`、`learning-summary.md` 和 `memory-candidates.json`，并把稳定候选同步到现有长期记忆系统。Archives 页面展示当前空间运营账号学习结果，AI runtime 在聊天、稿件编辑和 RedClaw 等创作链路中自动注入当前账号档案、写作风格技能和长期记忆上下文。
+本计划的核心链路已经完成：插件可以读取当前空间健康状态，在 sidepanel 展示空间名和账号绑定提示；用户在账号主页点击绑定后，会复用保存博主流程创建账号导入会话、批量上传历史内容并完成导入。App 会把主数据保存到当前 workspace 的 `accounts/{platform}/{accountId}/`，通过 `profile_learning` 生成 `distillation/` 证据包、统计、AI 蒸馏任务和质量报告，再自动更新 `CreatorProfile.md`、`writing-style-skill/SKILL.md`、`learning-summary.md` 和 `memory-candidates.json`，并把稳定候选同步到现有长期记忆系统。插件已把账号正文、评论快照和媒体元数据分别写入 `posts/`、`comments/`、`media/`。Archives 页面展示当前空间运营账号学习结果，AI runtime 在聊天、稿件编辑和 RedClaw 等创作链路中自动注入当前账号档案、写作风格技能和长期记忆上下文。
 
 ## 目标
 
@@ -79,10 +79,7 @@ workspace/
         comments/
           note-{platformPostId}.comments.json
         media/
-          note-{platformPostId}/
-            cover.webp
-            image-1.webp
-            video.mp4
+          media-{mediaId}.json
     douyin/
       account-{platformUserId-or-urlHash}/
     bilibili/
@@ -868,6 +865,7 @@ Workboard 使用方式：
 - `POST /api/accounts/import-sessions`
 - `POST /api/accounts/{accountId}/posts/batch`
 - `POST /api/accounts/{accountId}/comments/batch`
+- `POST /api/accounts/{accountId}/media/batch`
 - `POST /api/accounts/import-sessions/{sessionId}/complete`
 
 验收：
