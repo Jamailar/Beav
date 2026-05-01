@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Clipboard, FileText, Loader2, RefreshCw, Save } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Clipboard, FileJson, FileText, Loader2, RefreshCw, Save } from 'lucide-react';
 import { clsx } from 'clsx';
 
 type RedClawProject = {
@@ -110,6 +110,8 @@ export function RedClawProjectWorkspacePanel() {
     const [activeSectionId, setActiveSectionId] = useState<SectionDefinition['id']>('brief');
     const [sectionDrafts, setSectionDrafts] = useState<Record<string, string>>({});
     const [savingSectionId, setSavingSectionId] = useState('');
+    const [exportingMediaPlan, setExportingMediaPlan] = useState(false);
+    const [lastMediaPlanPath, setLastMediaPlanPath] = useState('');
     const [copiedSectionId, setCopiedSectionId] = useState('');
 
     const activeProject = useMemo(() => projects[0] || null, [projects]);
@@ -195,6 +197,28 @@ export function RedClawProjectWorkspacePanel() {
         setCopiedSectionId(activeSection.id);
         window.setTimeout(() => setCopiedSectionId(''), 1200);
     }, [activeSection.id, generatedSectionContent, sectionDrafts]);
+
+    const exportMediaPlan = useCallback(async () => {
+        if (!activeProject) return;
+        setExportingMediaPlan(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawProjects.exportMediaPlan({
+                projectId: activeProject.id,
+            });
+            if (!result?.success) {
+                setError(result?.error || '导出剪辑计划失败');
+                return;
+            }
+            setLastMediaPlanPath(String(result.path || '').trim());
+            await loadProjects();
+        } catch (err) {
+            console.error('Failed to export RedClaw media plan:', err);
+            setError('导出剪辑计划失败');
+        } finally {
+            setExportingMediaPlan(false);
+        }
+    }, [activeProject, loadProjects]);
 
     useEffect(() => {
         setSectionDrafts(sectionDraftsFromProject(activeProject));
@@ -332,6 +356,22 @@ export function RedClawProjectWorkspacePanel() {
                                             {activeSection.label} · 可编辑草稿
                                         </div>
                                         <div className="flex gap-1.5">
+                                            {activeSection.id === 'media' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void exportMediaPlan()}
+                                                    disabled={exportingMediaPlan}
+                                                    className={clsx(
+                                                        'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
+                                                        exportingMediaPlan
+                                                            ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                                            : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
+                                                    )}
+                                                >
+                                                    {exportingMediaPlan ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
+                                                    导出计划
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={() => void copySectionDraft()}
@@ -356,6 +396,11 @@ export function RedClawProjectWorkspacePanel() {
                                             </button>
                                         </div>
                                     </div>
+                                    {activeSection.id === 'media' && lastMediaPlanPath && (
+                                        <div className="truncate rounded-[8px] bg-surface-secondary px-2 py-1.5 text-[11px] text-text-tertiary">
+                                            已导出：{lastMediaPlanPath}
+                                        </div>
+                                    )}
                                 </div>
 
                                 {(activeProject.learningCandidates || []).slice(0, 3).map((candidate, index) => (
