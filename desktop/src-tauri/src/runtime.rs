@@ -18,6 +18,8 @@ mod interactive_loop;
 mod interactive_recovery;
 #[path = "runtime/orchestration_runtime.rs"]
 mod orchestration_runtime;
+#[path = "runtime/redclaw_orchestration.rs"]
+mod redclaw_orchestration;
 #[path = "runtime/session_runtime.rs"]
 mod session_runtime;
 #[path = "runtime/task_runtime.rs"]
@@ -37,6 +39,7 @@ pub use events::*;
 pub use interactive_loop::*;
 pub use interactive_recovery::*;
 pub use orchestration_runtime::*;
+pub use redclaw_orchestration::*;
 pub use session_runtime::*;
 pub use task_runtime::*;
 pub use turn_context::*;

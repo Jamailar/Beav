@@ -10,7 +10,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::commands::redclaw_runtime::execute_redclaw_run;
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
-use crate::runtime::RedclawRuntime;
+use crate::runtime::{
+    plan_redclaw_orchestration, redclaw_orchestration_registry_value, RedclawRuntime,
+};
 use crate::scheduler::task_policy::TaskIntentSchema;
 use crate::scheduler::{
     clear_definition_cooldown, emit_scheduler_snapshot, enqueue_manual_job_execution_for_source,
@@ -84,6 +86,8 @@ pub fn handle_redclaw_channel(
     let result: Result<Value, String> = match channel {
         "redclaw:runner-status" => redclaw_runner_status_value(state),
         "redclaw:list-projects" => Ok(json!([])),
+        "redclaw:orchestration-plan" => plan_redclaw_orchestration(payload).map(|plan| json!(plan)),
+        "redclaw:orchestration-registry" => Ok(redclaw_orchestration_registry_value()),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
