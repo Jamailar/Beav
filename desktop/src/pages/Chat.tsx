@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -629,6 +629,26 @@ function buildChatErrorTimelineItem(
   };
 }
 
+function buildRuntimeResumeTimelineItem(sessionId: string): ProcessItem {
+  const now = Date.now();
+  return {
+    id: `runtime_resume_${sessionId}_${now}`,
+    type: 'tool-call',
+    title: '断点恢复',
+    content: '正在继续这个会话上次未完成的回复，不是当前新消息单独触发的工具链。',
+    status: 'running',
+    timestamp: now,
+    toolData: {
+      callId: `runtime-resume:${sessionId}`,
+      name: 'runtime',
+      input: {
+        action: 'runtime.resume',
+        sessionId,
+      },
+    },
+  };
+}
+
 export function Chat({
   isActive = true,
   onExecutionStateChange,
@@ -763,11 +783,11 @@ export function Chat({
   const suppressComposerFocusUntilRef = useRef(0);
   const [composerSuppressed, setComposerSuppressed] = useState(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!fixedSessionId) return;
     if (currentSessionIdRef.current === fixedSessionId) return;
     currentSessionIdRef.current = fixedSessionId;
@@ -1478,6 +1498,7 @@ export function Chat({
   const selectSession = async (sessionId: string) => {
     if (!isActiveRef.current) return;
     setErrorNotice(null);
+    currentSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
     if (fixedSessionId && sessionId === fixedSessionId) {
       const warm = readFixedSessionWarmSnapshot(sessionId);
@@ -1584,6 +1605,7 @@ export function Chat({
           sessionId,
           partialChars: runtimePartial.length,
         });
+        const recoveryItem = buildRuntimeResumeTimelineItem(sessionId);
         const restoredContent = `${runtimePartial}${missedChunksRef.current || ''}`;
         missedChunksRef.current = '';
         const lastMsg = uiMessages[uiMessages.length - 1];
@@ -1594,7 +1616,7 @@ export function Chat({
             messageType: 'reply',
             content: restoredContent,
             tools: [],
-            timeline: [],
+            timeline: [recoveryItem],
             isStreaming: true,
             processingStartedAt: lastUserCreatedAt ?? Date.now(),
           });
@@ -1604,6 +1626,10 @@ export function Chat({
             messageType: 'reply',
             content: restoredContent || lastMsg.content || '',
             isStreaming: true,
+            timeline: [
+              recoveryItem,
+              ...(lastMsg.timeline || []),
+            ],
             processingStartedAt: lastMsg.processingStartedAt ?? lastUserCreatedAt ?? Date.now(),
             processingFinishedAt: undefined,
           };

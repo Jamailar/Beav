@@ -189,6 +189,9 @@ const getHumanStatusText = (toolName: string, actionName: string, status: Status
   if (normalizedAction.startsWith('redclaw.task.')) {
     return statusVerb(status, '正在处理 RedClaw 任务', '已处理 RedClaw 任务', 'RedClaw 任务处理失败');
   }
+  if (normalizedAction === 'runtime.resume') {
+    return statusVerb(status, '正在继续上次任务', '已继续上次任务', '恢复任务失败');
+  }
   if (normalizedAction.startsWith('manuscripts.')) {
     return statusVerb(status, '正在处理稿件', '已处理稿件', '稿件处理失败');
   }
