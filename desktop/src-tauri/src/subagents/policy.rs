@@ -78,6 +78,12 @@ fn role_sequence(route: &RuntimeRouteRecord, metadata: Option<&Value>) -> Vec<St
 fn parallel_group_for_role(role_id: &str, middle_index: usize) -> usize {
     match role_id {
         "planner" | "research_agent" => 0,
+        "insight_agent" => 1,
+        "script_agent" => 2,
+        "storyboard_agent" => 3,
+        "media_agent" => 4,
+        "editor_agent" => 5,
+        "publish_agent" => 6,
         "reviewer" | "review_agent" => usize::MAX,
         _ => 1 + (middle_index / 4),
     }
@@ -170,5 +176,64 @@ mod tests {
                 .all(|tool| tool == "redbox_fs" || tool == "app_cli")
         }));
         assert!(configs.iter().all(|item| item.model_config.is_some()));
+    }
+
+    #[test]
+    fn redclaw_roles_follow_creative_pipeline_order() {
+        let route = runtime_direct_route_record(
+            "redclaw",
+            "make a short video package",
+            Some(&json!({
+                "forceMultiAgent": true,
+                "subagentRoles": [
+                    "research_agent",
+                    "insight_agent",
+                    "script_agent",
+                    "storyboard_agent",
+                    "media_agent",
+                    "editor_agent",
+                    "publish_agent",
+                    "review_agent"
+                ]
+            })),
+        );
+        let configs = build_subagent_configs(
+            &route,
+            "redclaw",
+            "task-redclaw",
+            Some("session-redclaw"),
+            Some(&json!({
+                "allowedTools": ["app_cli", "redbox_fs"],
+                "subagentRoles": [
+                    "research_agent",
+                    "insight_agent",
+                    "script_agent",
+                    "storyboard_agent",
+                    "media_agent",
+                    "editor_agent",
+                    "publish_agent",
+                    "review_agent"
+                ]
+            })),
+            Some(&json!({"modelName": "gpt-main"})),
+        );
+
+        let groups = configs
+            .iter()
+            .map(|config| (config.role_id.as_str(), config.parallel_group))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            groups,
+            vec![
+                ("research_agent", 0),
+                ("insight_agent", 1),
+                ("script_agent", 2),
+                ("storyboard_agent", 3),
+                ("media_agent", 4),
+                ("editor_agent", 5),
+                ("publish_agent", 6),
+                ("review_agent", usize::MAX),
+            ]
+        );
     }
 }
