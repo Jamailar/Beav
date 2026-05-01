@@ -27,6 +27,7 @@ pub fn handle_runtime_session_channel(
             runtime_session_ops::runtime_tool_results_value(state, payload)
         }
         "runtime:list-approvals" => runtime_session_ops::runtime_approvals_value(state),
+        "task-panel:list" => runtime_collab::task_panel_list_value(state, payload),
         "team-runtime:list-sessions" | "collab:sessions:list" => {
             runtime_collab::list_sessions_value(state)
         }
