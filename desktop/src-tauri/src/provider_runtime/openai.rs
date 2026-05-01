@@ -340,6 +340,7 @@ mod tests {
             api_key: Some("rbx-live-1".to_string()),
             model_name: "qwen3.5-plus".to_string(),
             reasoning_effort: None,
+            web_search_mode: crate::provider_compat::WebSearchMode::Auto,
         };
 
         assert!(should_prefer_non_streaming_openai_turn("redclaw", &config));
@@ -356,6 +357,7 @@ mod tests {
             api_key: Some("sk-test".to_string()),
             model_name: "gpt-5.4".to_string(),
             reasoning_effort: None,
+            web_search_mode: crate::provider_compat::WebSearchMode::Auto,
         };
 
         assert!(!should_prefer_non_streaming_openai_turn("redclaw", &config));

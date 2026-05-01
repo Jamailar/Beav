@@ -7982,6 +7982,25 @@ fn run_openai_interactive_chat_runtime(
         {
             body["reasoning_split"] = json!(true);
         }
+        let web_search_policy = provider_profile.web_search_policy(config.web_search_mode);
+        if web_search_policy.requested {
+            if matches!(
+                web_search_policy.native_support,
+                crate::provider_compat::NativeWebSearchSupport::OpenAiChatCompletions
+            ) {
+                body["web_search_options"] = json!({});
+            }
+            append_debug_log_state(
+                state,
+                format!(
+                    "[runtime][web-search][{}] requested=true support={:?} requiredTransport={} reason={}",
+                    trace_id,
+                    web_search_policy.native_support,
+                    web_search_policy.required_transport.unwrap_or("current"),
+                    web_search_policy.reason
+                ),
+            );
+        }
         if is_wander {
             body["temperature"] = json!(0.4);
             body["max_tokens"] = json!(900);

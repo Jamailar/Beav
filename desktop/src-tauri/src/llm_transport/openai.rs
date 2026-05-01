@@ -934,6 +934,7 @@ mod tests {
             api_key: None,
             model_name: "MiniMax-M2.7".to_string(),
             reasoning_effort: None,
+            web_search_mode: crate::provider_compat::WebSearchMode::Auto,
         };
         assert_eq!(preferred_transport_mode(&config), TransportMode::Http11);
         assert_eq!(
