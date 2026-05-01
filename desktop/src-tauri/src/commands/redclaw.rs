@@ -88,7 +88,11 @@ pub fn handle_redclaw_channel(
 ) -> Option<Result<Value, String>> {
     let result: Result<Value, String> = match channel {
         "redclaw:runner-status" => redclaw_runner_status_value(state),
-        "redclaw:list-projects" => Ok(json!([])),
+        "redclaw:list-projects" => with_store(state, |store| {
+            let mut projects = store.redclaw_state.projects.clone();
+            projects.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            Ok(json!({ "success": true, "items": projects, "count": projects.len() }))
+        }),
         "redclaw:orchestration-plan" => plan_redclaw_orchestration(payload).map(|plan| json!(plan)),
         "redclaw:orchestration-registry" => Ok(redclaw_orchestration_registry_value()),
         "redclaw:orchestration-create-team" => create_redclaw_orchestration_team(state, payload),
@@ -789,11 +793,14 @@ fn create_redclaw_orchestration_run(
 ) -> Result<Value, String> {
     let plan = plan_redclaw_orchestration(payload)?;
     let owner_session_id = payload_string(payload, "sessionId");
+    let project_id = payload_string(payload, "projectId")
+        .unwrap_or_else(|| format!("redclaw-project:{}", plan.run_id));
     with_store_mut(state, |store| {
         let metadata = json!({
             "source": "redclaw-orchestrator",
             "runId": plan.run_id,
             "graphId": plan.graph.id,
+            "projectId": project_id,
             "redclawTaskGraph": &plan.graph,
             "subagentRoles": redclaw_plan_role_ids(&plan),
             "forceMultiAgent": true,

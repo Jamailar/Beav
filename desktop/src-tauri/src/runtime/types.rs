@@ -98,14 +98,24 @@ pub struct RedclawLongCycleTaskRecord {
     pub next_run_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct RedclawProjectRecord {
     pub id: String,
     pub goal: String,
     pub platform: Option<String>,
     pub task_type: Option<String>,
     pub status: String,
+    pub run_id: Option<String>,
+    pub graph_id: Option<String>,
+    pub runtime_task_id: Option<String>,
+    pub collab_session_id: Option<String>,
+    pub content_format: Option<String>,
+    pub artifact_path: Option<String>,
+    pub artifacts: Vec<Value>,
+    pub checkpoints: Vec<Value>,
+    pub metadata: Option<Value>,
+    pub created_at: Option<String>,
     pub updated_at: String,
 }
 
