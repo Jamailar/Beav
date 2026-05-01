@@ -238,6 +238,8 @@ struct AdvisorRecord {
     detected_knowledge_language: Option<String>,
     language_detection_status: Option<String>,
     language_confidence: Option<f64>,
+    redclaw_visible: Option<bool>,
+    redclaw_order: Option<i64>,
     created_at: String,
     updated_at: String,
 }

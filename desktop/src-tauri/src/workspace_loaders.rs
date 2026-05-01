@@ -436,6 +436,14 @@ pub(crate) fn load_advisors_from_fs(advisors_root: &Path) -> Vec<AdvisorRecord> 
                 .get("languageConfidence")
                 .or_else(|| config.get("language_confidence"))
                 .and_then(|v| v.as_f64()),
+            redclaw_visible: config
+                .get("redclawVisible")
+                .or_else(|| config.get("redclaw_visible"))
+                .and_then(|v| v.as_bool()),
+            redclaw_order: config
+                .get("redclawOrder")
+                .or_else(|| config.get("redclaw_order"))
+                .and_then(|v| v.as_i64()),
             created_at: config
                 .get("createdAt")
                 .or_else(|| config.get("created_at"))

@@ -98,6 +98,10 @@ function isRenderableAdvisorAvatar(advisor: AdvisorProfile): boolean {
     return hasRenderableAssetUrl(advisor.avatar);
 }
 
+function advisorRedClawOrder(advisor: AdvisorProfile, index: number): number {
+    return Number.isFinite(advisor.redclawOrder) ? Number(advisor.redclawOrder) : index;
+}
+
 function buildAdvisorInitialContext(advisor: AdvisorProfile): string {
     const sections = [
         `当前对话绑定成员：${advisor.name}`,
@@ -504,7 +508,15 @@ function RedClawAiSwitchBar({
     onSelectAdvisor: (advisorId: string) => void;
     onCreateAdvisor: () => void;
 }) {
-    const visibleAdvisors = advisors.slice(0, 6);
+    const visibleAdvisors = advisors
+        .map((advisor, index) => ({ advisor, index }))
+        .filter(({ advisor }) => advisor.redclawVisible !== false)
+        .sort((left, right) => {
+            const orderDelta = advisorRedClawOrder(left.advisor, left.index) - advisorRedClawOrder(right.advisor, right.index);
+            return orderDelta || left.index - right.index;
+        })
+        .map(({ advisor }) => advisor)
+        .slice(0, 6);
     return (
         <div>
             <div className="flex max-w-[min(84vw,32rem)] items-center gap-1.5 overflow-visible rounded-[22px] bg-surface-elevated/95 px-2 py-2 shadow-sm backdrop-blur-xl">
@@ -720,8 +732,13 @@ export function RedClaw({
         };
 
         void loadTeamData();
+        const handleTeamSettingsChanged = () => {
+            void loadTeamData();
+        };
+        window.addEventListener('redclaw:team-settings-changed', handleTeamSettingsChanged);
         return () => {
             cancelled = true;
+            window.removeEventListener('redclaw:team-settings-changed', handleTeamSettingsChanged);
         };
     }, [isActive]);
 
