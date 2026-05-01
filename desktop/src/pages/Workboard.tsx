@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Clock3, ListTodo, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
+import type {
+    CollabSessionSnapshot,
+    CollabTaskRecord,
+    ReviewDocketRecord,
+} from '../types';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { CollaborationBoard } from './workboard/CollaborationBoard';
 
@@ -10,7 +15,31 @@ type TaskStatsResponse = Awaited<ReturnType<typeof window.ipcRenderer.redclawRun
 type TaskFilterKey = 'all' | 'scheduled' | 'long_cycle' | 'draft' | 'active' | 'cooldown';
 type TaskEditorMode = 'create' | 'edit';
 type TaskEditorKind = 'scheduled' | 'long_cycle';
-type WorkboardMode = 'redclaw' | 'collaboration';
+type WorkboardMode = 'unified' | 'redclaw' | 'collaboration';
+type UnifiedTaskStatus = 'queued' | 'running' | 'review' | 'blocked' | 'completed' | 'failed' | 'paused';
+type UnifiedTaskSource = 'redclaw' | 'collaboration' | 'approval';
+type UnifiedTaskFilter = 'active' | UnifiedTaskStatus | UnifiedTaskSource | 'all';
+
+interface UnifiedTaskItem {
+    id: string;
+    source: UnifiedTaskSource;
+    sourceLabel: string;
+    title: string;
+    summary: string;
+    status: UnifiedTaskStatus;
+    owner: string;
+    sessionTitle: string;
+    priorityLabel: string;
+    progress: number;
+    artifactCount: number;
+    updatedAt: number;
+    createdAt: number;
+    reviewCount: number;
+    rawRedclaw?: TaskListItem;
+    rawCollab?: CollabTaskRecord;
+    rawDocket?: ReviewDocketRecord;
+    latestReportSummary?: string;
+}
 
 interface TaskEditorState {
     kind: TaskEditorKind;
@@ -256,6 +285,160 @@ function shortFingerprint(value?: string | null): string {
     return `${raw.slice(0, 8)}...${raw.slice(-8)}`;
 }
 
+function millisFrom(value?: string | number | null): number {
+    if (!value) return 0;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function redclawPanelStatus(item: TaskListItem): UnifiedTaskStatus {
+    const latestStatus = String(item.latestExecution?.status || '').trim();
+    if (item.requiresConfirmation) return 'queued';
+    if (item.cooldown?.state === 'active') return 'blocked';
+    if (latestStatus === 'running' || latestStatus === 'leased' || latestStatus === 'retrying') return 'running';
+    if (latestStatus === 'failed' || latestStatus === 'dead_lettered') return 'failed';
+    if (latestStatus === 'completed' || latestStatus === 'succeeded') return 'completed';
+    if (!item.enabled) return 'paused';
+    return 'queued';
+}
+
+function collabPanelStatus(status?: string | null): UnifiedTaskStatus {
+    switch (String(status || '').trim()) {
+        case 'in_progress':
+        case 'active':
+        case 'working':
+        case 'running':
+            return 'running';
+        case 'waiting_for_review':
+        case 'reviewing':
+        case 'review':
+            return 'review';
+        case 'blocked':
+            return 'blocked';
+        case 'done':
+        case 'completed':
+            return 'completed';
+        case 'failed':
+        case 'cancelled':
+            return 'failed';
+        case 'paused':
+        case 'archived':
+            return 'paused';
+        default:
+            return 'queued';
+    }
+}
+
+function docketPanelStatus(status?: string | null): UnifiedTaskStatus {
+    switch (String(status || '').trim()) {
+        case 'approved':
+            return 'completed';
+        case 'rejected':
+            return 'failed';
+        case 'changes_requested':
+            return 'blocked';
+        case 'skipped':
+        case 'archived':
+            return 'paused';
+        default:
+            return 'review';
+    }
+}
+
+function unifiedStatusLabel(status: UnifiedTaskStatus): string {
+    switch (status) {
+        case 'queued':
+            return '待处理';
+        case 'running':
+            return '执行中';
+        case 'review':
+            return '待审批';
+        case 'blocked':
+            return '阻塞';
+        case 'completed':
+            return '完成';
+        case 'failed':
+            return '失败';
+        case 'paused':
+            return '暂停';
+        default:
+            return status;
+    }
+}
+
+function unifiedStatusTone(status: UnifiedTaskStatus): string {
+    switch (status) {
+        case 'running':
+            return 'bg-[#dff2ee] text-[#4b7f76]';
+        case 'review':
+            return 'bg-[#efe5d6] text-[#6d553a]';
+        case 'blocked':
+            return 'bg-[#f7ead7] text-[#8c6a3c]';
+        case 'completed':
+            return 'bg-[#e4f1df] text-[#4f7358]';
+        case 'failed':
+            return 'bg-[#f8dfdf] text-[#94545c]';
+        case 'paused':
+            return 'bg-[#edf0f4] text-[#6f7682]';
+        default:
+            return 'bg-[#eef1f5] text-[#687180]';
+    }
+}
+
+function unifiedStatusRank(status: UnifiedTaskStatus): number {
+    switch (status) {
+        case 'review':
+            return 0;
+        case 'blocked':
+            return 1;
+        case 'running':
+            return 2;
+        case 'queued':
+            return 3;
+        case 'failed':
+            return 4;
+        case 'paused':
+            return 5;
+        case 'completed':
+            return 6;
+        default:
+            return 9;
+    }
+}
+
+function sourceTone(source: UnifiedTaskSource): string {
+    switch (source) {
+        case 'collaboration':
+            return 'bg-[#eef7ef] text-[#4f7358]';
+        case 'approval':
+            return 'bg-[#fff4df] text-[#7a5a2f]';
+        default:
+            return 'bg-[#f3efe8] text-[#746b5f]';
+    }
+}
+
+function priorityLabel(value?: string | number | null): string {
+    if (typeof value === 'number') return value > 0 ? `P${value}` : 'P0';
+    switch (String(value || '').trim()) {
+        case 'urgent':
+            return '紧急';
+        case 'high':
+            return '高';
+        case 'low':
+            return '低';
+        default:
+            return '普通';
+    }
+}
+
+function matchesUnifiedFilter(item: UnifiedTaskItem, filter: UnifiedTaskFilter): boolean {
+    if (filter === 'all') return true;
+    if (filter === 'active') return item.status !== 'completed' && item.status !== 'failed' && item.status !== 'paused';
+    if (filter === 'redclaw' || filter === 'collaboration' || filter === 'approval') return item.source === filter;
+    return item.status === filter;
+}
+
 function sortRank(item: TaskListItem): number {
     if (item.requiresConfirmation) return 0;
     if (item.cooldown?.state === 'active') return 1;
@@ -490,6 +673,179 @@ function TaskEditorPanel({
     );
 }
 
+function UnifiedTaskCard({
+    item,
+    active,
+    onSelect,
+}: {
+    item: UnifiedTaskItem;
+    active: boolean;
+    onSelect: () => void;
+}) {
+    return (
+        <button
+            onClick={onSelect}
+            className={`w-full rounded-[18px] border px-3 py-2.5 text-left transition ${
+                active
+                    ? 'border-[#d5b68b] bg-[#fbf2e6] shadow-[0_10px_24px_rgba(95,70,35,0.06)]'
+                    : 'border-[#eee7dc] bg-white hover:border-[#e1d4c2] hover:bg-[#fdfcf9]'
+            }`}
+        >
+            <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${sourceTone(item.source)}`}>
+                    {item.sourceLabel}
+                </span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${unifiedStatusTone(item.status)}`}>
+                    {unifiedStatusLabel(item.status)}
+                </span>
+                {item.reviewCount > 0 && (
+                    <span className="rounded-full bg-[#fff1db] px-2 py-0.5 text-[10px] font-medium text-[#7a5a2f]">
+                        审批 {item.reviewCount}
+                    </span>
+                )}
+            </div>
+            <div className="mt-2 line-clamp-2 text-[13px] font-semibold leading-5 text-[#1d1b18]">{item.title}</div>
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-[#877f73]">
+                <span className="truncate">{item.owner}</span>
+                <span>{formatDateTime(item.updatedAt)}</span>
+            </div>
+            {item.summary && (
+                <div className="mt-2 line-clamp-2 rounded-[12px] bg-[#f6f2ea] px-2 py-1.5 text-[11px] leading-5 text-[#70695d]">
+                    {item.summary}
+                </div>
+            )}
+        </button>
+    );
+}
+
+function UnifiedTaskInspector({
+    item,
+    onOpenRedclaw,
+    onOpenCollaboration,
+    onOpenApproval,
+    onRunRedclaw,
+    onEditRedclaw,
+}: {
+    item: UnifiedTaskItem | null;
+    onOpenRedclaw: () => void;
+    onOpenCollaboration: () => void;
+    onOpenApproval?: () => void;
+    onRunRedclaw: (item: TaskListItem) => void;
+    onEditRedclaw: (item: TaskListItem) => void;
+}) {
+    if (!item) {
+        return (
+            <div className="flex h-full min-h-[320px] items-center justify-center px-6 text-center text-[13px] leading-6 text-[#7b7469]">
+                当前没有任务。
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex h-full min-h-0 flex-col">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${sourceTone(item.source)}`}>
+                            {item.sourceLabel}
+                        </span>
+                        <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${unifiedStatusTone(item.status)}`}>
+                            {unifiedStatusLabel(item.status)}
+                        </span>
+                        <span className="rounded-full bg-[#eef1f5] px-2.5 py-0.5 text-[11px] font-medium text-[#687180]">
+                            {item.priorityLabel}
+                        </span>
+                    </div>
+                    <h2 className="mt-3 text-[24px] font-semibold tracking-[-0.03em] text-[#1d1b18]">{item.title}</h2>
+                    <p className="mt-2 max-w-[720px] text-[13px] leading-6 text-[#70695d]">{item.summary || '当前任务没有附带摘要。'}</p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                    {item.source === 'redclaw' && item.rawRedclaw && (
+                        <>
+                            <button
+                                onClick={() => onEditRedclaw(item.rawRedclaw as TaskListItem)}
+                                className="inline-flex items-center rounded-full border border-[#eadfce] bg-white px-3 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
+                            >
+                                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                                编辑
+                            </button>
+                            <button
+                                onClick={() => onRunRedclaw(item.rawRedclaw as TaskListItem)}
+                                className="inline-flex items-center rounded-full border border-[#d2b690] bg-[#efe1ca] px-3 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
+                            >
+                                <Play className="mr-1.5 h-3.5 w-3.5" />
+                                立即执行
+                            </button>
+                            <button
+                                onClick={onOpenRedclaw}
+                                className="rounded-full border border-[#eadfce] bg-white px-3 py-1.5 text-[12px] text-[#776f63] hover:bg-[#f7f3ec]"
+                            >
+                                调度管理
+                            </button>
+                        </>
+                    )}
+                    {item.source === 'collaboration' && (
+                        <button
+                            onClick={onOpenCollaboration}
+                            className="rounded-full border border-[#d8e6d8] bg-white px-3 py-1.5 text-[12px] text-[#607166] hover:bg-[#f1f7f0]"
+                        >
+                            团队看板
+                        </button>
+                    )}
+                    {item.source === 'approval' && onOpenApproval && (
+                        <button
+                            onClick={onOpenApproval}
+                            className="rounded-full border border-[#d2b690] bg-[#efe1ca] px-3 py-1.5 text-[12px] text-[#5e4730] hover:bg-[#e7d5b9]"
+                        >
+                            去审批
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            <div className="mt-5 grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
+                <DetailRow label="来源" value={item.sourceLabel} />
+                <DetailRow label="负责人" value={item.owner} />
+                <DetailRow label="所属项目" value={item.sessionTitle || '-'} />
+                <DetailRow label="进度" value={`${item.progress}%`} />
+                <DetailRow label="产物" value={`${item.artifactCount} 个`} />
+                <DetailRow label="更新" value={formatDateTime(item.updatedAt)} />
+            </div>
+
+            <div className="mt-4 grid min-h-0 gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(260px,0.8fr)]">
+                <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
+                    <div className="text-[13px] font-medium text-[#1d1b18]">任务内容</div>
+                    <div className="mt-3 whitespace-pre-wrap text-[13px] leading-6 text-[#595247]">
+                        {item.rawRedclaw ? taskContent(item.rawRedclaw) : item.rawCollab?.objective || item.rawCollab?.description || item.rawDocket?.body || item.summary || '-'}
+                    </div>
+                </section>
+
+                <section className="rounded-[20px] border border-[#eee7dc] bg-[#fcfbf9] px-4 py-4">
+                    <div className="text-[13px] font-medium text-[#1d1b18]">最近动态</div>
+                    <div className="mt-3 space-y-2.5 text-[13px] leading-6 text-[#595247]">
+                        {item.latestReportSummary && <div>{item.latestReportSummary}</div>}
+                        {item.rawRedclaw?.latestExecution ? (
+                            <>
+                                <div>执行状态：{executionStatusLabel(item.rawRedclaw.latestExecution.status)}</div>
+                                <div>计划时间：{formatDateTime(item.rawRedclaw.latestExecution.scheduledForAt)}</div>
+                                <div>最近心跳：{formatDateTime(item.rawRedclaw.latestExecution.lastHeartbeatAt)}</div>
+                            </>
+                        ) : null}
+                        {item.rawCollab?.failureReason && (
+                            <div className="rounded-[16px] border border-[#f0d5d8] bg-[#fff4f5] px-3 py-2 text-[11px] leading-5 text-[#9a525c]">
+                                {item.rawCollab.failureReason}
+                            </div>
+                        )}
+                        {!item.latestReportSummary && !item.rawRedclaw?.latestExecution && !item.rawCollab?.failureReason && (
+                            <div>还没有更多执行动态。</div>
+                        )}
+                    </div>
+                </section>
+            </div>
+        </div>
+    );
+}
+
 export function Workboard({
     isActive = true,
     onNavigateToApproval,
@@ -497,14 +853,18 @@ export function Workboard({
     isActive?: boolean;
     onNavigateToApproval?: () => void;
 }) {
-    const [mode, setMode] = useState<WorkboardMode>('redclaw');
+    const [mode, setMode] = useState<WorkboardMode>('unified');
     const [items, setItems] = useState<TaskListItem[]>([]);
     const [stats, setStats] = useState<TaskStatsResponse | null>(null);
+    const [collabSnapshots, setCollabSnapshots] = useState<CollabSessionSnapshot[]>([]);
+    const [reviewDockets, setReviewDockets] = useState<ReviewDocketRecord[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [lastUpdatedAt, setLastUpdatedAt] = useState('');
     const [selectedId, setSelectedId] = useState('');
+    const [selectedUnifiedId, setSelectedUnifiedId] = useState('');
     const [filter, setFilter] = useState<TaskFilterKey>('all');
+    const [unifiedFilter, setUnifiedFilter] = useState<UnifiedTaskFilter>('active');
     const [actionState, setActionState] = useState<{ id: string; action: string } | null>(null);
     const [editorMode, setEditorMode] = useState<TaskEditorMode | null>(null);
     const [editorDraft, setEditorDraft] = useState<TaskEditorState>(defaultTaskEditorState);
@@ -525,9 +885,11 @@ export function Workboard({
         }
         setError('');
         try {
-            const [taskListResult, taskStatsResult] = await Promise.all([
+            const [taskListResult, taskStatsResult, collabSessionsResult, docketsResult] = await Promise.all([
                 window.ipcRenderer.redclawRunner.taskList({ includeDrafts: true }),
                 window.ipcRenderer.redclawRunner.taskStats(),
+                window.ipcRenderer.teamRuntime.listSessions().catch(() => []),
+                window.ipcRenderer.teamRuntime.listReviewDockets({ limit: 80 }).catch(() => []),
             ]);
             if (requestId !== loadRequestRef.current) return;
             const nextItems = Array.isArray(taskListResult?.items) ? [...taskListResult.items] : [];
@@ -539,8 +901,26 @@ export function Workboard({
                 if (leftDueAt !== rightDueAt) return leftDueAt - rightDueAt;
                 return Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || '');
             });
+            const nextSessions = Array.isArray(collabSessionsResult) ? collabSessionsResult : [];
+            const nextSnapshots = await Promise.all(
+                nextSessions.slice(0, 24).map(async (session) => {
+                    try {
+                        const snapshot = await window.ipcRenderer.teamRuntime.getSession({
+                            sessionId: session.id,
+                            mailboxLimit: 20,
+                            reportLimit: 40,
+                        });
+                        return snapshot?.session ? snapshot as CollabSessionSnapshot : null;
+                    } catch {
+                        return null;
+                    }
+                }),
+            );
+            if (requestId !== loadRequestRef.current) return;
             setItems(nextItems);
             setStats(taskStatsResult || null);
+            setCollabSnapshots(nextSnapshots.filter((snapshot): snapshot is CollabSessionSnapshot => Boolean(snapshot)));
+            setReviewDockets(Array.isArray(docketsResult) ? docketsResult : []);
             setLastUpdatedAt(new Date().toISOString());
             setSelectedId((prev) => (prev && nextItems.some((item) => item.definitionId === prev) ? prev : nextItems[0]?.definitionId || ''));
         } catch (loadError) {
@@ -556,6 +936,18 @@ export function Workboard({
     useEffect(() => {
         if (!isActive) return;
         void load();
+    }, [isActive, load]);
+
+    useEffect(() => {
+        if (!isActive) return;
+        const listener = (_event: unknown, envelope?: unknown) => {
+            const eventRecord = envelope && typeof envelope === 'object' ? envelope as Record<string, unknown> : {};
+            const eventType = String(eventRecord.eventType || '');
+            if (!eventType.startsWith('runtime:collab-') && eventType !== 'runtime:review-docket-changed') return;
+            void load();
+        };
+        window.ipcRenderer.teamRuntime.onEvent(listener);
+        return () => window.ipcRenderer.teamRuntime.offEvent(listener);
     }, [isActive, load]);
 
     const filteredItems = useMemo(
@@ -594,6 +986,134 @@ export function Workboard({
         runningExecutions: stats?.executions?.running ?? 0,
         failedExecutions: stats?.executions?.failed ?? 0,
     }), [items, stats]);
+
+    const unifiedTasks = useMemo<UnifiedTaskItem[]>(() => {
+        const docketByTask = new Map<string, ReviewDocketRecord[]>();
+        reviewDockets.forEach((docket) => {
+            if (!docket.taskId) return;
+            const current = docketByTask.get(docket.taskId) || [];
+            current.push(docket);
+            docketByTask.set(docket.taskId, current);
+        });
+
+        const redclawItems = items.map((item): UnifiedTaskItem => ({
+            id: `redclaw:${item.definitionId}`,
+            source: 'redclaw',
+            sourceLabel: item.kind === 'long_cycle' ? '长周期' : 'RedClaw',
+            title: item.title || '未命名任务',
+            summary: taskContent(item),
+            status: redclawPanelStatus(item),
+            owner: item.ownerScope || 'RedClaw',
+            sessionTitle: item.sourceKind || kindLabel(item.kind),
+            priorityLabel: item.requiresConfirmation ? '待确认' : lifecycleLabel(item),
+            progress: item.kind === 'long_cycle' && Number(item.totalRounds || 0) > 0
+                ? Math.min(100, Math.round((Number(item.completedRounds || 0) / Number(item.totalRounds || 1)) * 100))
+                : item.latestExecution?.status === 'running'
+                    ? 50
+                    : redclawPanelStatus(item) === 'completed'
+                        ? 100
+                        : 0,
+            artifactCount: 0,
+            updatedAt: millisFrom(item.updatedAt),
+            createdAt: millisFrom(item.createdAt),
+            reviewCount: 0,
+            rawRedclaw: item,
+        }));
+
+        const collabItems = collabSnapshots.flatMap((snapshot) => {
+            const memberById = new Map(snapshot.members.map((member) => [member.id, member]));
+            return snapshot.tasks.map((task): UnifiedTaskItem => {
+                const latestReport = [...snapshot.reports]
+                    .filter((report) => report.taskId === task.id)
+                    .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))[0] || null;
+                const reviewCount = (docketByTask.get(task.id) || []).filter((docket) => docket.status === 'pending').length;
+                const owner = task.memberId ? memberById.get(task.memberId)?.displayName : '';
+                return {
+                    id: `collab:${task.id}`,
+                    source: 'collaboration',
+                    sourceLabel: '团队',
+                    title: task.title || '未命名协作任务',
+                    summary: latestReport?.summary || task.resultSummary || task.description || task.objective || '',
+                    status: reviewCount > 0 ? 'review' : collabPanelStatus(task.status),
+                    owner: owner || '未分配',
+                    sessionTitle: snapshot.session.title || snapshot.session.objective || '-',
+                    priorityLabel: priorityLabel(task.priority),
+                    progress: Math.max(0, Math.min(100, Number(task.progressPercent ?? latestReport?.progressPercent ?? 0))),
+                    artifactCount: task.artifactIds.length + task.artifacts.length,
+                    updatedAt: Number(task.updatedAt || snapshot.session.updatedAt || 0),
+                    createdAt: Number(task.createdAt || snapshot.session.createdAt || 0),
+                    reviewCount,
+                    rawCollab: task,
+                    latestReportSummary: latestReport?.summary || '',
+                };
+            });
+        });
+
+        const approvalItems = reviewDockets
+            .filter((docket) => docket.status === 'pending')
+            .map((docket): UnifiedTaskItem => ({
+                id: `approval:${docket.id}`,
+                source: 'approval',
+                sourceLabel: '审批',
+                title: docket.title || '未命名审批',
+                summary: docket.summary || docket.body || '',
+                status: docketPanelStatus(docket.status),
+                owner: docket.assignedToUserId || '人工审批',
+                sessionTitle: docket.sourceKind || '-',
+                priorityLabel: priorityLabel(docket.priority),
+                progress: 0,
+                artifactCount: docket.artifactRefs.length,
+                updatedAt: Number(docket.updatedAt || docket.createdAt || 0),
+                createdAt: Number(docket.createdAt || 0),
+                reviewCount: 1,
+                rawDocket: docket,
+            }));
+
+        return [...approvalItems, ...collabItems, ...redclawItems].sort((left, right) => {
+            const rankDelta = unifiedStatusRank(left.status) - unifiedStatusRank(right.status);
+            if (rankDelta !== 0) return rankDelta;
+            return right.updatedAt - left.updatedAt;
+        });
+    }, [collabSnapshots, items, reviewDockets]);
+
+    const filteredUnifiedTasks = useMemo(
+        () => unifiedTasks.filter((item) => matchesUnifiedFilter(item, unifiedFilter)),
+        [unifiedFilter, unifiedTasks],
+    );
+
+    useEffect(() => {
+        if (!filteredUnifiedTasks.length) {
+            setSelectedUnifiedId('');
+            return;
+        }
+        if (!selectedUnifiedId || !filteredUnifiedTasks.some((item) => item.id === selectedUnifiedId)) {
+            setSelectedUnifiedId(filteredUnifiedTasks[0].id);
+        }
+    }, [filteredUnifiedTasks, selectedUnifiedId]);
+
+    const selectedUnifiedTask = useMemo(
+        () => filteredUnifiedTasks.find((item) => item.id === selectedUnifiedId) || filteredUnifiedTasks[0] || null,
+        [filteredUnifiedTasks, selectedUnifiedId],
+    );
+
+    const unifiedFilterOptions = useMemo(() => ([
+        { key: 'active' as const, label: '进行中', count: unifiedTasks.filter((item) => matchesUnifiedFilter(item, 'active')).length },
+        { key: 'review' as const, label: '待审批', count: unifiedTasks.filter((item) => item.status === 'review').length },
+        { key: 'running' as const, label: '执行中', count: unifiedTasks.filter((item) => item.status === 'running').length },
+        { key: 'blocked' as const, label: '阻塞', count: unifiedTasks.filter((item) => item.status === 'blocked').length },
+        { key: 'redclaw' as const, label: 'RedClaw', count: unifiedTasks.filter((item) => item.source === 'redclaw').length },
+        { key: 'collaboration' as const, label: '团队', count: unifiedTasks.filter((item) => item.source === 'collaboration').length },
+        { key: 'all' as const, label: '全部', count: unifiedTasks.length },
+    ]), [unifiedTasks]);
+
+    const unifiedStats = useMemo(() => ({
+        total: unifiedTasks.length,
+        active: unifiedTasks.filter((item) => matchesUnifiedFilter(item, 'active')).length,
+        review: unifiedTasks.filter((item) => item.status === 'review').length,
+        running: unifiedTasks.filter((item) => item.status === 'running').length,
+        failed: unifiedTasks.filter((item) => item.status === 'failed').length,
+        sources: new Set(unifiedTasks.map((item) => item.source)).size,
+    }), [unifiedTasks]);
 
     const executeAction = useCallback(async (
         item: TaskListItem,
@@ -679,13 +1199,170 @@ export function Workboard({
         });
     }, [executeAction]);
 
+    const runUnifiedRedclawTask = useCallback((item: TaskListItem) => {
+        void executeAction(item, 'run-now', () => runTaskNow(item));
+    }, [executeAction]);
+
+    const editUnifiedRedclawTask = useCallback((item: TaskListItem) => {
+        setMode('redclaw');
+        setSelectedId(item.definitionId);
+        openEditEditor(item);
+    }, [openEditEditor]);
+
     if (mode === 'collaboration') {
         return (
             <CollaborationBoard
                 isActive={isActive}
-                onSwitchRedclaw={() => setMode('redclaw')}
+                onSwitchRedclaw={() => setMode('unified')}
                 onOpenApproval={onNavigateToApproval}
             />
+        );
+    }
+
+    if (mode === 'unified') {
+        return (
+            <div className="legacy-theme-panel h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
+                <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <div className="inline-flex items-center gap-1.5 rounded-full border border-[#ece3d5] bg-white px-2.5 py-1 text-[11px] text-[#7c7468]">
+                                <ListTodo className="h-3 w-3" />
+                                任务面板
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <div className="rounded-full border border-[#ece5da] bg-white px-2.5 py-1 text-[11px] text-[#7d766a]">
+                                更新于 {formatDateTime(lastUpdatedAt)}
+                            </div>
+                            <button
+                                onClick={() => setMode('collaboration')}
+                                className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#d8e6d8] bg-white px-3 text-[11px] text-[#607166] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f1f7f0]"
+                            >
+                                <Users className="h-3 w-3" />
+                                团队看板
+                            </button>
+                            <button
+                                onClick={() => setMode('redclaw')}
+                                className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#e7e0d4] bg-white px-3 text-[11px] text-[#7d766a] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f5f1e9]"
+                            >
+                                RedClaw 管理
+                            </button>
+                            {onNavigateToApproval && (
+                                <button
+                                    onClick={onNavigateToApproval}
+                                    className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#e8dccb] bg-white px-3 text-[11px] text-[#74634f] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f8f1e7]"
+                                >
+                                    审批
+                                </button>
+                            )}
+                            <button
+                                onClick={openCreateEditor}
+                                className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#d2b690] bg-[#efe1ca] px-3 text-[11px] text-[#5e4730] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#e7d5b9]"
+                            >
+                                <Plus className="h-3 w-3" />
+                                新建任务
+                            </button>
+                            <button
+                                onClick={() => void load()}
+                                className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#e7e0d4] bg-white px-3 text-[11px] text-[#7d766a] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f5f1e9]"
+                            >
+                                <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+                                刷新
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto pb-1">
+                        <div className="flex min-w-max items-center gap-2.5">
+                            <StatCard label="任务总数" value={unifiedStats.total} />
+                            <StatCard label="活跃任务" value={unifiedStats.active} />
+                            <StatCard label="待审批" value={unifiedStats.review} />
+                            <StatCard label="执行中" value={unifiedStats.running} />
+                            <StatCard label="失败" value={unifiedStats.failed} />
+                            <StatCard label="来源" value={unifiedStats.sources} />
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        {unifiedFilterOptions.map((option) => (
+                            <button
+                                key={option.key}
+                                onClick={() => setUnifiedFilter(option.key)}
+                                className={`rounded-full border px-3 py-1.5 text-[12px] transition ${
+                                    unifiedFilter === option.key
+                                        ? 'border-[#c8b08b] bg-[#efe3d0] text-[#5c4630]'
+                                        : 'border-[#e8dfd2] bg-white text-[#736b60] hover:bg-[#f6f2ea]'
+                                }`}
+                            >
+                                {option.label}
+                                <span className="ml-2 text-xs opacity-70">{option.count}</span>
+                            </button>
+                        ))}
+                    </div>
+
+                    {error && (
+                        <div className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-[13px] text-red-700">
+                            <AlertCircle className="h-3.5 w-3.5" />
+                            {error}
+                        </div>
+                    )}
+
+                    {editorMode && (
+                        <TaskEditorPanel
+                            mode={editorMode}
+                            value={editorDraft}
+                            busy={editorBusy}
+                            error={editorError}
+                            onChange={setEditorDraft}
+                            onSubmit={() => void submitEditor()}
+                            onCancel={closeEditor}
+                        />
+                    )}
+
+                    <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
+                        <div className="min-h-0 overflow-hidden rounded-[24px] border border-[#ece4d8] bg-white">
+                            <div className="flex items-center justify-between border-b border-[#f0e9de] px-4 py-3">
+                                <div className="text-[13px] font-medium text-[#1d1b18]">任务流</div>
+                                <div className="text-[11px] text-[#9a9184]">{filteredUnifiedTasks.length} 件</div>
+                            </div>
+                            <div className="h-[calc(100%-45px)] overflow-y-auto px-2.5 py-2.5">
+                                {loading && unifiedTasks.length === 0 ? (
+                                    <div className="flex h-full min-h-[260px] items-center justify-center text-[13px] text-[#7b7469]">
+                                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                        正在加载
+                                    </div>
+                                ) : filteredUnifiedTasks.length === 0 ? (
+                                    <div className="flex h-full min-h-[260px] items-center justify-center px-5 text-center text-[13px] leading-6 text-[#7b7469]">
+                                        当前筛选下没有任务。
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2.5">
+                                        {filteredUnifiedTasks.map((item) => (
+                                            <UnifiedTaskCard
+                                                key={item.id}
+                                                item={item}
+                                                active={selectedUnifiedTask?.id === item.id}
+                                                onSelect={() => setSelectedUnifiedId(item.id)}
+                                            />
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="min-h-0 overflow-y-auto rounded-[24px] border border-[#ece4d8] bg-white px-5 py-5">
+                            <UnifiedTaskInspector
+                                item={selectedUnifiedTask}
+                                onOpenRedclaw={() => setMode('redclaw')}
+                                onOpenCollaboration={() => setMode('collaboration')}
+                                onOpenApproval={onNavigateToApproval}
+                                onRunRedclaw={runUnifiedRedclawTask}
+                                onEditRedclaw={editUnifiedRedclawTask}
+                            />
+                        </div>
+                    </div>
+                </div>
+            </div>
         );
     }
 
@@ -703,6 +1380,13 @@ export function Workboard({
                         <div className="rounded-full border border-[#ece5da] bg-white px-2.5 py-1 text-[11px] text-[#7d766a]">
                             更新于 {formatDateTime(lastUpdatedAt)}
                         </div>
+                        <button
+                            onClick={() => setMode('unified')}
+                            className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#e7e0d4] bg-white px-3 text-[11px] text-[#7d766a] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f5f1e9]"
+                        >
+                            <ListTodo className="h-3 w-3" />
+                            任务面板
+                        </button>
                         <button
                             onClick={() => setMode('collaboration')}
                             className="inline-flex h-[32px] items-center gap-1.5 rounded-full border border-[#d8e6d8] bg-white px-3 text-[11px] text-[#607166] shadow-[0_1px_2px_rgba(24,24,24,0.03)] hover:bg-[#f1f7f0]"
