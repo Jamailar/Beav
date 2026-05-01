@@ -57,7 +57,7 @@ Memory 是 RedClaw 统一治理的经验资产。
 
 ## Product Shape
 
-RedClaw 页面需要从单一聊天页演化为一个创作操作台，但第一屏仍然是用户熟悉的任务输入。
+RedClaw 页面需要从单一聊天页演化为通用创作协作入口，但不为小红书、视频或其他内容形态拆专属页面。第一屏仍然是用户熟悉的任务输入，平台差异由 Orchestrator、角色团队、Skill contract、导出包和质检层承载。
 
 推荐一级区域：
 
@@ -78,6 +78,8 @@ RedClaw Page
 - 当前缺什么。
 - 下一步建议是什么。
 - 哪些学习项可以保存为长期偏好。
+
+小红书文章、图文和配图流程不新增专属 UI。用户仍在 RedClaw 页面发任务、看团队协作和领取交付物；系统内部根据 `contentFormat` 自动组建 Topic、Note Architect、Copy、Visual、Image、Layout、Compliance 等临时岗位。
 
 ## End-To-End Flow
 
@@ -753,7 +755,7 @@ type TimelineClip = {
 
 ## UI Implementation Details
 
-RedClaw 页面应展示自动团队执行，而不是要求用户手动管理 Agent。
+RedClaw 页面应展示自动团队执行，而不是要求用户手动管理 Agent。页面保持通用协作壳，不为小红书单独做专属 UI；小红书的文章、图文、配图差异由 `contentFormat`、任务图、角色输出 schema 和导出包表达。
 
 ### Command Bar
 
@@ -786,6 +788,7 @@ Storyboard
 Media Plan
 Publish Package
 Review
+XHS Package
 ```
 
 每个 artifact 支持：
@@ -899,6 +902,8 @@ type RedClawJob = {
 - 小红书 Agent 已补完整运行提示词边界，子 Agent 会读取 `node`、`skillProfiles`、上下游节点、平台和内容格式。
 - Skill Profile 已从名称声明升级为 contract，包含 `instruction`、`inputContract`、`outputContract` 和评估维度。
 - 小红书项目可导出 `redclaw.xhsPackage.v1` 包，包含 `xhs-package.json`、`xhs-package.md`、`carousel-layout.json` 和 `image-manifest.json`。
+- 小红书子 Agent 输出会按对应 `outputContract` 做 artifact 校验；缺失 artifact、非 JSON artifact 或字段类型不匹配都会让节点不通过。
+- 小红书交付包会附带 `redclaw.xhsDeterministicCompliance.v1` 确定性质检，先稳定拦截医疗、金融、法律确定性承诺和平台高风险表述，再交给 Compliance Agent 做语义复核。
 
 当前新增/使用的 RedClaw orchestration IPC：
 
@@ -985,6 +990,7 @@ RedClaw 自研部分：
 - 小红书图文结构、视觉 brief、图片资产 manifest、carousel layout manifest。
 - 项目状态同步、section 草稿、学习候选、发布包、质检报告。
 - 小红书交付包导出：`xhs-package` 聚合选题、结构、文案、视觉、图片、版式、合规、发布和复盘结果。
+- 小红书 artifact contract 校验和确定性质检规则；这类规则需要可测试、可审计、可逐步扩展，不依赖前端专属页面。
 
 ### Step 1. Contracts
 
@@ -1110,12 +1116,14 @@ RedClaw 自研部分：
 - Creation Workspace。
 - Evidence And Memory panel。
 - Learning confirmation panel。
+- 通用 export action：按项目内容格式导出 media plan、publish package、review report 或 xhs package。
 
 验收：
 
 - 用户只发一个任务，UI 展示完整团队执行过程。
 - 页面刷新不清空已有 run/project。
 - 失败节点能展示原因和重试入口。
+- 小红书任务不需要跳转到专属页面；在同一个 RedClaw 页面内可以看到团队执行、产物摘要、质检结果和导出入口。
 
 ### Step 9. Full Flow Verification
 
