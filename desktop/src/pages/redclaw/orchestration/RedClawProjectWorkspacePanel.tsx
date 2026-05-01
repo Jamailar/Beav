@@ -112,8 +112,10 @@ export function RedClawProjectWorkspacePanel() {
     const [savingSectionId, setSavingSectionId] = useState('');
     const [exportingMediaPlan, setExportingMediaPlan] = useState(false);
     const [renderingRoughCut, setRenderingRoughCut] = useState(false);
+    const [exportingPublishPackage, setExportingPublishPackage] = useState(false);
     const [lastMediaPlanPath, setLastMediaPlanPath] = useState('');
     const [lastRoughCutPath, setLastRoughCutPath] = useState('');
+    const [lastPublishPackagePath, setLastPublishPackagePath] = useState('');
     const [copiedSectionId, setCopiedSectionId] = useState('');
 
     const activeProject = useMemo(() => projects[0] || null, [projects]);
@@ -241,6 +243,28 @@ export function RedClawProjectWorkspacePanel() {
             setError(err instanceof Error ? err.message : '生成粗剪失败');
         } finally {
             setRenderingRoughCut(false);
+        }
+    }, [activeProject, loadProjects]);
+
+    const exportPublishPackage = useCallback(async () => {
+        if (!activeProject) return;
+        setExportingPublishPackage(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawProjects.exportPublishPackage({
+                projectId: activeProject.id,
+            });
+            if (!result?.success) {
+                setError(result?.error || '导出发布包失败');
+                return;
+            }
+            setLastPublishPackagePath(String(result.markdownPath || result.packagePath || '').trim());
+            await loadProjects();
+        } catch (err) {
+            console.error('Failed to export RedClaw publish package:', err);
+            setError('导出发布包失败');
+        } finally {
+            setExportingPublishPackage(false);
         }
     }, [activeProject, loadProjects]);
 
@@ -412,6 +436,22 @@ export function RedClawProjectWorkspacePanel() {
                                                     </button>
                                                 </>
                                             )}
+                                            {activeSection.id === 'publish' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void exportPublishPackage()}
+                                                    disabled={exportingPublishPackage}
+                                                    className={clsx(
+                                                        'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
+                                                        exportingPublishPackage
+                                                            ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                                            : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
+                                                    )}
+                                                >
+                                                    {exportingPublishPackage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
+                                                    导出发布包
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={() => void copySectionDraft()}
@@ -444,6 +484,11 @@ export function RedClawProjectWorkspacePanel() {
                                     {activeSection.id === 'media' && lastRoughCutPath && (
                                         <div className="truncate rounded-[8px] bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-700">
                                             粗剪视频：{lastRoughCutPath}
+                                        </div>
+                                    )}
+                                    {activeSection.id === 'publish' && lastPublishPackagePath && (
+                                        <div className="truncate rounded-[8px] bg-surface-secondary px-2 py-1.5 text-[11px] text-text-tertiary">
+                                            发布包：{lastPublishPackagePath}
                                         </div>
                                     )}
                                 </div>
