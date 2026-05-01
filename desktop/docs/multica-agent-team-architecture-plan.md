@@ -567,19 +567,20 @@ Do not self-build:
 Multica's inbox is useful because it treats AI output as work that may require human attention. RedConvert should not copy a traditional inbox list. The product metaphor should be:
 
 ```text
-AI 自主工作，人类批奏折。
+AI 自主工作，人类审批关键事项。
 ```
 
-The user should review one decision page at a time. Internally call it `ReviewDocket`; UI can call it `御批台`, `审批台` or `Review Desk`. Recommended product placement:
+The user should review one decision page at a time. Internally call it `ReviewDocket`; UI should call it `审批`. Recommended product placement:
 
 ```text
-Workboard
-├─ 御批台 / Review Docket
-├─ 协作任务 / Collaboration Board
-└─ RedClaw 任务
+Main tabs
+├─ 审批 / Review Docket
+├─ 任务 / Workboard
+├─ 团队 / Team
+└─ ...
 ```
 
-It may also have a global navigation badge such as `待批`, but the real surface belongs in Workboard because it is a work decision queue, not a notification drawer.
+It should have a global navigation badge such as `待审`, because approval is a top-level human responsibility rather than a nested task mode.
 
 Core product rule:
 
@@ -653,7 +654,7 @@ Runtime behavior:
 Agent reaches a human-decision boundary
 -> creates ReviewDocket
 -> linked task moves to waiting_for_review
--> Workboard 御批台 shows one docket page
+-> 审批 shows one docket page
 -> user approves / rejects / requests changes / edits parameters
 -> ReviewDecision is persisted
 -> linked task resumes, retries or closes
@@ -838,12 +839,12 @@ Atomic commits:
 3. Done: Add task integration:
    - creating a docket can move linked task to `waiting_for_review`
    - deciding a docket can resume, reject or complete linked task
-   - Team Workboard tasks can be sent to `御批台`
-4. Done: Add Workboard `御批台` view:
+   - Team Workboard tasks can be sent to `审批`
+4. Done: Add top-level `审批` view:
    - one docket page at a time
    - approve / reject / request changes / skip
    - compact queue progress
-5. Done: Add a global navigation badge only if there are pending dockets; clicking Workboard with pending approvals opens `御批台`.
+5. Done: Add a global navigation badge only if there are pending dockets; clicking `审批` opens the approval queue.
 
 Acceptance:
 
@@ -991,7 +992,7 @@ Why:
 The best second code change is:
 
 ```text
-ReviewDocketRecord + Workboard 御批台 MVP
+ReviewDocketRecord + top-level 审批 MVP
 ```
 
 Why:
