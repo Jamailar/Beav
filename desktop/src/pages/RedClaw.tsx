@@ -36,6 +36,7 @@ import {
 import { RedClawHistoryDrawer } from './redclaw/RedClawHistoryDrawer';
 import { RedClawFilePreviewPane } from './redclaw/RedClawFilePreviewPane';
 import { RedClawTeamPlanPreview } from './redclaw/orchestration/RedClawTeamPlanPreview';
+import { RedClawProjectWorkspacePanel } from './redclaw/orchestration/RedClawProjectWorkspacePanel';
 import {
     isRedClawOnboardingCompleted,
     type RedclawOnboardingState,
@@ -1536,7 +1537,10 @@ export function RedClaw({
                                 />
                             </div>
                             {!previewTarget && (
-                                <RedClawTeamPlanPreview sessionId={activeSessionId} />
+                                <>
+                                    <RedClawTeamPlanPreview sessionId={activeSessionId} />
+                                    <RedClawProjectWorkspacePanel />
+                                </>
                             )}
                             <RedClawHistoryDrawer
                                 open={historyDrawerOpen}
