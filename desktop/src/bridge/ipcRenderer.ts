@@ -1133,6 +1133,8 @@ function createIpcRenderer() {
         invokeChannel('redclaw:learning-candidate-update', payload),
       updateSection: (payload: { projectId: string; sectionId: string; content: string }) =>
         invokeChannel('redclaw:project-section-update', payload),
+      exportMediaPlan: (payload: { projectId: string }) =>
+        invokeChannel('redclaw:media-plan-export', payload),
     },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),

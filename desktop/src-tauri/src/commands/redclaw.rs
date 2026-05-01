@@ -26,8 +26,9 @@ use crate::{
     complete_redclaw_mvp_onboarding, handle_redclaw_onboarding_turn,
     load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
     load_redclaw_profile_prompt_bundle, load_redclaw_style_profile, now_i64, now_iso,
-    payload_field, payload_string, redclaw_state_value, save_redclaw_mvp_onboarding_progress,
-    update_redclaw_profile_doc, AppState,
+    parse_json_value_from_text, payload_field, payload_string, redclaw_state_value,
+    save_redclaw_mvp_onboarding_progress, update_redclaw_profile_doc, workspace_root,
+    write_text_file, AppState,
 };
 use redclaw_task_control::{
     create_confirmed_task_from_intent, handle_task_cancel, handle_task_confirm, handle_task_create,
@@ -99,6 +100,7 @@ pub fn handle_redclaw_channel(
         "redclaw:orchestration-create-run" => create_redclaw_orchestration_run(state, payload),
         "redclaw:learning-candidate-update" => update_redclaw_learning_candidate(state, payload),
         "redclaw:project-section-update" => update_redclaw_project_section(state, payload),
+        "redclaw:media-plan-export" => export_redclaw_media_plan(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -777,6 +779,153 @@ fn update_redclaw_project_section(
             "success": true,
             "project": project,
             "sectionId": section_id
+        }))
+    })
+}
+
+fn safe_export_slug(value: &str) -> String {
+    let mut slug = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "redclaw-project".to_string()
+    } else {
+        slug
+    }
+}
+
+fn output_for_role(outputs: &[Value], role_id: &str) -> Option<Value> {
+    outputs
+        .iter()
+        .find(|item| item.get("roleId").and_then(Value::as_str) == Some(role_id))
+        .cloned()
+}
+
+fn parsed_output_artifact(output: Option<&Value>) -> Value {
+    let Some(output) = output else {
+        return Value::Null;
+    };
+    let artifact = output
+        .get("artifact")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if artifact.is_empty() {
+        return Value::Null;
+    }
+    parse_json_value_from_text(artifact).unwrap_or_else(|| json!({ "raw": artifact }))
+}
+
+fn redclaw_output_summary(output: Option<&Value>) -> Value {
+    let Some(output) = output else {
+        return Value::Null;
+    };
+    json!({
+        "roleId": output.get("roleId").cloned().unwrap_or(Value::Null),
+        "summary": output.get("summary").cloned().unwrap_or(Value::Null),
+        "artifact": output.get("artifact").cloned().unwrap_or(Value::Null),
+        "handoff": output.get("handoff").cloned().unwrap_or(Value::Null),
+        "risks": output.get("risks").cloned().unwrap_or_else(|| json!([])),
+        "issues": output.get("issues").cloned().unwrap_or_else(|| json!([])),
+    })
+}
+
+fn build_redclaw_media_plan_export(project: &crate::runtime::RedclawProjectRecord) -> Value {
+    let metadata = project.metadata.as_ref();
+    let outputs = metadata
+        .and_then(|value| value.get("orchestrationOutputs"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let script = output_for_role(&outputs, "script_agent");
+    let storyboard = output_for_role(&outputs, "storyboard_agent");
+    let media = output_for_role(&outputs, "media_agent");
+    let publish = output_for_role(&outputs, "publish_agent");
+    let media_artifact = parsed_output_artifact(media.as_ref());
+    json!({
+        "schema": "redclaw.mediaPlan.v1",
+        "project": {
+            "id": project.id,
+            "goal": project.goal,
+            "platform": project.platform,
+            "contentFormat": project.content_format,
+            "runtimeTaskId": project.runtime_task_id,
+            "artifactPath": project.artifact_path,
+        },
+        "generatedAt": now_iso(),
+        "mediaPlan": media_artifact,
+        "timelinePlan": media_artifact.get("timelinePlan").cloned()
+            .or_else(|| media_artifact.get("timeline").cloned())
+            .unwrap_or_else(|| json!([])),
+        "matchedAssets": media_artifact.get("matchedAssets").cloned().unwrap_or_else(|| json!([])),
+        "missingAssets": media_artifact.get("missingAssets").cloned().unwrap_or_else(|| json!([])),
+        "productionRisks": media_artifact.get("productionRisks").cloned().unwrap_or_else(|| json!([])),
+        "sections": {
+            "script": redclaw_output_summary(script.as_ref()),
+            "storyboard": redclaw_output_summary(storyboard.as_ref()),
+            "media": redclaw_output_summary(media.as_ref()),
+            "publish": redclaw_output_summary(publish.as_ref()),
+        }
+    })
+}
+
+fn export_redclaw_media_plan(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let project_id =
+        payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
+    let root = workspace_root(state)?;
+    let export_dir = root.join("redclaw").join("media-plans");
+    std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
+    with_store_mut(state, |store| {
+        let project = store
+            .redclaw_state
+            .projects
+            .iter_mut()
+            .find(|item| item.id == project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())?;
+        let export_value = build_redclaw_media_plan_export(project);
+        let path = export_dir.join(format!("{}-media-plan.json", safe_export_slug(&project.id)));
+        let body =
+            serde_json::to_string_pretty(&export_value).map_err(|error| error.to_string())?;
+        write_text_file(&path, &body)?;
+
+        let now = now_iso();
+        let mut metadata = project
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut exports = metadata
+            .get("mediaPlanExports")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        exports.push(json!({
+            "path": path.display().to_string(),
+            "schema": "redclaw.mediaPlan.v1",
+            "createdAt": now,
+        }));
+        metadata.insert("mediaPlanExports".to_string(), Value::Array(exports));
+        project.metadata = Some(Value::Object(metadata));
+        project.updated_at = now;
+        Ok(json!({
+            "success": true,
+            "project": project,
+            "path": path.display().to_string(),
+            "plan": export_value
         }))
     })
 }
