@@ -35,7 +35,6 @@ import {
 } from './redclaw/helpers';
 import { RedClawHistoryDrawer } from './redclaw/RedClawHistoryDrawer';
 import { RedClawFilePreviewPane } from './redclaw/RedClawFilePreviewPane';
-import { RedClawTeamPlanPreview } from './redclaw/orchestration/RedClawTeamPlanPreview';
 import { RedClawProjectWorkspacePanel } from './redclaw/orchestration/RedClawProjectWorkspacePanel';
 import { RedClawRunTimelinePanel } from './redclaw/orchestration/RedClawRunTimelinePanel';
 import {
@@ -1453,20 +1452,20 @@ export function RedClaw({
             sessionId: payload.sessionId || activeSessionId || undefined,
         });
         if (!result?.success || !result.runtimeTaskId) {
-            throw new Error(String(result?.error || 'RedClaw 临时团队创建失败'));
+            throw new Error(String(result?.error || 'RedClaw 自动组队失败'));
         }
         const resumeResult = await window.ipcRenderer.tasks.resume({ taskId: result.runtimeTaskId }) as {
             success?: boolean;
             error?: string;
         };
         if (resumeResult && resumeResult.success === false) {
-            throw new Error(resumeResult.error || 'RedClaw 临时团队启动失败');
+            throw new Error(resumeResult.error || 'RedClaw 自动执行失败');
         }
         const roleCount = Array.isArray(result.graph?.nodes) ? result.graph.nodes.length : 0;
         return {
             handled: true,
             assistantContent: [
-                `已组建 RedClaw 临时创作团队，开始执行：${goal}`,
+                `RedClaw 已自动组建创作团队，开始执行：${goal}`,
                 roleCount > 0 ? `本次会由 ${roleCount} 个岗位接力完成，进度会同步到右下角团队运行面板和左下角创作项目。` : '进度会同步到团队运行面板和创作项目。',
                 result.runtimeTaskId ? `任务 ID：${result.runtimeTaskId}` : '',
             ].filter(Boolean).join('\n\n'),
@@ -1557,7 +1556,7 @@ export function RedClaw({
                                     onMessageLinkPreview={handlePreviewLink}
                                     activePreviewHref={previewTarget?.href || null}
                                     keepComposerInputActive={true}
-                                    placeholder="使用 # 调用知识库&#10;使用 @ 召唤团队成员"
+                                    placeholder="描述创作目标，RedClaw 会自动组队执行&#10;使用 # 调用知识库"
                                     onDispatchOverride={handleRedClawDispatchOverride}
                                     messageListHeader={<RedClawImageGenerationProgressPanel jobs={visibleImageJobs} />}
                                     inlineSidePanel={previewTarget ? (
@@ -1572,7 +1571,6 @@ export function RedClaw({
                             </div>
                             {!previewTarget && (
                                 <>
-                                    <RedClawTeamPlanPreview sessionId={activeSessionId} />
                                     <RedClawProjectWorkspacePanel />
                                     <RedClawRunTimelinePanel />
                                 </>
