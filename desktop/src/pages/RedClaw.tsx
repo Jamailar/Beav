@@ -484,7 +484,7 @@ function RedClawAiSwitchBar({
     const visibleAdvisors = advisors.slice(0, 6);
     return (
         <div>
-            <div className="flex max-w-[min(84vw,32rem)] items-center gap-1.5 overflow-hidden rounded-[22px] border border-border/70 bg-surface-elevated/95 px-2 py-2 shadow-sm backdrop-blur-xl">
+            <div className="flex max-w-[min(84vw,32rem)] items-center gap-1.5 overflow-visible rounded-[22px] bg-surface-elevated/95 px-2 py-2 shadow-sm backdrop-blur-xl">
                 <button
                     type="button"
                     onClick={onSelectRedClaw}
@@ -509,10 +509,10 @@ function RedClawAiSwitchBar({
                             type="button"
                             onClick={() => onSelectAdvisor(advisor.id)}
                             className={clsx(
-                                'flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border text-[13px] font-semibold transition-colors',
+                                'flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full text-[13px] font-semibold transition-all duration-200 ease-out hover:scale-125 active:scale-110',
                                 active
-                                    ? 'border-accent-primary/30 bg-accent-primary/10 text-accent-primary'
-                                    : 'border-transparent text-text-tertiary hover:border-border hover:bg-surface-primary/70 hover:text-text-primary'
+                                    ? 'bg-accent-primary/10 text-accent-primary'
+                                    : 'text-text-tertiary hover:bg-surface-primary/70 hover:text-text-primary'
                             )}
                             title={advisor.name}
                             aria-label={advisor.name}
