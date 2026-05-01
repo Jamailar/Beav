@@ -2,9 +2,14 @@
 mod redclaw_task_control;
 
 use serde_json::{json, Value};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use tauri::{AppHandle, Emitter, State};
 
@@ -101,6 +106,7 @@ pub fn handle_redclaw_channel(
         "redclaw:learning-candidate-update" => update_redclaw_learning_candidate(state, payload),
         "redclaw:project-section-update" => update_redclaw_project_section(state, payload),
         "redclaw:media-plan-export" => export_redclaw_media_plan(state, payload),
+        "redclaw:media-plan-render" => render_redclaw_rough_cut(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -973,6 +979,100 @@ fn build_media_plan_readme(project_id: &str, items: &[(String, Option<f64>)]) ->
     body
 }
 
+fn executable_in_path(name: &str) -> Option<PathBuf> {
+    let path_env = env::var_os("PATH")?;
+    for dir in env::split_paths(&path_env) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn ffconcat_file_entries(body: &str) -> Vec<String> {
+    body.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let raw = trimmed.strip_prefix("file ")?;
+            let value = raw
+                .trim()
+                .trim_matches('\'')
+                .replace("'\\''", "'")
+                .replace("\\\\", "\\");
+            if value.trim().is_empty() {
+                None
+            } else {
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+fn validate_ffconcat_inputs(package_dir: &Path, concat_path: &Path) -> Result<Vec<String>, String> {
+    let body = std::fs::read_to_string(concat_path).map_err(|error| error.to_string())?;
+    let entries = ffconcat_file_entries(&body);
+    if entries.is_empty() {
+        return Err("rough-cut.ffconcat has no media file entries".to_string());
+    }
+    let missing = entries
+        .iter()
+        .filter(|entry| !entry.starts_with("http://") && !entry.starts_with("https://"))
+        .filter(|entry| {
+            let path = Path::new(entry);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                package_dir.join(path)
+            };
+            !resolved.exists()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "rough-cut.ffconcat references missing files: {}",
+            missing.join(", ")
+        ));
+    }
+    Ok(entries)
+}
+
+fn run_ffmpeg_concat(
+    ffmpeg_path: &Path,
+    package_dir: &Path,
+    concat_path: &Path,
+    output_path: &Path,
+) -> Result<Value, String> {
+    let output = Command::new(ffmpeg_path)
+        .current_dir(package_dir)
+        .arg("-y")
+        .arg("-safe")
+        .arg("0")
+        .arg("-f")
+        .arg("concat")
+        .arg("-i")
+        .arg(concat_path)
+        .arg("-c")
+        .arg("copy")
+        .arg(output_path)
+        .output()
+        .map_err(|error| error.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        return Err(format!(
+            "ffmpeg rough cut render failed: {}",
+            stderr.trim().chars().take(1200).collect::<String>()
+        ));
+    }
+    Ok(json!({
+        "status": output.status.code(),
+        "stdout": stdout,
+        "stderr": stderr,
+    }))
+}
+
 #[cfg(test)]
 mod redclaw_media_plan_tests {
     use super::*;
@@ -993,6 +1093,15 @@ mod redclaw_media_plan_tests {
         assert!(body.contains("duration 2.500"));
         assert!(body.contains("file '/tmp/b.mp4'"));
         assert!(body.contains("duration 3.000"));
+    }
+
+    #[test]
+    fn ffconcat_file_entries_parses_exported_paths() {
+        let entries = ffconcat_file_entries(
+            "ffconcat version 1.0\nfile '/tmp/a.mp4'\nduration 1.000\nfile 'relative/b.mp4'\n",
+        );
+
+        assert_eq!(entries, vec!["/tmp/a.mp4", "relative/b.mp4"]);
     }
 }
 
@@ -1058,6 +1167,75 @@ fn export_redclaw_media_plan(
             "concatPath": concat_path.display().to_string(),
             "readmePath": readme_path.display().to_string(),
             "plan": export_value
+        }))
+    })
+}
+
+fn render_redclaw_rough_cut(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    let project_id =
+        payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
+    let export_result = export_redclaw_media_plan(state, payload)?;
+    let package_path = payload_string(&export_result, "packagePath")
+        .ok_or_else(|| "media plan packagePath missing".to_string())?;
+    let concat_path = payload_string(&export_result, "concatPath")
+        .ok_or_else(|| "media plan concatPath missing".to_string())?;
+    let package_dir = PathBuf::from(package_path);
+    let concat_path = PathBuf::from(concat_path);
+    let output_path = package_dir.join("rough-cut.mp4");
+    let ffmpeg_path = executable_in_path("ffmpeg").ok_or_else(|| {
+        "ffmpeg not found in PATH. Install ffmpeg before rendering RedClaw rough cuts.".to_string()
+    })?;
+    let inputs = validate_ffconcat_inputs(&package_dir, &concat_path)?;
+    let ffmpeg = run_ffmpeg_concat(&ffmpeg_path, &package_dir, &concat_path, &output_path)?;
+    let output_size = std::fs::metadata(&output_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    with_store_mut(state, |store| {
+        let project = store
+            .redclaw_state
+            .projects
+            .iter_mut()
+            .find(|item| item.id == project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())?;
+        let now = now_iso();
+        let render_record = json!({
+            "path": output_path.display().to_string(),
+            "packagePath": package_dir.display().to_string(),
+            "concatPath": concat_path.display().to_string(),
+            "inputCount": inputs.len(),
+            "sizeBytes": output_size,
+            "createdAt": now,
+            "renderer": "ffmpeg.concat.copy",
+        });
+        let mut metadata = project
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut renders = metadata
+            .get("mediaPlanRenders")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        renders.push(render_record.clone());
+        metadata.insert("mediaPlanRenders".to_string(), Value::Array(renders));
+        project.artifacts.push(json!({
+            "artifactType": "redclaw-rough-cut",
+            "title": "RedClaw Rough Cut",
+            "path": output_path.display().to_string(),
+            "payload": render_record,
+            "createdAt": now,
+        }));
+        project.metadata = Some(Value::Object(metadata));
+        project.updated_at = now;
+        Ok(json!({
+            "success": true,
+            "project": project,
+            "path": output_path.display().to_string(),
+            "packagePath": package_dir.display().to_string(),
+            "inputCount": inputs.len(),
+            "sizeBytes": output_size,
+            "ffmpeg": ffmpeg,
         }))
     })
 }
