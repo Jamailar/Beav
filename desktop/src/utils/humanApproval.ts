@@ -16,6 +16,12 @@ export type HumanApprovalTaskStatus =
   | 'failed'
   | 'cancelled'
   | 'blocked';
+export type HumanApprovalActionKind =
+  | 'collab_task_completion'
+  | 'redclaw_task_draft'
+  | 'manuscript_publish'
+  | 'media_generation_result'
+  | 'plugin_import_batch';
 
 export interface HumanApprovalDocketInput {
   sourceKind: string;
@@ -34,6 +40,7 @@ export interface HumanApprovalDocketInput {
   createdByAgentId?: string | null;
   assignedToUserId?: string | null;
   expiresAt?: number | null;
+  actionKind?: HumanApprovalActionKind;
   proposedAction?: Record<string, unknown>;
   onDecisionTaskStatus?: Partial<Record<HumanApprovalDecisionKey, HumanApprovalTaskStatus>>;
 }
@@ -58,6 +65,7 @@ export function buildHumanApprovalDocketPayload(input: HumanApprovalDocketInput)
 
   const proposedAction = {
     ...(input.proposedAction || {}),
+    ...(input.actionKind ? { kind: input.actionKind } : {}),
     ...(input.onDecisionTaskStatus
       ? { onDecisionTaskStatus: input.onDecisionTaskStatus }
       : {}),
@@ -110,6 +118,7 @@ export async function createCollabTaskCompletionApprovalDocket({
     riskLevel: task.status === 'failed' ? 'high' : 'normal',
     artifactRefs: artifactRefs || [...task.artifactIds, ...task.artifacts.map(approvalArtifactRef)],
     createdByAgentId: task.assigneeAgentId,
+    actionKind: 'collab_task_completion',
     onDecisionTaskStatus: {
       approved: 'completed',
       rejected: 'failed',
