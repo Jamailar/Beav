@@ -101,6 +101,26 @@ import {
   getAbsoluteMediaPath,
   type MediaAsset,
 } from './core/mediaLibraryStore';
+import {
+  applyAutoEditRunToVideoEditorV2Project,
+  createVideoEditorV2Project,
+  generateAutoEditForVideoEditorV2Project,
+  getOrCreateVideoEditorV2ProjectForManuscript,
+  getVideoEditorV2Project,
+  importAssetsToVideoEditorV2Project,
+  importSrtContentToVideoEditorV2Project,
+  importSrtFileToVideoEditorV2Project,
+  mergeVideoEditorV2SrtSegments,
+  reorderVideoEditorV2TimelineClip,
+  setVideoEditorV2TimelineClipDisabled,
+  splitVideoEditorV2TimelineClip,
+  splitVideoEditorV2SrtSegment,
+  trimVideoEditorV2TimelineClip,
+  undoVideoEditorV2ProjectTimeline,
+  updateVideoEditorV2SrtSegment,
+} from './core/video-editor-v2/videoEditorV2ProjectStore';
+import { renderVideoEditorV2Project } from './core/video-editor-v2/renderExportService';
+import { transcribeMediaToSrt } from './core/video-auto-edit/asrSrtService';
 import { buildRuntimeBaseSystemPrompt } from './core/prompts/defaultPromptBuilder';
 import {
   listCoverAssets,
@@ -3787,6 +3807,473 @@ ipcMain.handle('media:open-root', async () => {
     return { success: true };
   } catch (error) {
     console.error('Failed to open media library root:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:get-or-create-for-manuscript', async (_, payload?: {
+  manuscriptPath?: string;
+  title?: string;
+}) => {
+  try {
+    const manuscriptPath = String(payload?.manuscriptPath || '').trim();
+    if (!manuscriptPath) {
+      return { success: false, error: 'manuscriptPath is required' };
+    }
+    const project = await getOrCreateVideoEditorV2ProjectForManuscript({
+      manuscriptPath,
+      title: String(payload?.title || '').trim() || path.basename(manuscriptPath),
+    });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to get/create video editor V2 project:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:create-project', async (_, payload?: {
+  title?: string;
+  manuscriptPath?: string | null;
+}) => {
+  try {
+    const project = await createVideoEditorV2Project({
+      title: String(payload?.title || '').trim() || '未命名剪辑项目',
+      sourceManuscriptPath: payload?.manuscriptPath ? String(payload.manuscriptPath) : null,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'create', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to create video editor V2 project:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:get-project', async (_, payload?: { projectId?: string }) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    if (!projectId) {
+      return { success: false, error: 'projectId is required' };
+    }
+    const project = await getVideoEditorV2Project(projectId);
+    return { success: Boolean(project), project, error: project ? undefined : 'Project not found' };
+  } catch (error) {
+    console.error('Failed to read video editor V2 project:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:import-assets', async (_, payload?: {
+  projectId?: string;
+  sourcePaths?: string[];
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    if (!projectId) {
+      return { success: false, error: 'projectId is required' };
+    }
+    let sourcePaths = Array.isArray(payload?.sourcePaths)
+      ? payload!.sourcePaths.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    if (sourcePaths.length === 0) {
+      const picker = await dialog.showOpenDialog({
+        title: '选择 V2 剪辑素材',
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          { name: 'Media Files', extensions: ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv', 'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'png', 'jpg', 'jpeg', 'webp', 'gif'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+      if (picker.canceled || picker.filePaths.length === 0) {
+        return { success: true, canceled: true };
+      }
+      sourcePaths = picker.filePaths;
+    }
+    const project = await importAssetsToVideoEditorV2Project(projectId, sourcePaths);
+    emitRendererDataChanged('video-editor-v2', { action: 'import-assets', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to import V2 editor assets:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:import-srt', async (_, payload?: {
+  projectId?: string;
+  assetId?: string;
+  srtPath?: string;
+  srtContent?: string;
+  language?: string;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    if (!projectId) {
+      return { success: false, error: 'projectId is required' };
+    }
+    let project;
+    if (String(payload?.srtContent || '').trim()) {
+      project = await importSrtContentToVideoEditorV2Project({
+        projectId,
+        assetId: payload?.assetId,
+        srtContent: String(payload?.srtContent || ''),
+        language: payload?.language,
+      });
+    } else {
+      let srtPath = String(payload?.srtPath || '').trim();
+      if (!srtPath) {
+        const picker = await dialog.showOpenDialog({
+          title: '选择 SRT 字幕文件',
+          properties: ['openFile'],
+          filters: [
+            { name: 'SRT Files', extensions: ['srt'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+        });
+        if (picker.canceled || picker.filePaths.length === 0) {
+          return { success: true, canceled: true };
+        }
+        srtPath = picker.filePaths[0];
+      }
+      project = await importSrtFileToVideoEditorV2Project({
+        projectId,
+        assetId: payload?.assetId,
+        srtPath,
+        language: payload?.language,
+      });
+    }
+    emitRendererDataChanged('video-editor-v2', { action: 'import-srt', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to import V2 SRT:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:run-asr', async (_, payload?: {
+  projectId?: string;
+  assetId?: string;
+  language?: string;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const assetId = String(payload?.assetId || '').trim();
+    if (!projectId || !assetId) {
+      return { success: false, error: 'projectId and assetId are required' };
+    }
+    const project = await getVideoEditorV2Project(projectId);
+    const asset = project?.assets.find((item) => item.id === assetId);
+    if (!project || !asset) {
+      return { success: false, error: 'Project or asset not found' };
+    }
+    const asr = await transcribeMediaToSrt({
+      mediaPath: asset.projectPath,
+      workDir: path.join(project.projectDir, 'analysis'),
+      language: payload?.language,
+    });
+    const updated = await importSrtContentToVideoEditorV2Project({
+      projectId,
+      assetId,
+      srtContent: asr.srt,
+      sourceName: `${asset.id}.asr.srt`,
+      language: payload?.language,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'run-asr', entityId: updated.id });
+    return { success: true, project: updated };
+  } catch (error) {
+    console.error('Failed to run V2 ASR:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:update-srt-segment', async (_, payload?: {
+  projectId?: string;
+  trackId?: string;
+  segmentId?: string;
+  text?: string;
+  tags?: string[];
+  startMs?: number;
+  endMs?: number;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const trackId = String(payload?.trackId || '').trim();
+    const segmentId = String(payload?.segmentId || '').trim();
+    if (!projectId || !trackId || !segmentId) {
+      return { success: false, error: 'projectId, trackId and segmentId are required' };
+    }
+    const project = await updateVideoEditorV2SrtSegment({
+      projectId,
+      trackId,
+      segmentId,
+      text: payload?.text,
+      tags: Array.isArray(payload?.tags) ? payload!.tags as any : undefined,
+      startMs: payload?.startMs,
+      endMs: payload?.endMs,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'update-srt-segment', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to update V2 SRT segment:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:merge-srt-segments', async (_, payload?: {
+  projectId?: string;
+  trackId?: string;
+  segmentIds?: string[];
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const trackId = String(payload?.trackId || '').trim();
+    const segmentIds = Array.isArray(payload?.segmentIds)
+      ? payload!.segmentIds.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    if (!projectId || !trackId || segmentIds.length < 2) {
+      return { success: false, error: 'projectId, trackId and at least two segmentIds are required' };
+    }
+    const project = await mergeVideoEditorV2SrtSegments({
+      projectId,
+      trackId,
+      segmentIds,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'merge-srt-segments', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to merge V2 SRT segments:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:split-srt-segment', async (_, payload?: {
+  projectId?: string;
+  trackId?: string;
+  segmentId?: string;
+  splitMs?: number;
+  firstText?: string;
+  secondText?: string;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const trackId = String(payload?.trackId || '').trim();
+    const segmentId = String(payload?.segmentId || '').trim();
+    if (!projectId || !trackId || !segmentId) {
+      return { success: false, error: 'projectId, trackId and segmentId are required' };
+    }
+    const project = await splitVideoEditorV2SrtSegment({
+      projectId,
+      trackId,
+      segmentId,
+      splitMs: payload?.splitMs,
+      firstText: payload?.firstText,
+      secondText: payload?.secondText,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'split-srt-segment', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to split V2 SRT segment:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:set-timeline-clip-disabled', async (_, payload?: {
+  projectId?: string;
+  clipId?: string;
+  disabled?: boolean;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const clipId = String(payload?.clipId || '').trim();
+    if (!projectId || !clipId) {
+      return { success: false, error: 'projectId and clipId are required' };
+    }
+    const project = await setVideoEditorV2TimelineClipDisabled({
+      projectId,
+      clipId,
+      disabled: Boolean(payload?.disabled),
+    });
+    emitRendererDataChanged('video-editor-v2', { action: payload?.disabled ? 'disable-timeline-clip' : 'restore-timeline-clip', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to update V2 timeline clip disabled state:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:trim-timeline-clip', async (_, payload?: {
+  projectId?: string;
+  clipId?: string;
+  edge?: 'start' | 'end';
+  deltaMs?: number;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const clipId = String(payload?.clipId || '').trim();
+    const edge = payload?.edge === 'start' ? 'start' : 'end';
+    if (!projectId || !clipId) {
+      return { success: false, error: 'projectId and clipId are required' };
+    }
+    const deltaMs = Math.max(1, Math.round(Number(payload?.deltaMs || 500) || 500));
+    const project = await trimVideoEditorV2TimelineClip({
+      projectId,
+      clipId,
+      edge,
+      deltaMs,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: `trim-timeline-clip-${edge}`, entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to trim V2 timeline clip:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:split-timeline-clip', async (_, payload?: {
+  projectId?: string;
+  clipId?: string;
+  splitOffsetMs?: number;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const clipId = String(payload?.clipId || '').trim();
+    if (!projectId || !clipId) {
+      return { success: false, error: 'projectId and clipId are required' };
+    }
+    const splitOffsetMsRaw = Number(payload?.splitOffsetMs || 0);
+    const project = await splitVideoEditorV2TimelineClip({
+      projectId,
+      clipId,
+      splitOffsetMs: Number.isFinite(splitOffsetMsRaw) && splitOffsetMsRaw > 0 ? Math.round(splitOffsetMsRaw) : undefined,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'split-timeline-clip', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to split V2 timeline clip:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:reorder-timeline-clip', async (_, payload?: {
+  projectId?: string;
+  clipId?: string;
+  targetClipId?: string;
+  position?: 'before' | 'after';
+  direction?: 'left' | 'right';
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    const clipId = String(payload?.clipId || '').trim();
+    if (!projectId || !clipId) {
+      return { success: false, error: 'projectId and clipId are required' };
+    }
+    const project = await reorderVideoEditorV2TimelineClip({
+      projectId,
+      clipId,
+      targetClipId: payload?.targetClipId,
+      position: payload?.position === 'after' ? 'after' : 'before',
+      direction: payload?.direction === 'left' || payload?.direction === 'right' ? payload.direction : undefined,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'reorder-timeline-clip', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to reorder V2 timeline clip:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:undo-timeline', async (_, payload?: {
+  projectId?: string;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    if (!projectId) {
+      return { success: false, error: 'projectId is required' };
+    }
+    const project = await undoVideoEditorV2ProjectTimeline({ projectId });
+    emitRendererDataChanged('video-editor-v2', { action: 'undo-timeline', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to undo V2 timeline:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:generate-auto-edit', async (_, payload?: {
+  projectId?: string;
+  trackId?: string;
+  userGoal?: string;
+  targetDurationMs?: number | null;
+  pacing?: 'tight' | 'balanced' | 'slow';
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    if (!projectId) {
+      return { success: false, error: 'projectId is required' };
+    }
+    const targetDurationMs = Number(payload?.targetDurationMs || 0);
+    const project = await generateAutoEditForVideoEditorV2Project({
+      projectId,
+      trackId: payload?.trackId,
+      userGoal: payload?.userGoal,
+      targetDurationMs: Number.isFinite(targetDurationMs) && targetDurationMs > 0 ? targetDurationMs : null,
+      pacing: payload?.pacing,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'generate-auto-edit', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to generate V2 auto edit:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:apply-auto-edit', async (_, payload?: {
+  projectId?: string;
+  runId?: string;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    if (!projectId) {
+      return { success: false, error: 'projectId is required' };
+    }
+    const project = await applyAutoEditRunToVideoEditorV2Project({
+      projectId,
+      runId: String(payload?.runId || '').trim() || undefined,
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'apply-auto-edit', entityId: project.id });
+    return { success: true, project };
+  } catch (error) {
+    console.error('Failed to apply V2 auto edit:', error);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('videoEditorV2:render', async (event, payload?: {
+  projectId?: string;
+  outputPath?: string;
+  renderVideo?: boolean;
+}) => {
+  try {
+    const projectId = String(payload?.projectId || '').trim();
+    if (!projectId) {
+      return { success: false, error: 'projectId is required' };
+    }
+    const result = await renderVideoEditorV2Project({
+      projectId,
+      outputPath: payload?.outputPath,
+      renderVideo: payload?.renderVideo !== false,
+      onProgress: (progress) => {
+        event.sender.send('videoEditorV2:render-progress', progress);
+      },
+    });
+    emitRendererDataChanged('video-editor-v2', { action: 'render', entityId: result.project.id });
+    return {
+      success: true,
+      project: result.project,
+      outputPath: result.outputPath,
+      compositionPath: result.compositionPath,
+      subtitlePath: result.subtitlePath,
+    };
+  } catch (error) {
+    console.error('Failed to render V2 video editor project:', error);
     return { success: false, error: String(error) };
   }
 });

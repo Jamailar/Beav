@@ -69,6 +69,26 @@ import {
     updateVideoProjectScript,
 } from '../videoProjectStore';
 import {
+    applyAutoEditRunToVideoEditorV2Project,
+    createVideoEditorV2Project,
+    generateAutoEditForVideoEditorV2Project,
+    getOrCreateVideoEditorV2ProjectForManuscript,
+    getVideoEditorV2Project,
+    importAssetsToVideoEditorV2Project,
+    importSrtContentToVideoEditorV2Project,
+    importSrtFileToVideoEditorV2Project,
+    listVideoEditorV2Projects,
+    mergeVideoEditorV2SrtSegments,
+    reorderVideoEditorV2TimelineClip,
+    setVideoEditorV2TimelineClipDisabled,
+    splitVideoEditorV2TimelineClip,
+    splitVideoEditorV2SrtSegment,
+    trimVideoEditorV2TimelineClip,
+    undoVideoEditorV2ProjectTimeline,
+} from '../video-editor-v2/videoEditorV2ProjectStore';
+import { renderVideoEditorV2Project } from '../video-editor-v2/renderExportService';
+import { transcribeMediaToSrt } from '../video-auto-edit/asrSrtService';
+import {
     listSubjectCategories,
     createSubjectCategory,
     updateSubjectCategory,
@@ -223,6 +243,7 @@ const CONCURRENCY_SAFE_APP_CLI_ACTIONS = new Map<string, Set<string>>([
     ['memory', new Set(['list', 'get', 'search'])],
     ['redclaw', new Set(['list', 'get', 'status'])],
     ['media', new Set(['list', 'get', 'search'])],
+    ['video-edit', new Set(['list', 'get'])],
     ['subjects', new Set(['list', 'get', 'search'])],
     ['mcp', new Set(['list', 'status', 'oauth-status'])],
     ['settings', new Set(['get', 'show'])],
@@ -475,6 +496,25 @@ const APP_CLI_NAMESPACE_HELP: Record<string, { summary: string; actions: string[
             'video generate --prompt "让这些参考图里的主体元素进入同一支短视频镜头" --mode reference-guided --reference-images "/abs/ref1.png,/abs/ref2.png,/abs/ref3.png"',
             'video generate --prompt "从清晨空房间过渡到夜晚亮灯房间" --mode first-last-frame --reference-images "/abs/first.png,/abs/last.png"',
             'video generate --prompt "让这段镜头继续向前推进" --mode continuation --first-clip "/abs/clip.mp4"',
+        ],
+    },
+    'video-edit': {
+        summary: 'Drive the V2 subtitle-based automatic video editor: assets, SRT/ASR, auto edit, Remotion render.',
+        actions: ['list', 'get', 'create', 'for-manuscript', 'import-assets', 'import-srt', 'run-asr', 'merge-srt', 'split-srt', 'clip-disable', 'clip-restore', 'clip-trim-start', 'clip-trim-end', 'clip-split', 'clip-move-left', 'clip-move-right', 'undo', 'auto-edit', 'apply-auto-edit', 'render'],
+        examples: [
+            'video-edit for-manuscript --manuscript-path "drafts/demo.redvideo" --title "Demo"',
+            'video-edit import-assets --project-id video_edit_v2_xxx --paths "/abs/a.mp4"',
+            'video-edit import-srt --project-id video_edit_v2_xxx --asset-id asset_xxx --path "/abs/a.srt"',
+            'video-edit merge-srt --project-id video_edit_v2_xxx --track-id track_xxx --segment-ids seg_1,seg_2',
+            'video-edit split-srt --project-id video_edit_v2_xxx --track-id track_xxx --segment-id seg_1',
+            'video-edit clip-disable --project-id video_edit_v2_xxx --clip-id clip_xxx',
+            'video-edit clip-trim-start --project-id video_edit_v2_xxx --clip-id clip_xxx --delta-ms 500',
+            'video-edit clip-split --project-id video_edit_v2_xxx --clip-id clip_xxx',
+            'video-edit clip-move-left --project-id video_edit_v2_xxx --clip-id clip_xxx',
+            'video-edit undo --project-id video_edit_v2_xxx',
+            'video-edit auto-edit --project-id video_edit_v2_xxx --goal "剪成 60 秒高密度口播" --target-duration-seconds 60 --pacing tight',
+            'video-edit apply-auto-edit --project-id video_edit_v2_xxx --run-id auto_edit_xxx',
+            'video-edit render --project-id video_edit_v2_xxx',
         ],
     },
     mcp: {
@@ -1265,6 +1305,53 @@ export class AppCliTool extends DeclarativeTool<typeof AppCliParamsSchema> {
                     },
                 };
             }
+            if (parsed.namespace === 'video-edit') {
+                const info = result as {
+                    project?: { id?: string; status?: string; projectDir?: string; timeline?: { durationMs?: number }; assets?: unknown[]; transcriptTracks?: unknown[] };
+                    outputPath?: string;
+                    compositionPath?: string;
+                    subtitlePath?: string | null;
+                    count?: number;
+                };
+                const project = info.project || (result as { id?: string; status?: string; projectDir?: string; timeline?: { durationMs?: number }; assets?: unknown[]; transcriptTracks?: unknown[] });
+                const lines = [
+                    `video-edit ${parsed.action} completed.`,
+                    `projectId=${project?.id || ''}`,
+                    `status=${project?.status || ''}`,
+                    `projectDir=${project?.projectDir || ''}`,
+                ];
+                if (typeof info.count === 'number') {
+                    lines.push(`count=${info.count}`);
+                }
+                if (project?.timeline?.durationMs) {
+                    lines.push(`timelineDurationMs=${project.timeline.durationMs}`);
+                }
+                if (Array.isArray(project?.assets)) {
+                    lines.push(`assets=${project.assets.length}`);
+                }
+                if (Array.isArray(project?.transcriptTracks)) {
+                    lines.push(`transcriptTracks=${project.transcriptTracks.length}`);
+                }
+                if (info.outputPath) {
+                    lines.push(`outputPath=${info.outputPath}`);
+                }
+                if (info.compositionPath) {
+                    lines.push(`compositionPath=${info.compositionPath}`);
+                }
+                if (info.subtitlePath) {
+                    lines.push(`subtitlePath=${info.subtitlePath}`);
+                }
+                return {
+                    success: true,
+                    llmContent: lines.join('\n'),
+                    display: `video-edit ${parsed.action}`,
+                    data: {
+                        kind: 'video-editor-v2',
+                        action: parsed.action,
+                        ...((typeof result === 'object' && result !== null) ? result as Record<string, unknown> : { result }),
+                    },
+                };
+            }
             return createSuccessResult(toPrettyJson(result), `${parsed.namespace} ${parsed.action}`);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -1305,6 +1392,8 @@ export class AppCliTool extends DeclarativeTool<typeof AppCliParamsSchema> {
                 return this.handleImage(parsed, payload);
             case 'video':
                 return this.handleVideo(parsed, payload);
+            case 'video-edit':
+                return this.handleVideoEdit(parsed, payload);
             case 'mcp':
                 return this.handleMcp(parsed, payload);
             case 'settings':
@@ -2695,6 +2784,223 @@ export class AppCliTool extends DeclarativeTool<typeof AppCliParamsSchema> {
         }
 
         throw new Error(`Unsupported subjects action: ${action}`);
+    }
+
+    private async handleVideoEdit(parsed: ParsedCommand, payload: Record<string, unknown>) {
+        const action = parsed.action;
+
+        if (action === 'list') {
+            const limit = parseNumber(readFlag(parsed.flags, 'limit') || payload.limit) || 20;
+            const projects = await listVideoEditorV2Projects();
+            return {
+                count: projects.length,
+                projects: projects.slice(0, Math.max(1, limit)),
+            };
+        }
+
+        if (action === 'get') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const project = await getVideoEditorV2Project(projectId);
+            if (!project) {
+                throw new Error(`Video editor V2 project not found: ${projectId}`);
+            }
+            return { project };
+        }
+
+        if (action === 'create') {
+            const project = await createVideoEditorV2Project({
+                title: readFlag(parsed.flags, 'title') || (payload.title as string | undefined),
+                sourceManuscriptPath: readFlag(parsed.flags, 'source-manuscript-path', 'manuscript-path') || (payload.sourceManuscriptPath as string | undefined) || (payload.manuscriptPath as string | undefined) || null,
+            });
+            return { project };
+        }
+
+        if (action === 'for-manuscript') {
+            const manuscriptPath = requireString(readFlag(parsed.flags, 'manuscript-path', 'path') || payload.manuscriptPath || payload.path, 'manuscriptPath');
+            const project = await getOrCreateVideoEditorV2ProjectForManuscript({
+                manuscriptPath,
+                title: readFlag(parsed.flags, 'title') || (payload.title as string | undefined),
+            });
+            return { project };
+        }
+
+        if (action === 'import-assets') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const sourcePaths = dedupeList(parseList(
+                readFlag(parsed.flags, 'paths', 'source-paths', 'files')
+                || payload.sourcePaths
+                || payload.paths
+                || payload.files,
+            ));
+            if (sourcePaths.length === 0) {
+                throw new Error('sourcePaths/paths is required for video-edit import-assets');
+            }
+            const project = await importAssetsToVideoEditorV2Project(projectId, sourcePaths);
+            return { project, importedCount: sourcePaths.length };
+        }
+
+        if (action === 'import-srt') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const assetId = readFlag(parsed.flags, 'asset-id', 'assetid') || (payload.assetId as string | undefined);
+            const language = readFlag(parsed.flags, 'language', 'lang') || (payload.language as string | undefined);
+            const srtContent = String(readFlag(parsed.flags, 'content') || payload.srtContent || '').trim();
+            const srtPath = String(readFlag(parsed.flags, 'path', 'srt-path') || payload.srtPath || '').trim();
+            const project = srtContent
+                ? await importSrtContentToVideoEditorV2Project({
+                    projectId,
+                    assetId,
+                    srtContent,
+                    language,
+                })
+                : await importSrtFileToVideoEditorV2Project({
+                    projectId,
+                    assetId,
+                    srtPath: requireString(srtPath, 'srtPath'),
+                    language,
+                });
+            return { project };
+        }
+
+        if (action === 'run-asr') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const assetId = requireString(readFlag(parsed.flags, 'asset-id', 'assetid') || payload.assetId, 'assetId');
+            const project = await getVideoEditorV2Project(projectId);
+            const asset = project?.assets.find((item) => item.id === assetId);
+            if (!project || !asset) {
+                throw new Error('Project or asset not found');
+            }
+            const asr = await transcribeMediaToSrt({
+                mediaPath: asset.projectPath,
+                workDir: path.join(project.projectDir, 'analysis'),
+                language: readFlag(parsed.flags, 'language', 'lang') || (payload.language as string | undefined),
+            });
+            const updated = await importSrtContentToVideoEditorV2Project({
+                projectId,
+                assetId,
+                srtContent: asr.srt,
+                language: readFlag(parsed.flags, 'language', 'lang') || (payload.language as string | undefined),
+            });
+            return {
+                project: updated,
+                srtLength: asr.srt.length,
+            };
+        }
+
+        if (action === 'merge-srt') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const trackId = requireString(readFlag(parsed.flags, 'track-id', 'trackid') || payload.trackId, 'trackId');
+            const segmentIds = dedupeList(parseList(
+                readFlag(parsed.flags, 'segment-ids', 'segments')
+                || payload.segmentIds
+                || payload.segments,
+            ));
+            const project = await mergeVideoEditorV2SrtSegments({
+                projectId,
+                trackId,
+                segmentIds,
+            });
+            return { project };
+        }
+
+        if (action === 'split-srt') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const project = await splitVideoEditorV2SrtSegment({
+                projectId,
+                trackId: requireString(readFlag(parsed.flags, 'track-id', 'trackid') || payload.trackId, 'trackId'),
+                segmentId: requireString(readFlag(parsed.flags, 'segment-id', 'segmentid') || payload.segmentId, 'segmentId'),
+                splitMs: parseNumber(readFlag(parsed.flags, 'split-ms') || payload.splitMs),
+                firstText: readFlag(parsed.flags, 'first-text') || (payload.firstText as string | undefined),
+                secondText: readFlag(parsed.flags, 'second-text') || (payload.secondText as string | undefined),
+            });
+            return { project };
+        }
+
+        if (action === 'clip-disable' || action === 'clip-restore') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const project = await setVideoEditorV2TimelineClipDisabled({
+                projectId,
+                clipId: requireString(readFlag(parsed.flags, 'clip-id', 'clipid') || payload.clipId, 'clipId'),
+                disabled: action === 'clip-disable',
+            });
+            return { project };
+        }
+
+        if (action === 'clip-trim-start' || action === 'clip-trim-end') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const deltaMs = parseNumber(readFlag(parsed.flags, 'delta-ms') || payload.deltaMs) || 500;
+            const project = await trimVideoEditorV2TimelineClip({
+                projectId,
+                clipId: requireString(readFlag(parsed.flags, 'clip-id', 'clipid') || payload.clipId, 'clipId'),
+                edge: action === 'clip-trim-start' ? 'start' : 'end',
+                deltaMs,
+            });
+            return { project };
+        }
+
+        if (action === 'clip-split') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const project = await splitVideoEditorV2TimelineClip({
+                projectId,
+                clipId: requireString(readFlag(parsed.flags, 'clip-id', 'clipid') || payload.clipId, 'clipId'),
+                splitOffsetMs: parseNumber(readFlag(parsed.flags, 'split-offset-ms', 'offset-ms') || payload.splitOffsetMs),
+            });
+            return { project };
+        }
+
+        if (action === 'clip-move-left' || action === 'clip-move-right') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const project = await reorderVideoEditorV2TimelineClip({
+                projectId,
+                clipId: requireString(readFlag(parsed.flags, 'clip-id', 'clipid') || payload.clipId, 'clipId'),
+                direction: action === 'clip-move-left' ? 'left' : 'right',
+            });
+            return { project };
+        }
+
+        if (action === 'undo') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const project = await undoVideoEditorV2ProjectTimeline({ projectId });
+            return { project };
+        }
+
+        if (action === 'auto-edit') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const targetDurationSeconds = parseNumber(readFlag(parsed.flags, 'target-duration-seconds', 'target-seconds') || payload.targetDurationSeconds);
+            const targetDurationMs = parseNumber(readFlag(parsed.flags, 'target-duration-ms') || payload.targetDurationMs)
+                || (targetDurationSeconds ? targetDurationSeconds * 1000 : undefined);
+            const pacingRaw = String(readFlag(parsed.flags, 'pacing') || payload.pacing || 'balanced').trim();
+            const pacing = pacingRaw === 'tight' || pacingRaw === 'slow' ? pacingRaw : 'balanced';
+            const project = await generateAutoEditForVideoEditorV2Project({
+                projectId,
+                trackId: readFlag(parsed.flags, 'track-id', 'trackid') || (payload.trackId as string | undefined),
+                userGoal: readFlag(parsed.flags, 'goal') || (payload.userGoal as string | undefined) || (payload.goal as string | undefined),
+                targetDurationMs: targetDurationMs && targetDurationMs > 0 ? targetDurationMs : null,
+                pacing,
+            });
+            return { project };
+        }
+
+        if (action === 'apply-auto-edit') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const project = await applyAutoEditRunToVideoEditorV2Project({
+                projectId,
+                runId: readFlag(parsed.flags, 'run-id', 'runid') || (payload.runId as string | undefined),
+            });
+            return { project };
+        }
+
+        if (action === 'render') {
+            const projectId = requireString(readFlag(parsed.flags, 'project-id', 'projectid', 'id') || payload.projectId || payload.id, 'projectId');
+            const snapshotOnly = parseBoolean(readFlag(parsed.flags, 'snapshot-only') || payload.snapshotOnly) === true;
+            const result = await renderVideoEditorV2Project({
+                projectId,
+                outputPath: readFlag(parsed.flags, 'output-path', 'output') || (payload.outputPath as string | undefined),
+                renderVideo: !snapshotOnly,
+            });
+            return result;
+        }
+
+        throw new Error(`Unsupported video-edit action: ${action}`);
     }
 
     private async handleMedia(parsed: ParsedCommand, payload: Record<string, unknown>) {

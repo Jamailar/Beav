@@ -221,6 +221,9 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (channel === 'media:list') {
     return { success: true, assets: [] };
   }
+  if (channel.startsWith('videoEditorV2:')) {
+    return { success: false, error: `RedBox video editor V2 action failed: ${message}` };
+  }
   if (channel === 'cover:list') {
     return { success: true, assets: [] };
   }
@@ -1014,6 +1017,27 @@ function createIpcRenderer() {
         update: (payload: { id: string; name: string }) => invokeChannel('subjects:categories:update', payload),
         delete: (payload: { id: string }) => invokeChannel('subjects:categories:delete', payload)
       }
+    },
+    videoEditorV2: {
+      getOrCreateForManuscript: (payload: { manuscriptPath: string; title?: string }) =>
+        invokeChannel('videoEditorV2:get-or-create-for-manuscript', payload),
+      createProject: (payload?: Record<string, unknown>) => invokeChannel('videoEditorV2:create-project', payload || {}),
+      getProject: (payload: { projectId: string }) => invokeChannel('videoEditorV2:get-project', payload),
+      importAssets: (payload: { projectId: string; sourcePaths?: string[] }) => invokeChannel('videoEditorV2:import-assets', payload),
+      importSrt: (payload: { projectId: string; assetId?: string; srtPath?: string; srtContent?: string; language?: string }) =>
+        invokeChannel('videoEditorV2:import-srt', payload),
+      runAsr: (payload: { projectId: string; assetId: string; language?: string }) => invokeChannel('videoEditorV2:run-asr', payload),
+      updateSrtSegment: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:update-srt-segment', payload),
+      mergeSrtSegments: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:merge-srt-segments', payload),
+      splitSrtSegment: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:split-srt-segment', payload),
+      setTimelineClipDisabled: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:set-timeline-clip-disabled', payload),
+      trimTimelineClip: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:trim-timeline-clip', payload),
+      splitTimelineClip: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:split-timeline-clip', payload),
+      reorderTimelineClip: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:reorder-timeline-clip', payload),
+      undoTimeline: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:undo-timeline', payload),
+      generateAutoEdit: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:generate-auto-edit', payload),
+      applyAutoEdit: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:apply-auto-edit', payload),
+      render: (payload: Record<string, unknown>) => invokeChannel('videoEditorV2:render', payload),
     },
     getAppVersion: () => invokeChannel('app:get-version'),
     checkAppUpdate: (force = false) => invokeChannel('app:check-update', { force }),

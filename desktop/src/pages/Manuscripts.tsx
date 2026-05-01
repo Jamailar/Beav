@@ -18,6 +18,7 @@ import {
     Play,
     RefreshCw,
     Search,
+    Scissors,
     Sparkles,
     Trash2,
     Upload,
@@ -61,6 +62,9 @@ import {
 
 const VideoDraftWorkbench = lazy(async () => ({
     default: (await import('../components/manuscripts/ExperimentalVideoWorkbench')).ExperimentalVideoWorkbench,
+}));
+const VideoEditorV2Workbench = lazy(async () => ({
+    default: (await import('../components/video-editor-v2/VideoEditorV2Workbench')).VideoEditorV2Workbench,
 }));
 const AudioDraftWorkbench = lazy(async () => ({
     default: (await import('../components/manuscripts/AudioDraftWorkbench')).AudioDraftWorkbench,
@@ -992,6 +996,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
     const [activeVideoJobId, setActiveVideoJobId] = useState<string | null>(null);
+    const [videoWorkbenchVersion, setVideoWorkbenchVersion] = useState<'v2' | 'legacy'>('legacy');
     const [isUpgradingDraft, setIsUpgradingDraft] = useState(false);
     const [packageState, setPackageState] = useState<PackageState | null>(null);
     const [isGeneratingRemotion, setIsGeneratingRemotion] = useState(false);
@@ -3470,6 +3475,36 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                                 </button>
                             </div>
                         )}
+
+                        {isVideoDraft && (
+                            <div className="flex items-center gap-1 rounded-xl border border-border bg-surface-secondary/50 p-1">
+                                <button
+                                    type="button"
+                                    onClick={() => setVideoWorkbenchVersion('v2')}
+                                    className={clsx(
+                                        'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-black transition-all active:scale-95',
+                                        videoWorkbenchVersion === 'v2'
+                                            ? 'bg-accent-primary text-white shadow-sm shadow-accent-primary/20'
+                                            : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
+                                    )}
+                                >
+                                    <Scissors className="h-3.5 w-3.5" />
+                                    V2 自动剪辑
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setVideoWorkbenchVersion('legacy')}
+                                    className={clsx(
+                                        'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-black transition-all active:scale-95',
+                                        videoWorkbenchVersion === 'legacy'
+                                            ? 'bg-surface-primary text-text-primary shadow-sm'
+                                            : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
+                                    )}
+                                >
+                                    旧工作台
+                                </button>
+                            </div>
+                        )}
                         
                         {isVideoPackage && (
                             <button
@@ -3499,7 +3534,15 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
                         )}
                     </div>
                 </div>
-                {isVideoDraft ? (
+                {isVideoDraft && videoWorkbenchVersion === 'v2' ? (
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">V2 自动剪辑工作台加载中...</div>}>
+                        <VideoEditorV2Workbench
+                            isActive={isActive}
+                            title={currentDescriptor.title}
+                            editorFile={editorFile}
+                        />
+                    </Suspense>
+                ) : isVideoDraft ? (
                     <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">视频工作台加载中...</div>}>
                         <VideoDraftWorkbench
                             isActive={isActive}
