@@ -108,6 +108,7 @@ pub fn handle_redclaw_channel(
         "redclaw:media-plan-export" => export_redclaw_media_plan(state, payload),
         "redclaw:media-plan-render" => render_redclaw_rough_cut(state, payload),
         "redclaw:publish-package-export" => export_redclaw_publish_package(state, payload),
+        "redclaw:review-report-export" => export_redclaw_review_report(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -1016,6 +1017,118 @@ fn build_cover_brief_markdown(package: &Value) -> String {
     markdown
 }
 
+fn review_report_from_project(project: &crate::runtime::RedclawProjectRecord) -> Value {
+    let outputs = orchestration_outputs_for_project(project);
+    let editor = output_for_role(&outputs, "editor_agent");
+    let review = output_for_role(&outputs, "review_agent");
+    let review_artifact = parsed_output_artifact(review.as_ref());
+    let quality_score = review_artifact
+        .get("qualityScore")
+        .or_else(|| review_artifact.get("score"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let blocking_issues = value_string_list(
+        review_artifact
+            .get("blockingIssues")
+            .or_else(|| review_artifact.get("issues"))
+            .or_else(|| review.as_ref().and_then(|value| value.get("issues"))),
+    );
+    let suggested_patches = review_artifact
+        .get("suggestedPatches")
+        .or_else(|| review_artifact.get("patches"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let learning_candidates = review
+        .as_ref()
+        .and_then(|value| value.get("learningCandidates"))
+        .or_else(|| review_artifact.get("learningCandidates"))
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let summary = first_string_field(
+        &review_artifact,
+        &["summary", "conclusion", "overall", "reviewSummary"],
+    )
+    .or_else(|| {
+        review
+            .as_ref()
+            .and_then(|value| value.get("summary"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+    .unwrap_or_default();
+    json!({
+        "schema": "redclaw.reviewReport.v1",
+        "project": {
+            "id": project.id,
+            "goal": project.goal,
+            "platform": project.platform,
+            "contentFormat": project.content_format,
+            "runtimeTaskId": project.runtime_task_id,
+        },
+        "generatedAt": now_iso(),
+        "summary": summary,
+        "qualityScore": quality_score,
+        "blockingIssues": blocking_issues,
+        "suggestedPatches": suggested_patches,
+        "learningCandidates": learning_candidates,
+        "sources": {
+            "editor": redclaw_output_summary(editor.as_ref()),
+            "review": redclaw_output_summary(review.as_ref()),
+        },
+        "raw": review_artifact,
+    })
+}
+
+fn markdown_json_block(value: &Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn build_review_report_markdown(report: &Value) -> String {
+    let issues = value_string_list(report.get("blockingIssues"));
+    let summary = report
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let project = report.get("project").cloned().unwrap_or_else(|| json!({}));
+    let quality_score = report.get("qualityScore").cloned().unwrap_or(Value::Null);
+    let suggested_patches = report
+        .get("suggestedPatches")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let learning_candidates = report
+        .get("learningCandidates")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let mut markdown = String::new();
+    markdown.push_str("# RedClaw Review Report\n\n");
+    markdown.push_str(&format!(
+        "Project: `{}`\n\n",
+        project
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    ));
+    markdown.push_str("## Summary\n\n");
+    markdown.push_str(if summary.is_empty() {
+        "No review summary generated."
+    } else {
+        summary
+    });
+    markdown.push_str("\n\n## Quality Score\n\n```json\n");
+    markdown.push_str(&markdown_json_block(&quality_score));
+    markdown.push_str("\n```\n\n## Blocking Issues\n\n");
+    markdown.push_str(&markdown_list(&issues, "No blocking issues generated."));
+    markdown.push_str("\n## Suggested Patches\n\n```json\n");
+    markdown.push_str(&markdown_json_block(&suggested_patches));
+    markdown.push_str("\n```\n\n## Learning Candidates\n\n```json\n");
+    markdown.push_str(&markdown_json_block(&learning_candidates));
+    markdown.push_str("\n```\n");
+    markdown
+}
+
 fn build_redclaw_media_plan_export(project: &crate::runtime::RedclawProjectRecord) -> Value {
     let outputs = orchestration_outputs_for_project(project);
     let script = output_for_role(&outputs, "script_agent");
@@ -1289,6 +1402,25 @@ mod redclaw_media_plan_tests {
         assert!(cover.contains("Cover line"));
         assert!(cover.contains("Platform: xiaohongshu"));
     }
+
+    #[test]
+    fn review_report_markdown_includes_score_issues_and_learnings() {
+        let report = json!({
+            "schema": "redclaw.reviewReport.v1",
+            "project": { "id": "project-1" },
+            "summary": "Ready after one patch",
+            "qualityScore": { "overall": 82, "platformFit": 90 },
+            "blockingIssues": ["Missing source citation"],
+            "suggestedPatches": [{ "sectionId": "script", "reason": "Add citation" }],
+            "learningCandidates": [{ "statement": "Prefer stronger source links" }]
+        });
+        let markdown = build_review_report_markdown(&report);
+
+        assert!(markdown.contains("Ready after one patch"));
+        assert!(markdown.contains("Missing source citation"));
+        assert!(markdown.contains("\"overall\": 82"));
+        assert!(markdown.contains("Prefer stronger source links"));
+    }
 }
 
 fn export_redclaw_media_plan(
@@ -1487,6 +1619,67 @@ fn export_redclaw_publish_package(
             "markdownPath": markdown_path.display().to_string(),
             "coverBriefPath": cover_brief_path.display().to_string(),
             "package": package,
+        }))
+    })
+}
+
+fn export_redclaw_review_report(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let project_id =
+        payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
+    let root = workspace_root(state)?;
+    let export_dir = root
+        .join("redclaw")
+        .join("review-reports")
+        .join(safe_export_slug(&project_id));
+    std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
+    with_store_mut(state, |store| {
+        let project = store
+            .redclaw_state
+            .projects
+            .iter_mut()
+            .find(|item| item.id == project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())?;
+        let report = review_report_from_project(project);
+        let report_path = export_dir.join("review-report.json");
+        let markdown_path = export_dir.join("review-report.md");
+        write_text_file(
+            &report_path,
+            &serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?,
+        )?;
+        write_text_file(&markdown_path, &build_review_report_markdown(&report))?;
+
+        let now = now_iso();
+        let export_record = json!({
+            "packagePath": export_dir.display().to_string(),
+            "jsonPath": report_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "schema": "redclaw.reviewReport.v1",
+            "createdAt": now,
+        });
+        let mut metadata = project
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut exports = metadata
+            .get("reviewReportExports")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        exports.push(export_record);
+        metadata.insert("reviewReportExports".to_string(), Value::Array(exports));
+        project.metadata = Some(Value::Object(metadata));
+        project.updated_at = now;
+        Ok(json!({
+            "success": true,
+            "project": project,
+            "packagePath": export_dir.display().to_string(),
+            "jsonPath": report_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "report": report,
         }))
     })
 }
