@@ -1118,6 +1118,11 @@ function createIpcRenderer() {
       taskList: (payload?: { ownerScope?: string; includeDrafts?: boolean }) => invokeChannel('redclaw:task-list', payload || {}),
       taskStats: () => invokeChannel('redclaw:task-stats'),
     },
+    redclawOrchestration: {
+      plan: (payload: { goal: string; projectId?: string; platform?: string; format?: string }) =>
+        invokeChannel('redclaw:orchestration-plan', payload),
+      getRegistry: () => invokeChannel('redclaw:orchestration-registry'),
+    },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
       updateDoc: (payload: { docType: 'agent' | 'soul' | 'user' | 'creator_profile'; markdown: string; reason?: string }) =>

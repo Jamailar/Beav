@@ -1723,6 +1723,49 @@ declare global {
           };
         }>;
       };
+      redclawOrchestration: {
+        plan: (payload: {
+          goal: string;
+          projectId?: string;
+          platform?: string;
+          format?: string;
+        }) => Promise<{
+          success: boolean;
+          runId: string;
+          mode: string;
+          graph: {
+            id: string;
+            goal: string;
+            platform?: string | null;
+            contentFormat?: string | null;
+            createdAt: string;
+            nodes: Array<{
+              id: string;
+              title: string;
+              agentId: string;
+              skillIds: string[];
+              requiredArtifacts: string[];
+              outputSchema: string;
+              status: string;
+            }>;
+            edges: Array<{
+              from: string;
+              to: string;
+              dependencyType: string;
+            }>;
+          };
+          agentSpecs: Array<Record<string, unknown>>;
+          skillProfiles: Array<Record<string, unknown>>;
+          memoryScopes: string[];
+          releasePolicy: string;
+        }>;
+        getRegistry: () => Promise<{
+          success: boolean;
+          agents: Array<Record<string, unknown>>;
+          skills: Array<Record<string, unknown>>;
+          memoryScopes: string[];
+        }>;
+      };
       redclawProfile: {
         getBundle: () => Promise<{
           activeSpaceId?: string;
