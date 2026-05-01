@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{make_id, now_iso, payload_string};
+use crate::runtime::RedclawProjectRecord;
+use crate::{make_id, now_iso, payload_string, AppStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -659,6 +660,121 @@ pub fn redclaw_orchestration_registry_value() -> Value {
         "skills": redclaw_skill_profiles(),
         "memoryScopes": ["creator", "platform", "project", "skill", "knowledge", "asset", "execution"]
     })
+}
+
+fn value_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+}
+
+fn redclaw_project_id_from_metadata(metadata: Option<&Value>) -> Option<String> {
+    metadata
+        .and_then(|value| value_string(value, "projectId"))
+        .or_else(|| {
+            metadata
+                .and_then(|value| value_string(value, "runId"))
+                .map(|run_id| format!("redclaw-project:{run_id}"))
+        })
+}
+
+pub fn sync_redclaw_project_from_runtime_task(
+    store: &mut AppStore,
+    task_id: &str,
+) -> Result<Option<RedclawProjectRecord>, String> {
+    let Some(task) = store
+        .runtime_tasks
+        .iter()
+        .find(|item| item.id == task_id)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let metadata = task.metadata.as_ref();
+    let source = metadata.and_then(|value| value_string(value, "source"));
+    if source.as_deref() != Some("redclaw-orchestrator") {
+        return Ok(None);
+    }
+    let Some(project_id) = redclaw_project_id_from_metadata(metadata) else {
+        return Ok(None);
+    };
+    let graph = metadata
+        .and_then(|value| value.get("redclawTaskGraph"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let run_id = metadata.and_then(|value| value_string(value, "runId"));
+    let graph_id = metadata.and_then(|value| value_string(value, "graphId"));
+    let collab_session_id = store
+        .collab_sessions
+        .iter()
+        .find(|session| {
+            session
+                .metadata
+                .as_ref()
+                .and_then(|value| value_string(value, "sourceTaskId"))
+                .as_deref()
+                == Some(task_id)
+        })
+        .map(|session| session.id.clone());
+    let artifact_path = task
+        .artifacts
+        .iter()
+        .find_map(|artifact| artifact.path.clone());
+    let artifacts = task
+        .artifacts
+        .iter()
+        .map(|artifact| serde_json::to_value(artifact).unwrap_or_else(|_| Value::Null))
+        .collect::<Vec<_>>();
+    let checkpoints = task
+        .checkpoints
+        .iter()
+        .map(|checkpoint| serde_json::to_value(checkpoint).unwrap_or_else(|_| Value::Null))
+        .collect::<Vec<_>>();
+    let now = now_iso();
+    let record = RedclawProjectRecord {
+        id: project_id.clone(),
+        goal: task.goal.clone().unwrap_or_else(|| task_id.to_string()),
+        platform: value_string(&graph, "platform"),
+        task_type: Some(task.task_type.clone()),
+        status: task.status.clone(),
+        run_id,
+        graph_id,
+        runtime_task_id: Some(task.id.clone()),
+        collab_session_id,
+        content_format: value_string(&graph, "contentFormat"),
+        artifact_path,
+        artifacts,
+        checkpoints,
+        metadata: Some(json!({
+            "source": "redclaw-orchestrator",
+            "redclawTaskGraph": graph,
+            "runtimeTaskStatus": task.status,
+            "runtimeTaskError": task.last_error,
+        })),
+        created_at: store
+            .redclaw_state
+            .projects
+            .iter()
+            .find(|item| item.id == project_id)
+            .and_then(|item| item.created_at.clone())
+            .or_else(|| Some(now.clone())),
+        updated_at: now,
+    };
+    if let Some(existing) = store
+        .redclaw_state
+        .projects
+        .iter_mut()
+        .find(|item| item.id == project_id)
+    {
+        *existing = record.clone();
+    } else {
+        store.redclaw_state.projects.push(record.clone());
+    }
+    store.redclaw_state.current_project_id = Some(project_id);
+    Ok(Some(record))
 }
 
 #[cfg(test)]

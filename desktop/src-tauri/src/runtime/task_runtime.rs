@@ -527,6 +527,7 @@ pub fn apply_task_resume_execution(
         prepared.repair_orchestration.clone(),
         prepared.reviewer_blocked && prepared.repair_pass_failed,
     );
+    let _ = crate::runtime::sync_redclaw_project_from_runtime_task(store, task_id);
 
     Ok(AppliedTaskResumeExecution {
         response: serde_json::json!({
