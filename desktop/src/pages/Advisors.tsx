@@ -25,6 +25,8 @@ export interface Advisor {
     detectedKnowledgeLanguage?: string;
     languageDetectionStatus?: string;
     languageConfidence?: number;
+    redclawVisible?: boolean;
+    redclawOrder?: number;
     createdAt: string;
 }
 
@@ -2019,7 +2021,7 @@ export function AdvisorModal({
         }
 
         if (!name.trim()) return;
-        if (mode === 'manual' && pendingKnowledgeFiles.length === 0) {
+        if (!advisor && mode === 'manual' && pendingKnowledgeFiles.length === 0) {
             void appAlert('手动创建成员时必须导入至少一个知识库文件');
             return;
         }

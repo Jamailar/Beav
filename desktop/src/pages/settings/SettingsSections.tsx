@@ -4982,7 +4982,7 @@ export function ToolsSettingsSection({
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
+    activeTab: 'general' | 'ai' | 'team' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 
