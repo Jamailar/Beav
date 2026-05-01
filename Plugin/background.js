@@ -334,6 +334,13 @@ async function handleMessage(message, sender) {
         tabId,
         execute: () => collectXhsBloggerNotesFromTab(tabId, message?.options),
       });
+    case 'account:bind-current-platform':
+      return await enqueueXhsTask({
+        type: message.type,
+        title: createXhsTaskTitle(message.type, message, tabId),
+        tabId,
+        execute: () => bindCurrentPlatformAccountFromTab(tabId, message?.platform, message?.options),
+      });
     case 'xhs:collect-note-links':
       return await enqueueXhsTask({
         type: message.type,
@@ -1157,6 +1164,8 @@ function createXhsTaskTitle(type, message = {}, tabId = 0) {
       return '采集当前博主资料';
     case 'xhs:collect-blogger-notes':
       return `采集当前博主笔记${message?.options?.limit ? `（${Number(message.options.limit)} 条）` : ''}`;
+    case 'account:bind-current-platform':
+      return '绑定当前平台账号';
     case 'xhs:collect-note-links':
       return `链接批量采集（${countMessageUrls(message?.urls)} 条）`;
     case 'xhs:collect-visible-note-links':
@@ -1410,6 +1419,8 @@ function getXhsTaskActionLabel(type) {
       return '绑定账号';
     case 'xhs:collect-blogger-notes':
       return '采集博主笔记';
+    case 'account:bind-current-platform':
+      return '绑定账号';
     case 'xhs:collect-note-links':
       return '批量采集';
     case 'xhs:collect-visible-note-links':
@@ -2647,6 +2658,93 @@ function buildXhsAccountPostFromEntry(entryPayload) {
       }] : []),
     ].filter((item) => item.url),
     raw: entryPayload || {},
+  };
+}
+
+function normalizeAccountPlatform(value) {
+  const normalized = normalizeText(value).toLowerCase();
+  if (/^(xhs|rednote|xiaohongshu|小红书)$/.test(normalized)) return 'xiaohongshu';
+  if (/^(douyin|抖音)$/.test(normalized)) return 'douyin';
+  if (/^(bilibili|b站|哔哩哔哩)$/.test(normalized)) return 'bilibili';
+  return normalized;
+}
+
+function buildAccountProfileFromSocialPayload(payload = {}, platformHint = '') {
+  const platform = normalizeAccountPlatform(payload?.platform || platformHint);
+  const source = normalizeText(payload?.authorProfileUrl)
+    || normalizeText(payload?.profileUrl)
+    || normalizeText(payload?.source)
+    || normalizeText(payload?.url);
+  const username = normalizeText(payload?.author)
+    || normalizeText(payload?.username)
+    || normalizeText(payload?.title)
+    || `${platform || 'platform'}账号`;
+  const platformUserId = normalizeText(payload?.authorId)
+    || normalizeText(payload?.uid)
+    || normalizeText(payload?.mid)
+    || extractProfileIdFromUrl(source, platform)
+    || (source ? hashString(source) : '');
+  return {
+    platform,
+    homepageUrl: source,
+    platformUserId,
+    username,
+    avatarUrl: normalizeText(payload?.avatarUrl) || normalizeText(payload?.avatar) || '',
+    bio: normalizeText(payload?.description) || normalizeText(payload?.text) || '',
+    profile: {
+      ...payload,
+      stats: payload?.stats && typeof payload.stats === 'object' ? payload.stats : {},
+    },
+  };
+}
+
+function extractProfileIdFromUrl(url, platform = '') {
+  const normalized = normalizeText(url);
+  if (!normalized) return '';
+  try {
+    const parsed = new URL(normalized);
+    if (platform === 'bilibili') {
+      const match = parsed.pathname.match(/\/(?:space\/)?(\d+)/);
+      if (match?.[1]) return match[1];
+    }
+    if (platform === 'douyin') {
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      const userIndex = parts.findIndex((item) => item === 'user');
+      if (userIndex >= 0 && parts[userIndex + 1]) return parts[userIndex + 1];
+      if (parts[0]) return parts[0];
+    }
+    return parsed.pathname.replace(/^\/+|\/+$/g, '') || parsed.hostname;
+  } catch {
+    return '';
+  }
+}
+
+function buildAccountPostFromSocialPayload(payload = {}, platformHint = '') {
+  const platform = normalizeAccountPlatform(payload?.platform || platformHint);
+  const source = normalizeText(payload?.source || payload?.url);
+  const postId = normalizeText(payload?.noteId)
+    || normalizeText(payload?.externalId)
+    || hashString(`${platform}:${source}:${normalizeText(payload?.title)}`);
+  const imageUrls = Array.isArray(payload?.images)
+    ? payload.images.map(normalizeText).filter(Boolean)
+    : [];
+  const media = [
+    ...imageUrls.map((url, index) => ({ kind: 'image', url, index })),
+    ...(normalizeText(payload?.videoUrl) ? [{ kind: 'video', url: normalizeText(payload.videoUrl) }] : []),
+    ...(normalizeText(payload?.coverUrl) ? [{ kind: 'cover', url: normalizeText(payload.coverUrl) }] : []),
+  ].filter((item) => item.url);
+  return {
+    id: postId,
+    platformPostId: postId,
+    title: normalizeText(payload?.title),
+    content: normalizeText(payload?.text || payload?.content || payload?.description || payload?.title),
+    url: source,
+    publishedAt: normalizeText(payload?.publishedAt),
+    kind: normalizeText(payload?.contentType) || normalizeText(payload?.mode) || 'page',
+    stats: payload?.stats && typeof payload.stats === 'object' ? payload.stats : {},
+    tags: Array.isArray(payload?.tags) ? payload.tags.map(normalizeText).filter(Boolean) : [],
+    media,
+    raw: payload || {},
   };
 }
 
@@ -6715,6 +6813,41 @@ async function createAccountImportSessionFromXhs(payload, options = {}) {
   return response;
 }
 
+async function createAccountImportSessionFromSocialPayload(payload, options = {}) {
+  const profile = buildAccountProfileFromSocialPayload(payload, options?.platform);
+  if (!profile.platform || !profile.homepageUrl) {
+    throw new Error('当前页面未识别到可绑定的账号主页');
+  }
+  const response = await fetchAccountsJson('/import-sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      platform: profile.platform,
+      homepageUrl: profile.homepageUrl,
+      platformUserId: profile.platformUserId,
+      username: profile.username,
+      avatarUrl: profile.avatarUrl,
+      bio: profile.bio,
+      profile: profile.profile,
+      options: {
+        postLimit: 1,
+        includeComments: false,
+        includeMedia: Boolean(options?.includeMedia),
+      },
+    }),
+  });
+  return {
+    response,
+    accountSession: {
+      platform: profile.platform,
+      userId: profile.platformUserId,
+      source: profile.homepageUrl,
+      accountId: normalizeText(response?.account?.id),
+      sessionId: normalizeText(response?.session?.id),
+      username: profile.username,
+    },
+  };
+}
+
 async function ensureXhsAccountImportSession(payload, options = {}) {
   const userId = normalizeText(payload?.userId);
   const source = normalizeText(payload?.source);
@@ -6736,6 +6869,50 @@ async function ensureXhsAccountImportSession(payload, options = {}) {
     accountId: normalizeText(response?.account?.id),
     sessionId: normalizeText(response?.session?.id),
     username: normalizeText(response?.account?.username),
+  };
+}
+
+async function bindCurrentPlatformAccountFromTab(tabId, platformHint = '', options = {}) {
+  const platform = normalizeAccountPlatform(platformHint);
+  let payload = null;
+  if (platform === 'douyin') {
+    payload = await runExtraction(tabId, extractDouyinVideoPayload, { world: 'MAIN' }).catch(async () => (
+      await runExtraction(tabId, extractSocialPlatformPayload, { world: 'MAIN', args: ['douyin'] })
+    ));
+  } else {
+    payload = await runExtraction(tabId, extractSocialPlatformPayload, {
+      world: 'MAIN',
+      args: [platform],
+    });
+  }
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('当前页面内容提取失败，请刷新页面后重试');
+  }
+  const { response, accountSession } = await createAccountImportSessionFromSocialPayload(payload, {
+    ...options,
+    platform,
+  });
+  const post = buildAccountPostFromSocialPayload(payload, accountSession.platform);
+  let batchResponse = null;
+  if (post.title || post.content || post.url) {
+    batchResponse = await postAccountPostsBatch(accountSession, [post]);
+  }
+  const completeResponse = await completeAccountImportSession(accountSession, {
+    importedPostCount: Number(batchResponse?.postCount || (post.title || post.content || post.url ? 1 : 0)),
+    failedPostCount: 0,
+  });
+  return {
+    success: true,
+    mode: 'account-bind-current-platform',
+    platform: accountSession.platform,
+    account: response?.account || {
+      id: accountSession.accountId,
+      platform: accountSession.platform,
+      username: accountSession.username,
+    },
+    postCount: Number(batchResponse?.postCount || 0),
+    syncedMemoryCount: Number(completeResponse?.syncedMemoryCount || batchResponse?.syncedMemoryCount || 0),
+    summary: `${accountSession.username || '当前账号'} 已绑定${batchResponse ? '，当前内容已加入账号档案' : ''}`,
   };
 }
 
