@@ -34,16 +34,30 @@ function labelAgent(agentId: string): string {
             return 'Research';
         case 'insight_agent':
             return 'Insight';
+        case 'topic_agent':
+            return 'Topic';
+        case 'note_architect_agent':
+            return 'Note Architect';
         case 'script_agent':
             return 'Script';
+        case 'copy_agent':
+            return 'Copy';
         case 'storyboard_agent':
             return 'Storyboard';
+        case 'visual_director_agent':
+            return 'Visual Director';
         case 'media_agent':
             return 'Media';
+        case 'image_agent':
+            return 'Image';
+        case 'layout_agent':
+            return 'Layout';
         case 'editor_agent':
             return 'Editor';
         case 'publish_agent':
             return 'Publish';
+        case 'compliance_agent':
+            return 'Compliance';
         case 'review_agent':
             return 'Review';
         default:

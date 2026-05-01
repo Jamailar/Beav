@@ -26,12 +26,12 @@ type SectionDefinition = {
 };
 
 const SECTION_DEFINITIONS: SectionDefinition[] = [
-    { id: 'brief', label: 'Brief', roles: ['research_agent', 'insight_agent'], fallback: '暂无 brief。' },
-    { id: 'script', label: 'Script', roles: ['script_agent'], fallback: '暂无脚本。' },
-    { id: 'storyboard', label: 'Storyboard', roles: ['storyboard_agent'], fallback: '暂无分镜。' },
-    { id: 'media', label: 'Media', roles: ['media_agent'], fallback: '暂无媒体计划。' },
+    { id: 'brief', label: 'Brief', roles: ['research_agent', 'insight_agent', 'topic_agent'], fallback: '暂无 brief。' },
+    { id: 'script', label: 'Copy', roles: ['script_agent', 'copy_agent'], fallback: '暂无脚本或文案。' },
+    { id: 'storyboard', label: 'Structure', roles: ['storyboard_agent', 'note_architect_agent'], fallback: '暂无分镜或笔记结构。' },
+    { id: 'media', label: 'Media', roles: ['media_agent', 'visual_director_agent', 'image_agent', 'layout_agent'], fallback: '暂无媒体或配图计划。' },
     { id: 'publish', label: 'Publish', roles: ['publish_agent'], fallback: '暂无发布包。' },
-    { id: 'review', label: 'Review', roles: ['editor_agent', 'review_agent', 'reviewer'], fallback: '暂无质检结果。' },
+    { id: 'review', label: 'Review', roles: ['editor_agent', 'compliance_agent', 'review_agent', 'reviewer'], fallback: '暂无质检结果。' },
 ];
 
 function shortId(value?: string | null): string {
