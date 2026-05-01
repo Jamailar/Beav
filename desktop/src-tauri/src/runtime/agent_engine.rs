@@ -25,6 +25,14 @@ pub const RUNTIME_ROLE_IDS: &[&str] = &[
     "animation-director",
     "reviewer",
     "ops-coordinator",
+    "research_agent",
+    "insight_agent",
+    "script_agent",
+    "storyboard_agent",
+    "media_agent",
+    "editor_agent",
+    "publish_agent",
+    "review_agent",
 ];
 
 pub fn normalize_runtime_intent_name(value: Option<&str>) -> Option<String> {
