@@ -51,14 +51,20 @@ function labelAgent(agentId: string): string {
     }
 }
 
-export function RedClawTeamPlanPreview() {
+export function RedClawTeamPlanPreview({
+    sessionId,
+}: {
+    sessionId?: string | null;
+}) {
     const [open, setOpen] = useState(false);
     const [goal, setGoal] = useState(DEFAULT_GOAL);
     const [plan, setPlan] = useState<RedClawPlan | null>(null);
     const [loading, setLoading] = useState(false);
     const [creating, setCreating] = useState(false);
+    const [starting, setStarting] = useState(false);
     const [error, setError] = useState('');
     const [createdSessionId, setCreatedSessionId] = useState('');
+    const [runtimeTaskId, setRuntimeTaskId] = useState('');
 
     const nodes = useMemo(() => plan?.graph?.nodes || [], [plan]);
     const memoryScopes = useMemo(() => plan?.memoryScopes || [], [plan]);
@@ -69,6 +75,7 @@ export function RedClawTeamPlanPreview() {
         setLoading(true);
         setError('');
         setCreatedSessionId('');
+        setRuntimeTaskId('');
         try {
             const result = await window.ipcRenderer.redclawOrchestration.plan({ goal: trimmed });
             if (!result?.success) {
@@ -111,6 +118,45 @@ export function RedClawTeamPlanPreview() {
             setCreating(false);
         }
     }, [creating, goal]);
+
+    const startRun = useCallback(async () => {
+        const trimmed = goal.trim();
+        if (!trimmed || starting) return;
+        setStarting(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawOrchestration.createRun({
+                goal: trimmed,
+                sessionId: sessionId || undefined,
+            });
+            if (!result?.success || !result.runtimeTaskId) {
+                setError('执行任务创建失败');
+                return;
+            }
+            setCreatedSessionId(result.sessionId || '');
+            setRuntimeTaskId(result.runtimeTaskId);
+            if (result.graph) {
+                setPlan((current) => ({
+                    ...(current || {}),
+                    success: true,
+                    runId: result.runId,
+                    graph: result.graph,
+                }));
+            }
+            const resumeResult = await window.ipcRenderer.tasks.resume({ taskId: result.runtimeTaskId }) as {
+                success?: boolean;
+                error?: string;
+            };
+            if (resumeResult && resumeResult.success === false) {
+                setError(resumeResult.error || '执行任务启动失败');
+            }
+        } catch (err) {
+            console.error('Failed to start RedClaw orchestration run:', err);
+            setError('执行任务启动失败');
+        } finally {
+            setStarting(false);
+        }
+    }, [goal, sessionId, starting]);
 
     return (
         <div className="absolute right-4 top-4 z-30 w-[min(360px,calc(100%-32px))]">
@@ -160,20 +206,36 @@ export function RedClawTeamPlanPreview() {
                         </button>
 
                         {nodes.length > 0 && (
-                            <button
-                                type="button"
-                                onClick={() => void createTeam()}
-                                disabled={creating}
-                                className={clsx(
-                                    'inline-flex h-9 w-full items-center justify-center gap-2 rounded-[10px] border px-3 text-sm font-semibold transition',
-                                    creating
-                                        ? 'cursor-not-allowed border-border bg-surface-secondary text-text-tertiary'
-                                        : 'border-border bg-surface-primary text-text-primary hover:bg-surface-secondary'
-                                )}
-                            >
-                                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UsersRound className="h-4 w-4" />}
-                                创建临时团队
-                            </button>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => void createTeam()}
+                                    disabled={creating || starting}
+                                    className={clsx(
+                                        'inline-flex h-9 items-center justify-center gap-2 rounded-[10px] border px-3 text-sm font-semibold transition',
+                                        creating || starting
+                                            ? 'cursor-not-allowed border-border bg-surface-secondary text-text-tertiary'
+                                            : 'border-border bg-surface-primary text-text-primary hover:bg-surface-secondary'
+                                    )}
+                                >
+                                    {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UsersRound className="h-4 w-4" />}
+                                    建队
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void startRun()}
+                                    disabled={starting || creating}
+                                    className={clsx(
+                                        'inline-flex h-9 items-center justify-center gap-2 rounded-[10px] px-3 text-sm font-semibold transition',
+                                        starting || creating
+                                            ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                            : 'bg-text-primary text-surface-primary hover:bg-text-secondary'
+                                    )}
+                                >
+                                    {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Network className="h-4 w-4" />}
+                                    启动
+                                </button>
+                            </div>
                         )}
 
                         {error && (
@@ -184,7 +246,7 @@ export function RedClawTeamPlanPreview() {
 
                         {createdSessionId && (
                             <div className="rounded-[10px] border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700">
-                                已创建团队：{createdSessionId}
+                                已创建团队：{createdSessionId}{runtimeTaskId ? ` · 任务：${runtimeTaskId}` : ''}
                             </div>
                         )}
 
