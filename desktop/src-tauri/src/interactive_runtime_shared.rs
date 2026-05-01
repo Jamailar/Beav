@@ -137,6 +137,7 @@ pub(crate) fn interactive_runtime_context_bundle(
     let subjects_section = build_subjects_section(state, &workspace_root_value);
     let memory_section =
         crate::memory::build_memory_prompt_section(state, runtime_mode, session_id, 8);
+    let account_context_section = crate::accounts::build_account_prompt_section(state);
     let runtime_agent_overlay = runtime_agent_overlay_prompt(runtime_mode);
     if runtime_mode == "wander" {
         let mut sections = Vec::<String>::new();
@@ -180,6 +181,9 @@ pub(crate) fn interactive_runtime_context_bundle(
         }
         if let Some(memory_section) = memory_section.as_ref() {
             sections.push(memory_section.summary.trim().to_string());
+        }
+        if let Some(account_context_section) = account_context_section.as_ref() {
+            sections.push(account_context_section.trim().to_string());
         }
         if !explicit_knowledge_section.trim().is_empty() {
             sections.push(explicit_knowledge_section.trim().to_string());
@@ -234,6 +238,10 @@ pub(crate) fn interactive_runtime_context_bundle(
             if !explicit_knowledge_section.trim().is_empty() {
                 rendered.push_str("\n\n");
                 rendered.push_str(explicit_knowledge_section.trim());
+            }
+            if let Some(account_context_section) = account_context_section.as_ref() {
+                rendered.push_str("\n\n");
+                rendered.push_str(account_context_section.trim());
             }
             if !active_speaker_section.trim().is_empty() {
                 rendered.push_str("\n\n");
@@ -320,6 +328,10 @@ pub(crate) fn interactive_runtime_context_bundle(
         if let Some(memory_section) = memory_section.as_ref() {
             rendered.push_str("\n\n");
             rendered.push_str(memory_section.summary.trim());
+        }
+        if let Some(account_context_section) = account_context_section.as_ref() {
+            rendered.push_str("\n\n");
+            rendered.push_str(account_context_section.trim());
         }
         if runtime_mode == "redclaw" {
             if let Ok(bundle) = load_redclaw_profile_prompt_bundle(state) {
@@ -446,11 +458,22 @@ Host runtime context: {}\n{}",
             fallback.push_str("\n\n");
             fallback.push_str(explicit_knowledge_section.trim());
         }
+        if let Some(account_context_section) = account_context_section.as_ref() {
+            fallback.push_str("\n\n");
+            fallback.push_str(account_context_section.trim());
+        }
         fallback.push_str("\n\n");
         fallback.push_str(active_speaker_section.trim());
     } else if !explicit_knowledge_section.trim().is_empty() {
         fallback.push_str("\n\n");
         fallback.push_str(explicit_knowledge_section.trim());
+        if let Some(account_context_section) = account_context_section.as_ref() {
+            fallback.push_str("\n\n");
+            fallback.push_str(account_context_section.trim());
+        }
+    } else if let Some(account_context_section) = account_context_section.as_ref() {
+        fallback.push_str("\n\n");
+        fallback.push_str(account_context_section.trim());
     }
     RuntimeContextBundle::new(
         fallback.clone(),
