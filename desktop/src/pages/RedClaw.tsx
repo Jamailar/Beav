@@ -78,6 +78,111 @@ const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
     'unknown',
 ]);
 
+const REDCLAW_DIRECT_GOALS = new Set([
+    'hi',
+    'hello',
+    'hey',
+    '你好',
+    '嗨',
+    '哈喽',
+    '在吗',
+    'ok',
+    '好的',
+    '收到',
+    '谢谢',
+    'thanks',
+    '辛苦了',
+    '嗯',
+    '啊',
+]);
+
+const REDCLAW_TEAM_TRIGGER_TERMS = [
+    '团队',
+    '组队',
+    '协作',
+    '多agent',
+    'multi-agent',
+    '全流程',
+    '端到端',
+    '一站式',
+    '工作流',
+    '发布包',
+    '复盘',
+    '质检',
+    '合规',
+    '知识库',
+    '研究',
+    '资料',
+    '素材匹配',
+    '分镜',
+    '粗剪',
+    '剪辑计划',
+];
+
+const REDCLAW_DELIVERABLE_TERMS = [
+    '选题',
+    '标题',
+    '封面',
+    '正文',
+    '脚本',
+    '文案',
+    '标签',
+    '配图',
+    '图片',
+    '分镜',
+    '素材',
+    '发布',
+    '质检',
+    '复盘',
+];
+
+const REDCLAW_SIMPLE_DIRECT_PATTERNS = [
+    '改一下',
+    '润色',
+    '优化',
+    '缩短',
+    '扩写',
+    '翻译',
+    '总结',
+    '起个标题',
+    '写个标题',
+    '给我标题',
+    '写一句',
+    '写一段',
+    '简单写',
+    '帮我看看',
+];
+
+const normalizeRedClawRoutingText = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
+
+const shouldUseRedClawTeam = (goal: string): boolean => {
+    const normalized = normalizeRedClawRoutingText(goal);
+    if (!normalized) return false;
+
+    const compact = normalized.replace(/[,.!?;:'"`~，。！？；：、“”‘’（）()\[\]【】\s]/g, '');
+    if (REDCLAW_DIRECT_GOALS.has(compact)) return false;
+    if (compact.length <= 8 && !compact.includes('全流程') && !compact.includes('发布包')) return false;
+
+    const hasExplicitTeamTrigger = REDCLAW_TEAM_TRIGGER_TERMS.some((term) => normalized.includes(term));
+    const hasEndToEndShape = /从.+到/.test(normalized) || /包含.+(发布|质检|复盘|配图|分镜|素材)/.test(normalized);
+    const deliverableCount = REDCLAW_DELIVERABLE_TERMS.filter((term) => normalized.includes(term)).length;
+    const hasSourceGrounding = /(基于|根据|结合).+(收藏|知识库|资料|素材|文章|笔记|链接|文件)/.test(normalized);
+    const hasComplexCreationTarget = /(小红书|视频|图文|文章|笔记|发布)/.test(normalized)
+        && /(完整|一套|一条|生成|创作|策划|制作|发布)/.test(normalized);
+
+    if (hasExplicitTeamTrigger || hasEndToEndShape || hasSourceGrounding) return true;
+    if (deliverableCount >= 3) return true;
+    if (hasComplexCreationTarget && deliverableCount >= 2) return true;
+    if (normalized.length >= 120 && deliverableCount >= 2) return true;
+
+    const isSimpleDirect = normalized.length <= 80
+        && REDCLAW_SIMPLE_DIRECT_PATTERNS.some((term) => normalized.includes(term))
+        && deliverableCount <= 1;
+    if (isSimpleDirect) return false;
+
+    return false;
+};
+
 const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): ChatMessageLinkKind => {
     const normalized = String(value || '').trim().toLowerCase() as ChatMessageLinkKind;
     return PREVIEW_KIND_SET.has(normalized) ? normalized : fallback;
@@ -1445,6 +1550,7 @@ export function RedClaw({
     }) => {
         const goal = String(payload.message || payload.displayContent || '').trim();
         if (!goal) return false;
+        if (!shouldUseRedClawTeam(goal)) return false;
         const result = await window.ipcRenderer.redclawOrchestration.createRun({
             goal,
             sessionId: payload.sessionId || activeSessionId || undefined,
@@ -1464,7 +1570,7 @@ export function RedClaw({
             handled: true,
             assistantContent: [
                 `RedClaw 已自动组建创作团队，开始执行：${goal}`,
-                roleCount > 0 ? `本次会由 ${roleCount} 个岗位接力完成，进度会同步到右下角团队运行面板和左下角创作项目。` : '进度会同步到团队运行面板和创作项目。',
+                roleCount > 0 ? `本次会由 ${roleCount} 个岗位接力完成，进度和交付物会回到当前消息流。` : '进度和交付物会回到当前消息流。',
                 result.runtimeTaskId ? `任务 ID：${result.runtimeTaskId}` : '',
             ].filter(Boolean).join('\n\n'),
         };
@@ -1554,7 +1660,7 @@ export function RedClaw({
                                     onMessageLinkPreview={handlePreviewLink}
                                     activePreviewHref={previewTarget?.href || null}
                                     keepComposerInputActive={true}
-                                    placeholder="描述创作目标，RedClaw 会自动组队执行&#10;使用 # 调用知识库"
+                                    placeholder="描述创作目标，RedClaw 会判断是否需要组队&#10;使用 # 调用知识库"
                                     onDispatchOverride={handleRedClawDispatchOverride}
                                     messageListHeader={<RedClawImageGenerationProgressPanel jobs={visibleImageJobs} />}
                                     inlineSidePanel={previewTarget ? (
