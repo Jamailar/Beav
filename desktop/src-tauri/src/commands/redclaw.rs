@@ -1875,6 +1875,8 @@ fn create_redclaw_orchestration_run(
             "graphId": plan.graph.id,
             "projectId": project_id,
             "redclawTaskGraph": &plan.graph,
+            "redclawAgentSpecs": &plan.agent_specs,
+            "redclawSkillProfiles": &plan.skill_profiles,
             "subagentRoles": redclaw_plan_role_ids(&plan),
             "forceMultiAgent": true,
             "useRealSubagents": true,

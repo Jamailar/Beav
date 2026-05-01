@@ -44,6 +44,9 @@ pub struct RedclawSkillProfile {
     pub version: String,
     pub input_schema: String,
     pub output_schema: String,
+    pub instruction: String,
+    pub input_contract: Value,
+    pub output_contract: Value,
     pub evaluation_dimensions: Vec<String>,
 }
 
@@ -494,6 +497,219 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
     ]
 }
 
+fn skill_instruction(skill_id: &str) -> &'static str {
+    match skill_id {
+        "xhs.topic_brief" => "Turn research evidence into a RedNote/Xiaohongshu topic brief with audience, pain points, search keywords, hooks, recommended note format, and reasoning.",
+        "xhs.search_keyword_plan" => "Expand topic intent into search/discovery keywords, long-tail phrases, and content tags that fit Xiaohongshu search behavior.",
+        "xhs.note_architecture" => "Convert the topic brief into a note structure with opening strategy, section roles, key messages, and image/page intent.",
+        "xhs.carousel_page_plan" => "Plan each carousel page with purpose, text overlay, visual direction, and sequence logic.",
+        "xhs.copy_package" => "Write a publishable Xiaohongshu copy package: title options, cover title, opening hook, body, CTA, hashtags, comment prompt, and tone notes.",
+        "xhs.visual_brief" => "Define cover and image visual direction, page image types, prompts, overlay text, aspect ratio, and negative constraints.",
+        "xhs.cover_direction" => "Specify cover objective, composition, text hierarchy, safe area, and style constraints for mobile readability.",
+        "xhs.image_manifest" => "Bind generated or matched image assets to note pages, with path, source, prompt, overlay text, and missing asset list.",
+        "xhs.carousel_layout" => "Create a carousel layout manifest with page order, role, image binding, headline/body text, and layout type.",
+        "xhs.cover_text_safety" => "Check cover and carousel text for mobile readability, excessive wording, unsafe claims, and layout risk.",
+        "xhs.compliance_check" => "Check Xiaohongshu platform risk, sensitive expressions, exaggerated promises, medical/financial/legal claims, and commercial disclosure gaps.",
+        "image.prompt_pack" => "Create image prompts and negative prompts from a visual brief without claiming assets already exist.",
+        "image.generate_assets" => "Generate or request image assets according to the visual brief and return concrete asset paths when available.",
+        "image.asset_match" => "Match existing local assets to image requirements and return path-bound candidates with confidence and gaps.",
+        _ => "Execute the named RedClaw skill using the node input and return the declared structured output.",
+    }
+}
+
+fn string_array_schema() -> Value {
+    json!({ "type": "array", "items": { "type": "string" } })
+}
+
+fn schema_contract(schema_name: &str) -> Value {
+    match schema_name {
+        "XhsTopicBrief" => json!({
+            "type": "object",
+            "required": ["topic", "targetAudience", "userPainPoints", "contentAngle", "searchKeywords", "titleHooks", "recommendedFormat", "reason"],
+            "properties": {
+                "topic": { "type": "string" },
+                "targetAudience": string_array_schema(),
+                "userPainPoints": string_array_schema(),
+                "contentAngle": { "type": "string" },
+                "searchKeywords": string_array_schema(),
+                "titleHooks": string_array_schema(),
+                "recommendedFormat": { "type": "string", "enum": ["article_note", "image_text_note", "carousel_guide", "product_seeding", "experience_story", "checklist"] },
+                "reason": { "type": "string" },
+                "evidenceRefs": string_array_schema()
+            }
+        }),
+        "XhsNoteArchitecture" => json!({
+            "type": "object",
+            "required": ["format", "openingStrategy", "sections", "imagePlan"],
+            "properties": {
+                "format": { "type": "string", "enum": ["article_note", "image_text_note", "carousel_guide"] },
+                "openingStrategy": { "type": "string" },
+                "sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "role", "headline", "keyMessage"],
+                        "properties": {
+                            "id": { "type": "string" },
+                            "role": { "type": "string" },
+                            "headline": { "type": "string" },
+                            "keyMessage": { "type": "string" },
+                            "suggestedVisual": { "type": "string" }
+                        }
+                    }
+                },
+                "imagePlan": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["pageIndex", "purpose", "textOverlay", "visualDirection"],
+                        "properties": {
+                            "pageIndex": { "type": "integer" },
+                            "purpose": { "type": "string" },
+                            "textOverlay": { "type": "string" },
+                            "visualDirection": { "type": "string" }
+                        }
+                    }
+                }
+            }
+        }),
+        "XhsCopyPackage" => json!({
+            "type": "object",
+            "required": ["titles", "coverTitle", "openingHook", "body", "cta", "hashtags", "toneNotes"],
+            "properties": {
+                "titles": string_array_schema(),
+                "coverTitle": { "type": "string" },
+                "openingHook": { "type": "string" },
+                "body": { "type": "string" },
+                "cta": { "type": "string" },
+                "hashtags": string_array_schema(),
+                "commentPrompt": { "type": "string" },
+                "toneNotes": string_array_schema()
+            }
+        }),
+        "XhsVisualBrief" => json!({
+            "type": "object",
+            "required": ["cover", "images"],
+            "properties": {
+                "cover": {
+                    "type": "object",
+                    "required": ["objective", "mainText", "visualStyle", "composition", "negativePrompt"],
+                    "properties": {
+                        "objective": { "type": "string" },
+                        "mainText": { "type": "string" },
+                        "subText": { "type": "string" },
+                        "visualStyle": { "type": "string" },
+                        "composition": { "type": "string" },
+                        "negativePrompt": string_array_schema()
+                    }
+                },
+                "images": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["index", "type", "aspectRatio"],
+                        "properties": {
+                            "index": { "type": "integer" },
+                            "type": { "type": "string", "enum": ["ai_image", "photo", "screenshot", "text_card", "comparison", "diagram"] },
+                            "prompt": { "type": "string" },
+                            "overlayText": { "type": "string" },
+                            "sourceRequirement": { "type": "string" },
+                            "aspectRatio": { "type": "string", "enum": ["3:4", "1:1", "4:5"] }
+                        }
+                    }
+                }
+            }
+        }),
+        "XhsImageAssets" => json!({
+            "type": "object",
+            "required": ["pages", "missingAssets"],
+            "properties": {
+                "coverImage": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "prompt": { "type": "string" },
+                        "usage": { "type": "string", "enum": ["cover"] }
+                    }
+                },
+                "pages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["index", "path", "source"],
+                        "properties": {
+                            "index": { "type": "integer" },
+                            "path": { "type": "string" },
+                            "source": { "type": "string", "enum": ["generated", "local_asset", "template"] },
+                            "prompt": { "type": "string" },
+                            "overlayText": { "type": "string" }
+                        }
+                    }
+                },
+                "missingAssets": string_array_schema()
+            }
+        }),
+        "XhsCarouselLayout" => json!({
+            "type": "object",
+            "required": ["aspectRatio", "pages"],
+            "properties": {
+                "aspectRatio": { "type": "string", "enum": ["3:4", "1:1", "4:5"] },
+                "pages": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["index", "role", "headline", "layout"],
+                        "properties": {
+                            "index": { "type": "integer" },
+                            "role": { "type": "string" },
+                            "imagePath": { "type": "string" },
+                            "headline": { "type": "string" },
+                            "bodyText": { "type": "string" },
+                            "layout": { "type": "string", "enum": ["title_card", "image_with_caption", "split_compare", "checklist", "quote"] }
+                        }
+                    }
+                }
+            }
+        }),
+        "ComplianceReport" => json!({
+            "type": "object",
+            "required": ["riskLevel", "blockingIssues", "sensitiveTerms", "suggestedRewrites", "approved"],
+            "properties": {
+                "riskLevel": { "type": "string", "enum": ["low", "medium", "high"] },
+                "blockingIssues": string_array_schema(),
+                "sensitiveTerms": string_array_schema(),
+                "suggestedRewrites": string_array_schema(),
+                "approved": { "type": "boolean" }
+            }
+        }),
+        "PublishPackage" => json!({
+            "type": "object",
+            "required": ["titleOptions", "coverOptions", "body", "hashtags", "checklist"],
+            "properties": {
+                "titleOptions": string_array_schema(),
+                "coverOptions": string_array_schema(),
+                "body": { "type": "string" },
+                "hashtags": string_array_schema(),
+                "checklist": string_array_schema()
+            }
+        }),
+        "ReviewAgentOutput" => json!({
+            "type": "object",
+            "required": ["qualityScore", "blockingIssues", "suggestedPatches", "learningCandidates"],
+            "properties": {
+                "qualityScore": { "type": "object" },
+                "blockingIssues": string_array_schema(),
+                "suggestedPatches": { "type": "array" },
+                "learningCandidates": { "type": "array" }
+            }
+        }),
+        _ => json!({
+            "type": "object",
+            "description": schema_name
+        }),
+    }
+}
+
 pub fn redclaw_skill_profiles() -> Vec<RedclawSkillProfile> {
     [
         (
@@ -698,6 +914,9 @@ pub fn redclaw_skill_profiles() -> Vec<RedclawSkillProfile> {
             version: "0.1.0".to_string(),
             input_schema: input_schema.to_string(),
             output_schema: output_schema.to_string(),
+            instruction: skill_instruction(id).to_string(),
+            input_contract: schema_contract(input_schema),
+            output_contract: schema_contract(output_schema),
             evaluation_dimensions: vec![
                 "relevance".to_string(),
                 "voiceMatch".to_string(),
@@ -1400,5 +1619,28 @@ mod tests {
         assert!(graph.edges.iter().all(|edge| {
             node_ids.contains(&edge.from.as_str()) && node_ids.contains(&edge.to.as_str())
         }));
+    }
+
+    #[test]
+    fn xhs_skill_profiles_include_executable_contracts() {
+        let profiles = redclaw_skill_profiles();
+        let copy = profiles
+            .iter()
+            .find(|profile| profile.id == "xhs.copy_package")
+            .expect("missing copy package skill");
+
+        assert!(copy.instruction.contains("Xiaohongshu"));
+        assert_eq!(
+            copy.output_contract
+                .get("properties")
+                .and_then(|properties| properties.get("body"))
+                .and_then(|body| body.get("type"))
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        assert!(profiles
+            .iter()
+            .filter(|profile| profile.domain == "xhs")
+            .all(|profile| profile.output_contract.get("type").is_some()));
     }
 }
