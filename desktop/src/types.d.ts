@@ -1759,6 +1759,38 @@ declare global {
           memoryScopes: string[];
           releasePolicy: string;
         }>;
+        createTeam: (payload: {
+          goal: string;
+          projectId?: string;
+          platform?: string;
+          format?: string;
+        }) => Promise<{
+          success: boolean;
+          runId: string;
+          sessionId: string;
+          graph: {
+            id: string;
+            goal: string;
+            platform?: string | null;
+            contentFormat?: string | null;
+            createdAt: string;
+            nodes: Array<{
+              id: string;
+              title: string;
+              agentId: string;
+              skillIds: string[];
+              requiredArtifacts: string[];
+              outputSchema: string;
+              status: string;
+            }>;
+            edges: Array<{
+              from: string;
+              to: string;
+              dependencyType: string;
+            }>;
+          };
+          snapshot?: unknown;
+        }>;
         getRegistry: () => Promise<{
           success: boolean;
           agents: Array<Record<string, unknown>>;
