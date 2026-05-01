@@ -913,6 +913,74 @@ type RedClawJob = {
 
 仍未做的边界保持不变：不自动发布到平台，不自研完整剪辑器，不自研 ASR/OCR/编码器，不允许 Agent 静默写长期记忆。
 
+### XHS Content Team Delivery
+
+小红书不再复用视频语义里的 Storyboard / Media 作为主要角色。RedClaw Orchestrator 会根据 `contentFormat` 自动选择小红书团队：
+
+```text
+xhs_article
+  -> Research
+  -> Topic
+  -> Note Architect
+  -> Copy
+  -> Editor
+  -> Publish
+  -> Compliance
+  -> Review
+
+xhs_image_text
+  -> Research
+  -> Topic
+  -> Note Architect
+  -> Copy
+  -> Visual Director
+  -> Image
+  -> Layout
+  -> Editor
+  -> Publish
+  -> Compliance
+  -> Review
+
+xhs_image_assets
+  -> Research
+  -> Topic
+  -> Note Architect
+  -> Copy
+  -> Visual Director
+  -> Image
+  -> Layout
+  -> Editor
+  -> Publish
+  -> Compliance
+  -> Review
+```
+
+新增小红书角色：
+
+| Agent | 职责 | 输出 |
+|---|---|---|
+| Topic Agent | 选题、爆点、人群痛点、搜索关键词、笔记类型判断 | `XhsTopicBrief` |
+| Note Architect Agent | 文章/图文结构、段落角色、多图页目的和顺序 | `XhsNoteArchitecture` |
+| Copy Agent | 标题、封面标题、正文、CTA、标签、评论引导 | `XhsCopyPackage` |
+| Visual Director Agent | 封面方向、配图策略、图片 prompt、文字安全区 | `XhsVisualBrief` |
+| Image Agent | 查找/生成/整理封面和配图资产，声明缺失资产 | `XhsImageAssets` |
+| Layout Agent | 多图顺序、卡片文案、版式 manifest、移动端可读性 | `XhsCarouselLayout` |
+| Compliance Agent | 小红书风险、敏感词、夸张承诺、商业合规检查 | `ComplianceReport` |
+
+必须复用现成库/服务：
+
+- 图片生成：使用用户配置的图片生成模型或 OpenAI Images 等 provider，不自研生成模型。
+- 图片裁切、压缩、格式转换：使用 `sharp`、系统图像能力或现有 media pipeline，不手写编码器。
+- OCR / 图片文字识别：使用现成 OCR provider，不自研 OCR。
+- 视频/音频仍使用 ffmpeg / ffprobe / ASR provider，不自研底层媒体处理。
+
+RedClaw 自研部分：
+
+- `contentFormat` 到 team composition 的确定性映射。
+- 小红书 AgentSpec / SkillProfile / output schema。
+- 小红书图文结构、视觉 brief、图片资产 manifest、carousel layout manifest。
+- 项目状态同步、section 草稿、学习候选、发布包、质检报告。
+
 ### Step 1. Contracts
 
 新增 RedClaw orchestration contracts：
