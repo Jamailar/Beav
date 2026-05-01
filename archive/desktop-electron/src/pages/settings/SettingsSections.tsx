@@ -44,6 +44,63 @@ type SettingsFormData = {
     proxy_enabled: boolean;
     proxy_url: string;
     proxy_bypass: string;
+    visual_index_enabled: boolean;
+    visual_index_provider: string;
+    visual_index_endpoint: string;
+    visual_index_api_key: string;
+    visual_index_model: string;
+    visual_index_prompt_version: string;
+    visual_index_timeout_seconds: string;
+    visual_index_max_image_edge: string;
+    visual_index_skip_small_images: boolean;
+    visual_index_pdf_max_pages: string;
+    visual_index_pdf_render_dpi: string;
+    visual_index_concurrency: string;
+    docling_endpoint: string;
+    tika_endpoint: string;
+    unstructured_endpoint: string;
+    parser_api_key: string;
+    parser_timeout_seconds: string;
+    rerank_endpoint: string;
+    rerank_api_key: string;
+    rerank_model: string;
+    rerank_timeout_seconds: string;
+};
+
+export type FileIndexLaneStatus = {
+    lane: string;
+    label: string;
+    status: 'done' | 'indexing' | 'pending' | 'partial_failed' | 'disabled' | 'waiting' | string;
+    done: number;
+    total: number;
+    failed: number;
+    metadataOnly?: number;
+    lastUpdatedAt?: string | null;
+    nextRetryAt?: string | null;
+};
+
+export type FileIndexScopeStatus = {
+    scopeId: string;
+    name: string;
+    scopeType: 'workspace' | 'document_source' | 'advisor' | 'member' | 'system' | string;
+    ownerId?: string | null;
+    ownerName?: string | null;
+    fileCount: number;
+    status: 'done' | 'indexing' | 'pending' | 'partial_failed' | 'disabled' | 'waiting' | string;
+    failedCount: number;
+    lanes: FileIndexLaneStatus[];
+};
+
+export type FileIndexDashboard = {
+    overall: {
+        status: 'idle' | 'indexing' | 'pending' | 'partial_failed' | string;
+        indexedFiles: number;
+        totalFiles: number;
+        failedFiles: number;
+        lastIndexedAt?: string | null;
+    };
+    lanes: FileIndexLaneStatus[];
+    scopes: FileIndexScopeStatus[];
 };
 
 type YtdlpStatus = {
@@ -316,6 +373,10 @@ interface GeneralSettingsSectionProps {
     handleUploadPendingReport: (reportId: string) => Promise<void>;
     handleDismissPendingReport: (reportId: string) => Promise<void>;
     handleVersionTap: () => void;
+    handleOpenDownloadPage?: () => void;
+    fileIndexDashboard?: FileIndexDashboard | null;
+    fileIndexLoading?: boolean;
+    handleRefreshFileIndexDashboard?: () => Promise<void>;
 }
 
 interface RemoteConnectionSettingsSectionProps {
@@ -333,6 +394,175 @@ interface RemoteConnectionSettingsSectionProps {
     handleStartAssistantDaemonWeixinLogin: () => Promise<void>;
     handleCheckAssistantDaemonWeixinLogin: () => Promise<void>;
     handleClearAssistantDaemonWeixinLogin: () => void;
+}
+
+const FILE_INDEX_STATUS_LABELS: Record<string, string> = {
+    done: '已完成',
+    indexing: '索引中',
+    pending: '等待中',
+    partial_failed: '部分失败',
+    disabled: '已禁用',
+    waiting: '排队中',
+    idle: '空闲',
+    running: '运行中',
+};
+
+const FILE_INDEX_SCOPE_LABELS: Record<string, string> = {
+    workspace: '工作区',
+    document_source: '文档源',
+    advisor: '顾问',
+    member: '成员',
+    system: '系统',
+};
+
+function fileIndexStatusLabel(status?: string | null): string {
+    return FILE_INDEX_STATUS_LABELS[status || ''] || '未知';
+}
+
+function fileIndexScopeLabel(scopeType?: string | null): string {
+    return FILE_INDEX_SCOPE_LABELS[scopeType || ''] || '知识库';
+}
+
+function fileIndexStatusClass(status?: string | null): string {
+    if (status === 'partial_failed') {
+        return 'border-amber-200 bg-amber-50 text-amber-700';
+    }
+    if (status === 'indexing') {
+        return 'border-blue-200 bg-blue-50 text-blue-700';
+    }
+    if (status === 'pending' || status === 'waiting') {
+        return 'border-border bg-surface-secondary text-text-secondary';
+    }
+    if (status === 'disabled') {
+        return 'border-border bg-surface-secondary/60 text-text-tertiary';
+    }
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+}
+
+function FileIndexStatusBadge({ status }: { status?: string | null }) {
+    return (
+        <span className={clsx('inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium', fileIndexStatusClass(status))}>
+            {fileIndexStatusLabel(status)}
+        </span>
+    );
+}
+
+function FileIndexProgressText({
+    done,
+    total,
+    failed = 0,
+    metadataOnly = 0,
+}: {
+    done: number;
+    total: number;
+    failed?: number;
+    metadataOnly?: number;
+}) {
+    const details = [
+        metadataOnly > 0 ? `元数据 ${metadataOnly}` : '',
+        failed > 0 ? `失败 ${failed}` : '',
+    ].filter(Boolean).join(' · ');
+    return (
+        <span className="text-right font-mono text-[11px] leading-4 text-text-tertiary">
+            <span>{Math.max(0, done)}/{Math.max(0, total)}</span>
+            {details ? <span className="block font-sans text-[10px]">{details}</span> : null}
+        </span>
+    );
+}
+
+function FileIndexSettingsPanel({
+    dashboard,
+    loading,
+    onRefresh,
+}: {
+    dashboard: FileIndexDashboard | null;
+    loading: boolean;
+    onRefresh: () => Promise<void>;
+}) {
+    const overall = dashboard?.overall;
+    const lanes = dashboard?.lanes || [];
+    const scopes = dashboard?.scopes || [];
+    const visualLane = lanes.find((lane) => lane.lane === 'visual_index');
+    const summaryText = overall
+        ? `已索引 ${overall.indexedFiles}/${overall.totalFiles} 个文件 · 视觉索引 ${visualLane?.done || 0}/${visualLane?.total || 0} · 元数据 ${visualLane?.metadataOnly || 0} · ${overall.failedFiles} 个失败`
+        : '索引状态未加载';
+
+    return (
+        <div className="rounded-lg border border-border bg-surface-secondary/30 p-4">
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <h3 className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                        <Database className="h-4 w-4" />
+                        文件索引
+                    </h3>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
+                        <FileIndexStatusBadge status={overall?.status || 'idle'} />
+                        <span>{summaryText}</span>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => void onRefresh()}
+                    disabled={loading}
+                    className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
+                    刷新
+                </button>
+            </div>
+
+            <div className="mt-4 grid gap-4">
+                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                    <div className="grid grid-cols-[minmax(0,1fr)_80px_120px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                        <span>索引类型</span>
+                        <span>状态</span>
+                        <span className="text-right">进度</span>
+                    </div>
+                    {lanes.length === 0 ? (
+                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无索引记录</div>
+                    ) : (
+                        lanes.map((lane) => (
+                            <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_120px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                <span className="truncate text-xs text-text-primary">{lane.label}</span>
+                                <FileIndexStatusBadge status={lane.status} />
+                                <span className="text-right">
+                                    <FileIndexProgressText
+                                        done={lane.done}
+                                        total={lane.total}
+                                        failed={lane.failed}
+                                        metadataOnly={lane.metadataOnly || 0}
+                                    />
+                                </span>
+                            </div>
+                        ))
+                    )}
+                </div>
+
+                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                    <div className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                        <span>知识库</span>
+                        <span>类型</span>
+                        <span className="text-right">文件</span>
+                        <span className="text-right">状态</span>
+                    </div>
+                    {scopes.length === 0 ? (
+                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无知识库索引记录</div>
+                    ) : (
+                        scopes.map((scope) => (
+                            <div key={scope.scopeId} className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                <span className="truncate text-xs text-text-primary" title={scope.name}>{scope.name}</span>
+                                <span className="text-[11px] text-text-tertiary">{fileIndexScopeLabel(scope.scopeType)}</span>
+                                <span className="text-right font-mono text-[11px] text-text-tertiary">{scope.fileCount}</span>
+                                <span className="text-right">
+                                    <FileIndexStatusBadge status={scope.status} />
+                                </span>
+                            </div>
+                        ))
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 }
 
 function GeneralSettingsSectionInner({
@@ -360,6 +590,10 @@ function GeneralSettingsSectionInner({
     handleUploadPendingReport,
     handleDismissPendingReport,
     handleVersionTap,
+    handleOpenDownloadPage,
+    fileIndexDashboard,
+    fileIndexLoading,
+    handleRefreshFileIndexDashboard,
 }: GeneralSettingsSectionProps) {
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
 
@@ -388,15 +622,14 @@ function GeneralSettingsSectionInner({
                             自动更新已关闭，请前往 GitHub Releases 手动下载新版本。
                         </p>
                     </div>
-                    <a
-                        href="https://github.com/Jamailar/RedBox/releases"
-                        target="_blank"
-                        rel="noreferrer"
+                    <button
+                        type="button"
+                        onClick={() => void (handleOpenDownloadPage ? handleOpenDownloadPage() : window.open('https://github.com/Jamailar/RedBox/releases', '_blank', 'noopener,noreferrer'))}
                         className="flex items-center gap-2 px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary"
                     >
                         <Download className="w-3 h-3" />
                         打开下载页
-                    </a>
+                    </button>
                 </div>
             </div>
 
@@ -895,11 +1128,166 @@ function GeneralSettingsSectionInner({
                     </pre>
                 </div>
             </div>
+
+            {handleRefreshFileIndexDashboard && (
+                <FileIndexSettingsPanel
+                    dashboard={fileIndexDashboard ?? null}
+                    loading={fileIndexLoading ?? false}
+                    onRefresh={handleRefreshFileIndexDashboard}
+                />
+            )}
         </section>
     );
 }
 
 export const GeneralSettingsSection = memo(GeneralSettingsSectionInner);
+
+interface ExperimentalSettingsSectionProps {
+    formData: SettingsFormData;
+    setFormData: Dispatch<SetStateAction<any>>;
+}
+
+function ExperimentalSettingsSectionInner({
+    formData,
+    setFormData,
+}: ExperimentalSettingsSectionProps) {
+    const [isParserSidecarExpanded, setIsParserSidecarExpanded] = useState(false);
+    const inputClass = 'w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none';
+
+    return (
+        <section className="space-y-6">
+            <h2 className="text-lg font-medium text-text-primary mb-6">实验功能</h2>
+
+            <div className={clsx(
+                'overflow-hidden rounded-lg border border-border bg-surface-secondary/30 transition-colors',
+                isParserSidecarExpanded && 'border-accent-primary/30',
+            )}>
+                <button
+                    type="button"
+                    onClick={() => setIsParserSidecarExpanded((prev) => !prev)}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                    aria-expanded={isParserSidecarExpanded}
+                    aria-controls="experimental-parser-sidecar-panel"
+                >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                        <ChevronDown className={clsx('h-4 w-4 transition-transform', isParserSidecarExpanded ? 'rotate-0' : '-rotate-90')} />
+                    </span>
+                    <span className="min-w-0 truncate text-sm font-medium text-text-primary">文件解析与重排</span>
+                </button>
+
+                {isParserSidecarExpanded && (
+                    <div id="experimental-parser-sidecar-panel" className="space-y-5 border-t border-border/70 px-4 py-4">
+                        <div className="space-y-3">
+                            <div className="text-xs font-medium text-text-primary">解析服务</div>
+                            <div className="grid gap-3 md:grid-cols-3">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Docling Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.docling_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, docling_endpoint: e.target.value }))}
+                                        placeholder="https://parser.example.com/docling"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Tika Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.tika_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, tika_endpoint: e.target.value }))}
+                                        placeholder="https://parser.example.com/tika"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Unstructured Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.unstructured_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, unstructured_endpoint: e.target.value }))}
+                                        placeholder="https://parser.example.com/unstructured"
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser API Key</label>
+                                    <PasswordInput
+                                        value={formData.parser_api_key}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_api_key: e.target.value }))}
+                                        placeholder="可留空"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Parser 超时秒数</label>
+                                    <input
+                                        type="number"
+                                        min={10}
+                                        max={300}
+                                        value={formData.parser_timeout_seconds}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, parser_timeout_seconds: e.target.value }))}
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3">
+                            <div className="text-xs font-medium text-text-primary">重排服务</div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Endpoint</label>
+                                    <input
+                                        type="text"
+                                        value={formData.rerank_endpoint}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_endpoint: e.target.value }))}
+                                        placeholder="https://rerank.example.com/v1/rerank"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank Model</label>
+                                    <input
+                                        type="text"
+                                        value={formData.rerank_model}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_model: e.target.value }))}
+                                        placeholder="例如 bge-reranker-v2.5"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank API Key</label>
+                                    <PasswordInput
+                                        value={formData.rerank_api_key}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_api_key: e.target.value }))}
+                                        placeholder="可留空"
+                                        className={inputClass}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="mb-1.5 block text-xs font-medium text-text-secondary">Rerank 超时秒数</label>
+                                    <input
+                                        type="number"
+                                        min={5}
+                                        max={120}
+                                        value={formData.rerank_timeout_seconds}
+                                        onChange={(e) => setFormData((prev: any) => ({ ...prev, rerank_timeout_seconds: e.target.value }))}
+                                        className={inputClass}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
+
+export const ExperimentalSettingsSection = memo(ExperimentalSettingsSectionInner);
 
 type RemoteConnectionSubTab = 'api' | 'channels';
 type RemoteChannelId = 'feishu' | 'weixin';
@@ -4689,12 +5077,12 @@ export function ToolsSettingsSection({
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'tools' | 'profile' | 'memory' | 'remote';
+    activeTab: 'general' | 'ai' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 
 export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
-    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile') {
+    if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile' && activeTab !== 'experimental') {
         return null;
     }
 

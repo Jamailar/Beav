@@ -462,6 +462,42 @@ export interface IpcInvokeGuardOptions<T = unknown> {
   normalize?: (value: unknown) => T;
 }
 
+export interface FileIndexLaneStatus {
+  lane: string;
+  label: string;
+  status: string;
+  done: number;
+  total: number;
+  failed: number;
+  metadataOnly: number;
+  lastUpdatedAt: string | null;
+  nextRetryAt: string | null;
+}
+
+export interface FileIndexScopeStatus {
+  scopeId: string;
+  name: string;
+  scopeType: string;
+  ownerId: string;
+  ownerName: string;
+  fileCount: number;
+  status: string;
+  failedCount: number;
+  lanes: FileIndexLaneStatus[];
+}
+
+export interface FileIndexDashboard {
+  overall: {
+    status: string;
+    indexedFiles: number;
+    totalFiles: number;
+    failedFiles: number;
+    lastIndexedAt: string | null;
+  };
+  lanes: FileIndexLaneStatus[];
+  scopes: FileIndexScopeStatus[];
+}
+
 export interface RoleSpec {
   roleId: string;
   purpose: string;
@@ -1147,6 +1183,8 @@ declare global {
         listPage: <T = Record<string, unknown>>(payload?: Record<string, unknown>) => Promise<T>;
         getItemDetail: <T = Record<string, unknown>>(payload: Record<string, unknown>) => Promise<T | null>;
         getIndexStatus: <T = Record<string, unknown>>() => Promise<T>;
+        getFileIndexDashboard: <T = FileIndexDashboard>() => Promise<T>;
+        getFileIndexScopeStatus: <T = FileIndexScopeStatus>(scopeId: string) => Promise<T>;
         rebuildCatalog: () => Promise<unknown>;
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;

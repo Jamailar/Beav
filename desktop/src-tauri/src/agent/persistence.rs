@@ -113,9 +113,7 @@ pub fn persist_chat_exchange(
                 session_id: session.id.clone(),
                 role: "user".to_string(),
                 content: message.to_string(),
-                display_content: if display_content.trim().is_empty()
-                    || display_content.trim() == message.trim()
-                {
+                display_content: if display_content.trim().is_empty() {
                     None
                 } else {
                     Some(display_content.to_string())

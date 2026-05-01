@@ -372,6 +372,7 @@ interface GeneralSettingsSectionProps {
     handleUploadPendingReport: (reportId: string) => Promise<void>;
     handleDismissPendingReport: (reportId: string) => Promise<void>;
     handleVersionTap: () => void;
+    handleOpenDownloadPage: () => Promise<void>;
 }
 
 interface RemoteConnectionSettingsSectionProps {
@@ -583,6 +584,7 @@ function GeneralSettingsSectionInner({
     handleUploadPendingReport,
     handleDismissPendingReport,
     handleVersionTap,
+    handleOpenDownloadPage,
 }: GeneralSettingsSectionProps) {
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
     const [isDebugLogsExpanded, setIsDebugLogsExpanded] = useState(false);
@@ -612,15 +614,14 @@ function GeneralSettingsSectionInner({
                             启动时自动检查新版本，安装包从 RedBox 下载源获取。
                         </p>
                     </div>
-                    <a
-                        href="https://redbox.ziz.hk/download"
-                        target="_blank"
-                        rel="noreferrer"
+                    <button
+                        type="button"
+                        onClick={() => void handleOpenDownloadPage()}
                         className="flex items-center gap-2 px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary"
                     >
                         <Download className="w-3 h-3" />
                         打开下载页
-                    </a>
+                    </button>
                 </div>
             </div>
 

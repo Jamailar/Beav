@@ -1,8 +1,7 @@
 use crate::runtime::ResolvedChatConfig;
 
 use super::{
-    NativeWebSearchSupport, ProviderCapabilities, ProviderFamily, ProviderProfile,
-    ProviderThinkingDisableParameter,
+    ProviderCapabilities, ProviderFamily, ProviderProfile, ProviderThinkingDisableParameter,
 };
 
 fn openai_capabilities() -> ProviderCapabilities {
@@ -17,7 +16,6 @@ fn openai_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: true,
         supports_parallel_tool_calls: true,
         supports_text_fallback: true,
-        native_web_search: NativeWebSearchSupport::None,
         thinking_disable_parameter: ProviderThinkingDisableParameter::None,
     }
 }
@@ -65,7 +63,6 @@ fn anthropic_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: false,
         supports_parallel_tool_calls: true,
         supports_text_fallback: false,
-        native_web_search: NativeWebSearchSupport::None,
         thinking_disable_parameter: ProviderThinkingDisableParameter::None,
     }
 }
@@ -82,29 +79,8 @@ fn gemini_capabilities() -> ProviderCapabilities {
         supports_usage_trailer: false,
         supports_parallel_tool_calls: true,
         supports_text_fallback: false,
-        native_web_search: NativeWebSearchSupport::None,
         thinking_disable_parameter: ProviderThinkingDisableParameter::None,
     }
-}
-
-fn native_web_search_support(
-    protocol: &str,
-    base_url: &str,
-    model_name: &str,
-) -> NativeWebSearchSupport {
-    let protocol_key = protocol.trim().to_ascii_lowercase();
-    let base_key = base_url.trim().to_ascii_lowercase();
-    let is_official_openai = protocol_key == "openai"
-        && (base_key == "https://api.openai.com/v1"
-            || base_key == "https://api.openai.com"
-            || base_key.starts_with("https://api.openai.com/"));
-    if is_official_openai {
-        if model_name.trim().eq_ignore_ascii_case("gpt-5-search-api") {
-            return NativeWebSearchSupport::OpenAiChatCompletions;
-        }
-        return NativeWebSearchSupport::OpenAiResponses;
-    }
-    NativeWebSearchSupport::None
 }
 
 fn normalized_provider_key(protocol: &str, base_url: &str, model_name: &str) -> String {
@@ -153,9 +129,7 @@ pub(crate) fn provider_profile_from_parts(
             } else {
                 openai_capabilities()
             };
-            let mut capabilities = model_capability_overrides(model_name, base_capabilities);
-            capabilities.native_web_search =
-                native_web_search_support(protocol, base_url, model_name);
+            let capabilities = model_capability_overrides(model_name, base_capabilities);
             ProviderProfile {
                 key: normalized_provider_key(protocol, base_url, model_name),
                 provider_family,
@@ -173,8 +147,7 @@ pub(crate) fn provider_profile_from_config(config: &ResolvedChatConfig) -> Provi
 mod tests {
     use super::provider_profile_from_parts;
     use crate::provider_compat::{
-        InteractiveToolChoice, NativeWebSearchSupport, ProviderFamily,
-        ProviderThinkingDisableParameter,
+        InteractiveToolChoice, ProviderFamily, ProviderThinkingDisableParameter,
     };
     use serde_json::json;
 
@@ -197,30 +170,6 @@ mod tests {
         assert!(!profile.should_disable_thinking("chat", false));
         assert!(profile.should_disable_thinking("redclaw", false));
         assert!(profile.capabilities.supports_tool_choice_required);
-        assert_eq!(
-            profile.capabilities.native_web_search,
-            NativeWebSearchSupport::OpenAiResponses
-        );
-    }
-
-    #[test]
-    fn openai_compatible_gateways_do_not_claim_native_web_search() {
-        let profile =
-            provider_profile_from_parts("openai", "https://gateway.example.com/v1", "gpt-5");
-        assert_eq!(
-            profile.capabilities.native_web_search,
-            NativeWebSearchSupport::None
-        );
-    }
-
-    #[test]
-    fn openai_search_api_model_uses_chat_completions_native_search() {
-        let profile =
-            provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5-search-api");
-        assert_eq!(
-            profile.capabilities.native_web_search,
-            NativeWebSearchSupport::OpenAiChatCompletions
-        );
     }
 
     #[test]

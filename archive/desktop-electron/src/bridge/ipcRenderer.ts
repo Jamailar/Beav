@@ -27,6 +27,8 @@ const explicitCommandRoutes: Record<string, string> = {
   'knowledge:get-index-status': 'knowledge_get_index_status',
   'knowledge:rebuild-catalog': 'knowledge_rebuild_catalog',
   'knowledge:open-index-root': 'knowledge_open_index_root',
+  'knowledge:get-file-index-dashboard': 'knowledge_get_file_index_dashboard',
+  'knowledge:get-file-index-scope-status': 'knowledge_get_file_index_scope_status',
   'redclaw:runner-status': 'redclaw_runner_status',
 };
 
@@ -177,6 +179,32 @@ function buildFallbackResponse(channel: string, error: unknown): any {
       lastIndexedAt: null,
       isBuilding: false,
       lastError: null,
+    };
+  }
+  if (channel === 'knowledge:get-file-index-dashboard') {
+    return {
+      overall: {
+        status: 'idle',
+        indexedFiles: 0,
+        totalFiles: 0,
+        failedFiles: 0,
+        lastIndexedAt: null,
+      },
+      lanes: [],
+      scopes: [],
+    };
+  }
+  if (channel === 'knowledge:get-file-index-scope-status') {
+    return {
+      scopeId: '',
+      name: '',
+      scopeType: '',
+      ownerId: '',
+      ownerName: '',
+      fileCount: 0,
+      status: 'idle',
+      failedCount: 0,
+      lanes: [],
     };
   }
   if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
@@ -584,6 +612,37 @@ function createIpcRenderer() {
       addDocFolder: () => invokeChannel('knowledge:docs:add-folder'),
       addObsidianVault: () => invokeChannel('knowledge:docs:add-obsidian-vault'),
       deleteDocSource: (sourceId: string) => invokeChannel('knowledge:docs:delete-source', sourceId),
+      getFileIndexDashboard: <T = Record<string, unknown>>() => invokeCommandGuarded<T>(
+        'knowledge_get_file_index_dashboard',
+        undefined,
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:get-file-index-dashboard',
+          normalize: (value) => {
+            const raw = (value && typeof value === 'object') ? value as Record<string, unknown> : {};
+            return {
+              overall: {
+                status: typeof raw.overall === 'object' && raw.overall ? (raw.overall as Record<string, unknown>).status || 'idle' : 'idle',
+                indexedFiles: typeof raw.overall === 'object' && raw.overall ? Number((raw.overall as Record<string, unknown>).indexedFiles || 0) : 0,
+                totalFiles: typeof raw.overall === 'object' && raw.overall ? Number((raw.overall as Record<string, unknown>).totalFiles || 0) : 0,
+                failedFiles: typeof raw.overall === 'object' && raw.overall ? Number((raw.overall as Record<string, unknown>).failedFiles || 0) : 0,
+                lastIndexedAt: typeof raw.overall === 'object' && raw.overall ? ((raw.overall as Record<string, unknown>).lastIndexedAt || null) : null,
+              },
+              lanes: Array.isArray(raw.lanes) ? raw.lanes : [],
+              scopes: Array.isArray(raw.scopes) ? raw.scopes : [],
+            } as T;
+          },
+        },
+      ),
+      getFileIndexScopeStatus: <T = Record<string, unknown>>(scopeId: string) => invokeCommandGuarded<T>(
+        'knowledge_get_file_index_scope_status',
+        { scopeId },
+        {
+          timeoutMs: 3200,
+          fallbackChannel: 'knowledge:get-file-index-scope-status',
+          normalize: (value) => (value && typeof value === 'object') ? value as T : {} as T,
+        },
+      ),
     },
 
     embedding: {

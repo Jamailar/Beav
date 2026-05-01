@@ -570,7 +570,6 @@ impl<'a> AppCliExecutor<'a> {
             }
             "toolssearch" => self.handle_tools_search(payload),
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
-            "websearch" => self.handle_web(&["search".to_string()], payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
                 self.handle_memory(&tokens, payload)

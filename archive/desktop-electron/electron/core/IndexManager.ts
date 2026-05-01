@@ -242,3 +242,56 @@ export class IndexManager extends EventEmitter {
 }
 
 export const indexManager = new IndexManager();
+
+export interface FileIndexLaneStatus {
+  lane: string;
+  label: string;
+  status: string;
+  done: number;
+  total: number;
+  failed: number;
+  metadataOnly: number;
+  lastUpdatedAt: string | null;
+  nextRetryAt: string | null;
+}
+
+export function buildLanesFromStatus(
+  status: IndexingStatus,
+  stats: { totalVectors: number; totalDocuments: number },
+): FileIndexLaneStatus[] {
+  return [
+    {
+      lane: 'active',
+      label: '处理中',
+      status: status.activeItems.length > 0 ? 'running' : 'idle',
+      done: 0,
+      total: status.activeItems.length,
+      failed: 0,
+      metadataOnly: 0,
+      lastUpdatedAt: null,
+      nextRetryAt: null,
+    },
+    {
+      lane: 'queue',
+      label: '队列',
+      status: status.totalQueueLength > 0 ? 'running' : 'idle',
+      done: status.processedCount,
+      total: status.totalQueueLength + status.processedCount,
+      failed: 0,
+      metadataOnly: 0,
+      lastUpdatedAt: null,
+      nextRetryAt: null,
+    },
+    {
+      lane: 'vectors',
+      label: '向量存储',
+      status: 'idle',
+      done: stats.totalDocuments,
+      total: stats.totalDocuments,
+      failed: 0,
+      metadataOnly: 0,
+      lastUpdatedAt: null,
+      nextRetryAt: null,
+    },
+  ];
+}

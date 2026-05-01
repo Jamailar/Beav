@@ -1,0 +1,15 @@
+{
+  "id": "47074bc4",
+  "created_at": "2026-04-30T04:15:02.765756Z",
+  "updated_at": "2026-04-30T04:15:02.765756Z",
+  "provider": "openai",
+  "model": "qwen3.5-plus",
+  "cwd": "/Users/Jam/LocalDev/GitHub/RedConvert",
+  "total_usage": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0
+  },
+  "messages": []
+}

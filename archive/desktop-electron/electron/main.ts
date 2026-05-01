@@ -58,8 +58,11 @@ import {
   getDocumentKnowledgeIndexSummary,
   listDocumentKnowledgeIndexEntries,
   replaceDocumentKnowledgeIndexForSource,
+  getVectorStats,
+  getFileIndexLanesByScope,
+  getAllFileIndexLanes,
 } from './db'
-import { indexManager } from './core/IndexManager'
+import { indexManager, buildLanesFromStatus } from './core/IndexManager'
 import { embeddingService } from './core/vector/EmbeddingService'
 import { normalizeNote, normalizeVideo, normalizeFile, normalizeArchiveSample } from './core/normalization'
 import {
@@ -8854,6 +8857,126 @@ ipcMain.handle('knowledge:get-index-status', async () => {
       lastIndexedAt: null,
       isBuilding: false,
       lastError: error instanceof Error ? error.message : String(error),
+    };
+  }
+});
+
+ipcMain.handle('knowledge:get-file-index-dashboard', async () => {
+  try {
+    const status = indexManager.getStatus();
+    const stats = getVectorStats();
+    const lanes = buildLanesFromStatus(status, stats);
+    const scopeLanes = getAllFileIndexLanes();
+
+    // Group scope lanes by scope_id for per-scope status
+    const scopeIdSet = new Set(scopeLanes.map((l) => l.scope_id));
+    const scopes = Array.from(scopeIdSet).map((scopeId) => {
+      const lanes = scopeLanes
+        .filter((l) => l.scope_id === scopeId)
+        .map((l) => ({
+          lane: l.lane,
+          label: l.lane,
+          status: l.status,
+          done: l.done,
+          total: l.total,
+          failed: l.failed,
+          metadataOnly: l.metadata_only,
+          lastUpdatedAt: l.last_updated_at,
+          nextRetryAt: l.next_retry_at,
+        }));
+      const failedCount = lanes.reduce((sum, l) => sum + l.failed, 0);
+
+      return {
+        scopeId,
+        name: scopeId,
+        scopeType: 'knowledge',
+        ownerId: '',
+        ownerName: '',
+        fileCount: lanes.reduce((sum, l) => sum + l.total, 0),
+        status: lanes.some((l) => l.status === 'running') ? 'indexing' : 'idle',
+        failedCount,
+        lanes,
+      };
+    });
+
+    return {
+      overall: {
+        status: status.isIndexing ? 'indexing' : 'idle',
+        indexedFiles: stats.totalDocuments,
+        totalFiles: stats.totalDocuments + status.totalQueueLength,
+        failedFiles: 0,
+        lastIndexedAt: null,
+      },
+      lanes,
+      scopes,
+    };
+  } catch (error) {
+    return {
+      overall: {
+        status: 'idle',
+        indexedFiles: 0,
+        totalFiles: 0,
+        failedFiles: 0,
+        lastIndexedAt: null,
+      },
+      lanes: [],
+      scopes: [],
+    };
+  }
+});
+
+ipcMain.handle('knowledge:get-file-index-scope-status', async (_event, scopeId: string) => {
+  try {
+    if (!scopeId) {
+      return {
+        scopeId: '',
+        name: '',
+        scopeType: '',
+        ownerId: '',
+        ownerName: '',
+        fileCount: 0,
+        status: 'idle',
+        failedCount: 0,
+        lanes: [],
+      };
+    }
+
+    const scopeLanes = getFileIndexLanesByScope(scopeId);
+    const lanes = scopeLanes.map((l) => ({
+      lane: l.lane,
+      label: l.lane,
+      status: l.status,
+      done: l.done,
+      total: l.total,
+      failed: l.failed,
+      metadataOnly: l.metadata_only,
+      lastUpdatedAt: l.last_updated_at,
+      nextRetryAt: l.next_retry_at,
+    }));
+    const failedCount = lanes.reduce((sum, l) => sum + l.failed, 0);
+
+    return {
+      scopeId,
+      name: scopeId,
+      scopeType: 'knowledge',
+      ownerId: '',
+      ownerName: '',
+      fileCount: lanes.reduce((sum, l) => sum + l.total, 0),
+      status: lanes.some((l) => l.status === 'running') ? 'indexing' : 'idle',
+      failedCount,
+      lanes,
+    };
+  } catch (error) {
+    return {
+      scopeId: scopeId || '',
+      name: '',
+      scopeType: '',
+      ownerId: '',
+      ownerName: '',
+      fileCount: 0,
+      status: 'idle',
+      failedCount: 0,
+      lanes: [],
     };
   }
 });

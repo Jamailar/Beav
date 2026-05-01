@@ -109,7 +109,7 @@ impl<'a> ChatExchangeRequest<'a> {
     pub fn wander(session_id: String, prompt: String, model_config: Option<&'a Value>) -> Self {
         Self {
             session_id: Some(session_id),
-            display_content: prompt.clone(),
+            display_content: "Wander 漫步".to_string(),
             message: prompt,
             persist_user_message: true,
             model_config,
@@ -123,7 +123,7 @@ impl<'a> ChatExchangeRequest<'a> {
     pub fn assistant_daemon(session_id: String, prompt: String, route_kind: &str) -> Self {
         Self {
             session_id: Some(session_id),
-            display_content: prompt.clone(),
+            display_content: format!("助手请求 · {}", route_kind),
             message: prompt,
             persist_user_message: true,
             model_config: None,
@@ -137,7 +137,7 @@ impl<'a> ChatExchangeRequest<'a> {
     pub fn redclaw_run(session_id: String, prompt: String, source_label: &str) -> Self {
         Self {
             session_id: Some(session_id),
-            display_content: prompt.clone(),
+            display_content: format!("RedClaw 执行 · {}", source_label),
             message: prompt,
             persist_user_message: true,
             model_config: None,

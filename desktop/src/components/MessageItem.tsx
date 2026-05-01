@@ -63,9 +63,33 @@ const isVideoAssetUrl = (value: string): boolean => {
 
 const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i;
 
+// 当新增系统提示词或标签时，需要同步在此添加对应的过滤模式
 const INTERNAL_PROTOCOL_BLOCKS = [
+  // --- 内部协议 XML 标签（原有）---
   /<tool_call>[\s\S]*?<\/tool_call>/gi,
   /<activated_skill\b[\s\S]*?<\/activated_skill>/gi,
+
+  // --- Anthropic 平台系统标签 ---
+  /<system-reminder[\s\S]*?<\/system-reminder>/gi,
+  /<local-command-caveat[\s\S]*?<\/local-command-caveat>/gi,
+  /<task-notification[\s\S]*?<\/task-notification>/gi,
+
+  // --- RedClaw 配置注入标签（interactive_runtime_shared.rs）---
+  /<redclaw_agent_md[\s\S]*?<\/redclaw_agent_md>/gi,
+  /<redclaw_soul_md\b[\s\S]*?<\/redclaw_soul_md>/gi,
+  /<redclaw_identity_md[\s\S]*?<\/redclaw_identity_md>/gi,
+  /<redclaw_user_md[\s\S]*?<\/redclaw_user_md>/gi,
+  /<redclaw_creator_profile_md[\s\S]*?<\/redclaw_creator_profile_md>/gi,
+  /<redclaw_bootstrap[\s\S]*?<\/redclaw_bootstrap>/gi,
+
+  // --- Bracket 风格协议块（有闭合）---
+  /\[KnowledgeReferences\][\s\S]*?\[\/KnowledgeReferences\]/gi,
+
+  // --- Bracket 风格协议块（无闭合，延伸到下一个大写节标题或文本末尾）---
+  /\[SystemReminder[^\]]*\][\s\S]*?(?=\n\[[A-Z]|$)/gi,
+  /\[Assistant Rules[^\]]*\][\s\S]*?(?=\n\[[A-Z]|$)/gi,
+  /\[Available Skills\][\s\S]*?(?=\n\[[A-Z]|$)/gi,
+  /\[Skills Location\][\s\S]*?(?=\n\[[A-Z]|$)/gi,
 ];
 
 const stripInternalProtocolMarkup = (value: string): string => {
@@ -1012,43 +1036,33 @@ export const MessageItem = memo(({
     const references = (items || []).filter((item) => item.id || item.title);
     if (references.length === 0) return null;
     return (
-      <div className="mt-2 w-full max-w-[560px] rounded-2xl border border-border bg-surface-primary/95 p-2 shadow-sm">
-        <div className="px-1 pb-2 text-[11px] font-medium text-text-tertiary">
-          提到的知识库内容
-        </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {references.slice(0, 6).map((item) => {
-            const cover = String(item.cover || '').trim();
-            return (
-              <div
-                key={item.id || item.title}
-                className="flex min-w-0 items-start gap-3 rounded-xl border border-border bg-surface-secondary/60 p-2.5"
-              >
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-secondary text-text-tertiary">
-                  {cover ? (
-                    <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    renderKnowledgeIcon(item)
-                  )}
+      <div className="mt-2 flex w-full flex-wrap justify-end gap-2">
+        {references.slice(0, 6).map((item) => {
+          const cover = String(item.cover || '').trim();
+          return (
+            <div
+              key={item.id || item.title}
+              className="inline-flex h-14 max-w-[min(100%,320px)] items-center gap-2 rounded-xl border border-border bg-surface-primary/95 px-2 py-1.5 shadow-sm"
+            >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-secondary text-text-tertiary">
+                {cover ? (
+                  <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  renderKnowledgeIcon(item)
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-1.5 text-[10px] leading-3 text-text-tertiary">
+                  <span className="truncate">{knowledgeKindLabel(item)}</span>
+                  {item.hasTranscript ? <span className="shrink-0">有转录</span> : null}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-text-tertiary">
-                    <span>{knowledgeKindLabel(item)}</span>
-                    {item.hasTranscript ? <span>有转录</span> : null}
-                  </div>
-                  <div className="mt-1 truncate text-sm font-medium text-text-primary" title={item.title}>
-                    {item.title || '未命名内容'}
-                  </div>
-                  {item.summary ? (
-                    <div className="mt-1 line-clamp-2 text-xs text-text-secondary">
-                      {item.summary}
-                    </div>
-                  ) : null}
+                <div className="mt-0.5 truncate text-sm font-medium leading-5 text-text-primary" title={item.title}>
+                  {item.title || '未命名内容'}
                 </div>
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -1223,7 +1237,7 @@ export const MessageItem = memo(({
           (() => {
             const videoCardMatch = msg.content.match(/<!--VIDEO_CARD:(.*?)-->/);
             let videoCard: { title: string; thumbnailUrl?: string; videoId?: string } | null = null;
-            let displayText = msg.displayContent || msg.content;
+            let displayText = msg.displayContent || stripInternalProtocolMarkup(msg.content);
 
             if (videoCardMatch) {
               try {

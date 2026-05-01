@@ -1,0 +1,28 @@
+{
+  "sessions": [
+    {
+      "id": "ee256216",
+      "created_at": "2026-04-29T12:05:14.870773Z",
+      "updated_at": "2026-04-29T12:06:48.707841Z",
+      "model": "deepseek-v4-flash",
+      "summary": "在输入框是空的状态下，里面的占位提示文字改成\n\n使用 # 调用知识库\n使用 @ 召唤团队成员",
+      "message_count": 49
+    },
+    {
+      "id": "47074bc4",
+      "created_at": "2026-04-30T04:15:02.765756Z",
+      "updated_at": "2026-04-30T04:15:02.765756Z",
+      "model": "qwen3.5-plus",
+      "summary": "",
+      "message_count": 0
+    },
+    {
+      "id": "0e3a072b",
+      "created_at": "2026-04-30T04:21:48.325717Z",
+      "updated_at": "2026-04-30T04:22:23.063469Z",
+      "model": "deepseek-v4-flash",
+      "summary": "# You are the Team Leader\n\n## Your Role\nYou coordinate a team of AI agents. Y...",
+      "message_count": 5
+    }
+  ]
+}

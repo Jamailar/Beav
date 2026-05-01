@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -83,8 +83,10 @@ import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProp
 import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
 import {
   GeneralSettingsSection,
+  ExperimentalSettingsSection,
   SettingsSaveBar,
   ToolsSettingsSection,
+  type FileIndexDashboard,
 } from './settings/SettingsSections';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playTestNotificationSound } from '../notifications/audio';
@@ -121,7 +123,64 @@ const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
   },
 ];
 
-type SettingsTab = 'general' | 'ai' | 'tools' | 'profile' | 'remote';
+type SettingsTab = 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+
+const FILE_INDEX_DASHBOARD_CACHE_KEY = 'redbox:file-index-dashboard:v1';
+const FILE_INDEX_DASHBOARD_CACHE_TTL_MS = 60_000;
+const DEFAULT_VISUAL_INDEX_PROMPT_VERSION = 'visual-manifest-v2-zh';
+
+function normalizeVisualIndexPromptVersion(value: unknown): string {
+  const text = String(value || '').trim();
+  if (!text || text === 'visual-manifest-v1') {
+    return DEFAULT_VISUAL_INDEX_PROMPT_VERSION;
+  }
+  return text;
+}
+
+type FileIndexDashboardCacheRecord = {
+  savedAt: number;
+  dashboard: FileIndexDashboard;
+};
+
+function readCachedFileIndexDashboard(): FileIndexDashboardCacheRecord | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FileIndexDashboardCacheRecord>;
+    if (!parsed || typeof parsed.savedAt !== 'number' || !parsed.dashboard) return null;
+    return {
+      savedAt: parsed.savedAt,
+      dashboard: parsed.dashboard,
+    };
+  } catch (error) {
+    console.warn('Failed to read cached file index dashboard:', error);
+    return null;
+  }
+}
+
+function writeCachedFileIndexDashboard(dashboard: FileIndexDashboard): number {
+  const savedAt = Date.now();
+  if (typeof window === 'undefined') return savedAt;
+  try {
+    window.localStorage.setItem(
+      FILE_INDEX_DASHBOARD_CACHE_KEY,
+      JSON.stringify({ savedAt, dashboard }),
+    );
+  } catch (error) {
+    console.warn('Failed to cache file index dashboard:', error);
+  }
+  return savedAt;
+}
+
+function clearCachedFileIndexDashboard() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(FILE_INDEX_DASHBOARD_CACHE_KEY);
+  } catch (error) {
+    console.warn('Failed to clear cached file index dashboard:', error);
+  }
+}
 
 type RedclawProfileDraft = {
   user: string;
@@ -507,6 +566,27 @@ export function Settings({
     diagnostics_last_prompted_at: '',
     release_log_retention_days: '7',
     release_log_max_file_mb: '10',
+    visual_index_enabled: false,
+    visual_index_provider: 'openai-compatible',
+    visual_index_endpoint: '',
+    visual_index_api_key: '',
+    visual_index_model: '',
+    visual_index_prompt_version: DEFAULT_VISUAL_INDEX_PROMPT_VERSION,
+    visual_index_timeout_seconds: '90',
+    visual_index_max_image_edge: '1536',
+    visual_index_skip_small_images: true,
+    visual_index_pdf_max_pages: '12',
+    visual_index_pdf_render_dpi: '144',
+    visual_index_concurrency: '1',
+    docling_endpoint: '',
+    tika_endpoint: '',
+    unstructured_endpoint: '',
+    parser_api_key: '',
+    parser_timeout_seconds: '60',
+    rerank_endpoint: '',
+    rerank_api_key: '',
+    rerank_model: '',
+    rerank_timeout_seconds: '30',
     developer_mode_enabled: false,
     developer_mode_unlocked_at: '',
   });
@@ -572,6 +652,14 @@ export function Settings({
   const [runtimePerfResults, setRuntimePerfResults] = useState<RuntimePerfRunResult[]>([]);
   const [activeRuntimePerfRunId, setActiveRuntimePerfRunId] = useState('');
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const initialFileIndexDashboardCache = useMemo(() => readCachedFileIndexDashboard(), []);
+  const [fileIndexDashboard, setFileIndexDashboard] = useState<FileIndexDashboard | null>(null);
+  const [isFileIndexDashboardLoading, setIsFileIndexDashboardLoading] = useState(false);
+  const fileIndexDashboardCurrentRef = useRef<FileIndexDashboard | null>(null);
+  const fileIndexDashboardLoadedAtRef = useRef(0);
+  const fileIndexDashboardInFlightRef = useRef<Promise<FileIndexDashboard | null> | null>(null);
+  const fileIndexDashboardLoadRequestRef = useRef(0);
+  const fileIndexDashboardRefreshTimerRef = useRef<number | null>(null);
   const [redclawProfileDraft, setRedclawProfileDraft] = useState<RedclawProfileDraft>(EMPTY_REDCLAW_PROFILE_DRAFT);
   const [savedRedclawProfileDraft, setSavedRedclawProfileDraft] = useState<RedclawProfileDraft>(EMPTY_REDCLAW_PROFILE_DRAFT);
   const [redclawProfileRoot, setRedclawProfileRoot] = useState('');
@@ -2066,6 +2154,82 @@ export function Settings({
     }
   }, []);
 
+  const isEmptyFileIndexDashboardFallback = useCallback((dashboard: FileIndexDashboard | null | undefined): boolean => {
+    if (!dashboard) return true;
+    const overall = dashboard.overall;
+    return (dashboard.lanes || []).length === 0
+      && (dashboard.scopes || []).length === 0
+      && (!overall
+        || (
+          Number(overall.indexedFiles || 0) === 0
+          && Number(overall.totalFiles || 0) === 0
+          && Number(overall.failedFiles || 0) === 0
+        ));
+  }, []);
+
+  const loadFileIndexDashboard = useCallback(async (options: { force?: boolean; background?: boolean } = {}) => {
+    const cachedDashboard = fileIndexDashboardCurrentRef.current;
+    const cacheAge = Date.now() - fileIndexDashboardLoadedAtRef.current;
+    if (
+      !options.force
+      && cachedDashboard
+      && cacheAge >= 0
+      && cacheAge < FILE_INDEX_DASHBOARD_CACHE_TTL_MS
+    ) {
+      return cachedDashboard;
+    }
+    if (fileIndexDashboardInFlightRef.current) {
+      return fileIndexDashboardInFlightRef.current;
+    }
+
+    const requestId = ++fileIndexDashboardLoadRequestRef.current;
+    const shouldShowLoading = !options.background || !cachedDashboard;
+    if (shouldShowLoading) {
+      setIsFileIndexDashboardLoading(true);
+    }
+
+    let request: Promise<FileIndexDashboard | null>;
+    request = (async () => {
+      try {
+        const dashboard = await window.ipcRenderer.knowledge.getFileIndexDashboard<FileIndexDashboard>();
+        if (requestId !== fileIndexDashboardLoadRequestRef.current) {
+          return fileIndexDashboardCurrentRef.current;
+        }
+
+        let nextDashboard = dashboard || fileIndexDashboardCurrentRef.current || null;
+        if (
+          isEmptyFileIndexDashboardFallback(dashboard)
+          && fileIndexDashboardCurrentRef.current
+          && !isEmptyFileIndexDashboardFallback(fileIndexDashboardCurrentRef.current)
+        ) {
+          nextDashboard = fileIndexDashboardCurrentRef.current;
+        }
+
+        if (nextDashboard) {
+          fileIndexDashboardCurrentRef.current = nextDashboard;
+          fileIndexDashboardLoadedAtRef.current = writeCachedFileIndexDashboard(nextDashboard);
+          setFileIndexDashboard(nextDashboard);
+        }
+        return nextDashboard;
+      } catch (error) {
+        if (requestId === fileIndexDashboardLoadRequestRef.current) {
+          console.error('Failed to load file index dashboard:', error);
+        }
+        return fileIndexDashboardCurrentRef.current;
+      } finally {
+        if (fileIndexDashboardInFlightRef.current === request) {
+          fileIndexDashboardInFlightRef.current = null;
+          if (shouldShowLoading) {
+            setIsFileIndexDashboardLoading(false);
+          }
+        }
+      }
+    })();
+
+    fileIndexDashboardInFlightRef.current = request;
+    return request;
+  }, [isEmptyFileIndexDashboardFallback]);
+
   const loadRecentDebugLogs = useCallback(async () => {
     const requestId = ++debugLogsLoadRequestRef.current;
     setIsDebugLogsLoading(true);
@@ -2912,6 +3076,10 @@ export function Settings({
     });
   }, [activeTab, persistDeveloperModeState]);
 
+  const handleOpenDownloadPage = useCallback(() => {
+    window.open('https://github.com/Jamailar/RedBox/releases', '_blank', 'noopener,noreferrer');
+  }, []);
+
   const loadSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     const preserveViewState = Boolean(options?.preserveViewState);
     const preserveRemoteModels = options?.preserveRemoteModels ?? preserveViewState;
@@ -3119,6 +3287,27 @@ export function Settings({
           diagnostics_last_prompted_at: String(settings.diagnostics_last_prompted_at || ''),
           release_log_retention_days: String(settings.release_log_retention_days || 7),
           release_log_max_file_mb: String(settings.release_log_max_file_mb || 10),
+          visual_index_enabled: Boolean(settings.visual_index_enabled),
+          visual_index_provider: settings.visual_index_provider || 'openai-compatible',
+          visual_index_endpoint: settings.visual_index_endpoint || '',
+          visual_index_api_key: settings.visual_index_api_key || '',
+          visual_index_model: settings.visual_index_model || '',
+          visual_index_prompt_version: normalizeVisualIndexPromptVersion(settings.visual_index_prompt_version),
+          visual_index_timeout_seconds: String(settings.visual_index_timeout_seconds || 90),
+          visual_index_max_image_edge: String(settings.visual_index_max_image_edge || 1536),
+          visual_index_skip_small_images: settings.visual_index_skip_small_images !== false,
+          visual_index_pdf_max_pages: String(settings.visual_index_pdf_max_pages || 12),
+          visual_index_pdf_render_dpi: String(settings.visual_index_pdf_render_dpi || 144),
+          visual_index_concurrency: String(settings.visual_index_concurrency || 1),
+          docling_endpoint: settings.docling_endpoint || '',
+          tika_endpoint: settings.tika_endpoint || '',
+          unstructured_endpoint: settings.unstructured_endpoint || '',
+          parser_api_key: settings.parser_api_key || '',
+          parser_timeout_seconds: String(settings.parser_timeout_seconds || 60),
+          rerank_endpoint: settings.rerank_endpoint || '',
+          rerank_api_key: settings.rerank_api_key || '',
+          rerank_model: settings.rerank_model || '',
+          rerank_timeout_seconds: String(settings.rerank_timeout_seconds || 30),
           developer_mode_enabled: developerModeEnabled,
           developer_mode_unlocked_at: developerModeEnabled ? unlockedAt : '',
         });
@@ -3806,6 +3995,8 @@ export function Settings({
         if (!nextComponent) {
           setAiModelSubTab('custom');
         }
+      } else if (tab === 'experimental') {
+        // Experimental tab has no async resources to preload
       }
       tabWarmRef.current[tab] = true;
     } finally {
@@ -3868,7 +4059,7 @@ export function Settings({
     const handleSettingsUpdated = () => {
       // Preserve local edits on form-driven tabs; otherwise external auth sync can
       // reload persisted settings and wipe unsaved AI source/model changes.
-      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai';
+      const preserveLocalFormState = activeTab === 'general' || activeTab === 'ai' || activeTab === 'experimental';
       if (!preserveLocalFormState) {
         void ensureBaseSettingsLoaded(true);
       }
@@ -3994,6 +4185,35 @@ export function Settings({
     runtimeTasks.length,
     scheduleRemoteTabWarmup,
   ]);
+
+  useEffect(() => {
+    if (initialFileIndexDashboardCache) {
+      fileIndexDashboardCurrentRef.current = initialFileIndexDashboardCache.dashboard;
+      fileIndexDashboardLoadedAtRef.current = initialFileIndexDashboardCache.savedAt;
+      setFileIndexDashboard(initialFileIndexDashboardCache.dashboard);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!isActive || activeTab !== 'general') return;
+    const scheduleFileIndexRefresh = () => {
+      if (fileIndexDashboardRefreshTimerRef.current != null) {
+        window.clearTimeout(fileIndexDashboardRefreshTimerRef.current);
+      }
+      fileIndexDashboardRefreshTimerRef.current = window.setTimeout(() => {
+        fileIndexDashboardRefreshTimerRef.current = null;
+        void loadFileIndexDashboard({ force: true, background: true });
+      }, 750);
+    };
+    window.ipcRenderer.on('knowledge:file-index-updated', scheduleFileIndexRefresh);
+    window.ipcRenderer.on('knowledge:catalog-updated', scheduleFileIndexRefresh);
+    void loadFileIndexDashboard({ force: false, background: true });
+    return () => {
+      window.ipcRenderer.off('knowledge:file-index-updated', scheduleFileIndexRefresh);
+      window.ipcRenderer.off('knowledge:catalog-updated', scheduleFileIndexRefresh);
+    };
+  }, [activeTab, isActive, loadFileIndexDashboard]);
 
   const handleInstallYtdlp = async () => {
     setIsInstallingTool(true);
@@ -4238,6 +4458,27 @@ export function Settings({
           : null,
         chat_max_tokens_default: chatMaxTokensDefault,
         chat_max_tokens_deepseek: chatMaxTokensDeepseek,
+        visual_index_enabled: Boolean(formData.visual_index_enabled),
+        visual_index_provider: String(formData.visual_index_provider || '').trim(),
+        visual_index_endpoint: String(formData.visual_index_endpoint || '').trim(),
+        visual_index_api_key: String(formData.visual_index_api_key || '').trim(),
+        visual_index_model: String(formData.visual_index_model || '').trim(),
+        visual_index_prompt_version: normalizeVisualIndexPromptVersion(formData.visual_index_prompt_version),
+        visual_index_timeout_seconds: Number(formData.visual_index_timeout_seconds) || 90,
+        visual_index_max_image_edge: Math.max(256, Number(formData.visual_index_max_image_edge) || 1536),
+        visual_index_skip_small_images: Boolean(formData.visual_index_skip_small_images),
+        visual_index_pdf_max_pages: Math.max(1, Number(formData.visual_index_pdf_max_pages) || 12),
+        visual_index_pdf_render_dpi: Math.max(72, Number(formData.visual_index_pdf_render_dpi) || 144),
+        visual_index_concurrency: Math.max(1, Number(formData.visual_index_concurrency) || 1),
+        docling_endpoint: String(formData.docling_endpoint || '').trim(),
+        tika_endpoint: String(formData.tika_endpoint || '').trim(),
+        unstructured_endpoint: String(formData.unstructured_endpoint || '').trim(),
+        parser_api_key: String(formData.parser_api_key || '').trim(),
+        parser_timeout_seconds: Number(formData.parser_timeout_seconds) || 60,
+        rerank_endpoint: String(formData.rerank_endpoint || '').trim(),
+        rerank_api_key: String(formData.rerank_api_key || '').trim(),
+        rerank_model: String(formData.rerank_model || '').trim(),
+        rerank_timeout_seconds: Number(formData.rerank_timeout_seconds) || 30,
       });
       clearAiSourceDraftDirty();
       if (formData.debug_log_enabled) {
@@ -4308,6 +4549,7 @@ export function Settings({
     { id: 'general', label: '常规设置', icon: LayoutGrid },
     { id: 'profile', label: '用户档案', icon: FileText },
     { id: 'tools', label: '工具管理', icon: Wrench },
+    { id: 'experimental', label: '实验功能', icon: FlaskConical },
   ] as const;
 
   return (
@@ -4364,6 +4606,12 @@ export function Settings({
                 handleUploadPendingReport={handleUploadPendingReport}
                 handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
+                handleOpenDownloadPage={handleOpenDownloadPage}
+                fileIndexDashboard={fileIndexDashboard}
+                fileIndexLoading={isFileIndexDashboardLoading}
+                handleRefreshFileIndexDashboard={async () => {
+                  await loadFileIndexDashboard({ force: true });
+                }}
               />
             )}
 
@@ -5384,6 +5632,14 @@ export function Settings({
                 handleResumeRuntimeTask={handleResumeRuntimeTask}
                 handleCancelRuntimeTask={handleCancelRuntimeTask}
                 handleCancelBackgroundTask={handleCancelBackgroundTask}
+              />
+            )}
+
+            {/* Experimental Tab */}
+            {activeTab === 'experimental' && (
+              <ExperimentalSettingsSection
+                formData={formData}
+                setFormData={setFormData}
               />
             )}
 

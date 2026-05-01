@@ -1029,7 +1029,7 @@ export function CreativeChat({
             value={inputValue}
             onValueChange={setInputValue}
             onSubmit={() => void handleSendMessage()}
-            placeholder="发送消息..."
+            placeholder="使用 # 调用知识库&#10;使用 @ 召唤团队成员"
             attachment={pendingAttachment}
             onPickAttachment={pickAttachment}
             onClearAttachment={clearPendingAttachment}

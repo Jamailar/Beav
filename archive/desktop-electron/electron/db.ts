@@ -479,6 +479,52 @@ const initDb = () => {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_space_created_at ON user_memories(space_id, created_at);`);
   }
 
+  // Migration: file index tracking tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS file_index_lanes (
+      id TEXT PRIMARY KEY,
+      scope_id TEXT NOT NULL,
+      lane TEXT NOT NULL,
+      status TEXT DEFAULT 'idle',
+      done INTEGER DEFAULT 0,
+      total INTEGER DEFAULT 0,
+      failed INTEGER DEFAULT 0,
+      metadata_only INTEGER DEFAULT 0,
+      last_updated_at TEXT,
+      next_retry_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_index_lanes_scope
+      ON file_index_lanes(scope_id);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS file_index_events (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      details TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_index_events_source
+      ON file_index_events(source_id);
+    CREATE INDEX IF NOT EXISTS idx_file_index_events_type
+      ON file_index_events(event_type);
+  `);
+
+  // Idempotent migration: populate file_index_lanes from existing knowledge_vectors
+  db.exec(`
+    INSERT OR IGNORE INTO file_index_lanes (id, scope_id, lane, status, done, total)
+    SELECT
+      v.source_id as id,
+      COALESCE(json_extract(v.metadata, '$.scope'), 'unknown') as scope_id,
+      'vectors' as lane,
+      'idle' as status,
+      COUNT(*) as done,
+      COUNT(*) as total
+    FROM knowledge_vectors v
+    GROUP BY v.source_id;
+  `);
+
   const now = Date.now();
   db.prepare(`
     INSERT INTO spaces (id, name, created_at, updated_at)
@@ -2379,6 +2425,91 @@ export const getVectorStats = () => {
 
 export const clearAllVectors = () => {
   db.exec('DELETE FROM knowledge_vectors');
+};
+
+// ========== File Index Lane & Event Queries ==========
+
+export interface FileIndexLaneRow {
+  id: string;
+  scope_id: string;
+  lane: string;
+  status: string;
+  done: number;
+  total: number;
+  failed: number;
+  metadata_only: number;
+  last_updated_at: string | null;
+  next_retry_at: string | null;
+}
+
+export const getFileIndexLanesByScope = (scopeId: string) => {
+  const stmt = db.prepare(
+    'SELECT * FROM file_index_lanes WHERE scope_id = ?'
+  );
+  return stmt.all(scopeId) as FileIndexLaneRow[];
+};
+
+export const getAllFileIndexLanes = () => {
+  const stmt = db.prepare('SELECT * FROM file_index_lanes');
+  return stmt.all() as FileIndexLaneRow[];
+};
+
+export const upsertFileIndexLane = (lane: {
+  id: string;
+  scope_id: string;
+  lane: string;
+  status?: string;
+  done?: number;
+  total?: number;
+  failed?: number;
+  metadata_only?: number;
+  last_updated_at?: string | null;
+  next_retry_at?: string | null;
+}) => {
+  const stmt = db.prepare(`
+    INSERT INTO file_index_lanes (id, scope_id, lane, status, done, total, failed, metadata_only, last_updated_at, next_retry_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      done = excluded.done,
+      total = excluded.total,
+      failed = excluded.failed,
+      metadata_only = excluded.metadata_only,
+      last_updated_at = excluded.last_updated_at,
+      next_retry_at = excluded.next_retry_at
+  `);
+  return stmt.run(
+    lane.id,
+    lane.scope_id,
+    lane.lane,
+    lane.status ?? 'idle',
+    lane.done ?? 0,
+    lane.total ?? 0,
+    lane.failed ?? 0,
+    lane.metadata_only ?? 0,
+    lane.last_updated_at ?? null,
+    lane.next_retry_at ?? null,
+  );
+};
+
+export const addFileIndexEvent = (event: {
+  id: string;
+  source_id: string;
+  event_type: string;
+  details?: string | null;
+}) => {
+  const stmt = db.prepare(`
+    INSERT INTO file_index_events (id, source_id, event_type, details)
+    VALUES (?, ?, ?, ?)
+  `);
+  return stmt.run(event.id, event.source_id, event.event_type, event.details ?? null);
+};
+
+export const getFileIndexEventsBySource = (sourceId: string, limit = 20) => {
+  const stmt = db.prepare(
+    'SELECT * FROM file_index_events WHERE source_id = ? ORDER BY created_at DESC LIMIT ?'
+  );
+  return stmt.all(sourceId, limit);
 };
 
 // ========== Vector Search Logic (In-Memory Cosine Similarity) ==========
