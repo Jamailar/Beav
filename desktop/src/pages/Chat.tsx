@@ -212,6 +212,20 @@ export interface ChatShortcutContext {
 
 export type ChatShortcutProvider = ChatShortcut[] | ((context: ChatShortcutContext) => ChatShortcut[]);
 
+interface ChatDispatchOverridePayload {
+  sessionId?: string;
+  message: string;
+  displayContent: string;
+  attachment?: Message['attachment'];
+  knowledgeReferences?: ChatKnowledgeMentionOption[];
+  taskHints?: unknown;
+}
+
+interface ChatDispatchOverrideResult {
+  handled: boolean;
+  assistantContent?: string;
+}
+
 // 选中文字菜单状态
 interface SelectionMenu {
   visible: boolean;
@@ -265,6 +279,7 @@ interface ChatProps {
   keepComposerInputActive?: boolean;
   messageListHeader?: React.ReactNode;
   placeholder?: string;
+  onDispatchOverride?: (payload: ChatDispatchOverridePayload) => Promise<ChatDispatchOverrideResult | boolean>;
 }
 
 interface ChatContextUsage {
@@ -659,6 +674,7 @@ export function Chat({
   keepComposerInputActive = false,
   messageListHeader,
   placeholder,
+  onDispatchOverride,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -3163,6 +3179,55 @@ export function Chat({
     setPendingAttachment(null);
     setIsAttachmentUploading(false);
     setIsProcessing(true);
+
+    if (onDispatchOverride) {
+      try {
+        const overrideResult = await onDispatchOverride({
+          sessionId: currentSessionId || undefined,
+          message: runtimeMessage,
+          displayContent: displayText,
+          attachment: attachment as Message['attachment'],
+          knowledgeReferences: safeKnowledgeMentions,
+          taskHints: fixedSessionTaskHints,
+        });
+        const handled = typeof overrideResult === 'boolean' ? overrideResult : Boolean(overrideResult?.handled);
+        if (handled) {
+          const assistantContent = typeof overrideResult === 'boolean'
+            ? ''
+            : String(overrideResult.assistantContent || '').trim();
+          const now = Date.now();
+          setIsProcessing(false);
+          setMessages((prev) => prev.map((message) => (
+            message.id === aiPlaceholder.id
+              ? {
+                ...message,
+                content: assistantContent || '任务已交给 RedClaw 临时团队执行。',
+                isStreaming: false,
+                processingFinishedAt: now,
+              }
+              : message
+          )));
+          return;
+        }
+      } catch (error) {
+        console.error('Chat dispatch override failed:', error);
+        const detail = error instanceof Error ? error.message : String(error || '执行失败');
+        const now = Date.now();
+        setIsProcessing(false);
+        setErrorNotice(detail);
+        setMessages((prev) => prev.map((message) => (
+          message.id === aiPlaceholder.id
+            ? {
+              ...message,
+              content: `RedClaw 临时团队启动失败：${detail}`,
+              isStreaming: false,
+              processingFinishedAt: now,
+            }
+            : message
+        )));
+        return;
+      }
+    }
 
     let resolvedModelConfig;
     try {
