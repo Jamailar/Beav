@@ -883,6 +883,36 @@ type RedClawJob = {
 
 这不是产品分期，而是一次完整落地时的安全执行顺序。每一步完成后都应能被验证，最终形成全链路闭环。
 
+### Current Delivery Status
+
+截至 2026-05-01，RedClaw scoped orchestration 已经具备端到端创作闭环的第一版：
+
+- 用户在 RedClaw 输入任务后，可由 RedClaw 自动创建临时团队 run，而不是要求用户手动激活各 Agent。
+- Team Planner 会生成固定 Agent 枚举和依赖图，Research、Insight、Script、Storyboard、Media、Editor、Publish、Review 按依赖顺序交接。
+- RedClaw 子 Agent 会收到当前节点、上下游、平台、内容格式和任务图上下文。
+- 创作项目会同步 runtime task 的 orchestration outputs，并在 Creation Workspace 中展示 Brief、Script、Storyboard、Media、Publish、Review。
+- 用户可保存各 section 的人工编辑草稿，刷新后仍保留。
+- Review Agent 产生的 learning candidates 可由用户接受或拒绝；接受后写入统一 RedClaw memory，而不是写入 Agent 私有记忆。
+- Media section 可导出 `redclaw.mediaPlan.v1` 包，包含 `media-plan.json`、`rough-cut.ffconcat` 和 README；可用 ffmpeg 渲染第一版 rough cut。
+- Publish section 可导出 `redclaw.publishPackage.v1` 包，包含 `publish-package.json`、`publish-package.md` 和 `cover-brief.md`。
+- Review section 可导出 `redclaw.reviewReport.v1` 包，包含 `review-report.json` 和 `review-report.md`。
+
+当前新增/使用的 RedClaw orchestration IPC：
+
+- `redclaw:orchestration-plan`
+- `redclaw:orchestration-create-team`
+- `redclaw:orchestration-create-run`
+- `redclaw:orchestration-registry`
+- `redclaw:list-projects`
+- `redclaw:learning-candidate-update`
+- `redclaw:project-section-update`
+- `redclaw:media-plan-export`
+- `redclaw:media-plan-render`
+- `redclaw:publish-package-export`
+- `redclaw:review-report-export`
+
+仍未做的边界保持不变：不自动发布到平台，不自研完整剪辑器，不自研 ASR/OCR/编码器，不允许 Agent 静默写长期记忆。
+
 ### Step 1. Contracts
 
 新增 RedClaw orchestration contracts：
