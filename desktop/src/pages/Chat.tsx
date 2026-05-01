@@ -282,6 +282,7 @@ interface ChatProps {
   placeholder?: string;
   fixedMemberMention?: ChatMemberMentionOption | null;
   onDispatchOverride?: (payload: ChatDispatchOverridePayload) => Promise<ChatDispatchOverrideResult | boolean>;
+  onSessionActivity?: (sessionId: string, updatedAt: string) => void;
 }
 
 interface ChatContextUsage {
@@ -699,6 +700,7 @@ export function Chat({
   placeholder,
   fixedMemberMention = null,
   onDispatchOverride,
+  onSessionActivity,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -1309,6 +1311,12 @@ export function Chat({
     });
   }, [debugUi]);
 
+  const notifySessionActivity = useCallback((sessionId: string | null | undefined, updatedAt = new Date().toISOString()) => {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) return;
+    onSessionActivity?.(safeSessionId, updatedAt);
+  }, [onSessionActivity]);
+
   // 处理从其他页面传来的待发送消息（如知识库的"AI脑爆"）
   useEffect(() => {
     // 已处理过或正在处理中，跳过
@@ -1422,6 +1430,7 @@ export function Chat({
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
+      notifySessionActivity(sessionId, new Date(processingStartedAt).toISOString());
       const userMsg: Message = {
         id: processingStartedAt.toString(),
         role: 'user',
@@ -1473,7 +1482,7 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig, setPendingAttachment]);
+  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig, notifySessionActivity, setPendingAttachment]);
 
   const loadSessions = async () => {
     if (!isActiveRef.current) return;
@@ -3171,6 +3180,7 @@ export function Chat({
       knowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${knowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
     ].filter(Boolean).join('');
     const processingStartedAt = Date.now();
+    notifySessionActivity(currentSessionId, new Date(processingStartedAt).toISOString());
     const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
       type: 'member',
       memberId: memberMention.id,
