@@ -7,15 +7,15 @@ use crate::agent::{
     build_runtime_query_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::events::{
-    emit_runtime_subagent_finished, emit_runtime_subagent_spawned,
+    emit_runtime_event, emit_runtime_subagent_finished, emit_runtime_subagent_spawned,
     emit_runtime_task_checkpoint_saved, emit_runtime_task_node_changed,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, append_runtime_task_trace_scoped, append_session_checkpoint_scoped,
-    create_collab_session, create_collab_task, create_runtime_task, record_runtime_node,
-    runtime_subagent_role_spec, submit_collab_report, update_collab_task, RuntimeArtifact,
-    RuntimeCheckpointRecord, RuntimeRouteRecord,
+    create_collab_session, create_collab_task, create_review_docket, create_runtime_task,
+    record_runtime_node, runtime_subagent_role_spec, submit_collab_report, update_collab_task,
+    RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::subagents::{
     build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
@@ -650,6 +650,7 @@ fn create_child_runtime_records(
 }
 
 fn persist_child_execution(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     spawn: &SubAgentSpawnResult,
     config: &SubAgentConfig,
@@ -738,40 +739,92 @@ fn persist_child_execution(
             spawn.collab_task_id.as_deref(),
             config.collab_session_id.as_deref(),
         ) {
-            let _ = submit_collab_report(
+            let handoff = output.handoff.clone().unwrap_or_default();
+            let artifacts = output
+                .artifact
+                .as_ref()
+                .map(|value| {
+                    vec![json!({
+                        "type": "text",
+                        "label": format!("{} output", config.role_id),
+                        "content": value
+                    })]
+                })
+                .unwrap_or_default();
+            let report = submit_collab_report(
                 store,
                 &json!({
                     "sessionId": collab_session_id,
                     "memberId": member_id,
                     "taskId": collab_task_id,
-                    "status": "completed",
+                    "status": "waiting_for_review",
                     "reportType": "completion",
                     "summary": output.summary,
-                    "nextAction": output.handoff,
-                    "artifacts": output.artifact.as_ref().map(|value| vec![json!({
-                        "type": "text",
-                        "label": format!("{} output", config.role_id),
-                        "content": value
-                    })]).unwrap_or_default(),
+                    "nextAction": handoff,
+                    "artifacts": artifacts,
+                    "memberStatus": "review",
                     "payload": {
                         "roleId": config.role_id,
                         "childTaskId": spawn.child_task_id,
                         "childSessionId": spawn.child_session_id,
                         "approved": output.approved,
                         "risks": output.risks,
-                        "issues": output.issues
+                        "issues": output.issues,
+                        "completionClaim": {
+                            "sessionId": collab_session_id,
+                            "taskId": collab_task_id,
+                            "memberId": member_id,
+                            "status": "completed",
+                            "summary": output.summary,
+                            "handoff": handoff,
+                            "risks": output.risks
+                        }
                     }
                 }),
             );
-            let _ = update_collab_task(
-                store,
-                &json!({
-                    "taskId": collab_task_id,
-                    "status": "completed",
-                    "resultSummary": output.summary,
-                    "progressPercent": 100
-                }),
-            );
+            if report.is_ok() {
+                if let Ok(docket) = create_review_docket(
+                    store,
+                    &json!({
+                        "sourceKind": "subagent_completion",
+                        "sourceId": spawn.child_task_id,
+                        "sessionId": collab_session_id,
+                        "taskId": collab_task_id,
+                        "title": format!("验收 {} 的完成声明", config.role_id),
+                        "summary": output.summary,
+                        "body": format!("{}\n\nhandoff: {}", output.summary, handoff),
+                        "decisionType": "completion_review",
+                        "priority": if output.approved { "normal" } else { "high" },
+                        "riskLevel": if output.risks.is_empty() { "normal" } else { "medium" },
+                        "artifactRefs": output.artifact.as_ref().map(|_| vec![format!("subagent-output:{}", spawn.child_task_id)]).unwrap_or_default(),
+                        "evidenceRefs": [{
+                            "kind": "subagent_output",
+                            "roleId": config.role_id,
+                            "childTaskId": spawn.child_task_id,
+                            "childSessionId": spawn.child_session_id,
+                            "issues": output.issues,
+                            "risks": output.risks
+                        }],
+                        "createdByAgentId": config.role_id,
+                        "proposedAction": {
+                            "kind": "collab_task_completion",
+                            "onDecisionTaskStatus": {
+                                "approved": "completed",
+                                "rejected": "failed",
+                                "changes_requested": "claimed"
+                            }
+                        }
+                    }),
+                ) {
+                    emit_runtime_event(
+                        app,
+                        "runtime:review-docket-changed",
+                        Some(collab_session_id),
+                        Some(collab_task_id),
+                        json!({ "docketId": docket.id, "sourceKind": "subagent_completion" }),
+                    );
+                }
+            }
         }
         Ok(())
     })
@@ -933,6 +986,7 @@ fn execute_subagent_config(
         ),
     );
     persist_child_execution(
+        &app,
         &state,
         &spawn,
         &config,

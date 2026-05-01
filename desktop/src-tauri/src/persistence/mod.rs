@@ -483,6 +483,8 @@ pub fn default_store() -> AppStore {
         collab_tasks: Vec::new(),
         collab_mailbox_messages: Vec::new(),
         collab_progress_reports: Vec::new(),
+        review_dockets: Vec::new(),
+        review_decisions: Vec::new(),
         cli_tools: Vec::new(),
         cli_environments: Vec::new(),
         cli_manifests: Vec::new(),

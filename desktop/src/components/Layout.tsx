@@ -56,6 +56,7 @@ type ThemeMode = 'light' | 'dark';
 
 const THEME_STORAGE_KEY = 'redbox:theme-mode:v1';
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
+const WORKBOARD_MODE_HINT_STORAGE_KEY = 'redbox:workboard-mode-hint';
 const SIDEBAR_CONTENT_ANIMATION_MS = 170;
 
 function readInitialThemeMode(): ThemeMode {
@@ -90,6 +91,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
@@ -141,6 +143,26 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     };
     void loadVersion();
   }, []);
+
+  const loadPendingReviewCount = useCallback(async () => {
+    try {
+      const stats = await window.ipcRenderer.teamRuntime.reviewDocketStats();
+      setPendingReviewCount(Number(stats?.pending || 0));
+    } catch {
+      setPendingReviewCount(0);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPendingReviewCount();
+    const listener = (_event: unknown, envelope?: unknown) => {
+      const eventRecord = envelope && typeof envelope === 'object' ? envelope as Record<string, unknown> : {};
+      if (String(eventRecord.eventType || '') !== 'runtime:review-docket-changed') return;
+      void loadPendingReviewCount();
+    };
+    window.ipcRenderer.teamRuntime.onEvent(listener);
+    return () => window.ipcRenderer.teamRuntime.offEvent(listener);
+  }, [loadPendingReviewCount]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -425,12 +447,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 type="button"
                 data-guide-id={`nav-${id}`}
                 onClick={() => {
+                  if (id === 'workboard' && pendingReviewCount > 0) {
+                    window.sessionStorage.setItem(WORKBOARD_MODE_HINT_STORAGE_KEY, 'review');
+                    window.dispatchEvent(new CustomEvent('redbox:workboard-mode-hint', {
+                      detail: { mode: 'review' },
+                    }));
+                  }
                   onNavigate(id);
                 }}
                 title={label}
                 aria-label={label}
                 className={clsx(
-                  'w-full rounded-xl transition-all tracking-[0.01em] font-normal inline-flex items-center',
+                  'relative w-full rounded-xl transition-all tracking-[0.01em] font-normal inline-flex items-center',
                   sidebarVisualCollapsed ? 'h-11 justify-center px-0' : 'gap-3 px-3.5 py-2.5 text-[13px]',
                   id === 'subjects'
                     ? (
@@ -454,6 +482,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 >
                   {label}
                 </span>
+                {id === 'workboard' && pendingReviewCount > 0 && (
+                  <span
+                    className={clsx(
+                      'shrink-0 rounded-full bg-[#c75d43] text-white',
+                      sidebarVisualCollapsed
+                        ? 'absolute right-2 top-2 h-2.5 min-w-2.5'
+                        : 'ml-auto min-w-[18px] px-1.5 py-0.5 text-[10px] leading-4 text-center'
+                    )}
+                  >
+                    {sidebarVisualCollapsed ? '' : Math.min(pendingReviewCount, 99)}
+                  </span>
+                )}
               </button>
             ))}
           </nav>
