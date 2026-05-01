@@ -105,6 +105,33 @@ fn edge_node_ids(graph: &Value, node_id: &str, edge_key: &str) -> Vec<String> {
         .collect()
 }
 
+fn node_skill_ids(node: Option<&Value>) -> Vec<String> {
+    node.and_then(|item| payload_field(item, "skillIds"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn selected_skill_profiles(metadata: Option<&Value>, skill_ids: &[String]) -> Vec<Value> {
+    metadata
+        .and_then(|item| payload_field(item, "redclawSkillProfiles"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|profile| {
+            payload_string(profile, "id")
+                .map(|id| skill_ids.iter().any(|skill_id| skill_id == &id))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
 fn subagent_task_context(
     role_id: &str,
     runtime_mode: &str,
@@ -120,6 +147,8 @@ fn subagent_task_context(
         .as_ref()
         .and_then(|item| payload_string(item, "id"))
         .unwrap_or_else(|| role_id.to_string());
+    let skill_ids = node_skill_ids(node.as_ref());
+    let skill_profiles = selected_skill_profiles(metadata, &skill_ids);
     Some(json!({
         "source": "redclaw-orchestrator",
         "parentTaskId": parent_task_id,
@@ -129,6 +158,7 @@ fn subagent_task_context(
         "platform": graph.get("platform").cloned().unwrap_or(Value::Null),
         "contentFormat": graph.get("contentFormat").cloned().unwrap_or(Value::Null),
         "node": node.unwrap_or_else(|| json!({ "id": node_id, "agentId": role_id })),
+        "skillProfiles": skill_profiles,
         "upstreamNodeIds": edge_node_ids(graph, &node_id, "upstream"),
         "downstreamNodeIds": edge_node_ids(graph, &node_id, "downstream"),
         "graph": graph,
@@ -323,6 +353,19 @@ mod tests {
                 "projectId": "project-1",
                 "graphId": "graph-1",
                 "subagentRoles": ["script_agent"],
+                "redclawSkillProfiles": [
+                    {
+                        "id": "script.short_video_script",
+                        "domain": "script",
+                        "version": "0.1.0",
+                        "inputSchema": "CreativeBrief",
+                        "outputSchema": "ScriptDocument",
+                        "instruction": "write script",
+                        "inputContract": { "type": "object" },
+                        "outputContract": { "type": "object" },
+                        "evaluationDimensions": ["relevance"]
+                    }
+                ],
                 "redclawTaskGraph": {
                     "platform": "xiaohongshu",
                     "contentFormat": "short_video",
@@ -368,6 +411,15 @@ mod tests {
                 .and_then(|items| items.first())
                 .and_then(Value::as_str),
             Some("insight")
+        );
+        assert_eq!(
+            context
+                .get("skillProfiles")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|profile| profile.get("id"))
+                .and_then(Value::as_str),
+            Some("script.short_video_script")
         );
     }
 
