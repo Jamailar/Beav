@@ -843,9 +843,8 @@ export function RedClaw({
                 speakerLabel: 'RedClaw',
             })),
             ...advisorHistorySessions,
-            ...roomHistorySessions,
         ].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
-    ), [advisorHistorySessions, roomHistorySessions, sessionList]);
+    ), [advisorHistorySessions, sessionList]);
     const activeSpeakerSessionId = activeAiSurface === 'advisor' && selectedAdvisorId
         ? advisorSessionIds[selectedAdvisorId] || null
         : activeAiSurface === 'room' && selectedRoomId
@@ -1358,6 +1357,28 @@ export function RedClaw({
         setActiveSessionId(nextSessionId);
         debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
     }, [activeSpaceId, debugUi]);
+
+    const markHistorySessionActivity = useCallback((sessionId: string, updatedAt: string) => {
+        const nextSessionId = String(sessionId || '').trim();
+        const nextUpdatedAt = String(updatedAt || '').trim() || new Date().toISOString();
+        if (!nextSessionId) return;
+        const updateItem = <T extends ContextChatSessionListItem,>(item: T): T => (
+            item.id !== nextSessionId
+                ? item
+                : {
+                    ...item,
+                    chatSession: {
+                        id: item.chatSession?.id || item.id,
+                        title: item.chatSession?.title || '未命名会话',
+                        updatedAt: nextUpdatedAt,
+                    },
+                }
+        );
+        setSessionList((prev) => sortContextSessionItems(prev.map(updateItem)));
+        setAdvisorHistorySessions((prev) => (
+            [...prev.map(updateItem)].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
+        ));
+    }, []);
 
     const switchHistorySession = useCallback((session: RedClawHistoryListItem) => {
         if (!session?.id) return;
@@ -2351,6 +2372,7 @@ export function RedClaw({
                                         keepComposerInputActive={true}
                                         placeholder="描述创作目标，RedClaw 会判断是否需要组队&#10;使用 # 调用知识库"
                                         fixedMemberMention={activeSpeakerMention}
+                                        onSessionActivity={markHistorySessionActivity}
                                         onDispatchOverride={activeAiSurface === 'redclaw' ? handleRedClawDispatchOverride : undefined}
                                         messageListHeader={<RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />}
                                         inlineSidePanel={previewTarget ? (
