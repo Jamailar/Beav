@@ -3490,40 +3490,46 @@ export function Chat({
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
-      <div className="relative flex justify-center">
-        {welcomeIconSrc ? (
-          welcomeIconVariant === 'avatar' ? (
-            <div className={clsx(
-              'flex items-center justify-center overflow-hidden border shadow-lg',
-              darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
-              'h-24 w-24 rounded-[28px]',
-            )}>
+      <div className="flex flex-col items-center gap-4">
+        <div className="flex justify-center">
+          {welcomeIconSrc ? (
+            welcomeIconVariant === 'avatar' ? (
+              <div className={clsx(
+                'flex items-center justify-center overflow-hidden border shadow-lg',
+                darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
+                'h-24 w-24 rounded-[28px]',
+              )}>
+                <img
+                  src={welcomeIconSrc}
+                  alt={welcomeTitle}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            ) : (
               <img
                 src={welcomeIconSrc}
                 alt={welcomeTitle}
-                className="h-full w-full object-cover"
+                className="w-24 h-24 object-contain"
               />
+            )
+          ) : welcomeAvatarText ? (
+            <div className={clsx(
+              'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
+              darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
+            )}>
+              {welcomeAvatarText}
             </div>
           ) : (
-            <img
-              src={welcomeIconSrc}
-              alt={welcomeTitle}
-              className="w-24 h-24 object-contain"
-            />
-          )
-        ) : welcomeAvatarText ? (
-          <div className={clsx(
-            'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
-            darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
-          )}>
-            {welcomeAvatarText}
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
+              <Sparkles className="w-8 h-8 text-white" />
+            </div>
+          )}
+        </div>
+        {welcomeIconAccessory ? (
+          <div className="flex justify-center">
+            {welcomeIconAccessory}
           </div>
-        ) : (
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
-            <Sparkles className="w-8 h-8 text-white" />
-          </div>
-        )}
-        {welcomeIconAccessory}
+        ) : null}
       </div>
 
       <div className="space-y-2">

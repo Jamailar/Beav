@@ -5,7 +5,7 @@ import { Chat } from './Chat';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
-interface Advisor {
+export interface Advisor {
     id: string;
     name: string;
     avatar: string;
@@ -1858,7 +1858,7 @@ function VideoManagement({ advisorId, isActive = true }: { advisorId: string; is
 }
 
 // Modal Component
-function AdvisorModal({
+export function AdvisorModal({
     advisor,
     defaultMode,
     onSave,
