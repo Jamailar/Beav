@@ -75,6 +75,66 @@ fn role_sequence(route: &RuntimeRouteRecord, metadata: Option<&Value>) -> Vec<St
     role_sequence_for_route(&route.clone().into_value())
 }
 
+fn node_for_role(graph: &Value, role_id: &str) -> Option<Value> {
+    graph
+        .get("nodes")
+        .and_then(Value::as_array)
+        .and_then(|nodes| {
+            nodes
+                .iter()
+                .find(|node| payload_string(node, "agentId").as_deref() == Some(role_id))
+        })
+        .cloned()
+}
+
+fn edge_node_ids(graph: &Value, node_id: &str, edge_key: &str) -> Vec<String> {
+    graph
+        .get("edges")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|edge| {
+            let from = payload_string(edge, "from")?;
+            let to = payload_string(edge, "to")?;
+            match edge_key {
+                "upstream" if to == node_id => Some(from),
+                "downstream" if from == node_id => Some(to),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn subagent_task_context(
+    role_id: &str,
+    runtime_mode: &str,
+    parent_task_id: &str,
+    metadata: Option<&Value>,
+) -> Option<Value> {
+    let graph = metadata.and_then(|item| payload_field(item, "redclawTaskGraph"))?;
+    let node = node_for_role(graph, role_id);
+    if runtime_mode != "redclaw" && node.is_none() {
+        return None;
+    }
+    let node_id = node
+        .as_ref()
+        .and_then(|item| payload_string(item, "id"))
+        .unwrap_or_else(|| role_id.to_string());
+    Some(json!({
+        "source": "redclaw-orchestrator",
+        "parentTaskId": parent_task_id,
+        "runId": metadata.and_then(|item| payload_string(item, "runId")),
+        "projectId": metadata.and_then(|item| payload_string(item, "projectId")),
+        "graphId": metadata.and_then(|item| payload_string(item, "graphId")),
+        "platform": graph.get("platform").cloned().unwrap_or(Value::Null),
+        "contentFormat": graph.get("contentFormat").cloned().unwrap_or(Value::Null),
+        "node": node.unwrap_or_else(|| json!({ "id": node_id, "agentId": role_id })),
+        "upstreamNodeIds": edge_node_ids(graph, &node_id, "upstream"),
+        "downstreamNodeIds": edge_node_ids(graph, &node_id, "downstream"),
+        "graph": graph,
+    }))
+}
+
 fn parallel_group_for_role(role_id: &str, middle_index: usize) -> usize {
     match role_id {
         "planner" | "research_agent" => 0,
@@ -123,6 +183,8 @@ pub fn build_subagent_configs(
                     object.insert("reasoningEffort".to_string(), json!(reasoning_override));
                 }
             }
+            let task_context =
+                subagent_task_context(&role_id, runtime_mode, parent_task_id, metadata);
             SubAgentConfig {
                 role_id,
                 runtime_mode: runtime_mode.to_string(),
@@ -133,6 +195,7 @@ pub fn build_subagent_configs(
                 parallel_group,
                 model_config: Some(merged_model_config),
                 fork_overrides: overrides.clone(),
+                task_context,
             }
         })
         .collect()
@@ -234,6 +297,74 @@ mod tests {
                 ("publish_agent", 6),
                 ("review_agent", usize::MAX),
             ]
+        );
+    }
+
+    #[test]
+    fn redclaw_config_includes_node_task_context() {
+        let route = runtime_direct_route_record(
+            "redclaw",
+            "make a short video package",
+            Some(&json!({
+                "forceMultiAgent": true,
+                "subagentRoles": ["script_agent"]
+            })),
+        );
+        let configs = build_subagent_configs(
+            &route,
+            "redclaw",
+            "task-redclaw",
+            Some("session-redclaw"),
+            Some(&json!({
+                "runId": "run-1",
+                "projectId": "project-1",
+                "graphId": "graph-1",
+                "subagentRoles": ["script_agent"],
+                "redclawTaskGraph": {
+                    "platform": "xiaohongshu",
+                    "contentFormat": "short_video",
+                    "nodes": [
+                        {
+                            "id": "insight",
+                            "agentId": "insight_agent",
+                            "skillIds": ["insight.brief_from_references"],
+                            "requiredArtifacts": ["CreativeBrief"],
+                            "outputSchema": "CreativeBrief"
+                        },
+                        {
+                            "id": "script",
+                            "agentId": "script_agent",
+                            "skillIds": ["script.short_video_script"],
+                            "requiredArtifacts": ["ScriptDocument"],
+                            "outputSchema": "ScriptDocument"
+                        }
+                    ],
+                    "edges": [
+                        { "from": "insight", "to": "script", "dependencyType": "requires_output" }
+                    ]
+                }
+            })),
+            Some(&json!({"modelName": "gpt-main"})),
+        );
+
+        let context = configs
+            .first()
+            .and_then(|config| config.task_context.as_ref())
+            .expect("missing RedClaw task context");
+        assert_eq!(
+            context
+                .get("node")
+                .and_then(|node| node.get("outputSchema"))
+                .and_then(Value::as_str),
+            Some("ScriptDocument")
+        );
+        assert_eq!(
+            context
+                .get("upstreamNodeIds")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(Value::as_str),
+            Some("insight")
         );
     }
 }
