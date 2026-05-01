@@ -18,6 +18,7 @@ const TeamPage = lazy(async () => ({ default: (await import('./pages/Team')).Tea
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
+const CreatorProfilesPage = lazy(async () => ({ default: (await import('./pages/CreatorProfiles')).CreatorProfiles }));
 const WanderPage = lazy(async () => ({ default: (await import('./pages/Wander')).Wander }));
 const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw')).RedClaw }));
 const MediaLibraryPage = lazy(async () => ({ default: (await import('./pages/MediaLibrary')).MediaLibrary }));
@@ -26,7 +27,7 @@ const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
 
-export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard';
+export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'group-chat' | 'members';
 type SettingsNavigationTarget = {
@@ -45,6 +46,7 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'settings',
   'manuscripts',
   'archives',
+  'creator-profiles',
   'wander',
   'redclaw',
   'media-library',
@@ -734,6 +736,13 @@ function App() {
           <div className={currentView === 'archives' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'archives' ? <ViewLoadingFallback /> : null}>
               <ArchivesPage isActive={currentView === 'archives'} />
+            </Suspense>
+          </div>
+        )}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'creator-profiles') && (
+          <div className={currentView === 'creator-profiles' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'creator-profiles' ? <ViewLoadingFallback /> : null}>
+              <CreatorProfilesPage isActive={currentView === 'creator-profiles'} />
             </Suspense>
           </div>
         )}
