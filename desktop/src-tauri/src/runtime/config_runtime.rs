@@ -3,6 +3,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::payload_string;
+use crate::provider_compat::WebSearchMode;
 use crate::runtime::ResolvedChatConfig;
 
 fn normalize_reasoning_effort(value: Option<&str>) -> Option<String> {
@@ -26,6 +27,10 @@ pub fn runtime_warm_settings_fingerprint(settings: &Value, workspace_root: &Path
         "redbox_auth_session_json",
         "reasoning_effort",
         "reasoningEffort",
+        "webSearchMode",
+        "web_search_mode",
+        "nativeWebSearch",
+        "webSearch",
     ] {
         parts.push(payload_string(settings, key).unwrap_or_default());
     }
@@ -137,12 +142,14 @@ pub fn resolve_chat_config(
         .or_else(|| payload_string(settings, "reasoning_effort"))
         .or_else(|| payload_string(settings, "reasoningEffort"));
     let reasoning_effort = normalize_reasoning_effort(reasoning_effort_value.as_deref());
+    let web_search_mode = WebSearchMode::from_config(settings, &model_config);
     Some(ResolvedChatConfig {
         protocol,
         base_url,
         api_key,
         model_name,
         reasoning_effort,
+        web_search_mode,
     })
 }
 

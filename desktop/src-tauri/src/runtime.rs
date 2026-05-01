@@ -436,6 +436,7 @@ mod tests {
                 api_key: Some("default-key".to_string()),
                 model_name: "gemini-2.5-pro".to_string(),
                 reasoning_effort: None,
+                web_search_mode: crate::provider_compat::WebSearchMode::Auto,
             }
         );
     }
@@ -465,6 +466,7 @@ mod tests {
                 api_key: Some("rbx-live-1".to_string()),
                 model_name: "gpt-5.3-codex".to_string(),
                 reasoning_effort: None,
+                web_search_mode: crate::provider_compat::WebSearchMode::Auto,
             }
         );
     }
@@ -485,6 +487,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.reasoning_effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn resolve_chat_config_preserves_web_search_mode_override() {
+        let config = resolve_chat_config(
+            &json!({
+                "api_endpoint": "https://api.openai.com/v1",
+                "api_key": "sk-test",
+                "model_name": "gpt-5.4",
+                "webSearchMode": "disabled"
+            }),
+            Some(&json!({
+                "webSearchMode": "native"
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.web_search_mode,
+            crate::provider_compat::WebSearchMode::Native
+        );
     }
 
     #[test]
