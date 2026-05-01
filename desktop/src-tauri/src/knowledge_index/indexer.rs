@@ -26,7 +26,7 @@ use crate::{
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
-    now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
+    now_i64, now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
     MediaAssetRecord, YoutubeVideoRecord,
 };
 
@@ -567,7 +567,7 @@ pub(crate) fn visual_backfill_needed(state: &State<'_, AppState>) -> Result<bool
         return Ok(false);
     }
     let retry_gates = load_visual_retry_gates(state)?;
-    let now_ms = now_iso().parse::<i64>().unwrap_or_default();
+    let now_ms = now_i64();
     for row in load_document_rows(state, None)? {
         let canonical: crate::document_parse::CanonicalDocument =
             serde_json::from_str(&row.canonical_json).map_err(|error| error.to_string())?;

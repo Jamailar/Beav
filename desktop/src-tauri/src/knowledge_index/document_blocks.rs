@@ -2619,6 +2619,29 @@ mod tests {
     }
 
     #[test]
+    fn visual_backfill_skips_manifest_matching_current_config() {
+        let config = callable_visual_config("vision-small");
+        let document = test_canonical_document(
+            "png",
+            "visual_llm",
+            Some(json!({
+                "schemaVersion": VISUAL_SCHEMA_VERSION,
+                "analysis": {
+                    "processingMode": "visual_llm",
+                    "model": "vision-small",
+                    "promptVersion": config.prompt_version,
+                    "configSignature": config.config_signature()
+                },
+                "source": { "unitId": "source-1:file.png#image=abc" }
+            })),
+        );
+
+        assert!(!canonical_needs_visual_backfill_for_config(
+            &document, &config
+        ));
+    }
+
+    #[test]
     fn visual_backfill_waits_when_model_config_is_not_callable() {
         let config = VisualIndexConfig {
             enabled: true,
