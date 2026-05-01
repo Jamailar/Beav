@@ -111,7 +111,9 @@ export function RedClawProjectWorkspacePanel() {
     const [sectionDrafts, setSectionDrafts] = useState<Record<string, string>>({});
     const [savingSectionId, setSavingSectionId] = useState('');
     const [exportingMediaPlan, setExportingMediaPlan] = useState(false);
+    const [renderingRoughCut, setRenderingRoughCut] = useState(false);
     const [lastMediaPlanPath, setLastMediaPlanPath] = useState('');
+    const [lastRoughCutPath, setLastRoughCutPath] = useState('');
     const [copiedSectionId, setCopiedSectionId] = useState('');
 
     const activeProject = useMemo(() => projects[0] || null, [projects]);
@@ -217,6 +219,28 @@ export function RedClawProjectWorkspacePanel() {
             setError('导出剪辑计划失败');
         } finally {
             setExportingMediaPlan(false);
+        }
+    }, [activeProject, loadProjects]);
+
+    const renderRoughCut = useCallback(async () => {
+        if (!activeProject) return;
+        setRenderingRoughCut(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawProjects.renderRoughCut({
+                projectId: activeProject.id,
+            });
+            if (!result?.success) {
+                setError(result?.error || '生成粗剪失败');
+                return;
+            }
+            setLastRoughCutPath(String(result.path || '').trim());
+            await loadProjects();
+        } catch (err) {
+            console.error('Failed to render RedClaw rough cut:', err);
+            setError(err instanceof Error ? err.message : '生成粗剪失败');
+        } finally {
+            setRenderingRoughCut(false);
         }
     }, [activeProject, loadProjects]);
 
@@ -357,20 +381,36 @@ export function RedClawProjectWorkspacePanel() {
                                         </div>
                                         <div className="flex gap-1.5">
                                             {activeSection.id === 'media' && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void exportMediaPlan()}
-                                                    disabled={exportingMediaPlan}
-                                                    className={clsx(
-                                                        'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
-                                                        exportingMediaPlan
-                                                            ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
-                                                            : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
-                                                    )}
-                                                >
-                                                    {exportingMediaPlan ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
-                                                    导出计划
-                                                </button>
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void exportMediaPlan()}
+                                                        disabled={exportingMediaPlan || renderingRoughCut}
+                                                        className={clsx(
+                                                            'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
+                                                            exportingMediaPlan || renderingRoughCut
+                                                                ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                                                : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
+                                                        )}
+                                                    >
+                                                        {exportingMediaPlan ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
+                                                        导出计划
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void renderRoughCut()}
+                                                        disabled={renderingRoughCut || exportingMediaPlan}
+                                                        className={clsx(
+                                                            'inline-flex h-8 items-center gap-1.5 rounded-[9px] px-2.5 text-xs font-semibold transition',
+                                                            renderingRoughCut || exportingMediaPlan
+                                                                ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                                                : 'bg-text-primary text-surface-primary hover:bg-text-secondary'
+                                                        )}
+                                                    >
+                                                        {renderingRoughCut ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
+                                                        生成粗剪
+                                                    </button>
+                                                </>
                                             )}
                                             <button
                                                 type="button"
@@ -399,6 +439,11 @@ export function RedClawProjectWorkspacePanel() {
                                     {activeSection.id === 'media' && lastMediaPlanPath && (
                                         <div className="truncate rounded-[8px] bg-surface-secondary px-2 py-1.5 text-[11px] text-text-tertiary">
                                             已导出：{lastMediaPlanPath}
+                                        </div>
+                                    )}
+                                    {activeSection.id === 'media' && lastRoughCutPath && (
+                                        <div className="truncate rounded-[8px] bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-700">
+                                            粗剪视频：{lastRoughCutPath}
                                         </div>
                                     )}
                                 </div>
