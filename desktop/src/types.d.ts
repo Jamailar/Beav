@@ -1890,6 +1890,17 @@ declare global {
           plan?: unknown;
           error?: string;
         }>;
+        renderRoughCut: (payload: {
+          projectId: string;
+        }) => Promise<{
+          success?: boolean;
+          project?: unknown;
+          path?: string;
+          packagePath?: string;
+          inputCount?: number;
+          sizeBytes?: number;
+          error?: string;
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{
