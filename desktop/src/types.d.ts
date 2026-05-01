@@ -1833,6 +1833,32 @@ declare global {
           memoryScopes: string[];
         }>;
       };
+      redclawProjects: {
+        list: () => Promise<{
+          success?: boolean;
+          count?: number;
+          items?: Array<{
+            id: string;
+            goal: string;
+            platform?: string | null;
+            taskType?: string | null;
+            status: string;
+            runId?: string | null;
+            graphId?: string | null;
+            runtimeTaskId?: string | null;
+            collabSessionId?: string | null;
+            contentFormat?: string | null;
+            artifactPath?: string | null;
+            artifacts?: Array<Record<string, unknown>>;
+            checkpoints?: Array<Record<string, unknown>>;
+            learningCandidates?: Array<Record<string, unknown>>;
+            skillRuns?: Array<Record<string, unknown>>;
+            metadata?: Record<string, unknown> | null;
+            createdAt?: string | null;
+            updatedAt: string;
+          }>;
+        }>;
+      };
       redclawProfile: {
         getBundle: () => Promise<{
           activeSpaceId?: string;

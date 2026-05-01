@@ -1127,6 +1127,9 @@ function createIpcRenderer() {
         invokeChannel('redclaw:orchestration-create-run', payload),
       getRegistry: () => invokeChannel('redclaw:orchestration-registry'),
     },
+    redclawProjects: {
+      list: () => invokeChannel('redclaw:list-projects'),
+    },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
       updateDoc: (payload: { docType: 'agent' | 'soul' | 'user' | 'creator_profile'; markdown: string; reason?: string }) =>
