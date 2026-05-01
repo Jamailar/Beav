@@ -76,6 +76,12 @@ interface AccountDetail {
     posts?: AccountPost[];
     media?: AccountMedia[];
     comments?: AccountComment[];
+    learningState?: {
+        status?: string;
+        pendingVideoTranscriptions?: number;
+        failedVideoTranscriptions?: number;
+        updatedAt?: string;
+    };
     creatorProfile?: string;
     writingStyleSkill?: string;
     learningSummary?: string;
@@ -126,6 +132,18 @@ function postCover(post: AccountPost): string {
 
 function candidateText(candidate: Record<string, unknown>): string {
     return String(candidate.text || candidate.content || candidate.summary || '').trim();
+}
+
+function learningStatusText(state?: AccountDetail['learningState']): string {
+    const status = String(state?.status || '').trim();
+    if (status === 'waiting_transcription') {
+        return `等待 ${numberText(state?.pendingVideoTranscriptions)} 个视频转录`;
+    }
+    if (status === 'transcription_failed') {
+        return `${numberText(state?.failedVideoTranscriptions)} 个视频转录失败`;
+    }
+    if (status === 'completed') return '学习完成';
+    return '等待导入';
 }
 
 export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
@@ -316,7 +334,7 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                             </div>
                             <div className="mt-1 text-sm text-text-tertiary">
                                 {selectedAccount
-                                    ? `最近学习 ${formatTimestampDate(selectedAccount.lastLearnedAt) || '未学习'} · 最近导入 ${formatTimestampDate(selectedAccount.lastImportedAt) || '暂无记录'}`
+                                    ? `${learningStatusText(detail?.learningState)} · 最近学习 ${formatTimestampDate(selectedAccount.lastLearnedAt) || '未学习'} · 最近导入 ${formatTimestampDate(selectedAccount.lastImportedAt) || '暂无记录'}`
                                     : '选择一个账号查看内容画廊和学习结果'}
                             </div>
                         </div>
