@@ -57,6 +57,15 @@ h1 {
   line-height: 1.25;
 }
 
+.workspace-name {
+  margin-top: 2px;
+  color: #404040;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
 .status {
   margin-top: 3px;
   font-size: 12px;
@@ -72,10 +81,78 @@ h1 {
   color: #b91c1c;
 }
 
+.status.warn {
+  color: #a16207;
+}
+
 .section {
   display: grid;
   gap: 10px;
   padding: 12px;
+}
+
+.account-binding-notice {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.notice-title {
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.notice-copy {
+  margin-top: 3px;
+  color: #7c2d12;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.account-binding-notice button {
+  min-height: 34px;
+  border: 1px solid #c2410c;
+  border-radius: 7px;
+  background: #c2410c;
+  color: #fff7ed;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.account-binding-notice button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.account-footer {
+  position: sticky;
+  bottom: 8px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid #deded8;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 10px 12px;
+  box-shadow: 0 10px 26px rgba(23, 23, 23, 0.08);
+}
+
+.account-footer-label {
+  color: #737373;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.account-footer-value {
+  color: #171717;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .page-recognition {

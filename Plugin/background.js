@@ -29,8 +29,11 @@ const REDBOX_PLUGIN_SETTINGS_KEY = 'redboxPluginSettings';
 const XHS_TASK_HISTORY_KEY = 'xhsCollectorTaskHistory';
 const XHS_TASK_QUEUE_STATE_KEY = 'xhsCollectorTaskQueueState';
 const XHS_TASK_LOG_KEY = 'xhsCollectorTaskLogs';
+const XHS_BLOGGER_PROGRESS_KEY = 'xhsBloggerCollectedNotes';
 const XHS_TASK_HISTORY_LIMIT = 80;
 const XHS_TASK_LOG_LIMIT = 80;
+const XHS_BLOGGER_PROGRESS_LIMIT = 200;
+const XHS_BLOGGER_PROGRESS_NOTE_LIMIT = 5000;
 const XHS_COLLECT_INTERVAL_DEFAULT_MIN_MS = 1500;
 const XHS_COLLECT_INTERVAL_DEFAULT_MAX_MS = 3500;
 const XHS_COLLECT_INTERVAL_MIN_MS = 500;
@@ -59,10 +62,12 @@ let cachedKnowledgeApiAt = 0;
 let xhsTaskSequence = 0;
 let xhsActiveTask = null;
 let xhsLastTask = null;
+let xhsAccountImportSession = null;
 const xhsTaskQueue = [];
 let xhsTaskLogs = [];
 
 void hydrateXhsTaskLogs();
+void hydrateXhsTaskState();
 
 if (chrome.sidePanel?.setPanelBehavior) {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
@@ -717,7 +722,7 @@ function normalizePluginSettings(input = {}) {
     knowledgeApiEndpointPath: normalizeSettingsEndpointPath(source.knowledgeApiEndpointPath),
     xhsIntervalMinSeconds: Math.round(intervalMin * 10) / 10,
     xhsIntervalMaxSeconds: Math.round(intervalMax * 10) / 10,
-    xhsBloggerNoteLimit: Math.round(clampNumber(source.xhsBloggerNoteLimit, 1, 200, DEFAULT_PLUGIN_SETTINGS.xhsBloggerNoteLimit)),
+    xhsBloggerNoteLimit: normalizePositiveInteger(source.xhsBloggerNoteLimit, DEFAULT_PLUGIN_SETTINGS.xhsBloggerNoteLimit),
     xhsKeywordNoteLimit: Math.round(clampNumber(source.xhsKeywordNoteLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsKeywordNoteLimit)),
     xhsLinkBatchLimit: Math.round(clampNumber(source.xhsLinkBatchLimit, 1, 50, DEFAULT_PLUGIN_SETTINGS.xhsLinkBatchLimit)),
     xhsBloggerCollectionMode: normalizeText(source.xhsBloggerCollectionMode) === 'tab' ? 'tab' : 'api',
@@ -734,11 +739,17 @@ function resolveXhsCollectionMode(modeInput, fallback = DEFAULT_PLUGIN_SETTINGS.
       : 'api';
 }
 
+function normalizePositiveInteger(value, fallback = 1) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return Math.max(1, Math.round(fallback || 1));
+  return Math.max(1, Math.round(parsed));
+}
+
 function normalizeXhsBloggerCollectOptions(options = {}, settingsInput) {
   const settings = normalizePluginSettings(settingsInput || DEFAULT_PLUGIN_SETTINGS);
   const source = options && typeof options === 'object' ? options : {};
   const mode = resolveXhsCollectionMode(source.mode, settings.xhsBloggerCollectionMode);
-  const limit = Math.round(clampNumber(source.limit, 1, 200, settings.xhsBloggerNoteLimit));
+  const limit = normalizePositiveInteger(source.limit, settings.xhsBloggerNoteLimit);
   const interval = normalizeXhsCollectInterval({
     minSeconds: Math.max(3, clampNumber(
       source?.interval?.minSeconds ?? source?.intervalMinSeconds ?? settings.xhsIntervalMinSeconds,
@@ -1194,7 +1205,39 @@ function sanitizeXhsTaskForState(task) {
           mode: normalizeText(task.progress.mode),
         }
       : null,
+    context: task.context && typeof task.context === 'object'
+      ? sanitizeXhsTaskContextForState(task.context)
+      : null,
   };
+}
+
+function sanitizeXhsTaskContextForState(context) {
+  if (!context || typeof context !== 'object') return null;
+  const blogger = context.blogger && typeof context.blogger === 'object'
+    ? {
+        userId: normalizeText(context.blogger.userId),
+        source: normalizeText(context.blogger.source),
+        nickname: normalizeText(context.blogger.nickname),
+        noteCount: Number(context.blogger.noteCount || 0),
+        collectedUrlCount: Number(context.blogger.collectedUrlCount || 0),
+        collectionMode: normalizeText(context.blogger.collectionMode),
+      }
+    : null;
+  const interval = context.options?.interval && typeof context.options.interval === 'object'
+    ? {
+        minMs: Math.max(0, Number(context.options.interval.minMs || 0) || 0),
+        maxMs: Math.max(0, Number(context.options.interval.maxMs || 0) || 0),
+      }
+    : null;
+  const options = context.options && typeof context.options === 'object'
+    ? {
+        mode: normalizeText(context.options.mode) === 'tab' ? 'tab' : 'api',
+        limit: normalizePositiveInteger(context.options.limit, 50),
+        interval,
+      }
+    : null;
+  if (!blogger && !options) return null;
+  return { blogger, options };
 }
 
 function sanitizeXhsTaskLogForState(entry) {
@@ -1227,6 +1270,32 @@ function getXhsTaskQueueState() {
     running: Boolean(xhsActiveTask),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function setActiveXhsTaskContext(contextPatch = {}) {
+  if (!xhsActiveTask) return getXhsTaskQueueState();
+  const previous = xhsActiveTask.context && typeof xhsActiveTask.context === 'object'
+    ? xhsActiveTask.context
+    : {};
+  const nextContext = sanitizeXhsTaskContextForState({
+    ...previous,
+    ...contextPatch,
+    blogger: {
+      ...(previous.blogger || {}),
+      ...(contextPatch.blogger || {}),
+    },
+    options: {
+      ...(previous.options || {}),
+      ...(contextPatch.options || {}),
+      interval: {
+        ...(previous.options?.interval || {}),
+        ...(contextPatch.options?.interval || {}),
+      },
+    },
+  });
+  xhsActiveTask.context = nextContext;
+  xhsActiveTask.updatedAt = new Date().toISOString();
+  return publishXhsTaskQueueState();
 }
 
 function setActiveXhsTaskProgress(progressPatch = {}) {
@@ -1338,7 +1407,7 @@ function getXhsTaskActionLabel(type) {
     case 'xhs:collect-current-comments':
       return '采集评论';
     case 'xhs:collect-current-blogger':
-      return '保存博主';
+      return '绑定账号';
     case 'xhs:collect-blogger-notes':
       return '采集博主笔记';
     case 'xhs:collect-note-links':
@@ -1398,6 +1467,13 @@ function setActiveXhsTaskSavedCount(value) {
   xhsActiveTask.updatedAt = new Date().toISOString();
 }
 
+function setActiveXhsTaskTitle(title) {
+  if (!xhsActiveTask) return getXhsTaskQueueState();
+  xhsActiveTask.title = normalizeText(title) || xhsActiveTask.title || '小红书采集任务';
+  xhsActiveTask.updatedAt = new Date().toISOString();
+  return publishXhsTaskQueueState();
+}
+
 function describeBloggerCollectOptions(options = {}) {
   return {
     mode: normalizeText(options?.mode) || 'api',
@@ -1412,6 +1488,93 @@ async function hydrateXhsTaskLogs() {
   const stored = await getStorageLocal([XHS_TASK_LOG_KEY]).catch(() => ({}));
   const logs = Array.isArray(stored?.[XHS_TASK_LOG_KEY]) ? stored[XHS_TASK_LOG_KEY] : [];
   xhsTaskLogs = logs.map(sanitizeXhsTaskLogForState).filter(Boolean).slice(0, XHS_TASK_LOG_LIMIT);
+}
+
+async function hydrateXhsTaskState() {
+  const stored = await getStorageLocal([XHS_TASK_QUEUE_STATE_KEY]).catch(() => ({}));
+  if (stored?.[XHS_TASK_QUEUE_STATE_KEY]?.last) {
+    xhsLastTask = sanitizeXhsTaskForState(stored[XHS_TASK_QUEUE_STATE_KEY].last);
+  }
+}
+
+function sanitizeXhsBloggerProgressEntry(entry, userIdInput = '') {
+  const userId = normalizeText(entry?.userId || userIdInput);
+  if (!userId) return null;
+  const noteIds = Array.from(new Set(
+    (Array.isArray(entry?.noteIds) ? entry.noteIds : [])
+      .map((item) => normalizeText(item))
+      .filter(Boolean),
+  )).slice(0, XHS_BLOGGER_PROGRESS_NOTE_LIMIT);
+  return {
+    userId,
+    source: normalizeText(entry?.source),
+    nickname: normalizeText(entry?.nickname),
+    noteIds,
+    count: noteIds.length,
+    createdAt: normalizeText(entry?.createdAt) || new Date().toISOString(),
+    updatedAt: normalizeText(entry?.updatedAt) || new Date().toISOString(),
+  };
+}
+
+function sanitizeXhsBloggerProgressState(rawState) {
+  const source = rawState && typeof rawState === 'object' ? rawState : {};
+  const entries = Object.entries(source)
+    .map(([userId, value]) => sanitizeXhsBloggerProgressEntry(value, userId))
+    .filter(Boolean)
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  return entries.slice(0, XHS_BLOGGER_PROGRESS_LIMIT).reduce((acc, entry) => {
+    acc[entry.userId] = entry;
+    return acc;
+  }, {});
+}
+
+async function readXhsBloggerProgressState() {
+  const stored = await getStorageLocal([XHS_BLOGGER_PROGRESS_KEY]).catch(() => ({}));
+  return sanitizeXhsBloggerProgressState(stored?.[XHS_BLOGGER_PROGRESS_KEY]);
+}
+
+async function writeXhsBloggerProgressState(nextState) {
+  const normalized = sanitizeXhsBloggerProgressState(nextState);
+  await setStorageLocal({ [XHS_BLOGGER_PROGRESS_KEY]: normalized });
+  return normalized;
+}
+
+async function getCollectedXhsNoteIdsForBlogger(userIdInput) {
+  const userId = normalizeText(userIdInput);
+  if (!userId) return new Set();
+  const state = await readXhsBloggerProgressState();
+  const entry = sanitizeXhsBloggerProgressEntry(state?.[userId], userId);
+  return new Set(Array.isArray(entry?.noteIds) ? entry.noteIds : []);
+}
+
+async function markCollectedXhsNotesForBlogger({ userId, source, nickname, noteIds }) {
+  const normalizedUserId = normalizeText(userId);
+  const normalizedNoteIds = Array.from(new Set(
+    (Array.isArray(noteIds) ? noteIds : [])
+      .map((item) => normalizeText(item))
+      .filter(Boolean),
+  ));
+  if (!normalizedUserId || normalizedNoteIds.length === 0) return null;
+  const state = await readXhsBloggerProgressState();
+  const existing = sanitizeXhsBloggerProgressEntry(state?.[normalizedUserId], normalizedUserId);
+  const mergedNoteIds = Array.from(new Set([
+    ...(Array.isArray(existing?.noteIds) ? existing.noteIds : []),
+    ...normalizedNoteIds,
+  ])).slice(0, XHS_BLOGGER_PROGRESS_NOTE_LIMIT);
+  const nextEntry = sanitizeXhsBloggerProgressEntry({
+    ...existing,
+    userId: normalizedUserId,
+    source: normalizeText(source) || normalizeText(existing?.source),
+    nickname: normalizeText(nickname) || normalizeText(existing?.nickname),
+    noteIds: mergedNoteIds,
+    createdAt: normalizeText(existing?.createdAt) || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }, normalizedUserId);
+  await writeXhsBloggerProgressState({
+    ...state,
+    [normalizedUserId]: nextEntry,
+  });
+  return nextEntry;
 }
 
 function appendXhsTaskLog(entry) {
@@ -2457,6 +2620,36 @@ function buildXhsBloggerEntry(payload) {
   };
 }
 
+function buildXhsAccountPostFromEntry(entryPayload) {
+  const noteId = normalizeText(entryPayload?.noteId) || hashString(normalizeText(entryPayload?.source));
+  return {
+    id: noteId,
+    platformPostId: noteId,
+    title: normalizeText(entryPayload?.title),
+    content: normalizeText(entryPayload?.content || entryPayload?.text || entryPayload?.description),
+    url: normalizeText(entryPayload?.source),
+    publishedAt: normalizeText(entryPayload?.publishTime || entryPayload?.publishedAt),
+    stats: entryPayload?.stats && typeof entryPayload.stats === 'object' ? entryPayload.stats : {},
+    tags: Array.isArray(entryPayload?.tags) ? entryPayload.tags : [],
+    media: [
+      ...((Array.isArray(entryPayload?.images) ? entryPayload.images : []).map((url, index) => ({
+        kind: 'image',
+        url: normalizeText(url),
+        index,
+      }))),
+      ...(normalizeText(entryPayload?.videoUrl) ? [{
+        kind: 'video',
+        url: normalizeText(entryPayload.videoUrl),
+      }] : []),
+      ...(normalizeText(entryPayload?.cover) ? [{
+        kind: 'cover',
+        url: normalizeText(entryPayload.cover),
+      }] : []),
+    ].filter((item) => item.url),
+    raw: entryPayload || {},
+  };
+}
+
 function buildDouyinEntry(payload) {
   function extractTagsFromText(value) {
     const tags = [];
@@ -3280,6 +3473,12 @@ async function collectXhsBloggerFromTab(tabId) {
     throw new Error('当前页面未识别到小红书博主信息');
   }
   const response = await postKnowledgeEntry(buildXhsBloggerEntry(payload));
+  const accountResponse = await createAccountImportSessionFromXhs(payload).catch((error) => {
+    pluginWarn('xhs-account-import-session-failed', {
+      error: describeError(error),
+    });
+    return null;
+  });
   const historyItem = await appendXhsTaskHistory({
     id: `xhs-blogger-${hashString(`${payload?.source || ''}-${Date.now()}`)}`,
     type: 'blogger',
@@ -3298,6 +3497,8 @@ async function collectXhsBloggerFromTab(tabId) {
     mode: 'xhs-blogger',
     noteId: response.entryId || '',
     duplicate: Boolean(response.duplicate),
+    account: accountResponse?.account || null,
+    importSession: accountResponse?.session || null,
     task: historyItem,
   };
 }
@@ -3429,6 +3630,24 @@ async function collectXhsBloggerNotesFromTab(tabId, options = {}) {
 async function collectXhsBloggerNotesByMode(tabId, payload, options = {}) {
   const settings = await readPluginSettings();
   const normalizedOptions = normalizeXhsBloggerCollectOptions(options, settings);
+  const titleName = normalizeText(payload?.nickname) || normalizeText(payload?.userId) || '当前博主';
+  const taskTitle = `采集 ${titleName} 笔记（${normalizedOptions.limit} 条）`;
+  setActiveXhsTaskTitle(taskTitle);
+  setActiveXhsTaskContext({
+    blogger: {
+      userId: normalizeText(payload?.userId),
+      source: normalizeText(payload?.source),
+      nickname: titleName,
+      noteCount: Number(payload?.noteCount || 0),
+      collectedUrlCount: Array.isArray(payload?.notes) ? payload.notes.length : (Array.isArray(payload?.urls) ? payload.urls.length : 0),
+      collectionMode: normalizedOptions.mode,
+    },
+    options: {
+      mode: normalizedOptions.mode,
+      limit: normalizedOptions.limit,
+      interval: normalizedOptions.interval,
+    },
+  });
   pluginLog('xhs-blogger-notes-payload', {
     tabId,
     userId: normalizeText(payload?.userId),
@@ -3439,10 +3658,16 @@ async function collectXhsBloggerNotesByMode(tabId, payload, options = {}) {
     payloadApiError: normalizeText(payload?.apiError),
     options: describeBloggerCollectOptions(normalizedOptions),
   });
+  const accountSession = await ensureXhsAccountImportSession(payload, normalizedOptions).catch((error) => {
+    pluginWarn('xhs-account-import-session-ensure-failed', {
+      error: describeError(error),
+    });
+    return null;
+  });
   appendXhsTaskLog({
     type: 'xhs:collect-blogger-notes',
     status: 'running',
-    title: `采集当前博主笔记（${normalizedOptions.limit} 条）`,
+    title: taskTitle,
     message: `模式 ${normalizedOptions.mode === 'tab' ? '传统 Tab' : 'API'}，识别到 ${Array.isArray(payload?.urls) ? payload.urls.length : 0} 条候选笔记`,
   });
   const urls = Array.from(new Set(Array.isArray(payload?.urls)
@@ -3453,13 +3678,20 @@ async function collectXhsBloggerNotesByMode(tabId, payload, options = {}) {
     throw new Error(reason || '当前博主页未识别到可采集的笔记，请确认已登录并滚动加载主页笔记');
   }
   if (normalizedOptions.mode === 'tab') {
-    return await collectXhsBloggerNotesWithTabs(payload, urls, normalizedOptions);
+    return await collectXhsBloggerNotesWithTabs(payload, urls, {
+      ...normalizedOptions,
+      accountSession,
+    });
   }
-  return await collectXhsBloggerNotesViaApi(tabId, payload, normalizedOptions);
+  return await collectXhsBloggerNotesViaApi(tabId, payload, {
+    ...normalizedOptions,
+    accountSession,
+  });
 }
 
 async function collectXhsBloggerNotesWithTabs(payload, urls, options = {}) {
-  const titleName = normalizeText(payload?.nickname) || normalizeText(payload?.userId) || '小红书博主';
+  const titleName = normalizeText(payload?.nickname) || normalizeText(payload?.userId) || '当前博主';
+  const taskTitle = `采集 ${titleName} 笔记（${urls.length} 条）`;
   pluginLog('xhs-blogger-notes-tab-mode', {
     blogger: titleName,
     userId: normalizeText(payload?.userId),
@@ -3469,7 +3701,7 @@ async function collectXhsBloggerNotesWithTabs(payload, urls, options = {}) {
   appendXhsTaskLog({
     type: 'xhs:collect-blogger-notes',
     status: 'running',
-    title: `采集当前博主笔记（${urls.length} 条）`,
+    title: taskTitle,
     message: `传统模式启动：${titleName}，待打开 ${urls.length} 个详情页`,
   });
   const response = await collectXhsNoteLinks(urls, {
@@ -3494,56 +3726,174 @@ async function collectXhsBloggerNotesWithTabs(payload, urls, options = {}) {
   };
 }
 
-async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
-  const notes = Array.isArray(payload?.notes) ? payload.notes : [];
-  const titleName = normalizeText(payload?.nickname) || normalizeText(payload?.userId) || '小红书博主';
-  const targetNotes = notes
-    .map((item) => ({
+function buildXhsBloggerApiCollectionPlan(notesInput, collectedNoteIds, limit) {
+  const notes = Array.isArray(notesInput) ? notesInput : [];
+  const skippedNotes = [];
+  const pendingNotes = [];
+  const normalizedLimit = normalizePositiveInteger(limit, 1);
+  for (const item of notes) {
+    const urlInfo = parseXhsNoteUrl(item?.url);
+    if (!urlInfo?.id) continue;
+    const candidate = {
       ...item,
-      urlInfo: parseXhsNoteUrl(item?.url),
-    }))
-    .filter((item) => item.urlInfo?.id)
-    .slice(0, options.limit);
-  if (targetNotes.length === 0) {
+      urlInfo,
+    };
+    if (collectedNoteIds.has(urlInfo.id)) {
+      skippedNotes.push({
+        url: urlInfo.href,
+        noteId: urlInfo.id,
+        title: normalizeText(item?.title),
+        reason: 'already-collected',
+      });
+      continue;
+    }
+    pendingNotes.push(candidate);
+    if (pendingNotes.length >= normalizedLimit) break;
+  }
+  return {
+    skippedNotes,
+    pendingNotes,
+    scannedCount: skippedNotes.length + pendingNotes.length,
+  };
+}
+
+async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
+  let payloadState = payload;
+  let notes = Array.isArray(payloadState?.notes) ? payloadState.notes : [];
+  const titleName = normalizeText(payloadState?.nickname) || normalizeText(payloadState?.userId) || '当前博主';
+  if (notes.length === 0) {
+    throw new Error('当前博主页未识别到可用于 API 采集的笔记链接');
+  }
+  const collectedNoteIds = await getCollectedXhsNoteIdsForBlogger(payloadState?.userId);
+  let candidateLimit = Math.max(
+    normalizePositiveInteger(options.limit, 1),
+    normalizePositiveInteger(options.limit, 1) + collectedNoteIds.size,
+    notes.length,
+  );
+  let plan = buildXhsBloggerApiCollectionPlan(notes, collectedNoteIds, options.limit);
+  let expansionRounds = 0;
+  while (
+    plan.pendingNotes.length < options.limit &&
+    expansionRounds < 8 &&
+    (payloadState?.hasMore || (Number(payloadState?.noteCount || 0) > notes.length))
+  ) {
+    const missing = Math.max(0, options.limit - plan.pendingNotes.length);
+    const growthStep = Math.max(30, Math.ceil(options.limit / 2), missing + 10);
+    const nextLimit = Number(payloadState?.noteCount || 0) > 0
+      ? Math.min(Number(payloadState.noteCount), candidateLimit + growthStep)
+      : candidateLimit + growthStep;
+    if (nextLimit <= candidateLimit) break;
+    candidateLimit = nextLimit;
+    payloadState = await runExtraction(tabId, extractXhsBloggerNotesPayload, {
+      world: 'MAIN',
+      args: [candidateLimit, 'api'],
+    });
+    notes = Array.isArray(payloadState?.notes) ? payloadState.notes : [];
+    plan = buildXhsBloggerApiCollectionPlan(notes, collectedNoteIds, options.limit);
+    expansionRounds += 1;
+  }
+  const skippedNotes = plan.skippedNotes;
+  const pendingNotes = plan.pendingNotes;
+  if (pendingNotes.length === 0 && skippedNotes.length === 0) {
     throw new Error('当前博主页未识别到可用于 API 采集的笔记链接');
   }
   pluginLog('xhs-blogger-notes-api-mode', {
     tabId,
     blogger: titleName,
-    userId: normalizeText(payload?.userId),
+    userId: normalizeText(payloadState?.userId),
     candidateNotes: notes.length,
-    targetNotes: targetNotes.length,
+    targetNotes: plan.scannedCount,
+    skippedNotes: skippedNotes.length,
+    pendingNotes: pendingNotes.length,
+    loadedNoteCount: Number(payloadState?.loadedNoteCount || notes.length),
+    noteCount: Number(payloadState?.noteCount || 0),
+    expansionRounds,
     options: describeBloggerCollectOptions(options),
   });
   appendXhsTaskLog({
     type: 'xhs:collect-blogger-notes',
     status: 'running',
-    title: `采集当前博主笔记（${targetNotes.length} 条）`,
-    message: `API 模式启动：${titleName}，准备采集 ${targetNotes.length} 条`,
+    title: `采集 ${titleName} 笔记（${options.limit} 条）`,
+    message: `API 模式启动：${titleName}，准备采集 ${pendingNotes.length} 条${skippedNotes.length > 0 ? `，自动跳过 ${skippedNotes.length} 条已采集笔记` : ''}`,
   });
 
   const results = [];
   const failures = [];
+  const accountPosts = [];
   await syncXhsTaskStep({
     current: 0,
-    total: targetNotes.length,
-    message: `准备采集 ${titleName} 的笔记`,
+    total: pendingNotes.length,
+    message: skippedNotes.length > 0
+      ? `准备采集 ${titleName} 的笔记，已跳过 ${skippedNotes.length} 条`
+      : `准备采集 ${titleName} 的笔记`,
     mode: 'api',
   });
 
-  for (let index = 0; index < targetNotes.length; index += 1) {
-    const note = targetNotes[index];
+  if (pendingNotes.length === 0) {
+    await completeAccountImportSession(options.accountSession, {
+      status: 'completed',
+      importedPostCount: 0,
+      failedPostCount: 0,
+      lastError: null,
+    }).catch((error) => {
+      pluginWarn('xhs-account-import-complete-empty-failed', {
+        error: describeError(error),
+      });
+    });
+    const historyItem = await appendXhsTaskHistory({
+      id: `xhs-blogger-api-${hashString(`${titleName}-${Date.now()}`)}`,
+      type: 'blogger-notes',
+      title: `博主笔记采集：${titleName}`,
+      status: 'completed',
+      count: 0,
+      failed: 0,
+      summary: `无需采集，已自动跳过 ${skippedNotes.length} 条已采集笔记`,
+      payload: {
+        results: [],
+        failures: [],
+        skipped: skippedNotes,
+        interval: options.interval,
+        mode: 'api',
+        userId: normalizeText(payloadState?.userId),
+      },
+    });
+    return {
+      success: true,
+      mode: 'xhs-blogger-notes',
+      completed: true,
+      count: 0,
+      failed: 0,
+      skipped: skippedNotes.length,
+      skippedNotes,
+      results: [],
+      failures: [],
+      interval: options.interval,
+      task: historyItem,
+      blogger: {
+        userId: normalizeText(payloadState?.userId),
+        nickname: titleName,
+        source: normalizeText(payloadState?.source),
+        noteCount: Number(payloadState?.noteCount || 0),
+        collectedUrlCount: plan.scannedCount,
+        apiError: normalizeText(payloadState?.apiError),
+        collectionMode: 'api',
+      },
+    };
+  }
+
+  for (let index = 0; index < pendingNotes.length; index += 1) {
+    const note = pendingNotes[index];
     pluginLog('xhs-blogger-notes-api-item-start', {
       blogger: titleName,
       index: index + 1,
-      total: targetNotes.length,
+      total: pendingNotes.length,
       noteId: normalizeText(note?.urlInfo?.id),
       url: normalizeText(note?.urlInfo?.href),
     });
     await syncXhsTaskStep({
       current: results.length + failures.length,
-      total: targetNotes.length,
-      message: `API 模式采集中 ${index + 1}/${targetNotes.length}`,
+      total: pendingNotes.length,
+      message: `API 模式采集中 ${index + 1}/${pendingNotes.length}${skippedNotes.length > 0 ? ` · 已跳过 ${skippedNotes.length}` : ''}`,
       mode: 'api',
     });
     let intervalMs = 0;
@@ -3557,6 +3907,15 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       });
       const entryPayload = buildXhsNotePayloadFromFeed(feedResult, note.urlInfo);
       const response = options.saveToRedBox !== false ? await postKnowledgeEntry(buildXhsEntry(entryPayload)) : null;
+      accountPosts.push(buildXhsAccountPostFromEntry(entryPayload));
+      if (options.saveToRedBox !== false) {
+        await markCollectedXhsNotesForBlogger({
+          userId: payloadState?.userId,
+          source: payloadState?.source,
+          nickname: titleName,
+          noteIds: [entryPayload.noteId],
+        });
+      }
       results.push({
         url: note.urlInfo.href,
         title: normalizeText(entryPayload.title) || note.urlInfo.href,
@@ -3569,7 +3928,7 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       pluginLog('xhs-blogger-notes-api-item-success', {
         blogger: titleName,
         index: index + 1,
-        total: targetNotes.length,
+        total: pendingNotes.length,
         noteId: entryPayload.noteId,
         title: normalizeText(entryPayload.title),
         entryId: response?.entryId || '',
@@ -3578,8 +3937,8 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       });
       setActiveXhsTaskProgress({
         current: results.length + failures.length,
-        total: targetNotes.length,
-        message: `已采集 ${results.length + failures.length}/${targetNotes.length}`,
+        total: pendingNotes.length,
+        message: `已采集 ${results.length + failures.length}/${pendingNotes.length}${skippedNotes.length > 0 ? ` · 已跳过 ${skippedNotes.length}` : ''}`,
         mode: 'api',
       });
     } catch (error) {
@@ -3592,7 +3951,7 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       pluginWarn('xhs-blogger-notes-api-item-failed', {
         blogger: titleName,
         index: index + 1,
-        total: targetNotes.length,
+        total: pendingNotes.length,
         noteId: normalizeText(note?.urlInfo?.id),
         url: normalizeText(note?.urlInfo?.href),
         intervalMs,
@@ -3601,13 +3960,13 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       appendXhsTaskLog({
         type: 'xhs:collect-blogger-notes',
         status: 'partial',
-        title: `采集当前博主笔记（${targetNotes.length} 条）`,
-        message: `第 ${index + 1}/${targetNotes.length} 条失败：${errorMessage}`,
+        title: `采集 ${titleName} 笔记（${options.limit} 条）`,
+        message: `第 ${index + 1}/${pendingNotes.length} 条失败：${errorMessage}`,
       });
       setActiveXhsTaskProgress({
         current: results.length + failures.length,
-        total: targetNotes.length,
-        message: `已采集 ${results.length + failures.length}/${targetNotes.length}`,
+        total: pendingNotes.length,
+        message: `已采集 ${results.length + failures.length}/${pendingNotes.length}${skippedNotes.length > 0 ? ` · 已跳过 ${skippedNotes.length}` : ''}`,
         mode: 'api',
       });
     }
@@ -3620,15 +3979,40 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
     status: failures.length > 0 ? (results.length > 0 ? 'partial' : 'failed') : 'completed',
     count: results.length,
     failed: failures.length,
-    summary: `成功 ${results.length} 条，失败 ${failures.length} 条；API 模式；采集间隔 ${formatXhsCollectInterval(options.interval)}`,
-    payload: { results, failures, interval: options.interval, mode: 'api' },
+    summary: `成功 ${results.length} 条，失败 ${failures.length} 条${skippedNotes.length > 0 ? `，自动跳过 ${skippedNotes.length} 条` : ''}；API 模式；采集间隔 ${formatXhsCollectInterval(options.interval)}`,
+    payload: {
+      results,
+      failures,
+      skipped: skippedNotes,
+      interval: options.interval,
+      mode: 'api',
+      userId: normalizeText(payloadState?.userId),
+      source: normalizeText(payloadState?.source),
+    },
   });
   pluginLog('xhs-blogger-notes-api-finished', {
     blogger: titleName,
     successCount: results.length,
     failedCount: failures.length,
+    skippedCount: skippedNotes.length,
     failures: failures.slice(0, 5),
     interval: describeBloggerCollectOptions(options),
+  });
+  const accountBatch = await postAccountPostsBatch(options.accountSession, accountPosts).catch((error) => {
+    pluginWarn('xhs-account-posts-batch-failed', {
+      error: describeError(error),
+    });
+    return null;
+  });
+  await completeAccountImportSession(options.accountSession, {
+    status: failures.length > 0 ? (results.length > 0 ? 'partial' : 'failed') : 'completed',
+    importedPostCount: accountBatch?.postCount || results.length,
+    failedPostCount: failures.length,
+    lastError: failures.length > 0 ? `有 ${failures.length} 条采集失败` : null,
+  }).catch((error) => {
+    pluginWarn('xhs-account-import-complete-failed', {
+      error: describeError(error),
+    });
   });
 
   return {
@@ -3637,19 +4021,22 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
     completed: failures.length === 0,
     count: results.length,
     failed: failures.length,
+    skipped: skippedNotes.length,
+    skippedNotes,
     results,
     failures,
     interval: options.interval,
     task: historyItem,
     blogger: {
-      userId: normalizeText(payload?.userId),
+      userId: normalizeText(payloadState?.userId),
       nickname: titleName,
-      source: normalizeText(payload?.source),
-      noteCount: Number(payload?.noteCount || 0),
-      collectedUrlCount: targetNotes.length,
-      apiError: normalizeText(payload?.apiError),
+      source: normalizeText(payloadState?.source),
+      noteCount: Number(payloadState?.noteCount || 0),
+      collectedUrlCount: plan.scannedCount,
+      apiError: normalizeText(payloadState?.apiError),
       collectionMode: 'api',
     },
+    account: accountBatch,
     error: failures.length > 0 ? `API 模式采集完成，但有 ${failures.length} 条失败` : undefined,
   };
 }
@@ -5919,6 +6306,12 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  function normalizePositiveInteger(value, fallback = 1) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return Math.max(1, Math.round(fallback || 1));
+    return Math.max(1, Math.round(parsed));
+  }
+
   function unwrapValue(value) {
     if (!value || typeof value !== 'object') return value;
     if (value._rawValue && typeof value._rawValue === 'object') return value._rawValue;
@@ -6066,7 +6459,6 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
       if (seen.has(note.url)) continue;
       seen.add(note.url);
       notes.push(note);
-      if (notes.length >= limit) break;
     }
     return notes;
   }
@@ -6086,7 +6478,6 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
       if (Array.isArray(data?.notes)) {
         pushNotes(notes, data.notes, userId);
       }
-      if (notes.length >= limit) break;
     }
   }
 
@@ -6116,8 +6507,10 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
   }
 
   async function scrollProfile(notes, userId) {
-    const rounds = Math.max(2, Math.min(Math.ceil((limit - notes.length) / 8) + 2, 18));
-    for (let index = 0; index < rounds && notes.length < limit; index += 1) {
+    const maxRounds = Math.max(8, Math.min(Math.ceil(limit / 8) + 6, 80));
+    let previousCount = notes.length;
+    let stagnantRounds = 0;
+    for (let index = 0; index < maxRounds && notes.length < limit; index += 1) {
       const sections = Array.from(document.querySelectorAll('#userPostedFeeds>section, [id="userPostedFeeds"] section, .feeds-container section'));
       const target = sections[sections.length - 1] || document.scrollingElement || document.documentElement;
       try {
@@ -6129,10 +6522,17 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
       await sleep(850);
       collectVisibleNoteUrls(notes, userId);
       pushNotes(notes, getStateNotes(readInitialState()), userId);
+      if (notes.length > previousCount) {
+        previousCount = notes.length;
+        stagnantRounds = 0;
+      } else {
+        stagnantRounds += 1;
+        if (stagnantRounds >= 4) break;
+      }
     }
   }
 
-  const limit = Math.max(1, Math.min(Number(limitInput || 50), 200));
+  const limit = normalizePositiveInteger(limitInput, 50);
   const mode = normalizeText(modeInput) || 'auto';
   const initialState = readInitialState();
   const profile = getProfile(initialState);
@@ -6172,7 +6572,7 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
     }
   }
 
-  if ((mode === 'rpa' || notes.length < Math.min(limit, 12) || apiError) && mode !== 'api') {
+  if (mode === 'rpa' || notes.length < limit || apiError) {
     await scrollProfile(notes, profile.userId);
     collectCapturedPostedNotes(notes, profile.userId);
   }
@@ -6189,7 +6589,8 @@ async function extractXhsBloggerNotesPayload(limitInput = 50, modeInput = 'auto'
     apiError,
     cursor,
     hasMore,
-    notes: notes.slice(0, limit),
+    loadedNoteCount: notes.length,
+    notes,
     urls,
   };
 }
@@ -6234,8 +6635,138 @@ async function extractXhsNoteFeedByUrlFromCurrentPage(targetUrlInput, noteIdInpu
       const noteCard = data?.items?.[0]?.note_card;
       const currentId = normalizeText(noteCard?.note_id || noteCard?.noteId);
       if (currentId && currentId === noteId) {
-        return data;
-      }
+  return data;
+}
+
+async function fetchAccountsJson(path, init = {}) {
+  const knowledgeEndpoint = await resolveKnowledgeApiEndpoint(false);
+  const endpoint = {
+    baseUrl: knowledgeEndpoint.baseUrl,
+    endpointPath: '/api/accounts',
+  };
+  const url = `${endpoint.baseUrl}${endpoint.endpointPath}${path}`;
+  const headers = new Headers(init.headers || {});
+  const method = String(init.method || 'GET').toUpperCase();
+  if (!headers.has('Content-Type') && init.method && init.method !== 'GET') {
+    headers.set('Content-Type', 'application/json');
+  }
+  pluginLog('accounts-http-request', { method, url });
+  let response;
+  try {
+    response = await fetch(url, { ...init, headers });
+  } catch (error) {
+    pluginError('accounts-http-network-failed', {
+      method,
+      url,
+      error: describeError(error),
+    });
+    throw new Error(`账号档案请求失败: ${method} ${url} -> ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+  if (!response.ok || data?.success === false) {
+    pluginError('accounts-http-response-failed', {
+      method,
+      url,
+      status: response.status,
+      body: data,
+    });
+    throw new Error(data?.error || `账号档案 API HTTP ${response.status}`);
+  }
+  return data;
+}
+
+async function createAccountImportSessionFromXhs(payload, options = {}) {
+  const userId = normalizeText(payload?.userId);
+  const source = normalizeText(payload?.source);
+  const nickname = normalizeText(payload?.nickname) || normalizeText(payload?.name) || userId || '小红书账号';
+  if (!userId && !source) {
+    throw new Error('当前页面未识别到可绑定的账号主页');
+  }
+  const response = await fetchAccountsJson('/import-sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      platform: 'xiaohongshu',
+      homepageUrl: source,
+      platformUserId: userId,
+      username: nickname,
+      avatarUrl: normalizeText(payload?.avatar) || '',
+      bio: normalizeText(payload?.description) || normalizeText(payload?.desc) || '',
+      profile: payload || {},
+      options: {
+        postLimit: normalizePositiveInteger(options?.limit, 0) || undefined,
+        includeComments: Boolean(options?.includeComments),
+        includeMedia: Boolean(options?.includeMedia),
+      },
+    }),
+  });
+  xhsAccountImportSession = {
+    platform: 'xiaohongshu',
+    userId,
+    source,
+    accountId: normalizeText(response?.account?.id),
+    sessionId: normalizeText(response?.session?.id),
+    username: nickname,
+  };
+  return response;
+}
+
+async function ensureXhsAccountImportSession(payload, options = {}) {
+  const userId = normalizeText(payload?.userId);
+  const source = normalizeText(payload?.source);
+  if (
+    xhsAccountImportSession?.accountId &&
+    xhsAccountImportSession?.sessionId &&
+    (
+      (userId && xhsAccountImportSession.userId === userId) ||
+      (source && xhsAccountImportSession.source === source)
+    )
+  ) {
+    return xhsAccountImportSession;
+  }
+  const response = await createAccountImportSessionFromXhs(payload, options);
+  return {
+    platform: 'xiaohongshu',
+    userId,
+    source,
+    accountId: normalizeText(response?.account?.id),
+    sessionId: normalizeText(response?.session?.id),
+    username: normalizeText(response?.account?.username),
+  };
+}
+
+async function postAccountPostsBatch(accountSession, posts) {
+  const accountId = normalizeText(accountSession?.accountId);
+  if (!accountId || !Array.isArray(posts) || posts.length === 0) {
+    return null;
+  }
+  return await fetchAccountsJson(`/${encodeURIComponent(accountId)}/posts/batch`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: normalizeText(accountSession?.sessionId) || undefined,
+      platform: 'xiaohongshu',
+      posts,
+    }),
+  });
+}
+
+async function completeAccountImportSession(accountSession, summary = {}) {
+  const sessionId = normalizeText(accountSession?.sessionId);
+  if (!sessionId) return null;
+  return await fetchAccountsJson(`/import-sessions/${encodeURIComponent(sessionId)}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({
+      status: summary.status || 'completed',
+      importedPostCount: Number(summary.importedPostCount || 0),
+      failedPostCount: Number(summary.failedPostCount || 0),
+      lastError: summary.lastError || null,
+    }),
+  });
+}
     }
     return null;
   }

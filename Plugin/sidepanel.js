@@ -1,5 +1,11 @@
 const elements = {
   serverStatus: document.getElementById('server-status'),
+  workspaceName: document.getElementById('workspace-name'),
+  boundAccountName: document.getElementById('bound-account-name'),
+  accountBindingNotice: document.getElementById('account-binding-notice'),
+  accountBindingTitle: document.getElementById('account-binding-title'),
+  accountBindingCopy: document.getElementById('account-binding-copy'),
+  accountBindingAction: document.getElementById('account-binding-action'),
   refresh: document.getElementById('refresh'),
   openSettings: document.getElementById('open-settings'),
   updateBadge: document.getElementById('update-badge'),
@@ -63,7 +69,9 @@ function debugWarn(scope, details) {
 }
 
 init().catch((error) => {
-  renderConnection(false, error instanceof Error ? error.message : String(error));
+  renderConnection({ success: false, error: error instanceof Error ? error.message : String(error) });
+  renderWorkspaceAndAccounts(null, null);
+  renderAccountBindingNotice(null, null);
   renderPageIdentity({
     platform: 'redbox',
     name: '识别失败',
@@ -92,6 +100,7 @@ function bindEvents() {
   elements.bloggerNotesPause.addEventListener('click', () => void controlBloggerNotesTask('pause'));
   elements.bloggerNotesResume.addEventListener('click', () => void controlBloggerNotesTask('resume'));
   elements.bloggerNotesCancel.addEventListener('click', () => void controlBloggerNotesTask('cancel'));
+  elements.accountBindingAction.addEventListener('click', () => void bindCurrentProfileAsAccount());
   elements.captureActions.addEventListener('click', (event) => {
     const button = event.target?.closest?.('button[data-action]');
     if (!button) return;
@@ -225,7 +234,9 @@ async function refreshContext() {
     debugWarn('refresh-context-failed', {
       error: error instanceof Error ? error.message : String(error),
     });
-    renderConnection(false, error instanceof Error ? error.message : String(error));
+    renderConnection({ success: false, error: error instanceof Error ? error.message : String(error) });
+    renderWorkspaceAndAccounts(null, null);
+    renderAccountBindingNotice(null, null);
     renderPageIdentity({
       platform: 'redbox',
       name: '识别失败',
@@ -241,7 +252,10 @@ async function refreshContext() {
 
 function renderContext(nextContext) {
   const health = nextContext?.health || {};
-  renderConnection(Boolean(health.success), health.error || '');
+  const healthPayload = extractHealthPayload(health);
+  renderConnection(health);
+  renderWorkspaceAndAccounts(nextContext, healthPayload);
+  renderAccountBindingNotice(nextContext, healthPayload);
   renderPageIdentity(resolvePageIdentity(nextContext));
   renderCaptureActions(nextContext);
   renderBloggerNotesPanel(nextContext);
@@ -249,14 +263,112 @@ function renderContext(nextContext) {
   renderTaskLogs(nextContext?.logs || nextContext?.queue?.logs || []);
 }
 
-function renderConnection(isHealthy, errorText) {
-  if (isHealthy) {
-    elements.serverStatus.textContent = '本地知识库已链接';
+function renderConnection(health) {
+  if (!health?.success) {
+    elements.serverStatus.textContent = health?.error || '请先打开 RedBox 桌面端';
+    elements.serverStatus.className = 'status error';
+    return;
+  }
+
+  const payload = extractHealthPayload(health);
+  if (payload?.accountBindingStatus === 'hasAccountProfile') {
+    elements.serverStatus.textContent = '已链接 · 已有账号档案';
     elements.serverStatus.className = 'status ok';
     return;
   }
-  elements.serverStatus.textContent = errorText || '请先打开 RedBox 桌面端';
-  elements.serverStatus.className = 'status error';
+
+  elements.serverStatus.textContent = '已链接 · 当前空间无账号档案';
+  elements.serverStatus.className = 'status warn';
+}
+
+function renderWorkspaceAndAccounts(nextContext, healthPayload) {
+  if (!healthPayload?.success) {
+    elements.workspaceName.textContent = '当前空间：未连接';
+    elements.boundAccountName.textContent = '未连接 RedBox';
+    return;
+  }
+
+  const workspaceName = cleanTitle(healthPayload?.workspace?.name || healthPayload?.spaceName || healthPayload?.spaceId || '');
+  elements.workspaceName.textContent = workspaceName ? `当前空间：${workspaceName}` : '当前空间：未命名空间';
+
+  const accounts = healthPayload?.platformAccounts || {};
+  const view = resolvePageIdentity(nextContext);
+  const platformKey = healthPlatformKey(view.platform);
+  const platformLabels = {
+    xiaohongshu: '小红书',
+    douyin: '抖音',
+    bilibili: 'Bilibili',
+  };
+
+  if (platformKey && accounts[platformKey]) {
+    const account = accounts[platformKey];
+    const label = platformLabels[platformKey] || platformKey;
+    elements.boundAccountName.textContent = accountLabel(label, account);
+    return;
+  }
+
+  const boundAccounts = Object.entries(accounts)
+    .filter(([, account]) => account?.bound)
+    .map(([key, account]) => accountLabel(platformLabels[key] || key, account));
+
+  if (boundAccounts.length > 0) {
+    elements.boundAccountName.textContent = boundAccounts.join(' · ');
+    return;
+  }
+
+  elements.boundAccountName.textContent = '未绑定小红书 / 抖音 / Bilibili 账号';
+}
+
+function renderAccountBindingNotice(nextContext, healthPayload) {
+  const hasBoundAccount = healthPayload?.accountBindingStatus === 'hasAccountProfile';
+  const isConnected = healthPayload?.success === true;
+  elements.accountBindingNotice.classList.toggle('hidden', !isConnected || hasBoundAccount);
+  if (!isConnected || hasBoundAccount) return;
+
+  const view = resolvePageIdentity(nextContext);
+  const platformKey = healthPlatformKey(view.platform);
+  const pageInfo = nextContext?.pageInfo || {};
+  const pageType = nextContext?.pageIdentity?.pageType || inferPageType(pageInfo, nextContext?.tab || {});
+  const isXhsProfile = platformKey === 'xiaohongshu' && pageType === 'profile';
+  const platformLabels = {
+    xiaohongshu: '小红书',
+    douyin: '抖音',
+    bilibili: 'Bilibili',
+  };
+
+  elements.accountBindingTitle.textContent = '当前空间还没有绑定自媒体账号';
+  if (isXhsProfile) {
+    elements.accountBindingCopy.textContent = '用当前小红书主页绑定运营账号，并自动学习历史内容。';
+    elements.accountBindingAction.textContent = '绑定并学习这个账号';
+    elements.accountBindingAction.disabled = Boolean(capturePendingAction);
+    return;
+  }
+
+  const platformLabel = platformLabels[platformKey] || '平台';
+  elements.accountBindingCopy.textContent = platformKey
+    ? `请打开${platformLabel}账号主页，再绑定并学习这个账号。`
+    : '请打开小红书、抖音或 Bilibili 账号主页，再绑定并学习这个账号。';
+  elements.accountBindingAction.textContent = '等待账号主页';
+  elements.accountBindingAction.disabled = true;
+}
+
+function accountLabel(platformLabel, account) {
+  if (!account?.bound) return `${platformLabel}：未绑定`;
+  const username = cleanTitle(account.username || account.name || '');
+  const accountId = cleanTitle(account.id || account.platformUserId || '');
+  if (username && accountId) return `${platformLabel}：${username}（${accountId}）`;
+  return `${platformLabel}：${username || accountId || '已绑定账号'}`;
+}
+
+function healthPlatformKey(platform) {
+  if (platform === 'xhs' || platform === 'xiaohongshu') return 'xiaohongshu';
+  if (platform === 'douyin') return 'douyin';
+  if (platform === 'bilibili') return 'bilibili';
+  return '';
+}
+
+function extractHealthPayload(health) {
+  return health?.health || health || null;
 }
 
 function resolvePageIdentity(nextContext) {
@@ -415,6 +527,66 @@ async function runCaptureAction(action) {
     await refreshTaskQueue(false);
   } finally {
     capturePendingAction = '';
+    renderCaptureActions(context);
+  }
+}
+
+async function bindCurrentProfileAsAccount() {
+  if (capturePendingAction) return;
+  const tabId = Number(context?.tab?.id || 0);
+  if (!tabId) {
+    captureFeedback = { status: 'error', message: '未识别到当前标签页，请刷新侧栏后重试' };
+    renderCaptureActions(context);
+    return;
+  }
+
+  capturePendingAction = 'bindProfile';
+  captureFeedback = { status: 'pending', message: '正在绑定账号并准备学习…' };
+  renderAccountBindingNotice(context, extractHealthPayload(context?.health || {}));
+  renderCaptureActions(context);
+  try {
+    const tab = context?.tab || {};
+    const baseMessage = {
+      tabId,
+      tabUrl: tab.url || '',
+      windowId: Number(tab.windowId || 0) || undefined,
+    };
+    await sendMessage({
+      type: 'xhs:collect-current-blogger',
+      ...baseMessage,
+    });
+    const options = getBloggerNotesOptions();
+    const response = await sendMessage({
+      type: 'xhs:collect-blogger-notes',
+      ...baseMessage,
+      options,
+    });
+    if (response.taskQueue) {
+      renderTaskQueue(response.taskQueue);
+      renderTaskLogs(response.taskQueue.logs || []);
+      renderBloggerNotesPanel({
+        ...context,
+        queue: response.taskQueue,
+      });
+    }
+    captureFeedback = {
+      status: 'success',
+      message: summarizeActionResponse(response, '账号学习任务已启动'),
+    };
+    await refreshTaskQueue(false);
+    await refreshContext();
+  } catch (error) {
+    debugWarn('bind-current-profile-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    captureFeedback = {
+      status: 'error',
+      message: `绑定和学习失败：${error instanceof Error ? error.message : String(error)}`,
+    };
+    await refreshTaskQueue(false);
+  } finally {
+    capturePendingAction = '';
+    renderAccountBindingNotice(context, extractHealthPayload(context?.health || {}));
     renderCaptureActions(context);
   }
 }
@@ -645,7 +817,7 @@ function getCaptureActionConfig(nextContext) {
       title: 'RedBox 博主采集',
       subtitle: '小红书博主页',
       actions: [
-        { label: '保存博主', action: 'blogger', primary: true, title: '保存当前博主资料到 RedBox' },
+        { label: '绑定并学习账号', action: 'blogger', primary: true, title: '绑定当前账号并学习历史内容' },
       ],
     };
   }
@@ -733,7 +905,7 @@ function getCaptureActionMeta(action) {
     save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 RedBox' },
     download: { type: 'xhs:download-current-note', pending: '下载中...', done: '已创建下载任务' },
     comments: { type: 'xhs:collect-current-comments', pending: '采集中...', done: '评论已写入知识库' },
-    blogger: { type: 'xhs:collect-current-blogger', pending: '采集中...', done: '已保存博主资料' },
+    blogger: { type: 'xhs:collect-current-blogger', pending: '绑定中...', done: '已绑定账号资料' },
     bloggerNotes: { type: 'xhs:collect-blogger-notes', pending: '采集中...', done: '已采集主页笔记' },
     exportJson: { type: 'xhs:export-current-note-json', pending: '导出中...', done: '已导出 JSON' },
     savePageAuto: { type: 'save-page-auto', pending: '保存中...', done: '已保存到 RedBox' },
