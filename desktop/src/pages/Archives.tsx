@@ -72,6 +72,18 @@ interface ArchiveSample {
     createdAt: number;
 }
 
+interface AccountSummaryRecord {
+    id: string;
+    platform?: string;
+    platformUserId?: string;
+    username?: string;
+    homepageUrl?: string;
+    postCount?: number;
+    lastImportedAt?: string;
+    lastLearnedAt?: string;
+    updatedAt?: string;
+}
+
 const normalizeProfile = (profile: ArchiveProfileRecord): ArchiveProfile => ({
     id: profile.id,
     name: profile.name,
@@ -107,6 +119,7 @@ const formatDate = (sample: ArchiveSample) => {
 export function Archives({ isActive = true }: { isActive?: boolean }) {
     const [profiles, setProfiles] = useState<ArchiveProfile[]>([]);
     const [samples, setSamples] = useState<ArchiveSample[]>([]);
+    const [accounts, setAccounts] = useState<AccountSummaryRecord[]>([]);
     const [selectedProfileId, setSelectedProfileId] = useState('');
     const [selectedSampleId, setSelectedSampleId] = useState('');
     const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
@@ -197,6 +210,15 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
         }
     }, []);
 
+    const loadAccounts = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.invoke('accounts:list') as { accounts?: AccountSummaryRecord[] };
+            setAccounts(Array.isArray(result?.accounts) ? result.accounts : []);
+        } catch (error) {
+            console.error('Failed to load account profiles:', error);
+        }
+    }, []);
+
     const loadSamples = useCallback(async (profileId: string) => {
         if (!profileId) return;
         const requestId = loadSamplesRequestRef.current + 1;
@@ -225,7 +247,8 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
     useEffect(() => {
         if (!isActive) return;
         void loadProfiles();
-    }, [isActive, loadProfiles]);
+        void loadAccounts();
+    }, [isActive, loadAccounts, loadProfiles]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -502,6 +525,60 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
+                                    <Sparkles className="w-4 h-4 text-accent-primary" />
+                                    运营账号学习
+                                </div>
+                                <div className="mt-1 text-xs text-text-tertiary">
+                                    通过浏览器插件绑定账号后，RedBox 会自动更新创作档案、写作风格和待确认长期偏好。
+                                </div>
+                            </div>
+                            <button
+                                onClick={loadAccounts}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-primary transition-colors"
+                            >
+                                刷新
+                            </button>
+                        </div>
+                        <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
+                            {accounts.length === 0 ? (
+                                <div className="xl:col-span-3 rounded-lg border border-dashed border-border bg-surface-primary px-4 py-5 text-sm text-text-secondary">
+                                    当前空间还没有绑定运营账号。打开小红书账号主页，在插件侧边栏点击“绑定并学习这个账号”。
+                                </div>
+                            ) : (
+                                accounts.map(account => (
+                                    <div key={account.id} className="rounded-lg border border-border bg-surface-primary p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <div className="truncate text-sm font-semibold text-text-primary">{account.username || '未命名账号'}</div>
+                                                <div className="mt-1 text-xs text-text-tertiary">{account.platform || '-'} · {account.platformUserId || account.id}</div>
+                                            </div>
+                                            <span className="shrink-0 rounded bg-accent-primary/10 px-2 py-1 text-[10px] font-medium text-accent-primary">
+                                                已绑定
+                                            </span>
+                                        </div>
+                                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                                            <div className="rounded bg-surface-secondary px-2 py-1.5">
+                                                <div className="text-text-tertiary">历史内容</div>
+                                                <div className="mt-0.5 font-medium text-text-primary">{Number(account.postCount || 0)} 条</div>
+                                            </div>
+                                            <div className="rounded bg-surface-secondary px-2 py-1.5">
+                                                <div className="text-text-tertiary">写作风格</div>
+                                                <div className="mt-0.5 font-medium text-text-primary">{account.lastLearnedAt ? '已更新' : '待学习'}</div>
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 text-[11px] leading-4 text-text-tertiary">
+                                            {account.lastImportedAt ? `最近导入 ${account.lastImportedAt.slice(0, 10)}` : '等待首次导入'}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                         <div className="bg-surface-secondary/50 rounded-lg border border-border p-4">
                             <div className="flex items-center gap-2 text-sm font-medium text-text-primary mb-3">
