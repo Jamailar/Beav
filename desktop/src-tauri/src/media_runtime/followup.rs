@@ -821,14 +821,27 @@ mod tests {
 
     #[test]
     fn progress_notifications_stop_when_expected_count_is_reached() {
-        assert!(!should_send_incremental_progress(4, 4, 3, "idle", 0, 10));
+        assert!(!should_send_incremental_progress(
+            4, 4, 3, "idle", 0, 10, "default"
+        ));
     }
 
     #[test]
     fn progress_notifications_still_send_for_partial_artifacts() {
-        assert!(should_send_incremental_progress(2, 4, 1, "idle", 0, 10));
-        assert!(!should_send_incremental_progress(2, 4, 2, "idle", 0, 10));
-        assert!(!should_send_incremental_progress(2, 4, 1, "sending", 0, 10));
-        assert!(!should_send_incremental_progress(2, 4, 1, "idle", 20, 10));
+        assert!(should_send_incremental_progress(
+            2, 4, 1, "idle", 0, 10, "default"
+        ));
+        assert!(!should_send_incremental_progress(
+            2, 4, 2, "idle", 0, 10, "default"
+        ));
+        assert!(!should_send_incremental_progress(
+            2, 4, 1, "sending", 0, 10, "default"
+        ));
+        assert!(!should_send_incremental_progress(
+            2, 4, 1, "idle", 20, 10, "default"
+        ));
+        assert!(!should_send_incremental_progress(
+            2, 4, 1, "idle", 0, 10, "redclaw"
+        ));
     }
 }
