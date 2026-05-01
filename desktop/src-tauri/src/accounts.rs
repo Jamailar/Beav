@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{hash_map::DefaultHasher, BTreeMap};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -62,6 +62,23 @@ struct AccountPostBatchRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
+struct AccountCommentBatchRequest {
+    session_id: Option<String>,
+    platform: Option<String>,
+    post_id: Option<String>,
+    comments: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct AccountMediaBatchRequest {
+    session_id: Option<String>,
+    platform: Option<String>,
+    media: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
 struct AccountImportCompleteRequest {
     status: Option<String>,
     imported_post_count: Option<i64>,
@@ -97,6 +114,28 @@ pub(crate) fn handle_accounts_http_request(
             let request: AccountPostBatchRequest = serde_json::from_str(body)
                 .map_err(|error| format!("account posts batch request 无法解析: {error}"))?;
             Ok((200, "OK", upsert_posts_batch(state, account_id, request)?))
+        }
+        ("POST", _) if subpath.ends_with("/comments/batch") => {
+            let account_id = subpath
+                .strip_suffix("/comments/batch")
+                .unwrap_or_default()
+                .trim_matches('/');
+            let request: AccountCommentBatchRequest = serde_json::from_str(body)
+                .map_err(|error| format!("account comments batch request 无法解析: {error}"))?;
+            Ok((
+                200,
+                "OK",
+                upsert_comments_batch(state, account_id, request)?,
+            ))
+        }
+        ("POST", _) if subpath.ends_with("/media/batch") => {
+            let account_id = subpath
+                .strip_suffix("/media/batch")
+                .unwrap_or_default()
+                .trim_matches('/');
+            let request: AccountMediaBatchRequest = serde_json::from_str(body)
+                .map_err(|error| format!("account media batch request 无法解析: {error}"))?;
+            Ok((200, "OK", upsert_media_batch(state, account_id, request)?))
         }
         ("POST", _)
             if subpath.starts_with("import-sessions/") && subpath.ends_with("/complete") =>
@@ -216,6 +255,8 @@ fn accounts_health(state: &State<'_, AppState>) -> Result<Value, String> {
         "routes": {
             "importSessions": "/api/accounts/import-sessions",
             "postsBatch": "/api/accounts/{accountId}/posts/batch",
+            "commentsBatch": "/api/accounts/{accountId}/comments/batch",
+            "mediaBatch": "/api/accounts/{accountId}/media/batch",
             "completeImportSession": "/api/accounts/import-sessions/{sessionId}/complete"
         }
     }))
@@ -401,6 +442,205 @@ fn upsert_posts_batch(
         "failed": failed,
         "postCount": post_count,
         "syncedMemoryCount": synced_memory_count,
+    }))
+}
+
+fn upsert_comments_batch(
+    state: &State<'_, AppState>,
+    account_id: &str,
+    request: AccountCommentBatchRequest,
+) -> Result<Value, String> {
+    if account_id.trim().is_empty() {
+        return Err("accountId 不能为空".to_string());
+    }
+    if request.comments.is_empty() {
+        return Err("comments 不能为空".to_string());
+    }
+    if request.comments.len() > ACCOUNTS_BATCH_LIMIT {
+        return Err(format!(
+            "单次 comments batch 最多支持 {ACCOUNTS_BATCH_LIMIT} 条"
+        ));
+    }
+
+    let mut catalog = load_catalog_for_state(state).unwrap_or_default();
+    let account = catalog
+        .accounts
+        .iter()
+        .find(|item| item.id == account_id)
+        .cloned()
+        .ok_or_else(|| "账号档案不存在".to_string())?;
+    validate_request_platform(request.platform.as_deref(), &account.platform)?;
+
+    let root = account_root(state, &account.platform, account_id)?;
+    let comments_root = root.join("comments");
+    fs::create_dir_all(&comments_root).map_err(|error| error.to_string())?;
+
+    let fallback_post_id =
+        normalized_string(request.post_id).unwrap_or_else(|| "unknown".to_string());
+    let mut grouped: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for comment in request.comments {
+        let post_id = comment_post_identifier(&comment).unwrap_or_else(|| fallback_post_id.clone());
+        grouped.entry(post_id).or_default().push(comment);
+    }
+
+    let mut inserted = 0_i64;
+    let mut updated = 0_i64;
+    let mut failed = Vec::new();
+    let now = now_iso();
+    for (post_id, comments) in grouped {
+        let path = comments_root.join(format!(
+            "note-{}.comments.json",
+            storage_safe_file_stem(&post_id)
+        ));
+        let mut document = read_json_value(&path).unwrap_or_else(|| {
+            json!({
+                "schemaVersion": ACCOUNT_SCHEMA_VERSION,
+                "accountId": account_id,
+                "platform": account.platform,
+                "postId": post_id,
+                "comments": [],
+                "createdAt": now,
+                "updatedAt": now,
+            })
+        });
+        let existing_comments = document
+            .get_mut("comments")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| format!("comments 文件结构无效: {}", path.display()))?;
+
+        for mut comment in comments {
+            let comment_id = comment_identifier(&comment);
+            if let Some(object) = comment.as_object_mut() {
+                object.insert("schemaVersion".to_string(), json!(ACCOUNT_SCHEMA_VERSION));
+                object.insert("accountId".to_string(), json!(account_id));
+                object.insert("platform".to_string(), json!(account.platform));
+                object.insert("postId".to_string(), json!(post_id));
+                object
+                    .entry("capturedAt".to_string())
+                    .or_insert_with(|| json!(now));
+                object.insert("updatedAt".to_string(), json!(now));
+            }
+            let existing_index = if comment_id.is_empty() {
+                None
+            } else {
+                existing_comments
+                    .iter()
+                    .position(|item| comment_identifier(item) == comment_id)
+            };
+            if let Some(index) = existing_index {
+                existing_comments[index] = comment;
+                updated += 1;
+            } else {
+                existing_comments.push(comment);
+                inserted += 1;
+            }
+        }
+
+        if let Some(object) = document.as_object_mut() {
+            object.insert("schemaVersion".to_string(), json!(ACCOUNT_SCHEMA_VERSION));
+            object.insert("accountId".to_string(), json!(account_id));
+            object.insert("platform".to_string(), json!(account.platform));
+            object.insert("postId".to_string(), json!(post_id));
+            object.insert("updatedAt".to_string(), json!(now));
+        }
+        if let Err(error) = write_json_pretty(&path, &document) {
+            failed.push(json!({ "postId": post_id, "error": error }));
+        }
+    }
+
+    let comment_count = existing_comment_count(&root);
+    if let Some(item) = catalog
+        .accounts
+        .iter_mut()
+        .find(|item| item.id == account_id)
+    {
+        item.comment_count = comment_count;
+        item.last_imported_at = Some(now.clone());
+        item.updated_at = now.clone();
+    }
+    save_catalog_for_state(state, &catalog)?;
+
+    Ok(json!({
+        "success": true,
+        "sessionId": request.session_id,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": 0,
+        "failed": failed,
+        "commentCount": comment_count,
+    }))
+}
+
+fn upsert_media_batch(
+    state: &State<'_, AppState>,
+    account_id: &str,
+    request: AccountMediaBatchRequest,
+) -> Result<Value, String> {
+    if account_id.trim().is_empty() {
+        return Err("accountId 不能为空".to_string());
+    }
+    if request.media.is_empty() {
+        return Err("media 不能为空".to_string());
+    }
+    if request.media.len() > ACCOUNTS_BATCH_LIMIT {
+        return Err(format!(
+            "单次 media batch 最多支持 {ACCOUNTS_BATCH_LIMIT} 条"
+        ));
+    }
+
+    let mut catalog = load_catalog_for_state(state).unwrap_or_default();
+    let account = catalog
+        .accounts
+        .iter()
+        .find(|item| item.id == account_id)
+        .cloned()
+        .ok_or_else(|| "账号档案不存在".to_string())?;
+    validate_request_platform(request.platform.as_deref(), &account.platform)?;
+
+    let root = account_root(state, &account.platform, account_id)?;
+    let media_root = root.join("media");
+    fs::create_dir_all(&media_root).map_err(|error| error.to_string())?;
+
+    let mut inserted = 0_i64;
+    let mut updated = 0_i64;
+    let mut failed = Vec::new();
+    let now = now_iso();
+    for media in request.media {
+        let media_id = media_identifier(&media);
+        if media_id.is_empty() {
+            failed.push(json!({ "error": "missing media id" }));
+            continue;
+        }
+        let path = media_root.join(format!("media-{}.json", storage_safe_file_stem(&media_id)));
+        let existed = path.exists();
+        let payload = normalize_media_payload(media, account_id, &account.platform, &now);
+        match write_json_pretty(&path, &payload) {
+            Ok(()) if existed => updated += 1,
+            Ok(()) => inserted += 1,
+            Err(error) => failed.push(json!({ "mediaId": media_id, "error": error })),
+        }
+    }
+
+    let media_count = existing_media_count(&root);
+    if let Some(item) = catalog
+        .accounts
+        .iter_mut()
+        .find(|item| item.id == account_id)
+    {
+        item.media_count = media_count;
+        item.last_imported_at = Some(now.clone());
+        item.updated_at = now.clone();
+    }
+    save_catalog_for_state(state, &catalog)?;
+
+    Ok(json!({
+        "success": true,
+        "sessionId": request.session_id,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": 0,
+        "failed": failed,
+        "mediaCount": media_count,
     }))
 }
 
@@ -621,6 +861,53 @@ fn post_identifier(post: &Value) -> String {
         .unwrap_or_default()
 }
 
+fn comment_post_identifier(comment: &Value) -> Option<String> {
+    ["postId", "platformPostId", "noteId"]
+        .iter()
+        .filter_map(|key| comment.get(*key).and_then(Value::as_str))
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+}
+
+fn comment_identifier(comment: &Value) -> String {
+    ["commentId", "platformCommentId", "id", "url"]
+        .iter()
+        .filter_map(|key| comment.get(*key).and_then(Value::as_str))
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+fn media_identifier(media: &Value) -> String {
+    ["mediaId", "id", "url", "src", "localPath"]
+        .iter()
+        .filter_map(|key| media.get(*key).and_then(Value::as_str))
+        .map(|value| value.trim().to_string())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
+}
+
+fn normalize_media_payload(mut media: Value, account_id: &str, platform: &str, now: &str) -> Value {
+    if let Some(object) = media.as_object_mut() {
+        object.insert("schemaVersion".to_string(), json!(ACCOUNT_SCHEMA_VERSION));
+        object.insert("accountId".to_string(), json!(account_id));
+        object.insert("platform".to_string(), json!(platform));
+        object
+            .entry("capturedAt".to_string())
+            .or_insert_with(|| json!(now));
+        object.insert("updatedAt".to_string(), json!(now));
+        return media;
+    }
+    json!({
+        "schemaVersion": ACCOUNT_SCHEMA_VERSION,
+        "accountId": account_id,
+        "platform": platform,
+        "value": media,
+        "capturedAt": now,
+        "updatedAt": now,
+    })
+}
+
 fn existing_post_count(root: &Path) -> i64 {
     fs::read_dir(root.join("posts"))
         .map(|entries| {
@@ -632,6 +919,55 @@ fn existing_post_count(root: &Path) -> i64 {
                 .count() as i64
         })
         .unwrap_or(0)
+}
+
+fn existing_comment_count(root: &Path) -> i64 {
+    fs::read_dir(root.join("comments"))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.path().extension().and_then(|value| value.to_str()) == Some("json")
+                })
+                .map(|entry| {
+                    read_json_value(&entry.path())
+                        .and_then(|value| {
+                            value
+                                .get("comments")
+                                .and_then(Value::as_array)
+                                .map(|items| items.len() as i64)
+                        })
+                        .unwrap_or(0)
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+fn existing_media_count(root: &Path) -> i64 {
+    fs::read_dir(root.join("media"))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.path().extension().and_then(|value| value.to_str()) == Some("json")
+                })
+                .count() as i64
+        })
+        .unwrap_or(0)
+}
+
+fn validate_request_platform(
+    request_platform: Option<&str>,
+    account_platform: &str,
+) -> Result<(), String> {
+    if let Some(platform) = request_platform {
+        let normalized = normalize_platform(platform)?;
+        if normalized != account_platform {
+            return Err("请求平台与账号档案平台不一致".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn update_import_state_counts(
