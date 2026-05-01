@@ -606,7 +606,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onOpenApp
           <div className="flex items-center gap-2">
             {onSwitchRedclaw && (
               <button onClick={onSwitchRedclaw} className="rounded-full border border-[#dce6da] bg-white px-3 py-1.5 text-[12px] text-[#607166]">
-                RedClaw 任务
+                任务面板
               </button>
             )}
             {onOpenApproval && (
