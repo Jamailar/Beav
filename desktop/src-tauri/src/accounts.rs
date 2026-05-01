@@ -167,9 +167,12 @@ pub(crate) fn handle_accounts_http_request(
 pub(crate) fn handle_accounts_channel(
     state: &State<'_, AppState>,
     channel: &str,
-    _payload: &Value,
+    payload: &Value,
 ) -> Option<Result<Value, String>> {
-    if !matches!(channel, "accounts:health" | "accounts:list") {
+    if !matches!(
+        channel,
+        "accounts:health" | "accounts:list" | "accounts:get"
+    ) {
         return None;
     }
     Some(match channel {
@@ -178,6 +181,7 @@ pub(crate) fn handle_accounts_channel(
             let catalog = load_catalog_for_state(state);
             catalog.map(|catalog| json!({ "success": true, "accounts": catalog.accounts }))
         }
+        "accounts:get" => account_detail(state, payload),
         _ => unreachable!(),
     })
 }
@@ -711,6 +715,156 @@ fn platform_accounts_from_catalog(catalog: &AccountCatalog) -> Value {
     Value::Object(map)
 }
 
+fn account_detail(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    let account_id = payload
+        .get("accountId")
+        .or_else(|| payload.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "accountId 不能为空".to_string())?;
+    let catalog = load_catalog_for_state(state).unwrap_or_default();
+    let account = catalog
+        .accounts
+        .iter()
+        .find(|item| item.id == account_id)
+        .cloned()
+        .ok_or_else(|| "账号档案不存在".to_string())?;
+    let root = account_root(state, &account.platform, &account.id)?;
+    let memory_candidates = read_json_value(&root.join("memory-candidates.json"))
+        .unwrap_or_else(|| json!({ "candidates": [] }));
+    Ok(json!({
+        "success": true,
+        "account": account,
+        "profile": read_json_value(&root.join("profile.json")).unwrap_or_else(|| json!({})),
+        "posts": account_post_summaries(&root),
+        "media": account_media_summaries(&root),
+        "comments": account_comment_summaries(&root),
+        "creatorProfile": read_text_if_exists(&root.join("CreatorProfile.md")),
+        "writingStyleSkill": read_text_if_exists(&root.join("writing-style-skill").join("SKILL.md")),
+        "learningSummary": read_text_if_exists(&root.join("learning-summary.md")),
+        "memoryCandidates": memory_candidates,
+        "artifactPaths": {
+            "root": root.to_string_lossy().to_string(),
+            "profile": root.join("profile.json").to_string_lossy().to_string(),
+            "creatorProfile": root.join("CreatorProfile.md").to_string_lossy().to_string(),
+            "writingStyleSkill": root.join("writing-style-skill").join("SKILL.md").to_string_lossy().to_string(),
+            "learningSummary": root.join("learning-summary.md").to_string_lossy().to_string(),
+            "memoryCandidates": root.join("memory-candidates.json").to_string_lossy().to_string(),
+        }
+    }))
+}
+
+fn account_post_summaries(root: &Path) -> Vec<Value> {
+    let mut items = json_files_in_dir(&root.join("posts"))
+        .into_iter()
+        .filter_map(|path| {
+            let value = read_json_value(&path)?;
+            let post_id = post_identifier(&value);
+            let media = value
+                .get("media")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            Some(json!({
+                "id": if post_id.is_empty() { path.file_stem().and_then(|value| value.to_str()).unwrap_or_default().to_string() } else { post_id },
+                "title": json_string(&value, "title").unwrap_or_else(|| "未命名内容".to_string()),
+                "content": json_string(&value, "content").unwrap_or_default(),
+                "url": json_string(&value, "url").unwrap_or_default(),
+                "publishedAt": json_string(&value, "publishedAt").unwrap_or_default(),
+                "capturedAt": json_string(&value, "capturedAt").unwrap_or_default(),
+                "updatedAt": json_string(&value, "updatedAt").unwrap_or_default(),
+                "platform": json_string(&value, "platform").unwrap_or_default(),
+                "kind": json_string(&value, "kind").unwrap_or_default(),
+                "stats": value.get("stats").cloned().unwrap_or_else(|| json!({})),
+                "tags": value.get("tags").cloned().unwrap_or_else(|| json!([])),
+                "media": media,
+            }))
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        sort_time(right).cmp(&sort_time(left)).then_with(|| {
+            json_string(right, "id")
+                .unwrap_or_default()
+                .cmp(&json_string(left, "id").unwrap_or_default())
+        })
+    });
+    items
+}
+
+fn account_media_summaries(root: &Path) -> Vec<Value> {
+    let mut items = json_files_in_dir(&root.join("media"))
+        .into_iter()
+        .filter_map(|path| {
+            let value = read_json_value(&path)?;
+            let media_id = media_identifier(&value);
+            Some(json!({
+                "id": if media_id.is_empty() { path.file_stem().and_then(|value| value.to_str()).unwrap_or_default().to_string() } else { media_id },
+                "postId": json_string(&value, "postId").unwrap_or_default(),
+                "platform": json_string(&value, "platform").unwrap_or_default(),
+                "kind": json_string(&value, "kind").unwrap_or_else(|| "media".to_string()),
+                "url": json_string(&value, "url").or_else(|| json_string(&value, "src")).unwrap_or_default(),
+                "localPath": json_string(&value, "localPath").unwrap_or_default(),
+                "index": value.get("index").cloned().unwrap_or_else(|| json!(0)),
+                "capturedAt": json_string(&value, "capturedAt").unwrap_or_default(),
+                "updatedAt": json_string(&value, "updatedAt").unwrap_or_default(),
+            }))
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| sort_time(right).cmp(&sort_time(left)));
+    items
+}
+
+fn account_comment_summaries(root: &Path) -> Vec<Value> {
+    let mut items = Vec::new();
+    for path in json_files_in_dir(&root.join("comments")) {
+        let Some(value) = read_json_value(&path) else {
+            continue;
+        };
+        let post_id = json_string(&value, "postId").unwrap_or_default();
+        let platform = json_string(&value, "platform").unwrap_or_default();
+        if let Some(comments) = value.get("comments").and_then(Value::as_array) {
+            for comment in comments {
+                let comment_id = comment_identifier(comment);
+                items.push(json!({
+                    "id": if comment_id.is_empty() { short_hash(&comment.to_string()) } else { comment_id },
+                    "postId": json_string(comment, "postId").unwrap_or_else(|| post_id.clone()),
+                    "platform": json_string(comment, "platform").unwrap_or_else(|| platform.clone()),
+                    "author": json_string(comment, "author").unwrap_or_default(),
+                    "text": json_string(comment, "text").unwrap_or_default(),
+                    "likes": comment.get("likes").cloned().unwrap_or_else(|| json!(0)),
+                    "replies": comment.get("replies").cloned().unwrap_or_else(|| json!(0)),
+                    "createdAt": json_string(comment, "createdAt").unwrap_or_default(),
+                    "capturedAt": json_string(comment, "capturedAt").unwrap_or_default(),
+                    "updatedAt": json_string(comment, "updatedAt").unwrap_or_default(),
+                }));
+            }
+        }
+    }
+    items.sort_by(|left, right| sort_time(right).cmp(&sort_time(left)));
+    items
+}
+
+fn json_files_in_dir(root: &Path) -> Vec<PathBuf> {
+    fs::read_dir(root)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn sort_time(value: &Value) -> String {
+    json_string(value, "updatedAt")
+        .or_else(|| json_string(value, "capturedAt"))
+        .or_else(|| json_string(value, "publishedAt"))
+        .or_else(|| json_string(value, "createdAt"))
+        .unwrap_or_default()
+}
+
 fn load_catalog_for_state(state: &State<'_, AppState>) -> Result<AccountCatalog, String> {
     let path = accounts_root(state)?.join("catalog.json");
     if !path.exists() {
@@ -725,6 +879,10 @@ fn load_catalog_for_state(state: &State<'_, AppState>) -> Result<AccountCatalog,
         catalog.schema_version = ACCOUNT_SCHEMA_VERSION;
     }
     Ok(catalog)
+}
+
+fn read_text_if_exists(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_default()
 }
 
 fn save_catalog_for_state(
