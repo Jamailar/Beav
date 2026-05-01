@@ -34,6 +34,91 @@ export interface ToolDiagnosticRunResult {
   executionSucceeded?: boolean;
 }
 
+export interface VideoEditorV2ProjectSummary {
+  id: string;
+  title: string;
+  projectDir: string;
+  status: string;
+  updatedAt: string;
+  assets: Array<{
+    id: string;
+    kind: 'video' | 'audio' | 'image';
+    title: string;
+    projectPath: string;
+    proxyPath?: string | null;
+    thumbnailPath?: string | null;
+    durationMs?: number;
+    width?: number;
+    height?: number;
+    fps?: number;
+  }>;
+  transcriptTracks: Array<{
+    id: string;
+    assetId: string;
+    segments: Array<{
+      id: string;
+      index: number;
+      assetId: string;
+      startMs: number;
+      endMs: number;
+      text: string;
+      tags: string[];
+    }>;
+  }>;
+  timeline?: {
+    id: string;
+    durationMs: number;
+    tracks: Array<{
+      id: string;
+      kind: string;
+      name: string;
+      clips: Array<{
+        id: string;
+        assetId?: string;
+        transcriptSegmentIds?: string[];
+        disabled?: boolean;
+        sourceStartMs: number;
+        sourceEndMs: number;
+        timelineStartMs: number;
+        timelineEndMs: number;
+        text?: string;
+      }>;
+    }>;
+  };
+  autoEditRuns?: Array<{
+    id: string;
+    createdAt: string;
+    appliedAt?: string | null;
+    trackId?: string;
+    userGoal: string;
+    targetDurationMs?: number | null;
+    status: string;
+    plan?: {
+      summary?: string;
+      warnings?: string[];
+      selectedSegments?: unknown[];
+      removedSegments?: unknown[];
+    };
+    decisions?: unknown[];
+  }>;
+  undoStack?: Array<{
+    id: string;
+    createdAt: string;
+    label: string;
+  }>;
+  remotionSnapshot?: {
+    compositionPath: string;
+    updatedAt: string;
+  } | null;
+  renderOutputs?: Array<{
+    id: string;
+    path: string;
+    createdAt: string;
+    durationMs?: number;
+  }>;
+  lastError?: string | null;
+}
+
 export interface AgentTaskNode {
   id: string;
   type: string;
@@ -829,6 +914,25 @@ declare global {
           update: (payload: { id: string; name: string }) => Promise<{ success?: boolean; error?: string; category?: SubjectCategory }>;
           delete: (payload: { id: string }) => Promise<{ success?: boolean; error?: string }>;
         };
+      };
+      videoEditorV2: {
+        getOrCreateForManuscript: (payload: { manuscriptPath: string; title?: string }) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        createProject: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        getProject: (payload: { projectId: string }) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        importAssets: (payload: { projectId: string; sourcePaths?: string[] }) => Promise<{ success?: boolean; canceled?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        importSrt: (payload: { projectId: string; assetId?: string; srtPath?: string; srtContent?: string; language?: string }) => Promise<{ success?: boolean; canceled?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        runAsr: (payload: { projectId: string; assetId: string; language?: string }) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        updateSrtSegment: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        mergeSrtSegments: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        splitSrtSegment: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        setTimelineClipDisabled: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        trimTimelineClip: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        splitTimelineClip: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        reorderTimelineClip: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        undoTimeline: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        generateAutoEdit: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        applyAutoEdit: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary }>;
+        render: (payload: Record<string, unknown>) => Promise<{ success?: boolean; error?: string; project?: VideoEditorV2ProjectSummary; outputPath?: string; compositionPath?: string; subtitlePath?: string | null }>;
       };
       getAppVersion: () => Promise<string>;
       checkAppUpdate: (force?: boolean) => Promise<{ success: boolean; hasUpdate: boolean; throttled?: boolean; inFlight?: boolean; message?: string; notice?: { currentVersion: string; latestVersion: string; htmlUrl: string; name: string; publishedAt: string; body: string } }>;
