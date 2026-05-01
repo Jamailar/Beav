@@ -1379,6 +1379,48 @@ export function RedClaw({
         setHistoryDrawerOpen(false);
     }, [switchSession]);
 
+    const createAdvisorSession = useCallback(async (advisor: AdvisorProfile): Promise<string | null> => {
+        setSpeakerSessionLoading(true);
+        try {
+            const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
+                contextId: advisor.id,
+                contextType: ADVISOR_CHAT_CONTEXT_TYPE,
+                title: `与 ${advisor.name} 聊聊`,
+                initialContext: buildAdvisorInitialContext(advisor),
+                metadata: buildAdvisorSessionMetadata(advisor),
+            }, {
+                timeoutMs: 3200,
+                fallback: null,
+            });
+            if (!created) return null;
+            setSelectedAdvisorId(advisor.id);
+            setAdvisorSessionIds((prev) => ({ ...prev, [advisor.id]: created.id }));
+            setAdvisorHistorySessions((prev) => ([{
+                id: created.id,
+                messageCount: 0,
+                summary: '',
+                transcriptCount: 0,
+                checkpointCount: 0,
+                chatSession: {
+                    id: created.id,
+                    title: created.title,
+                    updatedAt: created.updatedAt,
+                },
+                surface: 'advisor',
+                speakerLabel: advisor.name || '成员',
+                advisorId: advisor.id,
+            }, ...prev.filter((item) => item.id !== created.id)]));
+            setActiveAiSurface('advisor');
+            return created.id;
+        } catch (error) {
+            console.error('Failed to create advisor session:', error);
+            setChatActionMessage('成员会话创建失败');
+            return null;
+        } finally {
+            setSpeakerSessionLoading(false);
+        }
+    }, []);
+
     const ensureAdvisorSession = useCallback(async (advisor: AdvisorProfile): Promise<string | null> => {
         if (advisorSessionIds[advisor.id]) return advisorSessionIds[advisor.id];
         setSpeakerSessionLoading(true);
@@ -1531,10 +1573,8 @@ export function RedClaw({
     const switchAdvisor = useCallback((advisorId: string) => {
         const advisor = advisors.find((item) => item.id === advisorId);
         if (!advisor) return;
-        setSelectedAdvisorId(advisor.id);
-        setActiveAiSurface('advisor');
-        void ensureAdvisorSession(advisor);
-    }, [advisors, ensureAdvisorSession]);
+        void createAdvisorSession(advisor);
+    }, [advisors, createAdvisorSession]);
 
     const createAdvisorFromRedClaw = useCallback(() => {
         setAdvisorCreateModalOpen(true);
@@ -1571,16 +1611,14 @@ export function RedClaw({
             if (result?.id) {
                 const advisor = Array.isArray(list) ? list.find((item) => item.id === result.id) : null;
                 if (advisor) {
-                    setSelectedAdvisorId(advisor.id);
-                    setActiveAiSurface('advisor');
-                    void ensureAdvisorSession(advisor);
+                    void createAdvisorSession(advisor);
                 }
             }
         } catch (error) {
             console.error('Failed to create advisor from RedClaw:', error);
             setChatActionMessage(error instanceof Error ? error.message : '创建成员失败');
         }
-    }, [ensureAdvisorSession]);
+    }, [createAdvisorSession]);
 
     const createRoomFromRedClaw = useCallback(async () => {
         const name = typeof window !== 'undefined' ? window.prompt('新群聊名称')?.trim() : '';
