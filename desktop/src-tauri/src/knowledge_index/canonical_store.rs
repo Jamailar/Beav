@@ -7,7 +7,7 @@ use tauri::State;
 use crate::{
     document_parse::{CanonicalDocument, PARSER_NAME, PARSER_VERSION},
     knowledge_index::{catalog_db_path, migration, schema::ensure_catalog_ready},
-    now_iso, AppState,
+    now_i64, now_iso, AppState,
 };
 
 #[derive(Debug, Clone)]
@@ -64,7 +64,7 @@ pub(crate) fn visual_status_summary(
     state: &State<'_, AppState>,
 ) -> Result<VisualIndexUnitStatusSummary, String> {
     let conn = connection(state)?;
-    let now_ms = now_iso().parse::<i64>().unwrap_or_default();
+    let now_ms = now_i64();
     conn.query_row(
         r#"
         SELECT
@@ -696,7 +696,7 @@ fn is_retryable_visual_warning(value: &str) -> bool {
 }
 
 fn next_retry_at(retry_count: i64) -> String {
-    let now_ms = now_iso().parse::<i64>().unwrap_or_default();
+    let now_ms = now_i64();
     let minutes = match retry_count {
         count if count <= 1 => 5,
         2 => 15,

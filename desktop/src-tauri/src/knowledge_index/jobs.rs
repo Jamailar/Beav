@@ -236,29 +236,61 @@ pub(crate) fn schedule_canonical_reparse(app: &AppHandle) {
 
 pub(crate) fn schedule_visual_backfill(app: &AppHandle, reason: &str) {
     let state = app.state::<AppState>();
-    match visual_maintenance_needed(&state) {
-        Ok(false) => {
-            schedule_visual_retry_wakeup(app, "visual-backfill-deferred");
-            return;
-        }
-        Ok(true) => {}
-        Err(error) => {
-            eprintln!("[RedBox knowledge index] visual backfill check failed: {error}");
-            return;
-        }
-    }
     let reason = if reason.trim().is_empty() {
         "visual_backfill"
     } else {
         reason.trim()
-    };
-    match mark_pending(&state, reason) {
-        Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::VisualBackfill),
-        Ok(false) => {}
-        Err(error) => {
-            eprintln!("[RedBox knowledge index] mark visual backfill pending failed: {error}")
-        }
     }
+    .to_string();
+    {
+        let Ok(mut runtime) = state.knowledge_index_state.lock() else {
+            eprintln!("[RedBox knowledge index] visual backfill check lock failed");
+            return;
+        };
+        if runtime.visual_backfill_checking {
+            runtime.visual_backfill_check_requested = true;
+            return;
+        }
+        runtime.visual_backfill_checking = true;
+        runtime.visual_backfill_check_requested = false;
+    }
+
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let needed = visual_maintenance_needed(&state);
+        let check_requested = {
+            let Ok(mut runtime) = state.knowledge_index_state.lock() else {
+                eprintln!("[RedBox knowledge index] visual backfill check lock failed");
+                return;
+            };
+            runtime.visual_backfill_checking = false;
+            let requested = runtime.visual_backfill_check_requested;
+            runtime.visual_backfill_check_requested = false;
+            requested
+        };
+        if check_requested {
+            schedule_visual_backfill(&app, &reason);
+            return;
+        }
+        match needed {
+            Ok(false) => {
+                schedule_visual_retry_wakeup(&app, "visual-backfill-deferred");
+            }
+            Ok(true) => match mark_pending(&state, &reason) {
+                Ok(true) => spawn_rebuild(app.clone(), RebuildJobKind::VisualBackfill),
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!(
+                        "[RedBox knowledge index] mark visual backfill pending failed: {error}"
+                    )
+                }
+            },
+            Err(error) => {
+                eprintln!("[RedBox knowledge index] visual backfill check failed: {error}");
+            }
+        }
+    });
 }
 
 fn schedule_visual_retry_wakeup(app: &AppHandle, reason: &str) {
