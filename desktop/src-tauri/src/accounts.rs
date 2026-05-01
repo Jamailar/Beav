@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{hash_map::DefaultHasher, BTreeMap};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -249,6 +249,24 @@ pub(crate) fn build_account_prompt_section(state: &State<'_, AppState>) -> Optio
     Some(lines.join("\n"))
 }
 
+pub(crate) fn sync_completed_transcript_from_knowledge(
+    state: &State<'_, AppState>,
+    note_id: &str,
+    meta: &Value,
+    transcript: &str,
+) -> Result<Value, String> {
+    sync_knowledge_transcription_to_accounts(state, note_id, meta, Some(transcript), None)
+}
+
+pub(crate) fn sync_failed_transcription_from_knowledge(
+    state: &State<'_, AppState>,
+    note_id: &str,
+    meta: &Value,
+    error: &str,
+) -> Result<Value, String> {
+    sync_knowledge_transcription_to_accounts(state, note_id, meta, None, Some(error))
+}
+
 fn accounts_health(state: &State<'_, AppState>) -> Result<Value, String> {
     let catalog = load_catalog_for_state(state)?;
     Ok(json!({
@@ -409,6 +427,14 @@ fn upsert_posts_batch(
             object.insert("schemaVersion".to_string(), json!(ACCOUNT_SCHEMA_VERSION));
             object.insert("accountId".to_string(), json!(account_id));
             object.insert("platform".to_string(), json!(account.platform));
+            if post_has_video_media(&Value::Object(object.clone())) {
+                object.insert("requiresTranscript".to_string(), json!(true));
+                if !post_has_transcript(&Value::Object(object.clone())) {
+                    object
+                        .entry("transcriptionStatus".to_string())
+                        .or_insert_with(|| json!("waiting"));
+                }
+            }
             object
                 .entry("capturedAt".to_string())
                 .or_insert_with(|| json!(now));
@@ -433,9 +459,7 @@ fn upsert_posts_batch(
     }
     save_catalog_for_state(state, &catalog)?;
     update_import_state_counts(&root, request.session_id.as_deref(), post_count, &now, None)?;
-    refresh_account_learning_artifacts(&root, state)?;
-    let synced_memory_count = sync_account_memory_candidates(state, &root)?;
-    mark_account_learned(&mut catalog, account_id, &now);
+    let learning = refresh_account_learning_if_ready(&root, state, &mut catalog, account_id, &now)?;
     save_catalog_for_state(state, &catalog)?;
 
     Ok(json!({
@@ -445,7 +469,10 @@ fn upsert_posts_batch(
         "skipped": 0,
         "failed": failed,
         "postCount": post_count,
-        "syncedMemoryCount": synced_memory_count,
+        "syncedMemoryCount": learning.synced_memory_count,
+        "learningStatus": learning.status,
+        "pendingVideoTranscriptions": learning.pending_video_transcriptions,
+        "failedVideoTranscriptions": learning.failed_video_transcriptions,
     }))
 }
 
@@ -671,13 +698,17 @@ fn complete_import_session(
             "completedAt": now,
         })),
     )?;
-    refresh_account_learning_artifacts(&root, state)?;
-    let synced_memory_count = sync_account_memory_candidates(state, &root)?;
+    let mut catalog = load_catalog_for_state(state).unwrap_or_default();
+    let learning = refresh_account_learning_if_ready(&root, state, &mut catalog, "", &now)?;
+    save_catalog_for_state(state, &catalog)?;
     Ok(json!({
         "success": true,
         "sessionId": session_id,
         "status": status,
-        "syncedMemoryCount": synced_memory_count,
+        "syncedMemoryCount": learning.synced_memory_count,
+        "learningStatus": learning.status,
+        "pendingVideoTranscriptions": learning.pending_video_transcriptions,
+        "failedVideoTranscriptions": learning.failed_video_transcriptions,
     }))
 }
 
@@ -740,6 +771,7 @@ fn account_detail(state: &State<'_, AppState>, payload: &Value) -> Result<Value,
         "posts": account_post_summaries(&root),
         "media": account_media_summaries(&root),
         "comments": account_comment_summaries(&root),
+        "learningState": read_json_value(&root.join("learning-state.json")).unwrap_or_else(|| json!({})),
         "creatorProfile": read_text_if_exists(&root.join("CreatorProfile.md")),
         "writingStyleSkill": read_text_if_exists(&root.join("writing-style-skill").join("SKILL.md")),
         "learningSummary": read_text_if_exists(&root.join("learning-summary.md")),
@@ -753,6 +785,125 @@ fn account_detail(state: &State<'_, AppState>, payload: &Value) -> Result<Value,
             "memoryCandidates": root.join("memory-candidates.json").to_string_lossy().to_string(),
         }
     }))
+}
+
+fn sync_knowledge_transcription_to_accounts(
+    state: &State<'_, AppState>,
+    note_id: &str,
+    meta: &Value,
+    transcript: Option<&str>,
+    transcription_error: Option<&str>,
+) -> Result<Value, String> {
+    let mut candidates = BTreeSet::new();
+    push_transcription_candidate(&mut candidates, note_id);
+    if let Some(stripped) = note_id.strip_prefix("knowledge-") {
+        push_transcription_candidate(&mut candidates, stripped);
+    }
+    for key in [
+        "externalId",
+        "dedupeKey",
+        "sourceUrl",
+        "sourceLink",
+        "videoUrl",
+    ] {
+        if let Some(value) = json_string(meta, key) {
+            push_transcription_candidate(&mut candidates, &value);
+        }
+    }
+
+    let mut catalog = load_catalog_for_state(state).unwrap_or_default();
+    let accounts = catalog.accounts.clone();
+    let now = now_iso();
+    let mut accounts_updated = 0_i64;
+    let mut posts_updated = 0_i64;
+    let mut refreshed_accounts = Vec::new();
+
+    for account in accounts {
+        let root = account_root(state, &account.platform, &account.id)?;
+        let posts_root = root.join("posts");
+        let mut account_changed = false;
+        for path in json_files_in_dir(&posts_root) {
+            let Some(mut post) = read_json_value(&path) else {
+                continue;
+            };
+            if !account_post_matches_transcription_candidates(&post, &candidates) {
+                continue;
+            }
+            if let Some(object) = post.as_object_mut() {
+                object.insert("requiresTranscript".to_string(), json!(true));
+                object.insert("transcriptionSourceNoteId".to_string(), json!(note_id));
+                object.insert("transcriptUpdatedAt".to_string(), json!(now));
+                if let Some(transcript) = transcript {
+                    object.insert("transcript".to_string(), json!(transcript));
+                    object.insert("transcriptionStatus".to_string(), json!("completed"));
+                    object.insert("transcriptionError".to_string(), Value::Null);
+                } else if let Some(error) = transcription_error {
+                    object.insert("transcriptionStatus".to_string(), json!("failed"));
+                    object.insert("transcriptionError".to_string(), json!(error));
+                }
+            }
+            write_json_pretty(&path, &post)?;
+            posts_updated += 1;
+            account_changed = true;
+        }
+        if account_changed {
+            accounts_updated += 1;
+            if transcript.is_some() {
+                let learning = refresh_account_learning_if_ready(
+                    &root,
+                    state,
+                    &mut catalog,
+                    &account.id,
+                    &now,
+                )?;
+                refreshed_accounts.push(json!({
+                    "accountId": account.id,
+                    "platform": account.platform,
+                    "learningStatus": learning.status,
+                    "pendingVideoTranscriptions": learning.pending_video_transcriptions,
+                    "failedVideoTranscriptions": learning.failed_video_transcriptions,
+                    "syncedMemoryCount": learning.synced_memory_count,
+                }));
+            } else {
+                write_account_learning_state(&root, "transcription_failed", 0, 1, &now)?;
+            }
+        }
+    }
+    save_catalog_for_state(state, &catalog)?;
+    Ok(json!({
+        "success": true,
+        "accountsUpdated": accounts_updated,
+        "postsUpdated": posts_updated,
+        "refreshedAccounts": refreshed_accounts,
+    }))
+}
+
+fn push_transcription_candidate(candidates: &mut BTreeSet<String>, value: &str) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    candidates.insert(trimmed.to_string());
+    candidates.insert(storage_safe_file_stem(trimmed));
+}
+
+fn account_post_matches_transcription_candidates(
+    post: &Value,
+    candidates: &BTreeSet<String>,
+) -> bool {
+    [
+        post_identifier(post),
+        json_string(post, "knowledgeEntryId").unwrap_or_default(),
+        json_string(post, "transcriptionSourceNoteId").unwrap_or_default(),
+        json_string(post, "url").unwrap_or_default(),
+    ]
+    .iter()
+    .any(|value| {
+        let trimmed = value.trim();
+        !trimmed.is_empty()
+            && (candidates.contains(trimmed)
+                || candidates.contains(&storage_safe_file_stem(trimmed)))
+    })
 }
 
 fn account_post_summaries(root: &Path) -> Vec<Value> {
@@ -928,6 +1079,93 @@ fn mark_account_learned(catalog: &mut AccountCatalog, account_id: &str, learned_
     }
 }
 
+struct AccountLearningRefreshOutcome {
+    status: String,
+    synced_memory_count: usize,
+    pending_video_transcriptions: i64,
+    failed_video_transcriptions: i64,
+}
+
+fn refresh_account_learning_if_ready(
+    root: &Path,
+    state: &State<'_, AppState>,
+    catalog: &mut AccountCatalog,
+    account_id: &str,
+    now: &str,
+) -> Result<AccountLearningRefreshOutcome, String> {
+    let account_id = if account_id.trim().is_empty() {
+        read_json_value(&root.join("profile.json"))
+            .and_then(|value| json_string(&value, "id"))
+            .unwrap_or_default()
+    } else {
+        account_id.to_string()
+    };
+    let pending_video_transcriptions = video_transcription_count(root, "pending");
+    let failed_video_transcriptions = video_transcription_count(root, "failed");
+    if pending_video_transcriptions > 0 {
+        write_account_learning_state(
+            root,
+            "waiting_transcription",
+            pending_video_transcriptions,
+            failed_video_transcriptions,
+            now,
+        )?;
+        return Ok(AccountLearningRefreshOutcome {
+            status: "waiting_transcription".to_string(),
+            synced_memory_count: 0,
+            pending_video_transcriptions,
+            failed_video_transcriptions,
+        });
+    }
+    if failed_video_transcriptions > 0 {
+        write_account_learning_state(
+            root,
+            "transcription_failed",
+            pending_video_transcriptions,
+            failed_video_transcriptions,
+            now,
+        )?;
+        return Ok(AccountLearningRefreshOutcome {
+            status: "transcription_failed".to_string(),
+            synced_memory_count: 0,
+            pending_video_transcriptions,
+            failed_video_transcriptions,
+        });
+    }
+
+    refresh_account_learning_artifacts(root, state)?;
+    let synced_memory_count = sync_account_memory_candidates(state, root)?;
+    if !account_id.is_empty() {
+        mark_account_learned(catalog, &account_id, now);
+    }
+    write_account_learning_state(root, "completed", 0, 0, now)?;
+    Ok(AccountLearningRefreshOutcome {
+        status: "completed".to_string(),
+        synced_memory_count,
+        pending_video_transcriptions: 0,
+        failed_video_transcriptions: 0,
+    })
+}
+
+fn write_account_learning_state(
+    root: &Path,
+    status: &str,
+    pending_video_transcriptions: i64,
+    failed_video_transcriptions: i64,
+    now: &str,
+) -> Result<(), String> {
+    write_json_pretty(
+        &root.join("learning-state.json"),
+        &json!({
+            "schemaVersion": ACCOUNT_SCHEMA_VERSION,
+            "status": status,
+            "pendingVideoTranscriptions": pending_video_transcriptions,
+            "failedVideoTranscriptions": failed_video_transcriptions,
+            "updatedAt": now,
+        }),
+    )
+}
+
 fn accounts_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = workspace_root(state)?.join("accounts");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
@@ -1017,6 +1255,61 @@ fn post_identifier(post: &Value) -> String {
         .map(|value| value.trim().to_string())
         .find(|value| !value.is_empty())
         .unwrap_or_default()
+}
+
+fn post_has_video_media(post: &Value) -> bool {
+    if json_string(post, "videoUrl").is_some() {
+        return true;
+    }
+    post.get("media")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().any(|item| {
+                let kind = json_string(item, "kind").unwrap_or_default().to_lowercase();
+                let url = json_string(item, "url")
+                    .or_else(|| json_string(item, "src"))
+                    .unwrap_or_default()
+                    .to_lowercase();
+                kind.contains("video")
+                    || url.contains(".mp4")
+                    || url.contains(".m3u8")
+                    || url.contains("video")
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn post_has_transcript(post: &Value) -> bool {
+    json_string(post, "transcript")
+        .or_else(|| json_string(post, "transcriptText"))
+        .or_else(|| json_string(post, "subtitle"))
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+fn video_transcription_state(post: &Value) -> Option<&'static str> {
+    if !post_has_video_media(post) {
+        return None;
+    }
+    if post_has_transcript(post) {
+        return Some("ready");
+    }
+    let status = json_string(post, "transcriptionStatus")
+        .unwrap_or_default()
+        .to_lowercase();
+    if status == "failed" {
+        Some("failed")
+    } else {
+        Some("pending")
+    }
+}
+
+fn video_transcription_count(root: &Path, state: &str) -> i64 {
+    json_files_in_dir(&root.join("posts"))
+        .into_iter()
+        .filter_map(|path| read_json_value(&path))
+        .filter(|post| video_transcription_state(post) == Some(state))
+        .count() as i64
 }
 
 fn comment_post_identifier(comment: &Value) -> Option<String> {
