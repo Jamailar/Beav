@@ -990,7 +990,7 @@ pub fn build_redclaw_task_graph(goal: &str) -> RedclawTaskGraph {
             RedclawTaskDependencyType::RequiresReview,
         ));
     }
-    if has_layout {
+    if has_layout && has_publish {
         edges.push(edge(
             "layout",
             "publish",
@@ -1381,5 +1381,24 @@ mod tests {
         assert!(!node_ids.contains(&"media"));
         assert!(node_ids.contains(&"publish"));
         assert!(node_ids.contains(&"compliance"));
+    }
+
+    #[test]
+    fn image_asset_goal_does_not_create_dangling_publish_edge() {
+        let graph = build_redclaw_task_graph("帮我生成一组配图");
+        let node_ids = graph
+            .nodes
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(graph.content_format.as_deref(), Some("xhs_image_assets"));
+        assert!(node_ids.contains(&"visual_direction"));
+        assert!(node_ids.contains(&"image_assets"));
+        assert!(node_ids.contains(&"layout"));
+        assert!(!node_ids.contains(&"publish"));
+        assert!(graph.edges.iter().all(|edge| {
+            node_ids.contains(&edge.from.as_str()) && node_ids.contains(&edge.to.as_str())
+        }));
     }
 }
