@@ -12,7 +12,8 @@ use crate::commands::redclaw_runtime::execute_redclaw_run;
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, collab_session_snapshot, create_collab_session, create_collab_task,
-    plan_redclaw_orchestration, redclaw_orchestration_registry_value, RedclawAgentId,
+    plan_redclaw_orchestration, redclaw_orchestration_registry_value, runtime_direct_route_record,
+    store_runtime_task, CollabSessionSnapshot, RedclawAgentId, RedclawOrchestrationPlan,
     RedclawRuntime,
 };
 use crate::scheduler::task_policy::TaskIntentSchema;
@@ -91,6 +92,7 @@ pub fn handle_redclaw_channel(
         "redclaw:orchestration-plan" => plan_redclaw_orchestration(payload).map(|plan| json!(plan)),
         "redclaw:orchestration-registry" => Ok(redclaw_orchestration_registry_value()),
         "redclaw:orchestration-create-team" => create_redclaw_orchestration_team(state, payload),
+        "redclaw:orchestration-create-run" => create_redclaw_orchestration_run(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -663,98 +665,162 @@ fn create_redclaw_orchestration_team(
 ) -> Result<Value, String> {
     let plan = plan_redclaw_orchestration(payload)?;
     with_store_mut(state, |store| {
-        let session = create_collab_session(
-            store,
-            &json!({
-                "title": "RedClaw 临时创作团队",
-                "objective": plan.graph.goal,
-                "runtimeMode": "redclaw",
-                "source": "redclaw-orchestrator",
-                "metadata": {
-                    "runId": plan.run_id,
-                    "graphId": plan.graph.id,
-                    "temporaryTeam": true,
-                    "releasePolicy": plan.release_policy
-                }
-            }),
-        )?;
-
-        let mut member_by_role = std::collections::HashMap::<String, String>::new();
-        for spec in &plan.agent_specs {
-            let role_id = redclaw_agent_role_id(&spec.id).to_string();
-            if member_by_role.contains_key(&role_id) {
-                continue;
-            }
-            let member = add_collab_member(
-                store,
-                &json!({
-                    "sessionId": session.id,
-                    "displayName": redclaw_agent_display_name(&spec.id),
-                    "roleId": role_id,
-                    "sourceKind": "ephemeral_subagent_spec",
-                    "backend": "redclaw-orchestrator",
-                    "adapterKind": "internal",
-                    "status": "idle",
-                    "capabilities": &spec.allowed_skills,
-                    "allowedTools": &spec.allowed_tools,
-                    "metadata": {
-                        "temporary": true,
-                        "memoryScopes": &spec.readable_memory_scopes,
-                        "outputSchema": &spec.output_schema
-                    }
-                }),
-            )?;
-            member_by_role.insert(role_id, member.id);
-        }
-
-        let mut task_by_node = std::collections::HashMap::<String, String>::new();
-        for node in &plan.graph.nodes {
-            let role_id = redclaw_agent_role_id(&node.agent_id);
-            let member_id = member_by_role
-                .get(role_id)
-                .ok_or_else(|| format!("missing member for role {role_id}"))?;
-            let depends_on_task_ids = plan
-                .graph
-                .edges
-                .iter()
-                .filter(|edge| edge.to == node.id)
-                .filter_map(|edge| task_by_node.get(&edge.from).cloned())
-                .collect::<Vec<_>>();
-            let task = create_collab_task(
-                store,
-                &json!({
-                    "sessionId": session.id,
-                    "memberId": member_id,
-                    "title": node.title,
-                    "objective": format!("{}：{}", node.title, plan.graph.goal),
-                    "description": format!("使用 {} 输出 {}", node.skill_ids.join(", "), node.output_schema),
-                    "status": "todo",
-                    "priority": if role_id == "review_agent" { 1 } else { 0 },
-                    "taskType": "redclaw_orchestration_node",
-                    "dependsOnTaskIds": depends_on_task_ids,
-                    "metadata": {
-                        "runId": plan.run_id,
-                        "graphId": plan.graph.id,
-                        "nodeId": node.id,
-                        "agentId": role_id,
-                        "skillIds": &node.skill_ids,
-                        "requiredArtifacts": &node.required_artifacts,
-                        "outputSchema": &node.output_schema,
-                        "temporaryTeam": true
-                    }
-                }),
-            )?;
-            task_by_node.insert(node.id.clone(), task.id);
-        }
-
-        let snapshot = collab_session_snapshot(store, &session.id, Some(100), Some(100))
-            .ok_or_else(|| "created RedClaw team session could not be reloaded".to_string())?;
+        let (session_id, snapshot) = create_redclaw_team_records(store, &plan, None)?;
         Ok(json!({
             "success": true,
             "runId": plan.run_id,
-            "sessionId": session.id,
+            "sessionId": session_id,
             "graph": plan.graph,
             "snapshot": snapshot
+        }))
+    })
+}
+
+fn redclaw_plan_role_ids(plan: &RedclawOrchestrationPlan) -> Vec<String> {
+    let mut roles = Vec::new();
+    for node in &plan.graph.nodes {
+        let role_id = redclaw_agent_role_id(&node.agent_id).to_string();
+        if !roles.iter().any(|existing| existing == &role_id) {
+            roles.push(role_id);
+        }
+    }
+    roles
+}
+
+fn create_redclaw_team_records(
+    store: &mut crate::AppStore,
+    plan: &RedclawOrchestrationPlan,
+    source_task_id: Option<&str>,
+) -> Result<(String, CollabSessionSnapshot), String> {
+    let session = create_collab_session(
+        store,
+        &json!({
+            "title": "RedClaw 临时创作团队",
+            "objective": plan.graph.goal,
+            "runtimeMode": "redclaw",
+            "source": "redclaw-orchestrator",
+            "metadata": {
+                "runId": plan.run_id,
+                "graphId": plan.graph.id,
+                "sourceTaskId": source_task_id,
+                "temporaryTeam": true,
+                "releasePolicy": plan.release_policy
+            }
+        }),
+    )?;
+
+    let mut member_by_role = std::collections::HashMap::<String, String>::new();
+    for spec in &plan.agent_specs {
+        let role_id = redclaw_agent_role_id(&spec.id).to_string();
+        if member_by_role.contains_key(&role_id) {
+            continue;
+        }
+        let member = add_collab_member(
+            store,
+            &json!({
+                "sessionId": session.id,
+                "displayName": redclaw_agent_display_name(&spec.id),
+                "roleId": role_id,
+                "sourceKind": "ephemeral_subagent_spec",
+                "backend": "redclaw-orchestrator",
+                "adapterKind": "internal",
+                "status": "idle",
+                "capabilities": &spec.allowed_skills,
+                "allowedTools": &spec.allowed_tools,
+                "metadata": {
+                    "temporary": true,
+                    "memoryScopes": &spec.readable_memory_scopes,
+                    "outputSchema": &spec.output_schema
+                }
+            }),
+        )?;
+        member_by_role.insert(role_id, member.id);
+    }
+
+    let mut task_by_node = std::collections::HashMap::<String, String>::new();
+    for node in &plan.graph.nodes {
+        let role_id = redclaw_agent_role_id(&node.agent_id);
+        let member_id = member_by_role
+            .get(role_id)
+            .ok_or_else(|| format!("missing member for role {role_id}"))?;
+        let depends_on_task_ids = plan
+            .graph
+            .edges
+            .iter()
+            .filter(|edge| edge.to == node.id)
+            .filter_map(|edge| task_by_node.get(&edge.from).cloned())
+            .collect::<Vec<_>>();
+        let task = create_collab_task(
+            store,
+            &json!({
+                "sessionId": session.id,
+                "memberId": member_id,
+                "title": node.title,
+                "objective": format!("{}：{}", node.title, plan.graph.goal),
+                "description": format!("使用 {} 输出 {}", node.skill_ids.join(", "), node.output_schema),
+                "status": "todo",
+                "priority": if role_id == "review_agent" { 1 } else { 0 },
+                "taskType": "redclaw_orchestration_node",
+                "dependsOnTaskIds": depends_on_task_ids,
+                "runtimeTaskId": source_task_id,
+                "metadata": {
+                    "runId": plan.run_id,
+                    "graphId": plan.graph.id,
+                    "nodeId": node.id,
+                    "agentId": role_id,
+                    "skillIds": &node.skill_ids,
+                    "requiredArtifacts": &node.required_artifacts,
+                    "outputSchema": &node.output_schema,
+                    "temporaryTeam": true
+                }
+            }),
+        )?;
+        task_by_node.insert(node.id.clone(), task.id);
+    }
+
+    let snapshot = collab_session_snapshot(store, &session.id, Some(100), Some(100))
+        .ok_or_else(|| "created RedClaw team session could not be reloaded".to_string())?;
+    Ok((session.id, snapshot))
+}
+
+fn create_redclaw_orchestration_run(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let plan = plan_redclaw_orchestration(payload)?;
+    let owner_session_id = payload_string(payload, "sessionId");
+    with_store_mut(state, |store| {
+        let metadata = json!({
+            "source": "redclaw-orchestrator",
+            "runId": plan.run_id,
+            "graphId": plan.graph.id,
+            "redclawTaskGraph": &plan.graph,
+            "subagentRoles": redclaw_plan_role_ids(&plan),
+            "forceMultiAgent": true,
+            "useRealSubagents": true,
+            "temporaryTeam": true,
+            "releasePolicy": plan.release_policy
+        });
+        let route = runtime_direct_route_record("redclaw", &plan.graph.goal, Some(&metadata));
+        let task = store_runtime_task(
+            store,
+            "redclaw_orchestration",
+            "pending",
+            "redclaw".to_string(),
+            owner_session_id,
+            Some(plan.graph.goal.clone()),
+            route,
+            Some(metadata),
+        );
+        let (session_id, snapshot) = create_redclaw_team_records(store, &plan, Some(&task.id))?;
+        Ok(json!({
+            "success": true,
+            "runId": plan.run_id,
+            "runtimeTaskId": task.id,
+            "sessionId": session_id,
+            "graph": plan.graph,
+            "snapshot": snapshot,
+            "task": task
         }))
     })
 }

@@ -1791,6 +1791,41 @@ declare global {
           };
           snapshot?: unknown;
         }>;
+        createRun: (payload: {
+          goal: string;
+          sessionId?: string;
+          projectId?: string;
+          platform?: string;
+          format?: string;
+        }) => Promise<{
+          success: boolean;
+          runId: string;
+          runtimeTaskId: string;
+          sessionId: string;
+          graph: {
+            id: string;
+            goal: string;
+            platform?: string | null;
+            contentFormat?: string | null;
+            createdAt: string;
+            nodes: Array<{
+              id: string;
+              title: string;
+              agentId: string;
+              skillIds: string[];
+              requiredArtifacts: string[];
+              outputSchema: string;
+              status: string;
+            }>;
+            edges: Array<{
+              from: string;
+              to: string;
+              dependencyType: string;
+            }>;
+          };
+          snapshot?: unknown;
+          task?: unknown;
+        }>;
         getRegistry: () => Promise<{
           success: boolean;
           agents: Array<Record<string, unknown>>;
