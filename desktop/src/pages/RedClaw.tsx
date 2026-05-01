@@ -35,8 +35,6 @@ import {
 } from './redclaw/helpers';
 import { RedClawHistoryDrawer } from './redclaw/RedClawHistoryDrawer';
 import { RedClawFilePreviewPane } from './redclaw/RedClawFilePreviewPane';
-import { RedClawProjectWorkspacePanel } from './redclaw/orchestration/RedClawProjectWorkspacePanel';
-import { RedClawRunTimelinePanel } from './redclaw/orchestration/RedClawRunTimelinePanel';
 import {
     isRedClawOnboardingCompleted,
     type RedclawOnboardingState,
@@ -1569,12 +1567,6 @@ export function RedClaw({
                                     ) : null}
                                 />
                             </div>
-                            {!previewTarget && (
-                                <>
-                                    <RedClawProjectWorkspacePanel />
-                                    <RedClawRunTimelinePanel />
-                                </>
-                            )}
                             <RedClawHistoryDrawer
                                 open={historyDrawerOpen}
                                 activeSpaceName={activeSpaceName}
