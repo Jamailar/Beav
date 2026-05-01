@@ -1,6 +1,7 @@
-import { History, Loader2, Plus, Trash2, X } from 'lucide-react';
+import { History, Loader2, Plus, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { formatDateTime } from './helpers';
+import type { CreativeChatRoom } from '../CreativeChat';
 
 interface RedClawHistoryDrawerProps {
     open: boolean;
@@ -8,9 +9,14 @@ interface RedClawHistoryDrawerProps {
     historyLoading: boolean;
     sessionList: ContextChatSessionListItem[];
     activeSessionId: string | null;
+    teamRooms?: CreativeChatRoom[];
+    activeRoomId?: string | null;
+    activeSurface?: 'redclaw' | 'advisor' | 'room';
     onToggleOpen: () => void;
     onClose: () => void;
     onCreateSession: () => void | Promise<void>;
+    onCreateRoom?: () => void;
+    onSwitchRoom?: (roomId: string) => void;
     onSwitchSession: (sessionId: string) => void;
     onDeleteSession: (sessionId: string) => void | Promise<void>;
 }
@@ -21,9 +27,14 @@ export function RedClawHistoryDrawer({
     historyLoading,
     sessionList,
     activeSessionId,
+    teamRooms = [],
+    activeRoomId,
+    activeSurface = 'redclaw',
     onToggleOpen,
     onClose,
     onCreateSession,
+    onCreateRoom,
+    onSwitchRoom,
     onSwitchSession,
     onDeleteSession,
 }: RedClawHistoryDrawerProps) {
@@ -83,8 +94,66 @@ export function RedClawHistoryDrawer({
                                 </div>
                             </div>
 
-                            {/* Content Section - 高密度列表 */}
                             <div className="flex-1 overflow-y-auto px-2 custom-scrollbar">
+                                <div className="mb-3 border-b border-border/70 pb-3">
+                                    <div className="mb-1.5 flex items-center justify-between px-3">
+                                        <span className="text-[11px] font-bold text-text-tertiary">团队</span>
+                                        {onCreateRoom && (
+                                            <button
+                                                type="button"
+                                                onClick={() => void onCreateRoom()}
+                                                className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                                title="创建群聊"
+                                                aria-label="创建群聊"
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                            </button>
+                                        )}
+                                    </div>
+                                    {teamRooms.length === 0 ? (
+                                        <div className="mx-3 rounded-lg border border-dashed border-border/80 px-3 py-3 text-center text-[11px] text-text-tertiary">
+                                            暂无群聊
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-0.5">
+                                            {teamRooms.map((room) => {
+                                                const isActiveRoom = activeSurface === 'room' && room.id === activeRoomId;
+                                                const memberCount = Array.isArray(room.advisorIds) ? room.advisorIds.length : 0;
+                                                return (
+                                                    <button
+                                                        key={room.id}
+                                                        type="button"
+                                                        onClick={() => onSwitchRoom?.(room.id)}
+                                                        className={clsx(
+                                                            'group relative flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all active:scale-[0.98]',
+                                                            isActiveRoom
+                                                                ? 'bg-surface-elevated shadow-sm ring-1 ring-accent-primary/20'
+                                                                : 'hover:bg-surface-secondary/70'
+                                                        )}
+                                                    >
+                                                        {isActiveRoom && (
+                                                            <div className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-accent-primary" />
+                                                        )}
+                                                        <Users className={clsx('h-4 w-4 shrink-0', isActiveRoom ? 'text-accent-primary' : 'text-text-tertiary')} />
+                                                        <div className="min-w-0 flex-1">
+                                                            <div className={clsx(
+                                                                'truncate text-[13px] font-bold leading-tight',
+                                                                isActiveRoom ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
+                                                            )}>
+                                                                {room.name || '未命名群聊'}
+                                                            </div>
+                                                            <div className="mt-0.5 text-[9px] font-bold uppercase tracking-tighter text-text-tertiary/60">
+                                                                {room.isSystem ? '系统群聊' : `${memberCount} 位成员`}
+                                                            </div>
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mb-1.5 px-3 text-[11px] font-bold text-text-tertiary">最近</div>
                                 {historyLoading && sessionList.length === 0 ? (
                                     <div className="flex h-full items-center justify-center py-10">
                                         <Loader2 className="w-5 h-5 animate-spin text-accent-primary/50" />

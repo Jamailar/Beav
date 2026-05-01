@@ -29,7 +29,6 @@ const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; grou
   { id: 'workboard', label: '任务', icon: ListTodo },
   { id: 'approval', label: '审批', icon: Bell },
   { id: 'subjects', label: '主体', icon: Package },
-  { id: 'team', label: '团队', icon: Users },
   { id: 'cover-studio', label: '封面', icon: ImagePlus },
   { id: 'generation-studio', label: '创作', icon: Sparkles },
   { id: 'media-library', label: '媒体', icon: Image },
