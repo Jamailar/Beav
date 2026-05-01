@@ -7,6 +7,7 @@ import type {
   CollabSessionSnapshot,
   CollabTaskRecord,
 } from '../../types';
+import { approvalArtifactRef, createCollabTaskCompletionApprovalDocket } from '../../utils/humanApproval';
 
 type BoardStatus = 'todo' | 'ready' | 'running' | 'blocked' | 'review' | 'completed';
 
@@ -125,12 +126,6 @@ function maxExecutorCountFor(member: CollabMemberRecord): number {
   const capacity = asRecord(agentCardFor(member).capacity);
   const maxThreads = Number(capacity.maxExecutorThreads || 0);
   return Number.isFinite(maxThreads) && maxThreads > 0 ? maxThreads : 5;
-}
-
-function artifactText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  const record = asRecord(value);
-  return String(record.path || record.id || record.ref || record.kind || JSON.stringify(value));
 }
 
 function completionClaimFor(report: CollabProgressReportRecord): Record<string, unknown> {
@@ -366,31 +361,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onOpenApp
     setBusy(`review:${selectedTask.id}`);
     try {
       const latest = latestReportForTask(reports, selectedTask.id);
-      await window.ipcRenderer.teamRuntime.createReviewDocket({
-        sourceKind: 'collab_task',
-        sourceId: selectedTask.id,
-        sessionId: selectedTask.sessionId,
-        taskId: selectedTask.id,
-        title: selectedTask.title,
-        summary: latest?.summary || selectedTask.resultSummary || selectedTask.description || selectedTask.objective || selectedTask.title,
-        body: [
-          selectedTask.objective || selectedTask.description || selectedTask.title,
-          latest?.summary ? `\n最新汇报：${latest.summary}` : '',
-          selectedTask.failureReason ? `\n失败原因：${selectedTask.failureReason}` : '',
-        ].filter(Boolean).join('\n'),
-        decisionType: 'completion_review',
-        priority: selectedTask.priority > 0 ? 'high' : 'normal',
-        riskLevel: selectedTask.status === 'failed' ? 'high' : 'normal',
-        artifactRefs: [...selectedTask.artifactIds, ...selectedTask.artifacts.map(artifactText)],
-        createdByAgentId: selectedTask.assigneeAgentId,
-        proposedAction: {
-          onDecisionTaskStatus: {
-            approved: 'completed',
-            rejected: 'failed',
-            changes_requested: 'claimed',
-          },
-        },
-      });
+      await createCollabTaskCompletionApprovalDocket({ task: selectedTask, latestReport: latest });
       await loadSnapshot(selectedTask.sessionId);
       onOpenApproval?.();
     } catch (reviewError) {
@@ -984,7 +955,7 @@ export function CollaborationBoard({ isActive = true, onSwitchRedclaw, onOpenApp
                   <div className="mt-3 rounded-[14px] bg-white px-2.5 py-2">
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-[#879184]">Artifacts</div>
                     <div className="space-y-1 text-[11px] text-[#526456]">
-                      {[...selectedTask.artifactIds, ...selectedTask.artifacts.map(artifactText)].slice(-6).map((item, index) => (
+                      {[...selectedTask.artifactIds, ...selectedTask.artifacts.map(approvalArtifactRef)].slice(-6).map((item, index) => (
                         <div key={`${item}:${index}`} className="truncate">{item}</div>
                       ))}
                     </div>
