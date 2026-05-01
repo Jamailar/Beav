@@ -113,10 +113,12 @@ export function RedClawProjectWorkspacePanel() {
     const [exportingMediaPlan, setExportingMediaPlan] = useState(false);
     const [renderingRoughCut, setRenderingRoughCut] = useState(false);
     const [exportingPublishPackage, setExportingPublishPackage] = useState(false);
+    const [exportingXhsPackage, setExportingXhsPackage] = useState(false);
     const [exportingReviewReport, setExportingReviewReport] = useState(false);
     const [lastMediaPlanPath, setLastMediaPlanPath] = useState('');
     const [lastRoughCutPath, setLastRoughCutPath] = useState('');
     const [lastPublishPackagePath, setLastPublishPackagePath] = useState('');
+    const [lastXhsPackagePath, setLastXhsPackagePath] = useState('');
     const [lastReviewReportPath, setLastReviewReportPath] = useState('');
     const [copiedSectionId, setCopiedSectionId] = useState('');
 
@@ -292,6 +294,28 @@ export function RedClawProjectWorkspacePanel() {
         }
     }, [activeProject, loadProjects]);
 
+    const exportXhsPackage = useCallback(async () => {
+        if (!activeProject) return;
+        setExportingXhsPackage(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawProjects.exportXhsPackage({
+                projectId: activeProject.id,
+            });
+            if (!result?.success) {
+                setError(result?.error || '导出小红书包失败');
+                return;
+            }
+            setLastXhsPackagePath(String(result.markdownPath || result.packagePath || '').trim());
+            await loadProjects();
+        } catch (err) {
+            console.error('Failed to export RedClaw XHS package:', err);
+            setError('导出小红书包失败');
+        } finally {
+            setExportingXhsPackage(false);
+        }
+    }, [activeProject, loadProjects]);
+
     useEffect(() => {
         setSectionDrafts(sectionDraftsFromProject(activeProject));
     }, [activeProject?.id, activeProject?.updatedAt]);
@@ -461,20 +485,36 @@ export function RedClawProjectWorkspacePanel() {
                                                 </>
                                             )}
                                             {activeSection.id === 'publish' && (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void exportPublishPackage()}
-                                                    disabled={exportingPublishPackage}
-                                                    className={clsx(
-                                                        'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
-                                                        exportingPublishPackage
-                                                            ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
-                                                            : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
-                                                    )}
-                                                >
-                                                    {exportingPublishPackage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
-                                                    导出发布包
-                                                </button>
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void exportPublishPackage()}
+                                                        disabled={exportingPublishPackage || exportingXhsPackage}
+                                                        className={clsx(
+                                                            'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
+                                                            exportingPublishPackage || exportingXhsPackage
+                                                                ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                                                : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
+                                                        )}
+                                                    >
+                                                        {exportingPublishPackage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
+                                                        导出发布包
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void exportXhsPackage()}
+                                                        disabled={exportingXhsPackage || exportingPublishPackage}
+                                                        className={clsx(
+                                                            'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
+                                                            exportingXhsPackage || exportingPublishPackage
+                                                                ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                                                : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
+                                                        )}
+                                                    >
+                                                        {exportingXhsPackage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
+                                                        小红书包
+                                                    </button>
+                                                </>
                                             )}
                                             {activeSection.id === 'review' && (
                                                 <button
@@ -529,6 +569,11 @@ export function RedClawProjectWorkspacePanel() {
                                     {activeSection.id === 'publish' && lastPublishPackagePath && (
                                         <div className="truncate rounded-[8px] bg-surface-secondary px-2 py-1.5 text-[11px] text-text-tertiary">
                                             发布包：{lastPublishPackagePath}
+                                        </div>
+                                    )}
+                                    {activeSection.id === 'publish' && lastXhsPackagePath && (
+                                        <div className="truncate rounded-[8px] bg-surface-secondary px-2 py-1.5 text-[11px] text-text-tertiary">
+                                            小红书包：{lastXhsPackagePath}
                                         </div>
                                     )}
                                     {activeSection.id === 'review' && lastReviewReportPath && (
