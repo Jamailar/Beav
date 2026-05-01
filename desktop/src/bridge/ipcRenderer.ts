@@ -1121,6 +1121,8 @@ function createIpcRenderer() {
     redclawOrchestration: {
       plan: (payload: { goal: string; projectId?: string; platform?: string; format?: string }) =>
         invokeChannel('redclaw:orchestration-plan', payload),
+      createTeam: (payload: { goal: string; projectId?: string; platform?: string; format?: string }) =>
+        invokeChannel('redclaw:orchestration-create-team', payload),
       getRegistry: () => invokeChannel('redclaw:orchestration-registry'),
     },
     redclawProfile: {

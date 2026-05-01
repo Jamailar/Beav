@@ -56,7 +56,9 @@ export function RedClawTeamPlanPreview() {
     const [goal, setGoal] = useState(DEFAULT_GOAL);
     const [plan, setPlan] = useState<RedClawPlan | null>(null);
     const [loading, setLoading] = useState(false);
+    const [creating, setCreating] = useState(false);
     const [error, setError] = useState('');
+    const [createdSessionId, setCreatedSessionId] = useState('');
 
     const nodes = useMemo(() => plan?.graph?.nodes || [], [plan]);
     const memoryScopes = useMemo(() => plan?.memoryScopes || [], [plan]);
@@ -66,6 +68,7 @@ export function RedClawTeamPlanPreview() {
         if (!trimmed || loading) return;
         setLoading(true);
         setError('');
+        setCreatedSessionId('');
         try {
             const result = await window.ipcRenderer.redclawOrchestration.plan({ goal: trimmed });
             if (!result?.success) {
@@ -80,6 +83,34 @@ export function RedClawTeamPlanPreview() {
             setLoading(false);
         }
     }, [goal, loading]);
+
+    const createTeam = useCallback(async () => {
+        const trimmed = goal.trim();
+        if (!trimmed || creating) return;
+        setCreating(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawOrchestration.createTeam({ goal: trimmed });
+            if (!result?.success || !result.sessionId) {
+                setError('临时团队创建失败');
+                return;
+            }
+            setCreatedSessionId(result.sessionId);
+            if (result.graph) {
+                setPlan((current) => ({
+                    ...(current || {}),
+                    success: true,
+                    runId: result.runId,
+                    graph: result.graph,
+                }));
+            }
+        } catch (err) {
+            console.error('Failed to create RedClaw orchestration team:', err);
+            setError('临时团队创建失败');
+        } finally {
+            setCreating(false);
+        }
+    }, [creating, goal]);
 
     return (
         <div className="absolute right-4 top-4 z-30 w-[min(360px,calc(100%-32px))]">
@@ -128,9 +159,32 @@ export function RedClawTeamPlanPreview() {
                             生成团队预览
                         </button>
 
+                        {nodes.length > 0 && (
+                            <button
+                                type="button"
+                                onClick={() => void createTeam()}
+                                disabled={creating}
+                                className={clsx(
+                                    'inline-flex h-9 w-full items-center justify-center gap-2 rounded-[10px] border px-3 text-sm font-semibold transition',
+                                    creating
+                                        ? 'cursor-not-allowed border-border bg-surface-secondary text-text-tertiary'
+                                        : 'border-border bg-surface-primary text-text-primary hover:bg-surface-secondary'
+                                )}
+                            >
+                                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <UsersRound className="h-4 w-4" />}
+                                创建临时团队
+                            </button>
+                        )}
+
                         {error && (
-                            <div className="rounded-[10px] border border-brand-red/20 bg-brand-red/8 px-3 py-2 text-xs text-brand-red">
+                            <div className="rounded-[10px] border border-brand-red/20 bg-brand-red/10 px-3 py-2 text-xs text-brand-red">
                                 {error}
+                            </div>
+                        )}
+
+                        {createdSessionId && (
+                            <div className="rounded-[10px] border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700">
+                                已创建团队：{createdSessionId}
                             </div>
                         )}
 
