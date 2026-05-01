@@ -880,6 +880,122 @@ fn build_redclaw_media_plan_export(project: &crate::runtime::RedclawProjectRecor
     })
 }
 
+fn media_plan_asset_path(item: &Value) -> Option<String> {
+    for key in [
+        "path",
+        "absolutePath",
+        "absolute_path",
+        "filePath",
+        "file",
+        "source",
+        "src",
+        "url",
+    ] {
+        if let Some(value) = item
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn media_plan_duration_seconds(item: &Value) -> Option<f64> {
+    for key in ["duration", "durationSeconds", "seconds"] {
+        if let Some(value) = item.get(key).and_then(Value::as_f64) {
+            return Some(value.max(0.0));
+        }
+        if let Some(value) = item.get(key).and_then(Value::as_i64) {
+            return Some((value as f64).max(0.0));
+        }
+    }
+    let start = item
+        .get("startAt")
+        .or_else(|| item.get("start"))
+        .and_then(Value::as_f64);
+    let end = item
+        .get("endAt")
+        .or_else(|| item.get("end"))
+        .and_then(Value::as_f64);
+    match (start, end) {
+        (Some(start), Some(end)) if end > start => Some(end - start),
+        _ => None,
+    }
+}
+
+fn media_plan_concat_items(plan: &Value) -> Vec<(String, Option<f64>)> {
+    let mut items = Vec::new();
+    for key in ["timelinePlan", "matchedAssets"] {
+        for item in plan
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(path) = media_plan_asset_path(item) {
+                items.push((path, media_plan_duration_seconds(item)));
+            }
+        }
+    }
+    items
+}
+
+fn ffconcat_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "'\\''")
+}
+
+fn build_ffconcat(items: &[(String, Option<f64>)]) -> String {
+    let mut body = String::from("ffconcat version 1.0\n");
+    for (path, duration) in items {
+        body.push_str(&format!("file '{}'\n", ffconcat_escape(path)));
+        if let Some(duration) = duration.filter(|value| *value > 0.0) {
+            body.push_str(&format!("duration {:.3}\n", duration));
+        }
+    }
+    body
+}
+
+fn build_media_plan_readme(project_id: &str, items: &[(String, Option<f64>)]) -> String {
+    let mut body = String::new();
+    body.push_str(&format!(
+        "# RedClaw Media Plan\n\nProject: `{project_id}`\n\n"
+    ));
+    body.push_str("- `media-plan.json`: structured RedClaw media plan export.\n");
+    body.push_str("- `rough-cut.ffconcat`: ffmpeg concat input generated from matched timeline assets when paths are available.\n\n");
+    if items.is_empty() {
+        body.push_str("No concrete media file paths were found in the current MediaPlan. Ask Media Agent to match local assets before rendering a rough cut.\n");
+    } else {
+        body.push_str("Preview command:\n\n```bash\nffmpeg -safe 0 -f concat -i rough-cut.ffconcat -c copy rough-cut.mp4\n```\n");
+    }
+    body
+}
+
+#[cfg(test)]
+mod redclaw_media_plan_tests {
+    use super::*;
+
+    #[test]
+    fn ffconcat_includes_asset_paths_and_durations() {
+        let plan = json!({
+            "timelinePlan": [
+                { "path": "/tmp/a.mp4", "durationSeconds": 2.5 },
+                { "filePath": "/tmp/b.mp4", "start": 1.0, "end": 4.0 }
+            ]
+        });
+        let items = media_plan_concat_items(&plan);
+        let body = build_ffconcat(&items);
+
+        assert!(body.contains("ffconcat version 1.0"));
+        assert!(body.contains("file '/tmp/a.mp4'"));
+        assert!(body.contains("duration 2.500"));
+        assert!(body.contains("file '/tmp/b.mp4'"));
+        assert!(body.contains("duration 3.000"));
+    }
+}
+
 fn export_redclaw_media_plan(
     state: &State<'_, AppState>,
     payload: &Value,
@@ -897,10 +1013,20 @@ fn export_redclaw_media_plan(
             .find(|item| item.id == project_id)
             .ok_or_else(|| "RedClaw project not found".to_string())?;
         let export_value = build_redclaw_media_plan_export(project);
-        let path = export_dir.join(format!("{}-media-plan.json", safe_export_slug(&project.id)));
+        let package_dir = export_dir.join(safe_export_slug(&project.id));
+        std::fs::create_dir_all(&package_dir).map_err(|error| error.to_string())?;
+        let path = package_dir.join("media-plan.json");
+        let concat_path = package_dir.join("rough-cut.ffconcat");
+        let readme_path = package_dir.join("README.md");
         let body =
             serde_json::to_string_pretty(&export_value).map_err(|error| error.to_string())?;
         write_text_file(&path, &body)?;
+        let concat_items = media_plan_concat_items(&export_value);
+        write_text_file(&concat_path, &build_ffconcat(&concat_items))?;
+        write_text_file(
+            &readme_path,
+            &build_media_plan_readme(&project.id, &concat_items),
+        )?;
 
         let now = now_iso();
         let mut metadata = project
@@ -915,6 +1041,9 @@ fn export_redclaw_media_plan(
             .unwrap_or_default();
         exports.push(json!({
             "path": path.display().to_string(),
+            "packagePath": package_dir.display().to_string(),
+            "concatPath": concat_path.display().to_string(),
+            "readmePath": readme_path.display().to_string(),
             "schema": "redclaw.mediaPlan.v1",
             "createdAt": now,
         }));
@@ -925,6 +1054,9 @@ fn export_redclaw_media_plan(
             "success": true,
             "project": project,
             "path": path.display().to_string(),
+            "packagePath": package_dir.display().to_string(),
+            "concatPath": concat_path.display().to_string(),
+            "readmePath": readme_path.display().to_string(),
             "plan": export_value
         }))
     })
