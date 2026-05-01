@@ -9,8 +9,8 @@ import {
   findAiPresetById,
   inferPresetIdByEndpoint
 } from '../config/aiSources';
-import { appAlert } from '../utils/appDialogs';
-import { AdvisorModal, type Advisor } from './Advisors';
+import { appAlert, appConfirm } from '../utils/appDialogs';
+import { AdvisorModal, AdvisorSettingsPanel, type Advisor } from './Advisors';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import {
   type AgentTaskSnapshot,
@@ -186,20 +186,20 @@ function TeamSettingsSection({
   busyAdvisorId,
   draggingAdvisorId,
   onToggleVisible,
-  onEdit,
+  onOpenSettings,
   onDragStart,
   onDragOver,
-  onDrop,
+  onDragEnd,
 }: {
   advisors: Advisor[];
   loading: boolean;
   busyAdvisorId: string | null;
   draggingAdvisorId: string | null;
   onToggleVisible: (advisor: Advisor) => void;
-  onEdit: (advisor: Advisor) => void;
+  onOpenSettings: (advisor: Advisor) => void;
   onDragStart: (advisorId: string) => void;
   onDragOver: (advisorId: string) => void;
-  onDrop: () => void;
+  onDragEnd: () => void;
 }) {
   return (
     <section className="space-y-4">
@@ -225,14 +225,23 @@ function TeamSettingsSection({
               return (
                 <div
                   key={advisor.id}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', advisor.id);
+                    onDragStart(advisor.id);
+                  }}
                   onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    onDragOver(advisor.id);
+                  }}
+                  onDragEnter={(event) => {
                     event.preventDefault();
                     onDragOver(advisor.id);
                   }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    onDrop();
-                  }}
+                  onDrop={(event) => event.preventDefault()}
+                  onDragEnd={onDragEnd}
                   className={clsx(
                     'flex items-center gap-3 px-3 py-3 transition-colors',
                     isDragging ? 'bg-surface-secondary/80' : 'bg-surface-primary'
@@ -243,9 +252,10 @@ function TeamSettingsSection({
                     draggable
                     onDragStart={(event) => {
                       event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', advisor.id);
                       onDragStart(advisor.id);
                     }}
-                    onDragEnd={onDrop}
+                    onDragEnd={onDragEnd}
                     className="flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary active:cursor-grabbing"
                     title="拖动排序"
                     aria-label="拖动排序"
@@ -271,23 +281,23 @@ function TeamSettingsSection({
                     onClick={() => onToggleVisible(advisor)}
                     disabled={busy}
                     className={clsx(
-                      'relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50',
-                      visible ? 'bg-accent-primary' : 'bg-surface-secondary'
+                      'relative h-7 w-[3.25rem] shrink-0 rounded-full transition-colors duration-200 disabled:opacity-50',
+                      visible ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
                     )}
                     title={visible ? '已展示' : '已隐藏'}
                     aria-label={visible ? '在 RedClaw 展示' : '不在 RedClaw 展示'}
                   >
                     <span
                       className={clsx(
-                        'absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform',
-                        visible ? 'translate-x-6' : 'translate-x-1'
+                        'absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.22)] transition-transform duration-200',
+                        visible ? 'translate-x-6' : 'translate-x-0'
                       )}
                     />
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => onEdit(advisor)}
+                    onClick={() => onOpenSettings(advisor)}
                     className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
                     title="设置成员"
                     aria-label="设置成员"
@@ -685,8 +695,12 @@ export function Settings({
   const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
   const [teamAdvisorBusyId, setTeamAdvisorBusyId] = useState<string | null>(null);
   const [editingTeamAdvisor, setEditingTeamAdvisor] = useState<Advisor | null>(null);
+  const [settingsTeamAdvisor, setSettingsTeamAdvisor] = useState<Advisor | null>(null);
   const [draggingTeamAdvisorId, setDraggingTeamAdvisorId] = useState<string | null>(null);
+  const [isTeamSystemPromptExpanded, setIsTeamSystemPromptExpanded] = useState(false);
+  const [isTeamOptimizingPrompt, setIsTeamOptimizingPrompt] = useState(false);
   const teamAdvisorOrderRef = useRef<Advisor[]>([]);
+  const teamAdvisorDragIdRef = useRef<string | null>(null);
   const initialFileIndexDashboardCache = useMemo(() => readCachedFileIndexDashboard(), []);
   const [baseSettingsLoadedRevision, setBaseSettingsLoadedRevision] = useState(0);
   const [formData, setFormData] = useState<any>({
@@ -4268,10 +4282,12 @@ export function Settings({
       const sorted = sortTeamAdvisors(Array.isArray(list) ? list : []);
       setTeamAdvisors(sorted);
       teamAdvisorOrderRef.current = sorted;
+      return sorted;
     } catch (error) {
       console.error('Failed to load team advisors:', error);
       setTestMsg('成员列表读取失败');
       setStatus('error');
+      return [];
     } finally {
       setIsTeamAdvisorsLoading(false);
     }
@@ -4312,10 +4328,16 @@ export function Settings({
     });
   }, []);
 
+  const handleTeamAdvisorDragStart = useCallback((advisorId: string) => {
+    teamAdvisorDragIdRef.current = advisorId;
+    setDraggingTeamAdvisorId(advisorId);
+  }, []);
+
   const handleTeamAdvisorDragOver = useCallback((targetAdvisorId: string) => {
     setTeamAdvisors((prev) => {
-      if (!draggingTeamAdvisorId || draggingTeamAdvisorId === targetAdvisorId) return prev;
-      const fromIndex = prev.findIndex((item) => item.id === draggingTeamAdvisorId);
+      const draggingId = teamAdvisorDragIdRef.current;
+      if (!draggingId || draggingId === targetAdvisorId) return prev;
+      const fromIndex = prev.findIndex((item) => item.id === draggingId);
       const toIndex = prev.findIndex((item) => item.id === targetAdvisorId);
       if (fromIndex < 0 || toIndex < 0) return prev;
       const next = [...prev];
@@ -4325,10 +4347,11 @@ export function Settings({
       teamAdvisorOrderRef.current = ordered;
       return ordered;
     });
-  }, [draggingTeamAdvisorId]);
+  }, []);
 
-  const handleTeamAdvisorDrop = useCallback(() => {
-    if (!draggingTeamAdvisorId) return;
+  const handleTeamAdvisorDragEnd = useCallback(() => {
+    if (!teamAdvisorDragIdRef.current) return;
+    teamAdvisorDragIdRef.current = null;
     setDraggingTeamAdvisorId(null);
     void persistTeamAdvisorOrder(teamAdvisorOrderRef.current).catch((error) => {
       console.error('Failed to persist advisor order:', error);
@@ -4336,7 +4359,140 @@ export function Settings({
       setStatus('error');
       void loadTeamAdvisors();
     });
-  }, [draggingTeamAdvisorId, loadTeamAdvisors, persistTeamAdvisorOrder]);
+  }, [loadTeamAdvisors, persistTeamAdvisorOrder]);
+
+  const refreshTeamAdvisor = useCallback(async (advisorId: string) => {
+    const list = await loadTeamAdvisors();
+    const updated = list.find((item) => item.id === advisorId) || null;
+    if (updated) {
+      setSettingsTeamAdvisor(updated);
+      setEditingTeamAdvisor((prev) => prev?.id === advisorId ? updated : prev);
+    }
+    return updated;
+  }, [loadTeamAdvisors]);
+
+  const handleOpenTeamAdvisorSettings = useCallback((advisor: Advisor) => {
+    setSettingsTeamAdvisor(advisor);
+    setIsTeamSystemPromptExpanded(false);
+  }, []);
+
+  const handleDeleteTeamAdvisor = useCallback(async (advisor: Advisor) => {
+    if (!(await appConfirm('确定要删除这个智囊团成员吗？', { title: '删除成员', confirmLabel: '删除', tone: 'danger' }))) return;
+    try {
+      await window.ipcRenderer.advisors.delete(advisor.id);
+      setSettingsTeamAdvisor(null);
+      setEditingTeamAdvisor(null);
+      await loadTeamAdvisors();
+      window.dispatchEvent(new Event('redclaw:team-settings-changed'));
+    } catch (error) {
+      console.error('Failed to delete advisor:', error);
+      setTestMsg('成员删除失败');
+      setStatus('error');
+    }
+  }, [loadTeamAdvisors]);
+
+  const handleUploadTeamAdvisorKnowledge = useCallback(async (advisor: Advisor) => {
+    try {
+      await window.ipcRenderer.advisors.uploadKnowledge(advisor.id);
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to upload advisor knowledge:', error);
+      setTestMsg('知识库上传失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleDeleteTeamAdvisorKnowledge = useCallback(async (advisor: Advisor, fileName: string) => {
+    if (!(await appConfirm(`确定要删除知识库文件 "${fileName}" 吗？`, { title: '删除知识文件', confirmLabel: '删除', tone: 'danger' }))) return;
+    try {
+      await window.ipcRenderer.advisors.deleteKnowledge({ advisorId: advisor.id, fileName });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to delete advisor knowledge:', error);
+      setTestMsg('知识文件删除失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleOptimizeTeamAdvisorPrompt = useCallback(async (advisor: Advisor) => {
+    setIsTeamOptimizingPrompt(true);
+    try {
+      const result = await window.ipcRenderer.advisors.optimizePromptDeep({
+        advisorId: advisor.id,
+        name: advisor.name,
+        personality: advisor.personality,
+        currentPrompt: advisor.systemPrompt,
+      }) as { success: boolean; prompt?: string; error?: string };
+      if (!result.success || !result.prompt) {
+        throw new Error(result.error || '优化失败');
+      }
+      await window.ipcRenderer.advisors.update({
+        ...advisor,
+        systemPrompt: result.prompt,
+      });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to optimize advisor prompt:', error);
+      void appAlert(`优化失败：${error instanceof Error ? error.message : '未知错误'}`);
+    } finally {
+      setIsTeamOptimizingPrompt(false);
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handlePromoteTeamMemberSkillCandidate = useCallback(async (advisor: Advisor) => {
+    try {
+      await window.ipcRenderer.advisors.promoteMemberSkillCandidate({
+        advisorId: advisor.id,
+        candidateVersion: advisor.memberSkillCandidateVersion,
+      });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to promote member skill candidate:', error);
+      setTestMsg('成员技能候选发布失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleDiscardTeamMemberSkillCandidate = useCallback(async (advisor: Advisor) => {
+    try {
+      await window.ipcRenderer.advisors.discardMemberSkillCandidate({ advisorId: advisor.id });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to discard member skill candidate:', error);
+      setTestMsg('成员技能候选丢弃失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleRefreshTeamMemberSkill = useCallback(async (advisor: Advisor) => {
+    try {
+      const result = await window.ipcRenderer.advisors.distillMemberSkill({ advisorId: advisor.id }) as { success?: boolean; error?: string };
+      if (result && result.success === false) {
+        throw new Error(result.error || '成员技能蒸馏失败');
+      }
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to refresh member skill:', error);
+      void appAlert(`成员技能蒸馏失败：${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  }, [refreshTeamAdvisor]);
+
+  const handleRollbackTeamMemberSkillVersion = useCallback(async (advisor: Advisor, version: string) => {
+    if (!version) return;
+    if (!(await appConfirm(`确定要把 ${advisor.name} 回滚到成员技能版本 "${version}" 吗？`, {
+      title: '回滚成员技能',
+      confirmLabel: '回滚',
+      tone: 'danger',
+    }))) return;
+    try {
+      await window.ipcRenderer.advisors.rollbackMemberSkillVersion({ advisorId: advisor.id, version });
+      await refreshTeamAdvisor(advisor.id);
+    } catch (error) {
+      console.error('Failed to rollback member skill version:', error);
+      setTestMsg('成员技能回滚失败');
+      setStatus('error');
+    }
+  }, [refreshTeamAdvisor]);
 
   const handleSaveTeamAdvisor = useCallback(async (
     data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>,
@@ -4349,9 +4505,9 @@ export function Settings({
       redclawOrder: editingTeamAdvisor.redclawOrder,
     });
     setEditingTeamAdvisor(null);
-    await loadTeamAdvisors();
+    await refreshTeamAdvisor(editingTeamAdvisor.id);
     window.dispatchEvent(new Event('redclaw:team-settings-changed'));
-  }, [editingTeamAdvisor, loadTeamAdvisors]);
+  }, [editingTeamAdvisor, refreshTeamAdvisor]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
@@ -5980,10 +6136,10 @@ export function Settings({
                 busyAdvisorId={teamAdvisorBusyId}
                 draggingAdvisorId={draggingTeamAdvisorId}
                 onToggleVisible={handleToggleTeamAdvisorVisible}
-                onEdit={setEditingTeamAdvisor}
-                onDragStart={setDraggingTeamAdvisorId}
+                onOpenSettings={handleOpenTeamAdvisorSettings}
+                onDragStart={handleTeamAdvisorDragStart}
                 onDragOver={handleTeamAdvisorDragOver}
-                onDrop={handleTeamAdvisorDrop}
+                onDragEnd={handleTeamAdvisorDragEnd}
               />
             )}
 
@@ -6225,6 +6381,36 @@ export function Settings({
               onSave={handleSaveTeamAdvisor}
               onClose={() => setEditingTeamAdvisor(null)}
             />
+          )}
+          {settingsTeamAdvisor && (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[2px] transition-opacity"
+                onClick={() => setSettingsTeamAdvisor(null)}
+                aria-label="关闭成员设置"
+              />
+              <aside className="fixed bottom-4 right-4 top-4 z-40 w-[30rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/60 bg-white/85 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.16)] backdrop-blur-[40px] animate-slide-in-right">
+                <AdvisorSettingsPanel
+                  advisor={settingsTeamAdvisor}
+                  isActive={isActive}
+                  downloadStatus={null}
+                  isSystemPromptExpanded={isTeamSystemPromptExpanded}
+                  setIsSystemPromptExpanded={setIsTeamSystemPromptExpanded}
+                  isOptimizingPrompt={isTeamOptimizingPrompt}
+                  onOptimizePrompt={() => void handleOptimizeTeamAdvisorPrompt(settingsTeamAdvisor)}
+                  onUploadKnowledge={() => void handleUploadTeamAdvisorKnowledge(settingsTeamAdvisor)}
+                  onDeleteKnowledge={(fileName) => void handleDeleteTeamAdvisorKnowledge(settingsTeamAdvisor, fileName)}
+                  onPromoteMemberSkillCandidate={() => void handlePromoteTeamMemberSkillCandidate(settingsTeamAdvisor)}
+                  onDiscardMemberSkillCandidate={() => void handleDiscardTeamMemberSkillCandidate(settingsTeamAdvisor)}
+                  onRefreshMemberSkill={() => handleRefreshTeamMemberSkill(settingsTeamAdvisor)}
+                  onRollbackMemberSkillVersion={(version) => void handleRollbackTeamMemberSkillVersion(settingsTeamAdvisor, version)}
+                  onEdit={() => setEditingTeamAdvisor(settingsTeamAdvisor)}
+                  onDelete={() => void handleDeleteTeamAdvisor(settingsTeamAdvisor)}
+                  onClose={() => setSettingsTeamAdvisor(null)}
+                />
+              </aside>
+            </>
           )}
           {isCreateAiSourceModalOpen && (
             <div

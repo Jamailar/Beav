@@ -1053,7 +1053,7 @@ function AdvisorHistoryPanel({
     );
 }
 
-function AdvisorSettingsPanel({
+export function AdvisorSettingsPanel({
     advisor,
     isActive,
     downloadStatus,
