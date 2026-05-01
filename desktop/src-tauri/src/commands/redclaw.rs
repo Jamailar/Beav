@@ -107,6 +107,7 @@ pub fn handle_redclaw_channel(
         "redclaw:project-section-update" => update_redclaw_project_section(state, payload),
         "redclaw:media-plan-export" => export_redclaw_media_plan(state, payload),
         "redclaw:media-plan-render" => render_redclaw_rough_cut(state, payload),
+        "redclaw:publish-package-export" => export_redclaw_publish_package(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -847,13 +848,176 @@ fn redclaw_output_summary(output: Option<&Value>) -> Value {
     })
 }
 
-fn build_redclaw_media_plan_export(project: &crate::runtime::RedclawProjectRecord) -> Value {
-    let metadata = project.metadata.as_ref();
-    let outputs = metadata
+fn orchestration_outputs_for_project(project: &crate::runtime::RedclawProjectRecord) -> Vec<Value> {
+    project
+        .metadata
+        .as_ref()
         .and_then(|value| value.get("orchestrationOutputs"))
         .and_then(Value::as_array)
         .cloned()
+        .unwrap_or_default()
+}
+
+fn value_string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    if item.is_object() {
+                        Some(item.to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+        .collect()
+}
+
+fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
+fn publish_package_from_project(project: &crate::runtime::RedclawProjectRecord) -> Value {
+    let outputs = orchestration_outputs_for_project(project);
+    let publish = output_for_role(&outputs, "publish_agent");
+    let publish_artifact = parsed_output_artifact(publish.as_ref());
+    let raw_artifact = publish
+        .as_ref()
+        .and_then(|value| value.get("artifact"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .unwrap_or_default();
+    let title_options = publish_artifact
+        .get("titleOptions")
+        .or_else(|| publish_artifact.get("titles"))
+        .or_else(|| publish_artifact.get("title_options"));
+    let cover_options = publish_artifact
+        .get("coverOptions")
+        .or_else(|| publish_artifact.get("coverCopy"))
+        .or_else(|| publish_artifact.get("cover"))
+        .or_else(|| publish_artifact.get("cover_options"));
+    let body = first_string_field(
+        &publish_artifact,
+        &["body", "caption", "postBody", "正文", "copy"],
+    )
+    .or_else(|| {
+        publish
+            .as_ref()
+            .and_then(|value| value.get("summary"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    })
+    .unwrap_or_else(|| raw_artifact.to_string());
+    json!({
+        "schema": "redclaw.publishPackage.v1",
+        "project": {
+            "id": project.id,
+            "goal": project.goal,
+            "platform": project.platform,
+            "contentFormat": project.content_format,
+            "runtimeTaskId": project.runtime_task_id,
+        },
+        "generatedAt": now_iso(),
+        "titleOptions": value_string_list(title_options),
+        "coverOptions": value_string_list(cover_options),
+        "body": body,
+        "hashtags": value_string_list(
+            publish_artifact.get("hashtags")
+                .or_else(|| publish_artifact.get("tags"))
+        ),
+        "checklist": value_string_list(publish_artifact.get("checklist")),
+        "raw": publish_artifact,
+        "source": redclaw_output_summary(publish.as_ref()),
+    })
+}
+
+fn markdown_list(items: &[String], empty: &str) -> String {
+    if items.is_empty() {
+        format!("- {empty}\n")
+    } else {
+        items
+            .iter()
+            .map(|item| format!("- {item}\n"))
+            .collect::<String>()
+    }
+}
+
+fn build_publish_package_markdown(package: &Value) -> String {
+    let titles = value_string_list(package.get("titleOptions"));
+    let covers = value_string_list(package.get("coverOptions"));
+    let hashtags = value_string_list(package.get("hashtags"));
+    let checklist = value_string_list(package.get("checklist"));
+    let body = package
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let project = package.get("project").cloned().unwrap_or_else(|| json!({}));
+    let mut markdown = String::new();
+    markdown.push_str("# RedClaw Publish Package\n\n");
+    markdown.push_str(&format!(
+        "Project: `{}`\n\n",
+        project
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    ));
+    markdown.push_str("## Titles\n\n");
+    markdown.push_str(&markdown_list(&titles, "No title options generated."));
+    markdown.push_str("\n## Cover Copy\n\n");
+    markdown.push_str(&markdown_list(&covers, "No cover copy generated."));
+    markdown.push_str("\n## Body\n\n");
+    markdown.push_str(if body.is_empty() {
+        "No body generated."
+    } else {
+        body
+    });
+    markdown.push_str("\n\n## Hashtags\n\n");
+    markdown.push_str(&markdown_list(&hashtags, "No hashtags generated."));
+    markdown.push_str("\n## Checklist\n\n");
+    markdown.push_str(&markdown_list(&checklist, "No checklist generated."));
+    markdown
+}
+
+fn build_cover_brief_markdown(package: &Value) -> String {
+    let titles = value_string_list(package.get("titleOptions"));
+    let covers = value_string_list(package.get("coverOptions"));
+    let project = package.get("project").cloned().unwrap_or_else(|| json!({}));
+    let mut markdown = String::new();
+    markdown.push_str("# RedClaw Cover Brief\n\n");
+    markdown.push_str(&format!(
+        "Platform: {}\n\n",
+        project
+            .get("platform")
+            .and_then(Value::as_str)
+            .unwrap_or("auto")
+    ));
+    markdown.push_str("## Primary Title Candidates\n\n");
+    markdown.push_str(&markdown_list(&titles, "No title options generated."));
+    markdown.push_str("\n## Cover Text Candidates\n\n");
+    markdown.push_str(&markdown_list(&covers, "No cover copy generated."));
+    markdown.push_str("\n## Visual Direction\n\nUse the creator profile, platform fit, and selected title to generate a clean cover image. Keep text legible on mobile.\n");
+    markdown
+}
+
+fn build_redclaw_media_plan_export(project: &crate::runtime::RedclawProjectRecord) -> Value {
+    let outputs = orchestration_outputs_for_project(project);
     let script = output_for_role(&outputs, "script_agent");
     let storyboard = output_for_role(&outputs, "storyboard_agent");
     let media = output_for_role(&outputs, "media_agent");
@@ -1103,6 +1267,28 @@ mod redclaw_media_plan_tests {
 
         assert_eq!(entries, vec!["/tmp/a.mp4", "relative/b.mp4"]);
     }
+
+    #[test]
+    fn publish_package_markdown_includes_titles_body_and_cover_copy() {
+        let package = json!({
+            "schema": "redclaw.publishPackage.v1",
+            "project": { "id": "project-1", "platform": "xiaohongshu" },
+            "titleOptions": ["Title A", "Title B"],
+            "coverOptions": ["Cover line"],
+            "body": "Post body",
+            "hashtags": ["#redclaw"],
+            "checklist": ["Fact checked"]
+        });
+        let markdown = build_publish_package_markdown(&package);
+        let cover = build_cover_brief_markdown(&package);
+
+        assert!(markdown.contains("Title A"));
+        assert!(markdown.contains("Cover line"));
+        assert!(markdown.contains("Post body"));
+        assert!(markdown.contains("#redclaw"));
+        assert!(cover.contains("Cover line"));
+        assert!(cover.contains("Platform: xiaohongshu"));
+    }
 }
 
 fn export_redclaw_media_plan(
@@ -1236,6 +1422,71 @@ fn render_redclaw_rough_cut(state: &State<'_, AppState>, payload: &Value) -> Res
             "inputCount": inputs.len(),
             "sizeBytes": output_size,
             "ffmpeg": ffmpeg,
+        }))
+    })
+}
+
+fn export_redclaw_publish_package(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let project_id =
+        payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
+    let root = workspace_root(state)?;
+    let export_dir = root
+        .join("redclaw")
+        .join("publish-packages")
+        .join(safe_export_slug(&project_id));
+    std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
+    with_store_mut(state, |store| {
+        let project = store
+            .redclaw_state
+            .projects
+            .iter_mut()
+            .find(|item| item.id == project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())?;
+        let package = publish_package_from_project(project);
+        let package_path = export_dir.join("publish-package.json");
+        let markdown_path = export_dir.join("publish-package.md");
+        let cover_brief_path = export_dir.join("cover-brief.md");
+        write_text_file(
+            &package_path,
+            &serde_json::to_string_pretty(&package).map_err(|error| error.to_string())?,
+        )?;
+        write_text_file(&markdown_path, &build_publish_package_markdown(&package))?;
+        write_text_file(&cover_brief_path, &build_cover_brief_markdown(&package))?;
+
+        let now = now_iso();
+        let export_record = json!({
+            "packagePath": export_dir.display().to_string(),
+            "jsonPath": package_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "coverBriefPath": cover_brief_path.display().to_string(),
+            "schema": "redclaw.publishPackage.v1",
+            "createdAt": now,
+        });
+        let mut metadata = project
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut exports = metadata
+            .get("publishPackageExports")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        exports.push(export_record);
+        metadata.insert("publishPackageExports".to_string(), Value::Array(exports));
+        project.metadata = Some(Value::Object(metadata));
+        project.updated_at = now;
+        Ok(json!({
+            "success": true,
+            "project": project,
+            "packagePath": export_dir.display().to_string(),
+            "jsonPath": package_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "coverBriefPath": cover_brief_path.display().to_string(),
+            "package": package,
         }))
     })
 }

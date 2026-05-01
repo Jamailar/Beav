@@ -1137,6 +1137,8 @@ function createIpcRenderer() {
         invokeChannel('redclaw:media-plan-export', payload),
       renderRoughCut: (payload: { projectId: string }) =>
         invokeChannel('redclaw:media-plan-render', payload),
+      exportPublishPackage: (payload: { projectId: string }) =>
+        invokeChannel('redclaw:publish-package-export', payload),
     },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
