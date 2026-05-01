@@ -1,6 +1,6 @@
 ---
 doc_type: plan
-execution_status: not_started
+execution_status: in_progress
 last_updated: 2026-05-01
 ---
 
