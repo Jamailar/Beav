@@ -330,6 +330,9 @@ function renderAccountBindingNotice(nextContext, healthPayload) {
   const pageInfo = nextContext?.pageInfo || {};
   const pageType = nextContext?.pageIdentity?.pageType || inferPageType(pageInfo, nextContext?.tab || {});
   const isXhsProfile = platformKey === 'xiaohongshu' && pageType === 'profile';
+  const canBindCurrentPlatform = platformKey === 'douyin'
+    || platformKey === 'bilibili'
+    || isXhsProfile;
   const platformLabels = {
     xiaohongshu: '小红书',
     douyin: '抖音',
@@ -337,8 +340,11 @@ function renderAccountBindingNotice(nextContext, healthPayload) {
   };
 
   elements.accountBindingTitle.textContent = '当前空间还没有绑定自媒体账号';
-  if (isXhsProfile) {
-    elements.accountBindingCopy.textContent = '用当前小红书主页绑定运营账号，并自动学习历史内容。';
+  if (canBindCurrentPlatform) {
+    const platformLabel = platformLabels[platformKey] || '当前平台';
+    elements.accountBindingCopy.textContent = isXhsProfile
+      ? '用当前小红书主页绑定运营账号，并自动学习历史内容。'
+      : `用当前${platformLabel}页面绑定运营账号，并把当前内容加入账号档案。`;
     elements.accountBindingAction.textContent = '绑定并学习这个账号';
     elements.accountBindingAction.disabled = Boolean(capturePendingAction);
     return;
@@ -546,11 +552,31 @@ async function bindCurrentProfileAsAccount() {
   renderCaptureActions(context);
   try {
     const tab = context?.tab || {};
+    const view = resolvePageIdentity(context);
+    const platformKey = healthPlatformKey(view.platform);
     const baseMessage = {
       tabId,
       tabUrl: tab.url || '',
       windowId: Number(tab.windowId || 0) || undefined,
     };
+    if (platformKey === 'douyin' || platformKey === 'bilibili') {
+      const response = await sendMessage({
+        type: 'account:bind-current-platform',
+        platform: platformKey,
+        ...baseMessage,
+      });
+      if (response.taskQueue) {
+        renderTaskQueue(response.taskQueue);
+        renderTaskLogs(response.taskQueue.logs || []);
+      }
+      captureFeedback = {
+        status: 'success',
+        message: summarizeActionResponse(response, '账号档案已绑定'),
+      };
+      await refreshTaskQueue(false);
+      await refreshContext();
+      return;
+    }
     await sendMessage({
       type: 'xhs:collect-current-blogger',
       ...baseMessage,
