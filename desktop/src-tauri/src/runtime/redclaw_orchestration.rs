@@ -9,11 +9,18 @@ use crate::{make_id, now_iso, payload_string, AppStore};
 pub enum RedclawAgentId {
     ResearchAgent,
     InsightAgent,
+    TopicAgent,
+    NoteArchitectAgent,
     ScriptAgent,
+    CopyAgent,
     StoryboardAgent,
+    VisualDirectorAgent,
     MediaAgent,
+    ImageAgent,
+    LayoutAgent,
     EditorAgent,
     PublishAgent,
+    ComplianceAgent,
     ReviewAgent,
 }
 
@@ -127,13 +134,30 @@ fn detect_format(text: &str) -> Option<String> {
     if includes_any(text, &["口播", "短视频", "视频", "分镜", "粗剪"]) {
         return Some("short_video".to_string());
     }
-    if includes_any(text, &["图文", "笔记", "帖子", "post"]) {
-        return Some("note".to_string());
+    if includes_any(text, &["配图", "生成图", "生成图片", "封面图", "图片资产"]) {
+        return Some("xhs_image_assets".to_string());
+    }
+    if includes_any(text, &["图文", "多图", "轮播", "卡片", "carousel"]) {
+        return Some("xhs_image_text".to_string());
+    }
+    if includes_any(
+        text,
+        &["小红书", "xiaohongshu", "rednote", "笔记", "帖子", "post"],
+    ) {
+        return Some("xhs_article".to_string());
     }
     if includes_any(text, &["长视频", "长稿", "长文"]) {
         return Some("long_form".to_string());
     }
     None
+}
+
+fn is_xhs_format(content_format: Option<&str>, platform: Option<&str>) -> bool {
+    platform == Some("xiaohongshu")
+        || matches!(
+            content_format,
+            Some("xhs_article") | Some("xhs_image_text") | Some("xhs_image_assets")
+        )
 }
 
 fn node(
@@ -205,6 +229,47 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
             output_schema: "CreativeBrief".to_string(),
         },
         RedclawAgentSpec {
+            id: RedclawAgentId::TopicAgent,
+            mission: "为小红书创作选择选题、爆点、人群痛点和搜索关键词。".to_string(),
+            responsibilities: vec![
+                "判断笔记类型".to_string(),
+                "提炼人群痛点".to_string(),
+                "输出小红书搜索词和标题 hook".to_string(),
+            ],
+            allowed_skills: vec![
+                "xhs.topic_brief".to_string(),
+                "xhs.search_keyword_plan".to_string(),
+                "insight.idea_score".to_string(),
+            ],
+            allowed_tools: vec!["app_cli".to_string()],
+            readable_memory_scopes: vec![
+                "creator".to_string(),
+                "platform".to_string(),
+                "knowledge".to_string(),
+            ],
+            output_schema: "XhsTopicBrief".to_string(),
+        },
+        RedclawAgentSpec {
+            id: RedclawAgentId::NoteArchitectAgent,
+            mission: "把小红书选题拆成文章或图文笔记结构，而不是直接写全文。".to_string(),
+            responsibilities: vec![
+                "设计笔记开头策略".to_string(),
+                "拆正文段落".to_string(),
+                "规划多图页目的和顺序".to_string(),
+            ],
+            allowed_skills: vec![
+                "xhs.note_architecture".to_string(),
+                "xhs.carousel_page_plan".to_string(),
+            ],
+            allowed_tools: vec!["app_cli".to_string()],
+            readable_memory_scopes: vec![
+                "creator".to_string(),
+                "platform".to_string(),
+                "project".to_string(),
+            ],
+            output_schema: "XhsNoteArchitecture".to_string(),
+        },
+        RedclawAgentSpec {
             id: RedclawAgentId::ScriptAgent,
             mission: "把 brief 转成符合用户风格和平台格式的脚本/文案。".to_string(),
             responsibilities: vec![
@@ -226,6 +291,27 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
             output_schema: "ScriptDocument".to_string(),
         },
         RedclawAgentSpec {
+            id: RedclawAgentId::CopyAgent,
+            mission: "把小红书笔记结构写成标题、封面标题、正文、CTA 和标签。".to_string(),
+            responsibilities: vec![
+                "写小红书正文".to_string(),
+                "生成标题和 hook".to_string(),
+                "按用户人设改写语气".to_string(),
+            ],
+            allowed_skills: vec![
+                "xhs.copy_package".to_string(),
+                "script.xiaohongshu_note".to_string(),
+                "script.hook_variants".to_string(),
+            ],
+            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            readable_memory_scopes: vec![
+                "creator".to_string(),
+                "platform".to_string(),
+                "skill".to_string(),
+            ],
+            output_schema: "XhsCopyPackage".to_string(),
+        },
+        RedclawAgentSpec {
             id: RedclawAgentId::StoryboardAgent,
             mission: "把脚本拆成分镜、镜头需求和字幕节奏。".to_string(),
             responsibilities: vec![
@@ -240,6 +326,27 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
             allowed_tools: vec!["app_cli".to_string()],
             readable_memory_scopes: vec!["project".to_string(), "asset".to_string()],
             output_schema: "Storyboard".to_string(),
+        },
+        RedclawAgentSpec {
+            id: RedclawAgentId::VisualDirectorAgent,
+            mission: "定义小红书封面和配图策略，把文案变成可执行视觉 brief。".to_string(),
+            responsibilities: vec![
+                "定义封面视觉方向".to_string(),
+                "规划每张配图目的".to_string(),
+                "生成图片 prompt 和文字安全区".to_string(),
+            ],
+            allowed_skills: vec![
+                "xhs.visual_brief".to_string(),
+                "xhs.cover_direction".to_string(),
+                "image.prompt_pack".to_string(),
+            ],
+            allowed_tools: vec!["app_cli".to_string()],
+            readable_memory_scopes: vec![
+                "creator".to_string(),
+                "platform".to_string(),
+                "asset".to_string(),
+            ],
+            output_schema: "XhsVisualBrief".to_string(),
         },
         RedclawAgentSpec {
             id: RedclawAgentId::MediaAgent,
@@ -260,6 +367,47 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "skill".to_string(),
             ],
             output_schema: "MediaPlan".to_string(),
+        },
+        RedclawAgentSpec {
+            id: RedclawAgentId::ImageAgent,
+            mission: "根据视觉 brief 查找、生成或整理小红书封面和图文配图资产。".to_string(),
+            responsibilities: vec![
+                "生成配图资产".to_string(),
+                "绑定图片到笔记页".to_string(),
+                "列出缺失素材和修图要求".to_string(),
+            ],
+            allowed_skills: vec![
+                "image.generate_assets".to_string(),
+                "image.asset_match".to_string(),
+                "xhs.image_manifest".to_string(),
+            ],
+            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            readable_memory_scopes: vec![
+                "asset".to_string(),
+                "project".to_string(),
+                "skill".to_string(),
+            ],
+            output_schema: "XhsImageAssets".to_string(),
+        },
+        RedclawAgentSpec {
+            id: RedclawAgentId::LayoutAgent,
+            mission: "决定小红书多图顺序、卡片文案和版式 manifest。".to_string(),
+            responsibilities: vec![
+                "排列图文页顺序".to_string(),
+                "生成卡片文字和版式".to_string(),
+                "检查移动端可读性".to_string(),
+            ],
+            allowed_skills: vec![
+                "xhs.carousel_layout".to_string(),
+                "xhs.cover_text_safety".to_string(),
+            ],
+            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            readable_memory_scopes: vec![
+                "project".to_string(),
+                "platform".to_string(),
+                "asset".to_string(),
+            ],
+            output_schema: "XhsCarouselLayout".to_string(),
         },
         RedclawAgentSpec {
             id: RedclawAgentId::EditorAgent,
@@ -301,6 +449,26 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "skill".to_string(),
             ],
             output_schema: "PublishPackage".to_string(),
+        },
+        RedclawAgentSpec {
+            id: RedclawAgentId::ComplianceAgent,
+            mission: "检查小红书平台风险、敏感表达、夸张承诺和商业合规缺口。".to_string(),
+            responsibilities: vec![
+                "检查平台风险".to_string(),
+                "标记敏感词和夸张承诺".to_string(),
+                "提出可执行修正建议".to_string(),
+            ],
+            allowed_skills: vec![
+                "xhs.compliance_check".to_string(),
+                "editor.fact_check".to_string(),
+            ],
+            allowed_tools: vec!["app_cli".to_string()],
+            readable_memory_scopes: vec![
+                "platform".to_string(),
+                "project".to_string(),
+                "knowledge".to_string(),
+            ],
+            output_schema: "ComplianceReport".to_string(),
         },
         RedclawAgentSpec {
             id: RedclawAgentId::ReviewAgent,
@@ -353,6 +521,31 @@ pub fn redclaw_skill_profiles() -> Vec<RedclawSkillProfile> {
             "CreativeBrief",
         ),
         (
+            "insight.idea_score",
+            "insight",
+            "TopicCandidates",
+            "IdeaScore",
+        ),
+        ("xhs.topic_brief", "xhs", "ResearchBrief", "XhsTopicBrief"),
+        (
+            "xhs.search_keyword_plan",
+            "xhs",
+            "XhsTopicBrief",
+            "XhsSearchKeywordPlan",
+        ),
+        (
+            "xhs.note_architecture",
+            "xhs",
+            "XhsTopicBrief",
+            "XhsNoteArchitecture",
+        ),
+        (
+            "xhs.carousel_page_plan",
+            "xhs",
+            "XhsNoteArchitecture",
+            "XhsCarouselPagePlan",
+        ),
+        (
             "script.short_video_script",
             "script",
             "CreativeBrief",
@@ -369,6 +562,12 @@ pub fn redclaw_skill_profiles() -> Vec<RedclawSkillProfile> {
             "script",
             "CreativeBrief",
             "HookOptions",
+        ),
+        (
+            "xhs.copy_package",
+            "xhs",
+            "XhsNoteArchitecture",
+            "XhsCopyPackage",
         ),
         (
             "storyboard.scene_breakdown",
@@ -393,6 +592,54 @@ pub fn redclaw_skill_profiles() -> Vec<RedclawSkillProfile> {
             "media",
             "Storyboard",
             "TimelinePlan",
+        ),
+        (
+            "xhs.visual_brief",
+            "xhs",
+            "XhsCopyPackage",
+            "XhsVisualBrief",
+        ),
+        (
+            "xhs.cover_direction",
+            "xhs",
+            "XhsCopyPackage",
+            "XhsCoverDirection",
+        ),
+        (
+            "image.prompt_pack",
+            "image",
+            "XhsVisualBrief",
+            "ImagePromptPack",
+        ),
+        (
+            "image.generate_assets",
+            "image",
+            "XhsVisualBrief",
+            "XhsImageAssets",
+        ),
+        (
+            "image.asset_match",
+            "image",
+            "XhsVisualBrief",
+            "XhsImageAssets",
+        ),
+        (
+            "xhs.image_manifest",
+            "xhs",
+            "XhsImageAssets",
+            "XhsImageManifest",
+        ),
+        (
+            "xhs.carousel_layout",
+            "xhs",
+            "XhsImageAssets",
+            "XhsCarouselLayout",
+        ),
+        (
+            "xhs.cover_text_safety",
+            "xhs",
+            "XhsCarouselLayout",
+            "CoverTextSafetyReport",
         ),
         (
             "editor.fact_check",
@@ -423,6 +670,12 @@ pub fn redclaw_skill_profiles() -> Vec<RedclawSkillProfile> {
             "publish",
             "ProjectArtifacts",
             "PublishPackage",
+        ),
+        (
+            "xhs.compliance_check",
+            "xhs",
+            "PublishPackage",
+            "ComplianceReport",
         ),
         (
             "review.run_quality_review",
@@ -463,40 +716,71 @@ pub fn build_redclaw_task_graph(goal: &str) -> RedclawTaskGraph {
     let wants_video = content_format.as_deref() == Some("short_video")
         || includes_any(&lower, &["分镜", "素材", "粗剪", "视频"]);
     let wants_publish = includes_any(&lower, &["发布", "标题", "封面", "标签", "正文", "publish"]);
+    let xhs_mode = is_xhs_format(content_format.as_deref(), platform.as_deref()) && !wants_video;
 
-    let mut nodes = vec![
-        node(
-            "research",
-            "整理资料与证据",
-            RedclawAgentId::ResearchAgent,
+    let mut nodes = vec![node(
+        "research",
+        "整理资料与证据",
+        RedclawAgentId::ResearchAgent,
+        vec![
+            "research.collect_recent_references",
+            "research.extract_claims",
+        ],
+        vec!["ResearchBrief"],
+        "ResearchBrief",
+    )];
+
+    if xhs_mode {
+        nodes.push(node(
+            "topic",
+            "生成小红书选题 brief",
+            RedclawAgentId::TopicAgent,
             vec![
-                "research.collect_recent_references",
-                "research.extract_claims",
+                "xhs.topic_brief",
+                "xhs.search_keyword_plan",
+                "insight.idea_score",
             ],
-            vec!["ResearchBrief"],
-            "ResearchBrief",
-        ),
-        node(
+            vec!["XhsTopicBrief"],
+            "XhsTopicBrief",
+        ));
+        nodes.push(node(
+            "note_architecture",
+            "设计小红书笔记结构",
+            RedclawAgentId::NoteArchitectAgent,
+            vec!["xhs.note_architecture", "xhs.carousel_page_plan"],
+            vec!["XhsNoteArchitecture"],
+            "XhsNoteArchitecture",
+        ));
+        nodes.push(node(
+            "copy",
+            "生成小红书文案包",
+            RedclawAgentId::CopyAgent,
+            vec![
+                "xhs.copy_package",
+                "script.xiaohongshu_note",
+                "script.hook_variants",
+            ],
+            vec!["XhsCopyPackage"],
+            "XhsCopyPackage",
+        ));
+    } else {
+        nodes.push(node(
             "insight",
             "生成创作 brief",
             RedclawAgentId::InsightAgent,
             vec!["insight.topic_cluster", "insight.brief_from_references"],
             vec!["CreativeBrief"],
             "CreativeBrief",
-        ),
-        node(
+        ));
+        nodes.push(node(
             "script",
             "生成脚本或文案",
             RedclawAgentId::ScriptAgent,
-            if content_format.as_deref() == Some("note") {
-                vec!["script.xiaohongshu_note", "script.hook_variants"]
-            } else {
-                vec!["script.short_video_script", "script.hook_variants"]
-            },
+            vec!["script.short_video_script", "script.hook_variants"],
             vec!["ScriptDocument"],
             "ScriptDocument",
-        ),
-    ];
+        ));
+    }
 
     if wants_video {
         nodes.push(node(
@@ -514,6 +798,46 @@ pub fn build_redclaw_task_graph(goal: &str) -> RedclawTaskGraph {
             vec!["media.asset_match", "media.rough_cut_plan"],
             vec!["MediaPlan"],
             "MediaPlan",
+        ));
+    }
+
+    let xhs_needs_images = matches!(
+        content_format.as_deref(),
+        Some("xhs_image_text") | Some("xhs_image_assets")
+    ) || (xhs_mode
+        && includes_any(&lower, &["配图", "图片", "封面", "图文", "多图", "卡片"]));
+    if xhs_needs_images {
+        nodes.push(node(
+            "visual_direction",
+            "制定小红书视觉 brief",
+            RedclawAgentId::VisualDirectorAgent,
+            vec![
+                "xhs.visual_brief",
+                "xhs.cover_direction",
+                "image.prompt_pack",
+            ],
+            vec!["XhsVisualBrief"],
+            "XhsVisualBrief",
+        ));
+        nodes.push(node(
+            "image_assets",
+            "生成或匹配小红书配图",
+            RedclawAgentId::ImageAgent,
+            vec![
+                "image.generate_assets",
+                "image.asset_match",
+                "xhs.image_manifest",
+            ],
+            vec!["XhsImageAssets"],
+            "XhsImageAssets",
+        ));
+        nodes.push(node(
+            "layout",
+            "生成小红书图文排版",
+            RedclawAgentId::LayoutAgent,
+            vec!["xhs.carousel_layout", "xhs.cover_text_safety"],
+            vec!["XhsCarouselLayout"],
+            "XhsCarouselLayout",
         ));
     }
 
@@ -541,6 +865,17 @@ pub fn build_redclaw_task_graph(goal: &str) -> RedclawTaskGraph {
         ));
     }
 
+    if xhs_mode {
+        nodes.push(node(
+            "compliance",
+            "检查小红书平台风险",
+            RedclawAgentId::ComplianceAgent,
+            vec!["xhs.compliance_check", "editor.fact_check"],
+            vec!["ComplianceReport"],
+            "ComplianceReport",
+        ));
+    }
+
     nodes.push(node(
         "review",
         "质检并生成学习候选",
@@ -555,24 +890,50 @@ pub fn build_redclaw_task_graph(goal: &str) -> RedclawTaskGraph {
 
     let has_storyboard = nodes.iter().any(|item| item.id == "storyboard");
     let has_media = nodes.iter().any(|item| item.id == "media");
+    let has_topic = nodes.iter().any(|item| item.id == "topic");
+    let has_visual_direction = nodes.iter().any(|item| item.id == "visual_direction");
+    let has_layout = nodes.iter().any(|item| item.id == "layout");
     let has_publish = nodes.iter().any(|item| item.id == "publish");
-    let mut edges = vec![
-        edge(
+    let has_compliance = nodes.iter().any(|item| item.id == "compliance");
+    let mut edges = Vec::new();
+    if has_topic {
+        edges.push(edge(
+            "research",
+            "topic",
+            RedclawTaskDependencyType::RequiresOutput,
+        ));
+        edges.push(edge(
+            "topic",
+            "note_architecture",
+            RedclawTaskDependencyType::RequiresOutput,
+        ));
+        edges.push(edge(
+            "note_architecture",
+            "copy",
+            RedclawTaskDependencyType::RequiresOutput,
+        ));
+        edges.push(edge(
+            "copy",
+            "editor",
+            RedclawTaskDependencyType::RequiresOutput,
+        ));
+    } else {
+        edges.push(edge(
             "research",
             "insight",
             RedclawTaskDependencyType::RequiresOutput,
-        ),
-        edge(
+        ));
+        edges.push(edge(
             "insight",
             "script",
             RedclawTaskDependencyType::RequiresOutput,
-        ),
-        edge(
+        ));
+        edges.push(edge(
             "script",
             "editor",
             RedclawTaskDependencyType::RequiresOutput,
-        ),
-    ];
+        ));
+    }
     if has_storyboard {
         edges.push(edge(
             "script",
@@ -590,11 +951,50 @@ pub fn build_redclaw_task_graph(goal: &str) -> RedclawTaskGraph {
             RedclawTaskDependencyType::OptionalContext,
         ));
     }
+    if has_visual_direction {
+        edges.push(edge(
+            "copy",
+            "visual_direction",
+            RedclawTaskDependencyType::RequiresOutput,
+        ));
+        edges.push(edge(
+            "note_architecture",
+            "visual_direction",
+            RedclawTaskDependencyType::OptionalContext,
+        ));
+        edges.push(edge(
+            "visual_direction",
+            "image_assets",
+            RedclawTaskDependencyType::RequiresOutput,
+        ));
+        edges.push(edge(
+            "image_assets",
+            "layout",
+            RedclawTaskDependencyType::RequiresOutput,
+        ));
+        edges.push(edge(
+            "copy",
+            "layout",
+            RedclawTaskDependencyType::OptionalContext,
+        ));
+        edges.push(edge(
+            "layout",
+            "editor",
+            RedclawTaskDependencyType::OptionalContext,
+        ));
+    }
     if has_media {
         edges.push(edge(
             "media",
             "review",
             RedclawTaskDependencyType::RequiresReview,
+        ));
+    }
+    if has_layout {
+        edges.push(edge(
+            "layout",
+            "publish",
+            RedclawTaskDependencyType::OptionalContext,
         ));
     }
     if has_publish {
@@ -603,11 +1003,24 @@ pub fn build_redclaw_task_graph(goal: &str) -> RedclawTaskGraph {
             "publish",
             RedclawTaskDependencyType::RequiresOutput,
         ));
-        edges.push(edge(
-            "publish",
-            "review",
-            RedclawTaskDependencyType::RequiresReview,
-        ));
+        if has_compliance {
+            edges.push(edge(
+                "publish",
+                "compliance",
+                RedclawTaskDependencyType::RequiresReview,
+            ));
+            edges.push(edge(
+                "compliance",
+                "review",
+                RedclawTaskDependencyType::RequiresReview,
+            ));
+        } else {
+            edges.push(edge(
+                "publish",
+                "review",
+                RedclawTaskDependencyType::RequiresReview,
+            ));
+        }
     } else {
         edges.push(edge(
             "editor",
@@ -931,16 +1344,42 @@ mod tests {
     }
 
     #[test]
-    fn note_goal_skips_media_when_video_work_is_not_requested() {
+    fn xhs_article_goal_builds_note_team_without_image_agents() {
+        let graph = build_redclaw_task_graph("把这个灵感扩展成小红书文章笔记");
+        let node_ids = graph
+            .nodes
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(graph.content_format.as_deref(), Some("xhs_article"));
+        assert!(node_ids.contains(&"topic"));
+        assert!(node_ids.contains(&"note_architecture"));
+        assert!(node_ids.contains(&"copy"));
+        assert!(node_ids.contains(&"publish"));
+        assert!(node_ids.contains(&"compliance"));
+        assert!(!node_ids.contains(&"storyboard"));
+        assert!(!node_ids.contains(&"media"));
+        assert!(!node_ids.contains(&"image_assets"));
+    }
+
+    #[test]
+    fn xhs_image_text_goal_builds_visual_and_layout_team() {
         let graph = build_redclaw_task_graph("把这个灵感扩展成小红书图文笔记");
         let node_ids = graph
             .nodes
             .iter()
             .map(|item| item.id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(graph.content_format.as_deref(), Some("note"));
+        assert_eq!(graph.content_format.as_deref(), Some("xhs_image_text"));
+        assert!(node_ids.contains(&"topic"));
+        assert!(node_ids.contains(&"note_architecture"));
+        assert!(node_ids.contains(&"copy"));
+        assert!(node_ids.contains(&"visual_direction"));
+        assert!(node_ids.contains(&"image_assets"));
+        assert!(node_ids.contains(&"layout"));
         assert!(!node_ids.contains(&"storyboard"));
         assert!(!node_ids.contains(&"media"));
         assert!(node_ids.contains(&"publish"));
+        assert!(node_ids.contains(&"compliance"));
     }
 }

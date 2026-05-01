@@ -28,11 +28,18 @@ pub const RUNTIME_ROLE_IDS: &[&str] = &[
     "ops-coordinator",
     "research_agent",
     "insight_agent",
+    "topic_agent",
+    "note_architect_agent",
     "script_agent",
+    "copy_agent",
     "storyboard_agent",
+    "visual_director_agent",
     "media_agent",
+    "image_agent",
+    "layout_agent",
     "editor_agent",
     "publish_agent",
+    "compliance_agent",
     "review_agent",
 ];
 
