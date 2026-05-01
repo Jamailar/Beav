@@ -1924,6 +1924,19 @@ declare global {
           report?: unknown;
           error?: string;
         }>;
+        exportXhsPackage: (payload: {
+          projectId: string;
+        }) => Promise<{
+          success?: boolean;
+          project?: unknown;
+          packagePath?: string;
+          jsonPath?: string;
+          markdownPath?: string;
+          layoutPath?: string;
+          imageManifestPath?: string;
+          package?: unknown;
+          error?: string;
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{

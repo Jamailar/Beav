@@ -109,6 +109,7 @@ pub fn handle_redclaw_channel(
         "redclaw:media-plan-render" => render_redclaw_rough_cut(state, payload),
         "redclaw:publish-package-export" => export_redclaw_publish_package(state, payload),
         "redclaw:review-report-export" => export_redclaw_review_report(state, payload),
+        "redclaw:xhs-package-export" => export_redclaw_xhs_package(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -1129,6 +1130,126 @@ fn build_review_report_markdown(report: &Value) -> String {
     markdown
 }
 
+fn artifact_for_role(outputs: &[Value], role_id: &str) -> Value {
+    parsed_output_artifact(output_for_role(outputs, role_id).as_ref())
+}
+
+fn xhs_package_from_project(project: &crate::runtime::RedclawProjectRecord) -> Value {
+    let outputs = orchestration_outputs_for_project(project);
+    let topic = artifact_for_role(&outputs, "topic_agent");
+    let architecture = artifact_for_role(&outputs, "note_architect_agent");
+    let copy = artifact_for_role(&outputs, "copy_agent");
+    let visual = artifact_for_role(&outputs, "visual_director_agent");
+    let images = artifact_for_role(&outputs, "image_agent");
+    let layout = artifact_for_role(&outputs, "layout_agent");
+    let compliance = artifact_for_role(&outputs, "compliance_agent");
+    let publish = publish_package_from_project(project);
+    let review = review_report_from_project(project);
+    json!({
+        "schema": "redclaw.xhsPackage.v1",
+        "project": {
+            "id": project.id,
+            "goal": project.goal,
+            "platform": project.platform,
+            "contentFormat": project.content_format,
+            "runtimeTaskId": project.runtime_task_id,
+        },
+        "generatedAt": now_iso(),
+        "topic": topic,
+        "noteArchitecture": architecture,
+        "copyPackage": copy,
+        "visualBrief": visual,
+        "imageAssets": images,
+        "carouselLayout": layout,
+        "publishPackage": publish,
+        "complianceReport": compliance,
+        "reviewReport": review,
+        "sources": {
+            "topic": redclaw_output_summary(output_for_role(&outputs, "topic_agent").as_ref()),
+            "noteArchitecture": redclaw_output_summary(output_for_role(&outputs, "note_architect_agent").as_ref()),
+            "copy": redclaw_output_summary(output_for_role(&outputs, "copy_agent").as_ref()),
+            "visual": redclaw_output_summary(output_for_role(&outputs, "visual_director_agent").as_ref()),
+            "image": redclaw_output_summary(output_for_role(&outputs, "image_agent").as_ref()),
+            "layout": redclaw_output_summary(output_for_role(&outputs, "layout_agent").as_ref()),
+            "compliance": redclaw_output_summary(output_for_role(&outputs, "compliance_agent").as_ref())
+        }
+    })
+}
+
+fn xhs_copy_titles(package: &Value) -> Vec<String> {
+    value_string_list(
+        package
+            .get("copyPackage")
+            .and_then(|copy| copy.get("titles"))
+            .or_else(|| {
+                package
+                    .get("publishPackage")
+                    .and_then(|publish| publish.get("titleOptions"))
+            }),
+    )
+}
+
+fn build_xhs_package_markdown(package: &Value) -> String {
+    let titles = xhs_copy_titles(package);
+    let copy = package
+        .get("copyPackage")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let body = first_string_field(&copy, &["body", "正文"]).unwrap_or_default();
+    let cover_title = first_string_field(&copy, &["coverTitle", "cover_title"]).unwrap_or_default();
+    let hashtags = value_string_list(copy.get("hashtags").or_else(|| {
+        package
+            .get("publishPackage")
+            .and_then(|publish| publish.get("hashtags"))
+    }));
+    let project = package.get("project").cloned().unwrap_or_else(|| json!({}));
+    let layout = package
+        .get("carouselLayout")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let images = package
+        .get("imageAssets")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let compliance = package
+        .get("complianceReport")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut markdown = String::new();
+    markdown.push_str("# RedClaw XHS Package\n\n");
+    markdown.push_str(&format!(
+        "Project: `{}`\n\n",
+        project
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    ));
+    markdown.push_str("## Titles\n\n");
+    markdown.push_str(&markdown_list(&titles, "No title options generated."));
+    markdown.push_str("\n## Cover Title\n\n");
+    markdown.push_str(if cover_title.is_empty() {
+        "No cover title generated."
+    } else {
+        &cover_title
+    });
+    markdown.push_str("\n\n## Body\n\n");
+    markdown.push_str(if body.is_empty() {
+        "No body generated."
+    } else {
+        &body
+    });
+    markdown.push_str("\n\n## Hashtags\n\n");
+    markdown.push_str(&markdown_list(&hashtags, "No hashtags generated."));
+    markdown.push_str("\n## Carousel Layout\n\n```json\n");
+    markdown.push_str(&markdown_json_block(&layout));
+    markdown.push_str("\n```\n\n## Image Assets\n\n```json\n");
+    markdown.push_str(&markdown_json_block(&images));
+    markdown.push_str("\n```\n\n## Compliance\n\n```json\n");
+    markdown.push_str(&markdown_json_block(&compliance));
+    markdown.push_str("\n```\n");
+    markdown
+}
+
 fn build_redclaw_media_plan_export(project: &crate::runtime::RedclawProjectRecord) -> Value {
     let outputs = orchestration_outputs_for_project(project);
     let script = output_for_role(&outputs, "script_agent");
@@ -1421,6 +1542,39 @@ mod redclaw_media_plan_tests {
         assert!(markdown.contains("\"overall\": 82"));
         assert!(markdown.contains("Prefer stronger source links"));
     }
+
+    #[test]
+    fn xhs_package_markdown_includes_copy_layout_and_compliance() {
+        let package = json!({
+            "schema": "redclaw.xhsPackage.v1",
+            "project": { "id": "project-1", "platform": "xiaohongshu" },
+            "copyPackage": {
+                "titles": ["Title A"],
+                "coverTitle": "Cover A",
+                "body": "XHS body",
+                "hashtags": ["#xhs"]
+            },
+            "carouselLayout": {
+                "aspectRatio": "3:4",
+                "pages": [{ "index": 1, "role": "cover", "headline": "Cover A", "layout": "title_card" }]
+            },
+            "imageAssets": {
+                "pages": [{ "index": 1, "path": "/tmp/cover.png", "source": "generated" }],
+                "missingAssets": []
+            },
+            "complianceReport": {
+                "riskLevel": "low",
+                "approved": true
+            }
+        });
+        let markdown = build_xhs_package_markdown(&package);
+
+        assert!(markdown.contains("Title A"));
+        assert!(markdown.contains("Cover A"));
+        assert!(markdown.contains("XHS body"));
+        assert!(markdown.contains("aspectRatio"));
+        assert!(markdown.contains("riskLevel"));
+    }
 }
 
 fn export_redclaw_media_plan(
@@ -1680,6 +1834,83 @@ fn export_redclaw_review_report(
             "jsonPath": report_path.display().to_string(),
             "markdownPath": markdown_path.display().to_string(),
             "report": report,
+        }))
+    })
+}
+
+fn export_redclaw_xhs_package(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let project_id =
+        payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
+    let root = workspace_root(state)?;
+    let export_dir = root
+        .join("redclaw")
+        .join("xhs-packages")
+        .join(safe_export_slug(&project_id));
+    std::fs::create_dir_all(&export_dir).map_err(|error| error.to_string())?;
+    with_store_mut(state, |store| {
+        let project = store
+            .redclaw_state
+            .projects
+            .iter_mut()
+            .find(|item| item.id == project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())?;
+        let package = xhs_package_from_project(project);
+        let package_path = export_dir.join("xhs-package.json");
+        let markdown_path = export_dir.join("xhs-package.md");
+        let layout_path = export_dir.join("carousel-layout.json");
+        let image_manifest_path = export_dir.join("image-manifest.json");
+        write_text_file(
+            &package_path,
+            &serde_json::to_string_pretty(&package).map_err(|error| error.to_string())?,
+        )?;
+        write_text_file(&markdown_path, &build_xhs_package_markdown(&package))?;
+        write_text_file(
+            &layout_path,
+            &serde_json::to_string_pretty(package.get("carouselLayout").unwrap_or(&Value::Null))
+                .map_err(|error| error.to_string())?,
+        )?;
+        write_text_file(
+            &image_manifest_path,
+            &serde_json::to_string_pretty(package.get("imageAssets").unwrap_or(&Value::Null))
+                .map_err(|error| error.to_string())?,
+        )?;
+
+        let now = now_iso();
+        let export_record = json!({
+            "packagePath": export_dir.display().to_string(),
+            "jsonPath": package_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "layoutPath": layout_path.display().to_string(),
+            "imageManifestPath": image_manifest_path.display().to_string(),
+            "schema": "redclaw.xhsPackage.v1",
+            "createdAt": now,
+        });
+        let mut metadata = project
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut exports = metadata
+            .get("xhsPackageExports")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        exports.push(export_record);
+        metadata.insert("xhsPackageExports".to_string(), Value::Array(exports));
+        project.metadata = Some(Value::Object(metadata));
+        project.updated_at = now;
+        Ok(json!({
+            "success": true,
+            "project": project,
+            "packagePath": export_dir.display().to_string(),
+            "jsonPath": package_path.display().to_string(),
+            "markdownPath": markdown_path.display().to_string(),
+            "layoutPath": layout_path.display().to_string(),
+            "imageManifestPath": image_manifest_path.display().to_string(),
+            "package": package,
         }))
     })
 }

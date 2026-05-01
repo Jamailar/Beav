@@ -1141,6 +1141,8 @@ function createIpcRenderer() {
         invokeChannel('redclaw:publish-package-export', payload),
       exportReviewReport: (payload: { projectId: string }) =>
         invokeChannel('redclaw:review-report-export', payload),
+      exportXhsPackage: (payload: { projectId: string }) =>
+        invokeChannel('redclaw:xhs-package-export', payload),
     },
     redclawProfile: {
       getBundle: () => invokeChannel('redclaw:profile:get-bundle'),
