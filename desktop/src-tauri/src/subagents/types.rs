@@ -22,6 +22,7 @@ pub struct SubAgentConfig {
     pub parallel_group: usize,
     pub model_config: Option<Value>,
     pub fork_overrides: ForkOverrides,
+    pub task_context: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

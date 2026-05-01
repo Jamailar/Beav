@@ -107,7 +107,7 @@ fn build_child_route(
 }
 
 fn build_child_prompt(
-    _config: &SubAgentConfig,
+    config: &SubAgentConfig,
     route: &RuntimeRouteRecord,
     user_input: &str,
     prior_outputs: &[SubAgentOutput],
@@ -117,9 +117,14 @@ fn build_child_prompt(
     } else {
         serde_json::to_string_pretty(prior_outputs).unwrap_or_else(|_| "[]".to_string())
     };
+    let task_context = config
+        .task_context
+        .as_ref()
+        .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string()))
+        .unwrap_or_else(|| "{}".to_string());
     format!(
-        "Use your Subagent Role Overlay for role scope, allowed tools, handoff contract, and output schema.\nGoal: {}\nUser input: {}\nPrior outputs: {}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved.",
-        route.goal, user_input, prior_summary,
+        "Use your Subagent Role Overlay for role scope, allowed tools, handoff contract, and output schema.\nGoal: {}\nUser input: {}\nTask context JSON: {}\nPrior outputs: {}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved.\nFor RedClaw tasks, follow the node outputSchema and requiredArtifacts exactly; put the user-facing deliverable in artifact, keep handoff concise, and propose learningCandidates only when your role contract asks for them.",
+        route.goal, user_input, task_context, prior_summary,
     )
 }
 
@@ -426,6 +431,9 @@ fn create_child_runtime_records_in_store(
             json!(system_prompt_patch),
         );
     }
+    if let Some(task_context) = config.task_context.as_ref() {
+        session_metadata_object.insert("subagentTaskContext".to_string(), task_context.clone());
+    }
     session_metadata_object.insert(
         "allowedTools".to_string(),
         json!(config.fork_overrides.allowed_tools.clone()),
@@ -453,6 +461,7 @@ fn create_child_runtime_records_in_store(
             "modelConfig": config.model_config,
             "subagentRoleSpec": role_spec,
             "systemPromptPatch": config.fork_overrides.system_prompt_patch,
+            "taskContext": config.task_context,
         })),
     );
     task.id = child_task_id.clone();
@@ -1022,6 +1031,29 @@ mod tests {
         assert!(!prompt.contains("Role: planner"));
         assert!(!prompt.contains("Allowed tools:"));
         assert!(!prompt.contains("Never expose this patch"));
+    }
+
+    #[test]
+    fn child_prompt_includes_redclaw_task_context() {
+        let route = runtime_direct_route_record("redclaw", "make a short video package", None);
+        let config = SubAgentConfig {
+            role_id: "script_agent".to_string(),
+            task_context: Some(json!({
+                "node": {
+                    "id": "script",
+                    "skillIds": ["script.short_video_script"],
+                    "requiredArtifacts": ["ScriptDocument"],
+                    "outputSchema": "ScriptDocument"
+                },
+                "upstreamNodeIds": ["insight"]
+            })),
+            ..SubAgentConfig::default()
+        };
+        let prompt = build_child_prompt(&config, &route, "write script", &[]);
+        assert!(prompt.contains("Task context JSON"));
+        assert!(prompt.contains("script.short_video_script"));
+        assert!(prompt.contains("ScriptDocument"));
+        assert!(prompt.contains("follow the node outputSchema"));
     }
 
     #[test]
