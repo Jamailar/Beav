@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, Plus, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
-import type { AdvisorProfile } from './Advisors';
+import { AdvisorModal, type Advisor, type AdvisorProfile } from './Advisors';
 import type { PendingChatMessage } from '../App';
 import type { ChatMessageLinkKind, ChatMessageLinkTarget } from '../components/MessageItem';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
@@ -477,7 +477,7 @@ function RedClawAiSwitchBar({
 }) {
     const visibleAdvisors = advisors.slice(0, 6);
     return (
-        <div className="absolute left-1/2 top-full z-20 mt-3 -translate-x-1/2">
+        <div>
             <div className="flex max-w-[min(84vw,32rem)] items-center gap-1.5 overflow-hidden rounded-[22px] border border-border/70 bg-surface-elevated/95 px-2 py-2 shadow-sm backdrop-blur-xl">
                 <button
                     type="button"
@@ -567,6 +567,7 @@ export function RedClaw({
     const [advisorSessionIds, setAdvisorSessionIds] = useState<Record<string, string>>({});
     const [roomSessionIds, setRoomSessionIds] = useState<Record<string, string>>({});
     const [speakerSessionLoading, setSpeakerSessionLoading] = useState(false);
+    const [advisorCreateModalOpen, setAdvisorCreateModalOpen] = useState(false);
     const [isRedClawChatExecuting, setIsRedClawChatExecuting] = useState(false);
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
@@ -1349,23 +1350,38 @@ export function RedClaw({
         void ensureAdvisorSession(advisor);
     }, [advisors, ensureAdvisorSession]);
 
-    const createAdvisorFromRedClaw = useCallback(async () => {
-        const name = typeof window !== 'undefined' ? window.prompt('新成员名称')?.trim() : '';
-        if (!name) return;
+    const createAdvisorFromRedClaw = useCallback(() => {
+        setAdvisorCreateModalOpen(true);
+    }, []);
+
+    const saveAdvisorFromRedClaw = useCallback(async (
+        data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>,
+        youtubeParams?: { url: string; count: number; channelId?: string },
+        knowledgeFilePaths?: string[],
+    ) => {
         try {
+            const createData: Record<string, unknown> = { ...data };
+            if (youtubeParams?.url) {
+                createData.youtubeChannel = {
+                    url: youtubeParams.url,
+                    channelId: youtubeParams.channelId || '',
+                };
+            }
             const result = await window.ipcRenderer.advisors.create({
-                name,
-                avatar: '🤖',
-                personality: 'AI 成员',
-                systemPrompt: `你是 ${name}，请以该成员身份协助 RedClaw 完成内容工作。`,
-                knowledgeLanguage: '中文',
-                knowledgeFiles: [],
+                ...createData,
             }) as { success?: boolean; id?: string; error?: string };
             if (result?.success === false) {
                 throw new Error(result.error || '创建成员失败');
             }
+            if (result?.id && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
+                await window.ipcRenderer.advisors.uploadKnowledge({
+                    advisorId: result.id,
+                    filePaths: knowledgeFilePaths,
+                });
+            }
             const list = await window.ipcRenderer.advisors.list<AdvisorProfile>();
             setAdvisors(Array.isArray(list) ? list : []);
+            setAdvisorCreateModalOpen(false);
             if (result?.id) {
                 const advisor = Array.isArray(list) ? list.find((item) => item.id === result.id) : null;
                 if (advisor) {
@@ -2119,6 +2135,14 @@ export function RedClaw({
                                 onInstallSkill={() => void installSkill()}
                                 onToggleSkill={(skill) => void toggleSkill(skill)}
                             />
+                            {advisorCreateModalOpen && (
+                                <AdvisorModal
+                                    advisor={null}
+                                    defaultMode="manual"
+                                    onSave={saveAdvisorFromRedClaw}
+                                    onClose={() => setAdvisorCreateModalOpen(false)}
+                                />
+                            )}
                         </div>
                     </div>
                 ) : (
