@@ -15,6 +15,7 @@ pub const RUNTIME_INTENT_NAMES: &[&str] = &[
     "memory_maintenance",
     "automation",
     "advisor_persona",
+    "redclaw_orchestration",
 ];
 
 pub const RUNTIME_ROLE_IDS: &[&str] = &[
@@ -74,6 +75,12 @@ pub fn runtime_required_capabilities(intent: &str) -> Vec<String> {
             "background-runner".to_string(),
             "artifact-save".to_string(),
         ],
+        "redclaw_orchestration" => vec![
+            "redclaw-task-graph".to_string(),
+            "multi-agent-creative-pipeline".to_string(),
+            "artifact-save".to_string(),
+            "memory-learning-candidates".to_string(),
+        ],
         "memory_maintenance" => vec![
             "memory-read".to_string(),
             "memory-write".to_string(),
@@ -132,12 +139,38 @@ pub fn runtime_default_role(runtime_mode: &str, intent: &str, metadata: Option<&
         _ => match intent {
             "knowledge_retrieval" | "advisor_persona" => "researcher".to_string(),
             "image_creation" | "cover_generation" => "image-director".to_string(),
+            "redclaw_orchestration" => "ops-coordinator".to_string(),
             "automation" | "long_running_task" | "memory_maintenance" => {
                 "ops-coordinator".to_string()
             }
             "discussion" | "direct_answer" | "file_operation" => "planner".to_string(),
             _ => "copywriter".to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn redclaw_orchestration_intent_uses_creative_pipeline_capabilities() {
+        let route = runtime_direct_route_record(
+            "redclaw",
+            "make a short video package",
+            Some(&json!({
+                "intent": "redclaw_orchestration",
+                "forceMultiAgent": true
+            })),
+        );
+
+        assert_eq!(route.intent, "redclaw_orchestration");
+        assert_eq!(route.recommended_role, "ops-coordinator");
+        assert!(route.requires_multi_agent);
+        assert!(route
+            .required_capabilities
+            .contains(&"multi-agent-creative-pipeline".to_string()));
     }
 }
 

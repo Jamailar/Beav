@@ -882,6 +882,8 @@ fn create_redclaw_orchestration_run(
     with_store_mut(state, |store| {
         let metadata = json!({
             "source": "redclaw-orchestrator",
+            "intent": "redclaw_orchestration",
+            "preferredRole": "ops-coordinator",
             "runId": plan.run_id,
             "graphId": plan.graph.id,
             "projectId": project_id,

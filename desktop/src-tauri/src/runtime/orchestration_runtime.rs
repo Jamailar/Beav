@@ -161,20 +161,17 @@ pub fn build_runtime_task_artifact_content(
                 content.push_str(&summary_lines.join("\n"));
                 content.push_str("\n\n");
             }
-            for item in &orchestration_outputs {
-                if let Some(role_id) = payload_string(item, "roleId") {
-                    content.push_str(&format!("## {}\n\n", role_id));
-                    if let Some(artifact) = payload_string(item, "artifact") {
-                        if !artifact.trim().is_empty() {
-                            content.push_str(&artifact);
-                            content.push_str("\n\n");
-                            continue;
-                        }
-                    }
-                    content.push_str(&payload_string(item, "summary").unwrap_or_default());
-                    content.push_str("\n\n");
-                }
+            append_orchestration_role_sections(&mut content, &orchestration_outputs);
+        }
+        "redclaw_orchestration" => {
+            content.push_str(&format!("# RedClaw Creative Run {}\n\n", task_id));
+            content.push_str(&format!("Goal: {}\n\n", goal));
+            if !summary_lines.is_empty() {
+                content.push_str("## Team Summary\n\n");
+                content.push_str(&summary_lines.join("\n"));
+                content.push_str("\n\n");
             }
+            append_orchestration_role_sections(&mut content, &orchestration_outputs);
         }
         "image_creation" | "cover_generation" => {
             content.push_str(&format!("# Visual Task {}\n\n", task_id));
@@ -208,6 +205,23 @@ pub fn build_runtime_task_artifact_content(
     }
 
     Ok(content)
+}
+
+fn append_orchestration_role_sections(content: &mut String, outputs: &[Value]) {
+    for item in outputs {
+        if let Some(role_id) = payload_string(item, "roleId") {
+            content.push_str(&format!("## {}\n\n", role_id));
+            if let Some(artifact) = payload_string(item, "artifact") {
+                if !artifact.trim().is_empty() {
+                    content.push_str(&artifact);
+                    content.push_str("\n\n");
+                    continue;
+                }
+            }
+            content.push_str(&payload_string(item, "summary").unwrap_or_default());
+            content.push_str("\n\n");
+        }
+    }
 }
 
 pub fn reviewer_rejected(orchestration: Option<&Value>) -> bool {
@@ -290,5 +304,35 @@ mod tests {
         let goal = build_repair_goal("Write draft", &json!({"summary": "Fix missing citations"}));
         assert!(goal.contains("Write draft"));
         assert!(goal.contains("Fix missing citations"));
+    }
+
+    #[test]
+    fn redclaw_orchestration_artifact_keeps_role_deliverables() {
+        let content = build_runtime_task_artifact_content(
+            "task-redclaw",
+            &json!({ "intent": "redclaw_orchestration" }),
+            "make a short video package",
+            Some(&json!({
+                "outputs": [
+                    {
+                        "roleId": "script_agent",
+                        "summary": "script ready",
+                        "artifact": "Hook\\nBody"
+                    },
+                    {
+                        "roleId": "publish_agent",
+                        "summary": "publish ready",
+                        "artifact": "Title options"
+                    }
+                ]
+            })),
+        )
+        .unwrap();
+
+        assert!(content.contains("# RedClaw Creative Run task-redclaw"));
+        assert!(content.contains("## script_agent"));
+        assert!(content.contains("Hook\\nBody"));
+        assert!(content.contains("## publish_agent"));
+        assert!(content.contains("Title options"));
     }
 }

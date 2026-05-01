@@ -151,6 +151,7 @@ pub fn save_runtime_task_artifact(
             (root.join("manuscripts").join("runtime-tasks"), "md")
         }
         "image_creation" | "cover_generation" => (root.join("cover").join("runtime-tasks"), "md"),
+        "redclaw_orchestration" => (root.join("redclaw").join("creative-runs"), "md"),
         _ => (root.join("redclaw").join("runtime-artifacts"), "md"),
     };
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
