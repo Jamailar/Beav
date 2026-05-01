@@ -224,15 +224,18 @@ fn append_orchestration_role_sections(content: &mut String, outputs: &[Value]) {
     }
 }
 
+fn is_review_role(item: &Value) -> bool {
+    matches!(
+        item.get("roleId").and_then(Value::as_str),
+        Some("reviewer") | Some("review_agent")
+    )
+}
+
 pub fn reviewer_rejected(orchestration: Option<&Value>) -> bool {
     orchestration
         .and_then(|value| value.get("outputs"))
         .and_then(|value| value.as_array())
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("roleId").and_then(|value| value.as_str()) == Some("reviewer")
-            })
-        })
+        .and_then(|items| items.iter().find(|item| is_review_role(item)))
         .map(|review| {
             let approved = review
                 .get("approved")
@@ -296,6 +299,9 @@ mod tests {
         }))));
         assert!(reviewer_rejected(Some(&json!({
             "outputs": [{"roleId": "reviewer", "approved": true, "issues": [{}]}]
+        }))));
+        assert!(reviewer_rejected(Some(&json!({
+            "outputs": [{"roleId": "review_agent", "approved": false, "issues": []}]
         }))));
     }
 

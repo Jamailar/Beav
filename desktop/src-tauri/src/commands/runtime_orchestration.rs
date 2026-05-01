@@ -89,6 +89,11 @@ fn run_prompt_subagent_orchestration_for_task(
             "handoff": payload_string(&parsed, "handoff"),
             "risks": parsed.get("risks").cloned().unwrap_or_else(|| json!([])),
             "issues": parsed.get("issues").cloned().unwrap_or_else(|| json!([])),
+            "learningCandidates": parsed
+                .get("learningCandidates")
+                .or_else(|| parsed.get("learning_candidates"))
+                .cloned()
+                .unwrap_or_else(|| json!([])),
             "approved": parsed.get("approved").cloned().unwrap_or_else(|| json!(true)),
         }));
     }

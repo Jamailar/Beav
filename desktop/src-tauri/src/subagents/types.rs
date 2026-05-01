@@ -45,6 +45,7 @@ pub struct SubAgentOutput {
     pub handoff: Option<String>,
     pub risks: Vec<Value>,
     pub issues: Vec<Value>,
+    pub learning_candidates: Vec<Value>,
     pub approved: bool,
     pub child_task_id: Option<String>,
     pub child_session_id: Option<String>,
