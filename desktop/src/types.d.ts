@@ -1878,6 +1878,15 @@ declare global {
           sectionId?: string;
           error?: string;
         }>;
+        exportMediaPlan: (payload: {
+          projectId: string;
+        }) => Promise<{
+          success?: boolean;
+          project?: unknown;
+          path?: string;
+          plan?: unknown;
+          error?: string;
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{
