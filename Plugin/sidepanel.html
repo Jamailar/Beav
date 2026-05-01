@@ -13,6 +13,7 @@
         <img src="icons/icon48.png" alt="RedBox" class="brand-icon">
         <div>
           <h1>RedBox Capture</h1>
+          <div id="workspace-name" class="workspace-name">当前空间：读取中</div>
           <div id="server-status" class="status">正在检测桌面端...</div>
         </div>
       </div>
@@ -21,6 +22,14 @@
         <button id="refresh" class="icon-btn" title="刷新当前页面状态" aria-label="刷新">↻</button>
       </div>
     </header>
+
+    <section id="account-binding-notice" class="section account-binding-notice hidden" aria-live="polite">
+      <div>
+        <div id="account-binding-title" class="notice-title">当前空间未绑定账号</div>
+        <div id="account-binding-copy" class="notice-copy">打开账号主页后，可以绑定并学习这个账号。</div>
+      </div>
+      <button id="account-binding-action" type="button">绑定并学习这个账号</button>
+    </section>
 
     <section class="section update-panel" aria-live="polite">
       <div class="section-row">
@@ -114,6 +123,11 @@
         <div class="log-empty">暂无执行日志</div>
       </div>
     </section>
+
+    <footer class="account-footer" aria-live="polite">
+      <div class="account-footer-label">当前空间账号</div>
+      <div id="bound-account-name" class="account-footer-value">等待连接 RedBox</div>
+    </footer>
   </main>
   <script src="sidepanel.js"></script>
 </body>
