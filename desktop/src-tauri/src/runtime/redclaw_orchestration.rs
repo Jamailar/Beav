@@ -866,6 +866,44 @@ pub fn sync_redclaw_project_from_runtime_task(
         store.redclaw_state.projects.push(record.clone());
     }
     store.redclaw_state.current_project_id = Some(project_id);
+    if let Some(session_id) = record.collab_session_id.as_deref() {
+        if let Some(session) = store
+            .collab_sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            if task.status == "completed" || task.status == "failed" || task.status == "cancelled" {
+                session.status = task.status.clone();
+                session.completed_at = task.completed_at;
+                session.updated_at = task.updated_at;
+            }
+        }
+        for member in store
+            .collab_members
+            .iter_mut()
+            .filter(|member| member.session_id == session_id)
+        {
+            let temporary = member
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("temporary"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if temporary
+                && (task.status == "completed"
+                    || task.status == "failed"
+                    || task.status == "cancelled")
+            {
+                member.status = if task.status == "completed" {
+                    "completed".to_string()
+                } else {
+                    "failed".to_string()
+                };
+                member.last_activity_at = task.completed_at;
+                member.updated_at = task.updated_at;
+            }
+        }
+    }
     Ok(Some(record))
 }
 
