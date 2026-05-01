@@ -4065,7 +4065,14 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       });
       const entryPayload = buildXhsNotePayloadFromFeed(feedResult, note.urlInfo);
       const response = options.saveToRedBox !== false ? await postKnowledgeEntry(buildXhsEntry(entryPayload)) : null;
-      accountPosts.push(buildXhsAccountPostFromEntry(entryPayload));
+      const accountPost = buildXhsAccountPostFromEntry(entryPayload);
+      if (response?.entryId) {
+        accountPost.knowledgeEntryId = normalizeText(response.entryId);
+      }
+      if (normalizeText(entryPayload?.videoUrl)) {
+        accountPost.transcriptionStatus = response?.entryId ? 'processing' : 'waiting';
+      }
+      accountPosts.push(accountPost);
       if (options.saveToRedBox !== false) {
         await markCollectedXhsNotesForBlogger({
           userId: payloadState?.userId,
@@ -6965,6 +6972,19 @@ async function bindCurrentPlatformAccountFromTab(tabId, platformHint = '', optio
     includeMedia: true,
   });
   const post = buildAccountPostFromSocialPayload(payload, accountSession.platform);
+  const knowledgeResponse = await saveAccountBindingPayloadToKnowledge(accountSession.platform, payload).catch((error) => {
+    pluginWarn('account-bind-knowledge-ingest-failed', {
+      platform: accountSession.platform,
+      error: describeError(error),
+    });
+    return null;
+  });
+  if (knowledgeResponse?.entryId) {
+    post.knowledgeEntryId = normalizeText(knowledgeResponse.entryId);
+  }
+  if (post.media?.some((item) => normalizeText(item?.kind).includes('video'))) {
+    post.transcriptionStatus = knowledgeResponse?.entryId ? 'processing' : 'waiting';
+  }
   let batchResponse = null;
   if (post.title || post.content || post.url) {
     batchResponse = await postAccountPostsBatch(accountSession, [post]);
@@ -7004,6 +7024,16 @@ async function bindCurrentPlatformAccountFromTab(tabId, platformHint = '', optio
     syncedMemoryCount: Number(completeResponse?.syncedMemoryCount || batchResponse?.syncedMemoryCount || 0),
     summary: `${accountSession.username || '当前账号'} 已绑定${batchResponse ? '，当前内容已加入账号档案' : ''}`,
   };
+}
+
+async function saveAccountBindingPayloadToKnowledge(platform, payload) {
+  if (platform === 'douyin') {
+    return await postKnowledgeEntry(buildDouyinEntry(payload));
+  }
+  return await postKnowledgeEntry(buildSocialPlatformEntry({
+    ...payload,
+    platform,
+  }));
 }
 
 async function postAccountPostsBatch(accountSession, posts) {
