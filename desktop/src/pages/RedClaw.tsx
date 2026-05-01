@@ -1536,7 +1536,7 @@ export function RedClaw({
                                 />
                             </div>
                             {!previewTarget && (
-                                <RedClawTeamPlanPreview />
+                                <RedClawTeamPlanPreview sessionId={activeSessionId} />
                             )}
                             <RedClawHistoryDrawer
                                 open={historyDrawerOpen}
