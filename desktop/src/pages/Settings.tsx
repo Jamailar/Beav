@@ -3201,6 +3201,18 @@ export function Settings({
     });
   }, [activeTab, persistDeveloperModeState]);
 
+  const handleOpenDownloadPage = useCallback(async () => {
+    try {
+      const result = await window.ipcRenderer.openAppReleasePage('https://redbox.ziz.hk/download');
+      if (!result?.success) {
+        void appAlert(result?.error || '打开下载页面失败');
+      }
+    } catch (error) {
+      console.error('Failed to open download page:', error);
+      void appAlert('打开下载页面失败');
+    }
+  }, []);
+
   const loadSettings = useCallback(async (options?: { preserveViewState?: boolean; preserveRemoteModels?: boolean }) => {
     const preserveViewState = Boolean(options?.preserveViewState);
     const preserveRemoteModels = options?.preserveRemoteModels ?? preserveViewState;
@@ -4770,6 +4782,7 @@ export function Settings({
                 handleUploadPendingReport={handleUploadPendingReport}
                 handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
+                handleOpenDownloadPage={handleOpenDownloadPage}
               />
             )}
 
@@ -5399,6 +5412,52 @@ export function Settings({
                   </div>
 
                   <div className="pt-4 border-t border-border">
+                    <h3 className="text-sm font-medium text-text-primary mb-4">生图模型设置</h3>
+
+                    <div className="space-y-4">
+                      <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className="group">
+                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                              生图 AI 源
+                            </label>
+                            <AiSourceSelect
+                              value={imageSourceId}
+                              sources={aiSources}
+                              onChange={(nextSourceId) => handleLinkedSourceChange('image', nextSourceId)}
+                              className="w-full"
+                            />
+                          </div>
+                          <div className="group">
+                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                              生图模型
+                            </label>
+                            <AiModelSelect
+                              value={formData.image_model}
+                              onChange={(modelId) => setFormData((d) => ({ ...d, image_model: modelId }))}
+                              className="w-full"
+                              disabled={isDashscopeImageTemplate || !imageSourceModels.length}
+                              placeholder={isDashscopeImageTemplate ? DASHSCOPE_LOCKED_IMAGE_MODEL : '请先在该源中添加模型'}
+                              options={isDashscopeImageTemplate
+                                ? [{ id: DASHSCOPE_LOCKED_IMAGE_MODEL, label: DASHSCOPE_LOCKED_IMAGE_MODEL }]
+                                : imageSourceModels.map((model) => ({
+                                  id: model.id,
+                                  label: model.id,
+                                  badges: buildModelCapabilityBadges(model.capabilities),
+                                  inputIcons: buildModelInputIcons(model.inputCapabilities),
+                                }))}
+                            />
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-text-tertiary">
+                          生图会自动复用所选 AI 源的 Endpoint 与 API Key；模型的增删请到上方对应源卡片中管理。
+                        </p>
+                      </div>
+
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border">
                     <div className="mb-4 flex items-center justify-between gap-3">
                       <h3 className="text-sm font-medium text-text-primary">知识库视觉索引模型</h3>
                       <button
@@ -5526,52 +5585,6 @@ export function Settings({
                         />
                         跳过 64px 以下的小图标
                       </label>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">生图模型设置</h3>
-
-                    <div className="space-y-4">
-                      <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="group">
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              生图 AI 源
-                            </label>
-                            <AiSourceSelect
-                              value={imageSourceId}
-                              sources={aiSources}
-                              onChange={(nextSourceId) => handleLinkedSourceChange('image', nextSourceId)}
-                              className="w-full"
-                            />
-                          </div>
-                          <div className="group">
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              生图模型
-                            </label>
-                            <AiModelSelect
-                              value={formData.image_model}
-                              onChange={(modelId) => setFormData((d) => ({ ...d, image_model: modelId }))}
-                              className="w-full"
-                              disabled={isDashscopeImageTemplate || !imageSourceModels.length}
-                              placeholder={isDashscopeImageTemplate ? DASHSCOPE_LOCKED_IMAGE_MODEL : '请先在该源中添加模型'}
-                              options={isDashscopeImageTemplate
-                                ? [{ id: DASHSCOPE_LOCKED_IMAGE_MODEL, label: DASHSCOPE_LOCKED_IMAGE_MODEL }]
-                                : imageSourceModels.map((model) => ({
-                                  id: model.id,
-                                  label: model.id,
-                                  badges: buildModelCapabilityBadges(model.capabilities),
-                                  inputIcons: buildModelInputIcons(model.inputCapabilities),
-                                }))}
-                            />
-                          </div>
-                        </div>
-                        <p className="text-[11px] text-text-tertiary">
-                          生图会自动复用所选 AI 源的 Endpoint 与 API Key；模型的增删请到上方对应源卡片中管理。
-                        </p>
-                      </div>
-
                     </div>
                   </div>
 

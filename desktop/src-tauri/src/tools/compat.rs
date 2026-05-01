@@ -360,17 +360,12 @@ fn normalize_search_call(arguments: &Value) -> NormalizedToolCall {
                 Some(path),
             )
         }
-        "web" => {
-            let mut payload = Map::new();
-            copy_universal(&mut payload, &object, "query");
-            copy_universal_as(&mut payload, &object, "limit", "limit");
-            app_cli_action_call(
-                "web.search",
-                Value::Object(payload),
-                Some("Search"),
-                Some(path),
-            )
-        }
+        "web" => app_cli_legacy_command_call(
+            "help",
+            json!({ "resource": "web", "operation": "search", "input": Value::Object(object.clone()) }),
+            Some("Search"),
+            Some(path),
+        ),
         _ => universal_fs_call("workspace.search", resource_path, &object, Some("Search")),
     }
 }
@@ -551,9 +546,6 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ),
         ("memory", "create" | "update") => {
             app_cli_action_call("memory.add", payload, Some("Redbox"), Some("memory.add"))
-        }
-        ("web", "search") => {
-            app_cli_action_call("web.search", payload, Some("Redbox"), Some("web.search"))
         }
         ("web", "get" | "read" | "fetch") => {
             let mut map = payload.as_object().cloned().unwrap_or_default();
@@ -1694,22 +1686,19 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_universal_search_web_to_unavailable_web_search() {
+    fn normalizes_universal_search_web_to_help() {
         let normalized = normalize_tool_call(
             "Search",
             &json!({ "path": "web://", "query": "oh-my-codex" }),
         );
         assert_eq!(normalized.name, "app_cli");
-        assert_eq!(
-            normalized.arguments.get("action"),
-            Some(&json!("web.search"))
-        );
+        assert_eq!(normalized.arguments.get("command"), Some(&json!("help")));
         assert_eq!(
             normalized
                 .arguments
                 .get("payload")
-                .and_then(|value| value.get("query")),
-            Some(&json!("oh-my-codex"))
+                .and_then(|value| value.get("operation")),
+            Some(&json!("search"))
         );
     }
 

@@ -1985,6 +1985,25 @@ mod tests {
     }
 
     #[test]
+    fn resolve_local_path_decodes_windows_file_url_with_unicode_user() {
+        let path = resolve_local_path("file:///C:/Users/%E5%BC%A0%E4%B8%89/RedBox/demo%201.png")
+            .expect("windows file url path");
+        let expected =
+            ["C:", "Users", "张三", "RedBox", "demo 1.png"].join(std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(path.to_string_lossy(), expected);
+    }
+
+    #[test]
+    fn resolve_local_path_decodes_redbox_asset_windows_path_with_unicode_user() {
+        let encoded = urlencoding::encode(r#"C:\Users\张三\RedBox\demo 1.png"#);
+        let path = resolve_local_path(&format!("redbox-asset://asset/{encoded}"))
+            .expect("redbox asset windows path");
+        let expected =
+            ["C:", "Users", "张三", "RedBox", "demo 1.png"].join(std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(path.to_string_lossy(), expected);
+    }
+
+    #[test]
     fn validate_runtime_tool_message_sequence_accepts_paired_messages() {
         let messages = vec![
             json!({
@@ -7982,25 +8001,6 @@ fn run_openai_interactive_chat_runtime(
         {
             body["reasoning_split"] = json!(true);
         }
-        let web_search_policy = provider_profile.web_search_policy(config.web_search_mode);
-        if web_search_policy.requested {
-            if matches!(
-                web_search_policy.native_support,
-                crate::provider_compat::NativeWebSearchSupport::OpenAiChatCompletions
-            ) {
-                body["web_search_options"] = json!({});
-            }
-            append_debug_log_state(
-                state,
-                format!(
-                    "[runtime][web-search][{}] requested=true support={:?} requiredTransport={} reason={}",
-                    trace_id,
-                    web_search_policy.native_support,
-                    web_search_policy.required_transport.unwrap_or("current"),
-                    web_search_policy.reason
-                ),
-            );
-        }
         if is_wander {
             body["temperature"] = json!(0.4);
             body["max_tokens"] = json!(900);
@@ -8719,35 +8719,68 @@ fn resolve_local_path(source: &str) -> Option<PathBuf> {
         || normalized_scheme.starts_with("local-file://")
         || normalized_scheme.starts_with("redbox-asset://asset/")
     {
+        if normalized_scheme.starts_with("redbox-asset://asset/") {
+            let encoded = &trimmed["redbox-asset://asset/".len()..];
+            return Some(PathBuf::from(decode_local_path_segment(encoded)));
+        }
+
         let parse_target = if normalized_scheme.starts_with("local-file://") {
             format!("file://{}", &trimmed["local-file://".len()..])
-        } else if normalized_scheme.starts_with("redbox-asset://asset/") {
-            format!("file:///{}", &trimmed["redbox-asset://asset/".len()..])
         } else {
             trimmed.to_string()
         };
         if let Ok(parsed) = url::Url::parse(&parse_target) {
-            if let Ok(path) = parsed.to_file_path() {
+            if let Some(path) = file_url_to_local_path(&parsed) {
                 return Some(path);
             }
         }
-        let rest = if normalized_scheme.starts_with("local-file://") {
-            &trimmed["local-file://".len()..]
-        } else if normalized_scheme.starts_with("redbox-asset://asset/") {
-            &trimmed["redbox-asset://asset/".len()..]
-        } else {
-            trimmed.strip_prefix("file://").unwrap_or(trimmed)
-        };
-        #[cfg(target_os = "windows")]
-        let normalized = rest.trim_start_matches('/');
-        #[cfg(not(target_os = "windows"))]
-        let normalized = rest;
-        let decoded = urlencoding::decode(normalized)
-            .map(|value| value.into_owned())
-            .unwrap_or_else(|_| normalized.to_string());
-        return Some(PathBuf::from(decoded));
+        let rest = parse_target
+            .strip_prefix("file://")
+            .unwrap_or(&parse_target);
+        return Some(PathBuf::from(decode_local_path_segment(rest)));
     }
     Some(PathBuf::from(trimmed))
+}
+
+fn decode_local_path_segment(raw: &str) -> String {
+    let decoded = urlencoding::decode(raw)
+        .map(|value| value.into_owned())
+        .unwrap_or_else(|_| raw.to_string());
+    trim_windows_drive_url_prefix(&decoded).replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
+}
+
+fn trim_windows_drive_url_prefix(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    if bytes.len() >= 3
+        && matches!(bytes[0], b'/' | b'\\')
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+    {
+        &value[1..]
+    } else {
+        value
+    }
+}
+
+fn file_url_to_local_path(parsed: &url::Url) -> Option<PathBuf> {
+    if parsed.scheme() != "file" {
+        return None;
+    }
+    let host = parsed.host_str().unwrap_or("").trim();
+    let decoded_path = decode_local_path_segment(parsed.path());
+    if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
+        return Some(PathBuf::from(format!(
+            "{}{}{}",
+            std::path::MAIN_SEPARATOR_STR.repeat(2),
+            host,
+            if decoded_path.starts_with(std::path::MAIN_SEPARATOR) {
+                decoded_path
+            } else {
+                format!("{}{}", std::path::MAIN_SEPARATOR, decoded_path)
+            }
+        )));
+    }
+    Some(PathBuf::from(decoded_path))
 }
 
 fn subjects_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {

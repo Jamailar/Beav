@@ -557,7 +557,9 @@ fn explicit_knowledge_prompt_section(metadata: Option<&Value>) -> String {
     let mut lines = vec![
         "ExplicitKnowledgeReferences:".to_string(),
         "- The user explicitly mentioned the following knowledge library items with `#` in this turn.".to_string(),
-        "- Treat these references as high-priority context anchors. Use tools to inspect the source files before making detailed factual claims when paths are available.".to_string(),
+        "- Treat these references as high-priority context anchors.".to_string(),
+        "- `primaryPath` is the best local path to inspect first. For note/video captures, it is usually a material folder; list it first, then read `meta.json` and any transcript/content/description files you find there.".to_string(),
+        "- For document sources, `rootPath` is the document source root; search/read files under that root before making detailed factual claims.".to_string(),
         "- If a referenced item cannot be inspected, say so instead of inventing details.".to_string(),
     ];
     for (index, item) in items.iter().take(12).enumerate() {
@@ -605,8 +607,16 @@ fn explicit_knowledge_prompt_section(metadata: Option<&Value>) -> String {
             source_kind
         ));
         if !folder_path.is_empty() || !root_path.is_empty() {
+            let primary_path = if !root_path.is_empty() {
+                root_path
+            } else {
+                folder_path
+            };
+            if !primary_path.is_empty() {
+                lines.push(format!("   primaryPath: {}", primary_path));
+            }
             lines.push(format!(
-                "   paths: folderPath={}, rootPath={}",
+                "   contentFolderPath: {}; rootPath: {}",
                 folder_path, root_path
             ));
         }

@@ -1,10 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{
-    search::resolve_web_search_policy, InteractiveToolChoice, NativeWebSearchSupport,
-    ProviderTurnPolicy, WebSearchMode, WebSearchRequestPolicy,
-};
+use super::{InteractiveToolChoice, ProviderTurnPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +33,6 @@ pub(crate) struct ProviderCapabilities {
     pub supports_usage_trailer: bool,
     pub supports_parallel_tool_calls: bool,
     pub supports_text_fallback: bool,
-    pub native_web_search: NativeWebSearchSupport,
     pub thinking_disable_parameter: ProviderThinkingDisableParameter,
 }
 
@@ -133,9 +129,5 @@ impl ProviderProfile {
                 body["thinking"] = json!({ "type": "disabled" });
             }
         }
-    }
-
-    pub(crate) fn web_search_policy(&self, mode: WebSearchMode) -> WebSearchRequestPolicy {
-        resolve_web_search_policy(mode, self.capabilities.native_web_search)
     }
 }

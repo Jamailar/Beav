@@ -158,10 +158,7 @@ fn fetch_latest_app_update(current_version: &str) -> Result<LatestAppUpdate, Str
         });
     }
     if !status.is_success() {
-        return Err(format!(
-            "更新源请求失败：HTTP {}",
-            status
-        ));
+        return Err(format!("更新源请求失败：HTTP {}", status));
     }
 
     let version = normalize_version_tag(

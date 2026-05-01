@@ -604,7 +604,6 @@ pub struct ResolvedChatConfig {
     pub api_key: Option<String>,
     pub model_name: String,
     pub reasoning_effort: Option<String>,
-    pub web_search_mode: crate::provider_compat::WebSearchMode,
 }
 
 #[derive(Debug, Clone)]

@@ -188,7 +188,7 @@ fn role_profile_defaults(role_id: &str) -> Value {
                 vec!["检索证据", "整理来源", "标注不确定项", "形成研究摘要"],
                 vec!["research", "evidence_collection", "knowledge_lookup"],
                 vec!["visual_generation", "final_delivery_claim"],
-                vec!["redbox_fs", "knowledge.search", "web.search"],
+                vec!["redbox_fs", "knowledge.search", "web.fetch"],
             ),
             "copywriter" => (
                 vec!["writing", "editing", "publishing_copy"],
