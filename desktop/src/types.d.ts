@@ -1858,6 +1858,16 @@ declare global {
             updatedAt: string;
           }>;
         }>;
+        updateLearningCandidate: (payload: {
+          projectId: string;
+          candidateId: string;
+          status: 'accepted' | 'rejected' | 'pending';
+        }) => Promise<{
+          success?: boolean;
+          project?: unknown;
+          candidate?: unknown;
+          error?: string;
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{

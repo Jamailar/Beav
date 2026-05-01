@@ -97,6 +97,7 @@ pub fn handle_redclaw_channel(
         "redclaw:orchestration-registry" => Ok(redclaw_orchestration_registry_value()),
         "redclaw:orchestration-create-team" => create_redclaw_orchestration_team(state, payload),
         "redclaw:orchestration-create-run" => create_redclaw_orchestration_run(state, payload),
+        "redclaw:learning-candidate-update" => update_redclaw_learning_candidate(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -635,6 +636,89 @@ pub fn handle_redclaw_channel(
         _ => return None,
     };
     Some(result)
+}
+
+fn update_redclaw_learning_candidate(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let project_id =
+        payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
+    let candidate_id = payload_string(payload, "candidateId")
+        .ok_or_else(|| "candidateId is required".to_string())?;
+    let status = payload_string(payload, "status").unwrap_or_else(|| "accepted".to_string());
+    if !matches!(status.as_str(), "accepted" | "rejected" | "pending") {
+        return Err("status must be accepted, rejected, or pending".to_string());
+    }
+    with_store_mut(state, |store| {
+        let project = store
+            .redclaw_state
+            .projects
+            .iter_mut()
+            .find(|item| item.id == project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())?;
+        let candidate = project
+            .learning_candidates
+            .iter_mut()
+            .find(|item| {
+                item.get("id").and_then(Value::as_str).map(str::trim) == Some(candidate_id.as_str())
+            })
+            .ok_or_else(|| "learning candidate not found".to_string())?;
+        if let Some(object) = candidate.as_object_mut() {
+            object.insert("status".to_string(), json!(status.clone()));
+            object.insert("updatedAt".to_string(), json!(now_iso()));
+        }
+        let candidate_snapshot = candidate.clone();
+        if status == "accepted" {
+            let statement = candidate_snapshot
+                .get("statement")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .unwrap_or("RedClaw learning candidate accepted")
+                .to_string();
+            store.memories.push(crate::UserMemoryRecord {
+                id: crate::make_id("memory"),
+                content: statement,
+                r#type: "redclaw_learning".to_string(),
+                tags: vec!["redclaw".to_string(), "learning".to_string()],
+                entities: Vec::new(),
+                scope: Some(
+                    candidate_snapshot
+                        .get("scope")
+                        .and_then(Value::as_str)
+                        .unwrap_or("project")
+                        .to_string(),
+                ),
+                space_id: Some(store.active_space_id.clone()),
+                project_id: Some(project_id.clone()),
+                session_id: None,
+                source: Some(json!({
+                    "kind": "redclaw_learning_candidate",
+                    "projectId": project_id,
+                    "candidateId": candidate_id,
+                    "candidate": candidate_snapshot,
+                })),
+                confidence: candidate_snapshot.get("confidence").and_then(Value::as_f64),
+                created_at: now_i64(),
+                updated_at: None,
+                last_accessed: None,
+                status: Some("active".to_string()),
+                archived_at: None,
+                archive_reason: None,
+                origin_id: None,
+                canonical_key: None,
+                revision: Some(1),
+                last_conflict_at: None,
+            });
+        }
+        project.updated_at = now_iso();
+        Ok(json!({
+            "success": true,
+            "project": project,
+            "candidate": candidate_snapshot
+        }))
+    })
 }
 
 fn redclaw_agent_role_id(agent_id: &RedclawAgentId) -> &'static str {

@@ -53,6 +53,29 @@ export function RedClawProjectWorkspacePanel() {
         }
     }, []);
 
+    const updateLearningCandidate = useCallback(async (
+        candidateId: string,
+        status: 'accepted' | 'rejected',
+    ) => {
+        if (!activeProject || !candidateId) return;
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawProjects.updateLearningCandidate({
+                projectId: activeProject.id,
+                candidateId,
+                status,
+            });
+            if (!result?.success) {
+                setError(result?.error || '学习候选更新失败');
+                return;
+            }
+            await loadProjects();
+        } catch (err) {
+            console.error('Failed to update RedClaw learning candidate:', err);
+            setError('学习候选更新失败');
+        }
+    }, [activeProject, loadProjects]);
+
     useEffect(() => {
         if (!open) return;
         void loadProjects();
@@ -159,8 +182,26 @@ export function RedClawProjectWorkspacePanel() {
                                         <div className="text-xs font-semibold text-text-primary">
                                             {textValue(candidate.statement, 'Learning candidate')}
                                         </div>
-                                        <div className="mt-1 text-[11px] text-text-tertiary">
-                                            {textValue(candidate.scope, 'project')} · {textValue(candidate.status, 'pending')}
+                                        <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-text-tertiary">
+                                            <span>{textValue(candidate.scope, 'project')} · {textValue(candidate.status, 'pending')}</span>
+                                            {textValue(candidate.status, 'pending') === 'pending' && (
+                                                <span className="inline-flex gap-1">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void updateLearningCandidate(textValue(candidate.id), 'accepted')}
+                                                        className="rounded-full bg-surface-primary px-2 py-0.5 font-semibold text-text-secondary transition hover:text-brand-red"
+                                                    >
+                                                        接受
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void updateLearningCandidate(textValue(candidate.id), 'rejected')}
+                                                        className="rounded-full bg-surface-primary px-2 py-0.5 font-semibold text-text-tertiary transition hover:text-text-secondary"
+                                                    >
+                                                        忽略
+                                                    </button>
+                                                </span>
+                                            )}
                                         </div>
                                     </div>
                                 ))}
