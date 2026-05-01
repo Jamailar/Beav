@@ -1884,6 +1884,9 @@ declare global {
           success?: boolean;
           project?: unknown;
           path?: string;
+          packagePath?: string;
+          concatPath?: string;
+          readmePath?: string;
           plan?: unknown;
           error?: string;
         }>;
