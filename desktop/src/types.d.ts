@@ -1913,6 +1913,17 @@ declare global {
           package?: unknown;
           error?: string;
         }>;
+        exportReviewReport: (payload: {
+          projectId: string;
+        }) => Promise<{
+          success?: boolean;
+          project?: unknown;
+          packagePath?: string;
+          jsonPath?: string;
+          markdownPath?: string;
+          report?: unknown;
+          error?: string;
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{
