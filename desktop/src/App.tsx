@@ -14,7 +14,6 @@ import { uiTraceInteraction } from './utils/uiDebug';
 const ChatPage = lazy(async () => ({ default: (await import('./pages/Chat')).Chat }));
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
-const TeamPage = lazy(async () => ({ default: (await import('./pages/Team')).Team }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
@@ -28,7 +27,7 @@ const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subject
 const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
 const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
 
-export type ViewType = 'chat' | 'team' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard' | 'approval';
+export type ViewType = 'chat' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard' | 'approval';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'group-chat' | 'members';
 type SettingsNavigationTarget = {
@@ -41,7 +40,6 @@ const PINNED_VIEWS: ViewType[] = [];
 const MAX_CACHED_VIEWS = 0;
 const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'chat',
-  'team',
   'skills',
   'knowledge',
   'settings',
@@ -477,10 +475,6 @@ function App() {
     setViewPersistent('chat', active);
   }, [setViewPersistent]);
 
-  const handleTeamExecutionStateChange = useCallback((active: boolean) => {
-    setViewPersistent('team', active);
-  }, [setViewPersistent]);
-
   const handleWanderExecutionStateChange = useCallback((active: boolean) => {
     setViewPersistent('wander', active);
   }, [setViewPersistent]);
@@ -677,16 +671,6 @@ function App() {
                 onExecutionStateChange={handleChatExecutionStateChange}
                 pendingMessage={pendingChatMessage}
                 onMessageConsumed={clearPendingMessage}
-              />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'team') && (
-          <div className={currentView === 'team' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'team' ? <ViewLoadingFallback /> : null}>
-              <TeamPage
-                isActive={currentView === 'team' || persistentViews.has('team')}
-                onExecutionStateChange={handleTeamExecutionStateChange}
               />
             </Suspense>
           </div>
