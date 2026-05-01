@@ -11,9 +11,27 @@ use crate::runtime::{
     list_collab_tasks, list_review_dockets, pin_collab_task_session, post_collab_message,
     read_collab_mailbox, request_collab_report, retry_collab_task, review_docket_stats,
     submit_collab_report, transition_collab_task, update_collab_session_status, update_collab_task,
+    ReviewDocketRecord,
 };
 use crate::subagents::{execute_team_tool, team_tool_descriptors, tick_team_wake_runtime};
 use crate::{payload_string, AppState};
+
+#[derive(Debug, Clone)]
+struct ApprovalActionRouteResult {
+    kind: String,
+    status: &'static str,
+    message: Option<String>,
+}
+
+impl ApprovalActionRouteResult {
+    fn json(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "status": self.status,
+            "message": self.message,
+        })
+    }
+}
 
 fn payload_limit(payload: &Value, key: &str) -> Option<usize> {
     payload
@@ -267,32 +285,69 @@ pub fn decide_review_docket_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let decision = with_store_mut(state, |store| decide_review_docket(store, payload))?;
-    apply_review_docket_action(app, state, &decision.docket_id, &decision.decision)?;
+    let action_result =
+        route_review_docket_action(app, state, &decision.docket_id, &decision.decision)?;
     emit_collab_event(
         app,
         "runtime:review-docket-changed",
         None,
-        json!({ "docketId": decision.docket_id, "decision": decision }),
+        json!({ "docketId": decision.docket_id, "decision": decision, "actionResult": action_result.json() }),
     );
     Ok(json!(decision))
 }
 
-fn apply_review_docket_action(
+fn proposed_action_kind(action: Option<&Value>) -> Option<&str> {
+    action
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("kind"))
+        .and_then(Value::as_str)
+}
+
+fn route_review_docket_action(
     app: &AppHandle,
     state: &State<'_, AppState>,
     docket_id: &str,
     decision: &str,
-) -> Result<(), String> {
+) -> Result<ApprovalActionRouteResult, String> {
     let docket = with_store(state, |store| {
         get_review_docket(&store, docket_id).ok_or_else(|| "审批项不存在".to_string())
     })?;
-    let proposed_action = docket.proposed_action.as_ref().and_then(Value::as_object);
-    let Some(action) = proposed_action else {
-        return Ok(());
+    let Some(kind) = proposed_action_kind(docket.proposed_action.as_ref()) else {
+        return Ok(ApprovalActionRouteResult {
+            kind: "none".to_string(),
+            status: "not_applicable",
+            message: None,
+        });
     };
-    if action.get("kind").and_then(Value::as_str) != Some("redclaw_task_draft") {
-        return Ok(());
+
+    match kind {
+        "redclaw_task_draft" => apply_redclaw_task_draft_approval(app, state, &docket, decision),
+        "collab_task_completion" => Ok(ApprovalActionRouteResult {
+            kind: kind.to_string(),
+            status: "already_applied",
+            message: Some(
+                "协作任务状态已由审批 runtime 按 onDecisionTaskStatus 回写。".to_string(),
+            ),
+        }),
+        other => Ok(ApprovalActionRouteResult {
+            kind: other.to_string(),
+            status: "unsupported",
+            message: Some("审批动作 kind 尚未注册业务处理器。".to_string()),
+        }),
     }
+}
+
+fn apply_redclaw_task_draft_approval(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    docket: &ReviewDocketRecord,
+    decision: &str,
+) -> Result<ApprovalActionRouteResult, String> {
+    let action = docket
+        .proposed_action
+        .as_ref()
+        .and_then(Value::as_object)
+        .ok_or_else(|| "RedClaw 审批项缺少 proposedAction".to_string())?;
     let draft_id = action
         .get("draftId")
         .and_then(Value::as_str)
@@ -312,8 +367,21 @@ fn apply_review_docket_action(
                 "confirm": confirm,
             }),
         )?;
+        return Ok(ApprovalActionRouteResult {
+            kind: "redclaw_task_draft".to_string(),
+            status: "succeeded",
+            message: Some(if confirm {
+                "RedClaw 草稿已确认。".to_string()
+            } else {
+                "RedClaw 草稿已丢弃。".to_string()
+            }),
+        });
     }
-    Ok(())
+    Ok(ApprovalActionRouteResult {
+        kind: "redclaw_task_draft".to_string(),
+        status: "ignored",
+        message: Some("该决定不会自动确认或丢弃 RedClaw 草稿。".to_string()),
+    })
 }
 
 pub fn archive_review_docket_value(

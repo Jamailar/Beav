@@ -17,6 +17,19 @@ Use `desktop/src/utils/humanApproval.ts` when a renderer module needs human appr
 
 Modules should prefer these helpers over directly calling `window.ipcRenderer.teamRuntime.createReviewDocket`.
 
+## Proposed Action Schema
+
+Every docket that should drive business state should set `proposedAction.kind`. Current registered kinds:
+
+- `collab_task_completion`: collaboration task completion review. The collaboration task status is already updated by `onDecisionTaskStatus`.
+- `redclaw_task_draft`: RedClaw task draft confirmation. Approval confirms the draft; rejection discards it.
+
+Reserved next kinds:
+
+- `manuscript_publish`
+- `media_generation_result`
+- `plugin_import_batch`
+
 ## Current Producers
 
 - Collaboration Workboard: manual task completion review.
@@ -36,3 +49,5 @@ changes_requested -> claimed
 ```
 
 RedClaw draft approvals use `proposedAction.kind = redclaw_task_draft`; approval confirms the draft, rejection discards it.
+
+Decision routing is centralized in the Rust approval action router. Unknown `proposedAction.kind` values are recorded as unsupported action results instead of being treated as implicit success.
