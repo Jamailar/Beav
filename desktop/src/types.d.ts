@@ -1901,6 +1901,18 @@ declare global {
           sizeBytes?: number;
           error?: string;
         }>;
+        exportPublishPackage: (payload: {
+          projectId: string;
+        }) => Promise<{
+          success?: boolean;
+          project?: unknown;
+          packagePath?: string;
+          jsonPath?: string;
+          markdownPath?: string;
+          coverBriefPath?: string;
+          package?: unknown;
+          error?: string;
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{
