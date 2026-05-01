@@ -123,7 +123,7 @@ fn build_child_prompt(
         .map(|value| serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string()))
         .unwrap_or_else(|| "{}".to_string());
     format!(
-        "Use your Subagent Role Overlay for role scope, allowed tools, handoff contract, and output schema.\nGoal: {}\nUser input: {}\nTask context JSON: {}\nPrior outputs: {}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved.\nFor RedClaw tasks, follow the node outputSchema and requiredArtifacts exactly; put the user-facing deliverable in artifact, keep handoff concise, and propose learningCandidates only when your role contract asks for them.",
+        "Use your Subagent Role Overlay for role scope, allowed tools, handoff contract, and output schema.\nGoal: {}\nUser input: {}\nTask context JSON: {}\nPrior outputs: {}\nReturn strict JSON only with fields summary, artifact, handoff, risks, issues, approved, learningCandidates.\nFor RedClaw tasks, follow the node outputSchema and requiredArtifacts exactly; put the user-facing deliverable in artifact, keep handoff concise, and propose learningCandidates only when your role contract asks for them.",
         route.goal, user_input, task_context, prior_summary,
     )
 }
@@ -156,6 +156,12 @@ fn parse_child_output(
             .unwrap_or_default(),
         issues: parsed
             .get("issues")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        learning_candidates: parsed
+            .get("learningCandidates")
+            .or_else(|| parsed.get("learning_candidates"))
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default(),
@@ -574,6 +580,7 @@ fn persist_child_execution(
                     "handoff": output.handoff,
                     "risks": output.risks,
                     "issues": output.issues,
+                    "learningCandidates": output.learning_candidates,
                     "approved": output.approved,
                     "rawResponse": raw_response,
                 })),
@@ -587,6 +594,7 @@ fn persist_child_execution(
                     "childTaskId": spawn.child_task_id,
                     "childSessionId": spawn.child_session_id,
                     "approved": output.approved,
+                    "learningCandidates": output.learning_candidates,
                 })),
             );
             task.checkpoints.push(checkpoint);
@@ -1054,6 +1062,35 @@ mod tests {
         assert!(prompt.contains("script.short_video_script"));
         assert!(prompt.contains("ScriptDocument"));
         assert!(prompt.contains("follow the node outputSchema"));
+    }
+
+    #[test]
+    fn child_output_preserves_learning_candidates() {
+        let output = parse_child_output(
+            r#"{
+                "summary": "review complete",
+                "learningCandidates": [
+                    {
+                        "scope": "creator",
+                        "statement": "Prefer tighter hooks",
+                        "confidence": 0.8
+                    }
+                ],
+                "approved": true
+            }"#,
+            "review_agent",
+            "task-child",
+            "session-child",
+        );
+
+        assert_eq!(output.role_id, "review_agent");
+        assert_eq!(output.learning_candidates.len(), 1);
+        assert_eq!(
+            output.learning_candidates[0]
+                .get("statement")
+                .and_then(Value::as_str),
+            Some("Prefer tighter hooks")
+        );
     }
 
     #[test]

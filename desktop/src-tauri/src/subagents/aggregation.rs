@@ -45,6 +45,7 @@ pub fn build_orchestration_value(store: &AppStore, outputs: Vec<SubAgentOutput>)
                 "handoff": item.handoff,
                 "risks": item.risks,
                 "issues": item.issues,
+                "learningCandidates": item.learning_candidates,
                 "approved": item.approved,
                 "childTaskId": item.child_task_id,
                 "childSessionId": item.child_session_id,
@@ -88,6 +89,9 @@ mod tests {
                 child_session_id: Some("child-session".to_string()),
                 status: "completed".to_string(),
                 approved: true,
+                learning_candidates: vec![json!({
+                    "statement": "Prefer tighter hooks"
+                })],
                 ..SubAgentOutput::default()
             }],
         );
@@ -109,6 +113,13 @@ mod tests {
         assert_eq!(
             output.get("status").and_then(Value::as_str),
             Some("completed")
+        );
+        assert_eq!(
+            output
+                .get("learningCandidates")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
         );
     }
 }
