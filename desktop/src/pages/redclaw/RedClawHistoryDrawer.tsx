@@ -9,11 +9,20 @@ interface RedClawTeamRoom {
     isSystem?: boolean;
 }
 
+export type RedClawHistorySurface = 'redclaw' | 'advisor' | 'room';
+
+export interface RedClawHistoryListItem extends ContextChatSessionListItem {
+    surface: RedClawHistorySurface;
+    speakerLabel: string;
+    advisorId?: string;
+    roomId?: string;
+}
+
 interface RedClawHistoryDrawerProps {
     open: boolean;
     activeSpaceName: string;
     historyLoading: boolean;
-    sessionList: ContextChatSessionListItem[];
+    sessionList: RedClawHistoryListItem[];
     activeSessionId: string | null;
     teamRooms?: RedClawTeamRoom[];
     activeRoomId?: string | null;
@@ -23,8 +32,8 @@ interface RedClawHistoryDrawerProps {
     onCreateSession: () => void | Promise<void>;
     onCreateRoom?: () => void;
     onSwitchRoom?: (roomId: string) => void;
-    onSwitchSession: (sessionId: string) => void;
-    onDeleteSession: (sessionId: string) => void | Promise<void>;
+    onSwitchSession: (session: RedClawHistoryListItem) => void;
+    onDeleteSession: (session: RedClawHistoryListItem) => void | Promise<void>;
 }
 
 export function RedClawHistoryDrawer({
@@ -176,14 +185,15 @@ export function RedClawHistoryDrawer({
                                             const title = session.chatSession?.title?.trim() || '未命名会话';
                                             const time = formatDateTime(session.chatSession?.updatedAt || null);
                                             const summary = session.summary?.trim();
+                                            const speakerLabel = session.speakerLabel || 'RedClaw';
                                             
                                             return (
                                                 <div
                                                     key={session.id}
                                                     role="button"
                                                     tabIndex={0}
-                                                    onClick={() => onSwitchSession(session.id)}
-                                                    onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSwitchSession(session.id)}
+                                                    onClick={() => onSwitchSession(session)}
+                                                    onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSwitchSession(session)}
                                                     className={clsx(
                                                         'group relative w-full rounded-lg px-3 py-2.5 text-left transition-all duration-200 active:scale-[0.98]',
                                                         isActive
@@ -205,7 +215,8 @@ export function RedClawHistoryDrawer({
                                                             </h4>
                                                             
                                                             <div className="mt-0.5 flex items-center gap-1.5 text-[9px] font-bold text-text-tertiary/60 uppercase tracking-tighter">
-                                                                <span>{time}</span>
+                                                                <span>{speakerLabel}</span>
+                                                                {time && <span>{time}</span>}
                                                                 {isActive && (
                                                                     <span className="text-accent-primary uppercase tracking-normal">● Online</span>
                                                                 )}
@@ -222,7 +233,7 @@ export function RedClawHistoryDrawer({
                                                             type="button"
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
-                                                                void onDeleteSession(session.id);
+                                                                void onDeleteSession(session);
                                                             }}
                                                             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 transition-all hover:bg-red-500/12 hover:text-red-400 group-hover:opacity-100"
                                                             title="移除"
