@@ -128,11 +128,125 @@ fn build_child_prompt(
     )
 }
 
+fn contract_type_matches(value: &Value, expected: &str) -> bool {
+    match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => {
+            value.as_f64().is_some() || value.as_i64().is_some() || value.as_u64().is_some()
+        }
+        "boolean" => value.is_boolean(),
+        _ => true,
+    }
+}
+
+fn validate_contract_value(value: &Value, contract: &Value, path: &str, errors: &mut Vec<String>) {
+    if let Some(expected_type) = contract.get("type").and_then(Value::as_str) {
+        if !contract_type_matches(value, expected_type) {
+            errors.push(format!("{path} expected {expected_type}"));
+            return;
+        }
+    }
+    if let Some(enum_values) = contract.get("enum").and_then(Value::as_array) {
+        if !enum_values.iter().any(|item| item == value) {
+            errors.push(format!("{path} is not one of the allowed enum values"));
+        }
+    }
+    if let Some(required) = contract.get("required").and_then(Value::as_array) {
+        for key in required.iter().filter_map(Value::as_str) {
+            if value.get(key).is_none() {
+                errors.push(format!("{path}.{key} is required"));
+            }
+        }
+    }
+    if let (Some(properties), Some(object)) = (
+        contract.get("properties").and_then(Value::as_object),
+        value.as_object(),
+    ) {
+        for (key, property_contract) in properties {
+            if let Some(property_value) = object.get(key) {
+                validate_contract_value(
+                    property_value,
+                    property_contract,
+                    &format!("{path}.{key}"),
+                    errors,
+                );
+            }
+        }
+    }
+    if let (Some(item_contract), Some(items)) = (contract.get("items"), value.as_array()) {
+        for (index, item) in items.iter().enumerate() {
+            validate_contract_value(item, item_contract, &format!("{path}[{index}]"), errors);
+        }
+    }
+}
+
+fn output_contracts_for_context(task_context: Option<&Value>) -> Vec<Value> {
+    let Some(context) = task_context else {
+        return Vec::new();
+    };
+    let node_output_schema = context
+        .get("node")
+        .and_then(|node| node.get("outputSchema"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    context
+        .get("skillProfiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|profile| {
+            node_output_schema.is_empty()
+                || profile
+                    .get("outputSchema")
+                    .and_then(Value::as_str)
+                    .map(|schema| schema == node_output_schema)
+                    .unwrap_or(false)
+        })
+        .filter_map(|profile| profile.get("outputContract").cloned())
+        .collect()
+}
+
+fn artifact_contract_issues(artifact: Option<&str>, task_context: Option<&Value>) -> Vec<Value> {
+    let contracts = output_contracts_for_context(task_context);
+    if contracts.is_empty() {
+        return Vec::new();
+    }
+    let Some(artifact) = artifact.map(str::trim).filter(|value| !value.is_empty()) else {
+        return vec![json!({
+            "code": "artifact_missing",
+            "message": "artifact is required for this RedClaw node output contract"
+        })];
+    };
+    let Some(parsed_artifact) = parse_json_value_from_text(artifact) else {
+        return vec![json!({
+            "code": "artifact_not_json",
+            "message": "artifact must be a JSON string matching the RedClaw output contract"
+        })];
+    };
+    let mut issues = Vec::new();
+    for contract in contracts {
+        let mut errors = Vec::new();
+        validate_contract_value(&parsed_artifact, &contract, "artifact", &mut errors);
+        if !errors.is_empty() {
+            issues.push(json!({
+                "code": "artifact_contract_violation",
+                "message": "artifact does not match the RedClaw output contract",
+                "errors": errors
+            }));
+        }
+    }
+    issues
+}
+
 fn parse_child_output(
     response: &str,
     role_id: &str,
     child_task_id: &str,
     child_session_id: &str,
+    task_context: Option<&Value>,
 ) -> SubAgentOutput {
     let parsed = parse_json_value_from_text(response).unwrap_or_else(|| {
         json!({
@@ -144,21 +258,26 @@ fn parse_child_output(
             "approved": true
         })
     });
+    let artifact = payload_string(&parsed, "artifact");
+    let mut issues = parsed
+        .get("issues")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let contract_issues = artifact_contract_issues(artifact.as_deref(), task_context);
+    let contract_passed = contract_issues.is_empty();
+    issues.extend(contract_issues);
     SubAgentOutput {
         role_id: role_id.to_string(),
         summary: payload_string(&parsed, "summary").unwrap_or_else(|| response.to_string()),
-        artifact: payload_string(&parsed, "artifact"),
+        artifact,
         handoff: payload_string(&parsed, "handoff"),
         risks: parsed
             .get("risks")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default(),
-        issues: parsed
-            .get("issues")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+        issues,
         learning_candidates: parsed
             .get("learningCandidates")
             .or_else(|| parsed.get("learning_candidates"))
@@ -168,7 +287,8 @@ fn parse_child_output(
         approved: parsed
             .get("approved")
             .and_then(Value::as_bool)
-            .unwrap_or(true),
+            .unwrap_or(true)
+            && contract_passed,
         child_task_id: Some(child_task_id.to_string()),
         child_session_id: Some(child_session_id.to_string()),
         status: "completed".to_string(),
@@ -790,6 +910,7 @@ fn execute_subagent_config(
         &config.role_id,
         &spawn.child_task_id,
         &spawn.child_session_id,
+        config.task_context.as_ref(),
     );
     log_subagent_state(
         &state,
@@ -1081,6 +1202,7 @@ mod tests {
             "review_agent",
             "task-child",
             "session-child",
+            None,
         );
 
         assert_eq!(output.role_id, "review_agent");
@@ -1091,6 +1213,88 @@ mod tests {
                 .and_then(Value::as_str),
             Some("Prefer tighter hooks")
         );
+    }
+
+    #[test]
+    fn redclaw_child_output_rejects_contract_violations() {
+        let task_context = json!({
+            "node": {
+                "id": "copy",
+                "agentId": "copy_agent",
+                "skillIds": ["xhs.copy_package"],
+                "outputSchema": "XhsCopyPackage"
+            },
+            "skillProfiles": [
+                {
+                    "id": "xhs.copy_package",
+                    "outputSchema": "XhsCopyPackage",
+                    "outputContract": {
+                        "type": "object",
+                        "required": ["titles", "body"],
+                        "properties": {
+                            "titles": { "type": "array", "items": { "type": "string" } },
+                            "body": { "type": "string" }
+                        }
+                    }
+                }
+            ]
+        });
+        let output = parse_child_output(
+            r#"{
+                "summary": "copy ready",
+                "artifact": "{\"titles\":[\"Title A\"]}",
+                "approved": true
+            }"#,
+            "copy_agent",
+            "task-child",
+            "session-child",
+            Some(&task_context),
+        );
+
+        assert!(!output.approved);
+        assert!(output.issues.iter().any(|issue| {
+            issue.get("code").and_then(Value::as_str) == Some("artifact_contract_violation")
+        }));
+    }
+
+    #[test]
+    fn redclaw_child_output_accepts_contract_match() {
+        let task_context = json!({
+            "node": {
+                "id": "copy",
+                "agentId": "copy_agent",
+                "skillIds": ["xhs.copy_package"],
+                "outputSchema": "XhsCopyPackage"
+            },
+            "skillProfiles": [
+                {
+                    "id": "xhs.copy_package",
+                    "outputSchema": "XhsCopyPackage",
+                    "outputContract": {
+                        "type": "object",
+                        "required": ["titles", "body"],
+                        "properties": {
+                            "titles": { "type": "array", "items": { "type": "string" } },
+                            "body": { "type": "string" }
+                        }
+                    }
+                }
+            ]
+        });
+        let output = parse_child_output(
+            r#"{
+                "summary": "copy ready",
+                "artifact": "{\"titles\":[\"Title A\"],\"body\":\"Body\"}",
+                "approved": true
+            }"#,
+            "copy_agent",
+            "task-child",
+            "session-child",
+            Some(&task_context),
+        );
+
+        assert!(output.approved);
+        assert!(output.issues.is_empty());
     }
 
     #[test]
