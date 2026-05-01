@@ -621,6 +621,7 @@ function RedClawRoomConversation({
     onExecutionStateChange,
     onPreviewLink,
     activePreviewHref,
+    shortcuts,
 }: {
     room: RedClawTeamRoom | null;
     advisors: AdvisorProfile[];
@@ -628,6 +629,7 @@ function RedClawRoomConversation({
     onExecutionStateChange: (active: boolean) => void;
     onPreviewLink: (target: ChatMessageLinkTarget) => void;
     activePreviewHref: string | null;
+    shortcuts: ReturnType<typeof createRedClawComposerShortcuts>;
 }) {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
@@ -843,8 +845,8 @@ function RedClawRoomConversation({
         )));
     }, [room?.id]);
 
-    const handleSend = useCallback(() => {
-        const content = input.trim();
+    const sendRoomMessage = useCallback((rawContent: string) => {
+        const content = rawContent.trim();
         if (!room?.id || !content || isSending) return;
         const clientMessageId = `room-user-${Date.now()}`;
         setMessages((prev) => [...prev, {
@@ -863,7 +865,11 @@ function RedClawRoomConversation({
             message: content,
             clientMessageId,
         });
-    }, [input, isSending, room?.id]);
+    }, [isSending, room?.id]);
+
+    const handleSend = useCallback(() => {
+        sendRoomMessage(input);
+    }, [input, sendRoomMessage]);
 
     if (!room) {
         return (
@@ -927,11 +933,38 @@ function RedClawRoomConversation({
                 </div>
             </div>
 
-            <div className="shrink-0 border-t border-border/70 bg-surface-primary px-5 py-4">
-                <div className="mx-auto w-full max-w-4xl">
+            <div className="shrink-0 bg-surface-primary pb-4 pt-2 md:pb-5">
+                <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-4">
                     {errorNotice && (
                         <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
                             {errorNotice}
+                        </div>
+                    )}
+                    {shortcuts.length > 0 && (
+                        <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
+                            {shortcuts.map((shortcut) => (
+                                <button
+                                    key={shortcut.label}
+                                    type="button"
+                                    onClick={() => {
+                                        if ((shortcut.action || 'send') === 'inject') {
+                                            setInput(shortcut.text);
+                                            requestAnimationFrame(() => composerRef.current?.focus());
+                                            return;
+                                        }
+                                        if (!room?.id || isSending) return;
+                                        setInput(shortcut.text);
+                                        requestAnimationFrame(() => {
+                                            composerRef.current?.focus();
+                                        });
+                                        sendRoomMessage(shortcut.text);
+                                    }}
+                                    disabled={isSending}
+                                    className="flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50"
+                                >
+                                    {shortcut.label}
+                                </button>
+                            ))}
                         </div>
                     )}
                     <ChatComposer
@@ -941,7 +974,7 @@ function RedClawRoomConversation({
                         value={input}
                         onValueChange={setInput}
                         onSubmit={handleSend}
-                        placeholder="给这个群聊发消息"
+                        placeholder="描述创作目标，团队会一起讨论&#10;使用 # 调用知识库"
                         isBusy={isSending}
                         onCancel={() => void handleCancel()}
                         showCancelWhenBusy={true}
@@ -1231,6 +1264,17 @@ export function RedClaw({
         ? advisorAvatarText(selectedAdvisor)
         : undefined;
     const activeWelcomeIconVariant = activeAiSurface === 'advisor' ? 'avatar' as const : 'default' as const;
+    const roomComposerShortcuts = useMemo(() => (
+        Array.isArray(composerShortcuts)
+            ? composerShortcuts
+            : composerShortcuts({
+                input: '',
+                hasInput: false,
+                attachment: null,
+                selectedMemberMention: null,
+                selectedKnowledgeMentions: [],
+            })
+    ), [composerShortcuts]);
 
     useEffect(() => {
         if (!pendingMessage) {
@@ -2599,6 +2643,7 @@ export function RedClaw({
                                         onExecutionStateChange={setIsRedClawChatExecuting}
                                         onPreviewLink={handlePreviewLink}
                                         activePreviewHref={previewTarget?.href || null}
+                                        shortcuts={roomComposerShortcuts}
                                     />
                                 ) : speakerSessionLoading || !activeSpeakerSessionId ? (
                                     <div className="flex h-full items-center justify-center">
