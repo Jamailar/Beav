@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, Plus, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
+import { CreativeChat } from './CreativeChat';
 import { AdvisorModal, type Advisor, type AdvisorProfile } from './Advisors';
 import type { PendingChatMessage } from '../App';
 import type { ChatMessageLinkKind, ChatMessageLinkTarget } from '../components/MessageItem';
@@ -80,7 +81,6 @@ interface RedClawTeamRoom {
 
 const REDCLAW_AI_SURFACE_STORAGE_KEY = 'redbox:redclaw-ai-surface:v1';
 const ADVISOR_CHAT_CONTEXT_TYPE = 'advisor-discussion';
-const REDCLAW_ROOM_CONTEXT_TYPE = 'redclaw-room-discussion';
 
 function readInitialRedClawAiSurface(): RedClawAiSurface {
     if (typeof window === 'undefined') return 'redclaw';
@@ -592,7 +592,6 @@ export function RedClaw({
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessionList, setSessionList] = useState<ContextChatSessionListItem[]>([]);
     const [advisorHistorySessions, setAdvisorHistorySessions] = useState<RedClawHistoryListItem[]>([]);
-    const [roomHistorySessions, setRoomHistorySessions] = useState<RedClawHistoryListItem[]>([]);
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
@@ -608,7 +607,6 @@ export function RedClaw({
     const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
     const [advisorSessionIds, setAdvisorSessionIds] = useState<Record<string, string>>({});
-    const [roomSessionIds, setRoomSessionIds] = useState<Record<string, string>>({});
     const [speakerSessionLoading, setSpeakerSessionLoading] = useState(false);
     const [advisorCreateModalOpen, setAdvisorCreateModalOpen] = useState(false);
     const [isRedClawChatExecuting, setIsRedClawChatExecuting] = useState(false);
@@ -817,56 +815,6 @@ export function RedClaw({
         };
     }, [advisors, isActive]);
 
-    useEffect(() => {
-        if (!isActive || teamRooms.length === 0) {
-            setRoomHistorySessions([]);
-            return;
-        }
-        let cancelled = false;
-
-        const loadRoomHistories = async () => {
-            try {
-                const results = await Promise.all(teamRooms.map(async (room) => {
-                    const contextId = `redclaw-room:${room.id}`;
-                    const list = await window.ipcRenderer.invokeGuarded<ContextChatSessionListItem[] | null>('chat:list-context-sessions', {
-                        contextId,
-                        contextType: REDCLAW_ROOM_CONTEXT_TYPE,
-                    }, {
-                        timeoutMs: 3200,
-                        fallback: null,
-                        normalize: (value) => Array.isArray(value) ? value as ContextChatSessionListItem[] : [],
-                    });
-                    return (Array.isArray(list) ? list : []).map((session): RedClawHistoryListItem => ({
-                        ...session,
-                        surface: 'room',
-                        speakerLabel: room.name || '团队群聊',
-                        roomId: room.id,
-                    }));
-                }));
-                if (cancelled) return;
-                const items = results.flat();
-                setRoomHistorySessions(items);
-                setRoomSessionIds((prev) => {
-                    const next = { ...prev };
-                    items.forEach((item) => {
-                        if (item.roomId && item.id && !next[item.roomId]) {
-                            next[item.roomId] = item.id;
-                        }
-                    });
-                    return next;
-                });
-            } catch (error) {
-                if (cancelled) return;
-                console.error('Failed to load RedClaw room histories:', error);
-            }
-        };
-
-        void loadRoomHistories();
-        return () => {
-            cancelled = true;
-        };
-    }, [isActive, teamRooms]);
-
     const selectedAdvisor = useMemo(
         () => advisors.find((advisor) => advisor.id === selectedAdvisorId) || null,
         [advisors, selectedAdvisorId],
@@ -887,9 +835,7 @@ export function RedClaw({
     ), [advisorHistorySessions, sessionList]);
     const activeSpeakerSessionId = activeAiSurface === 'advisor' && selectedAdvisorId
         ? advisorSessionIds[selectedAdvisorId] || null
-        : activeAiSurface === 'room' && selectedRoomId
-            ? roomSessionIds[selectedRoomId] || null
-            : activeSessionId;
+        : activeSessionId;
     const activeSpeakerMention = activeAiSurface === 'advisor' && selectedAdvisor ? {
         id: selectedAdvisor.id,
         name: selectedAdvisor.name,
@@ -1433,7 +1379,6 @@ export function RedClaw({
         }
         if (session.surface === 'room' && session.roomId) {
             setSelectedRoomId(session.roomId);
-            setRoomSessionIds((prev) => ({ ...prev, [session.roomId!]: session.id }));
             setActiveAiSurface('room');
             setHistoryDrawerOpen(false);
             return;
@@ -1550,91 +1495,13 @@ export function RedClaw({
         }
     }, [advisorSessionIds]);
 
-    const ensureRoomSession = useCallback(async (room: RedClawTeamRoom): Promise<string | null> => {
-        if (roomSessionIds[room.id]) return roomSessionIds[room.id];
-        setSpeakerSessionLoading(true);
-        try {
-            const contextId = `redclaw-room:${room.id}`;
-            const list = await window.ipcRenderer.invokeGuarded<ContextChatSessionListItem[] | null>('chat:list-context-sessions', {
-                contextId,
-                contextType: REDCLAW_ROOM_CONTEXT_TYPE,
-            }, {
-                timeoutMs: 3200,
-                fallback: null,
-                normalize: (value) => Array.isArray(value) ? value as ContextChatSessionListItem[] : [],
-            });
-            const existing = Array.isArray(list) ? sortContextSessionItems(list)[0]?.id : null;
-            if (existing) {
-                setRoomSessionIds((prev) => ({ ...prev, [room.id]: existing }));
-                setRoomHistorySessions((prev) => {
-                    if (prev.some((item) => item.id === existing)) return prev;
-                    const item = Array.isArray(list) ? list.find((session) => session.id === existing) : null;
-                    return item ? [...prev, {
-                        ...item,
-                        surface: 'room',
-                        speakerLabel: room.name || '团队群聊',
-                        roomId: room.id,
-                    }] : prev;
-                });
-                return existing;
-            }
-            const roomMembers = advisors
-                .filter((advisor) => Array.isArray(room.advisorIds) && room.advisorIds.includes(advisor.id))
-                .map((advisor) => `${advisor.name}: ${advisor.personality || 'AI 成员'}`)
-                .join('\n');
-            const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
-                contextId,
-                contextType: REDCLAW_ROOM_CONTEXT_TYPE,
-                title: room.name || '团队群聊',
-                initialContext: [
-                    `当前对话绑定团队群聊：${room.name || '团队群聊'}`,
-                    roomMembers ? `成员：\n${roomMembers}` : '当前群聊暂无成员详情。',
-                    '请以 RedClaw 团队主持人的身份组织回答；需要专家视角时，明确标注对应成员观点。',
-                ].join('\n\n'),
-                metadata: {
-                    roomId: room.id,
-                    advisorIds: room.advisorIds || [],
-                },
-            }, {
-                timeoutMs: 3200,
-                fallback: null,
-            });
-            if (!created) return null;
-            setRoomSessionIds((prev) => ({ ...prev, [room.id]: created.id }));
-            setRoomHistorySessions((prev) => ([{
-                id: created.id,
-                messageCount: 0,
-                summary: '',
-                transcriptCount: 0,
-                checkpointCount: 0,
-                chatSession: {
-                    id: created.id,
-                    title: created.title,
-                    updatedAt: created.updatedAt,
-                    createdAt: created.createdAt,
-                },
-                surface: 'room',
-                speakerLabel: room.name || '团队群聊',
-                roomId: room.id,
-            }, ...prev.filter((item) => item.id !== created.id)]));
-            return created.id;
-        } catch (error) {
-            console.error('Failed to prepare room session:', error);
-            setChatActionMessage('群聊会话创建失败');
-            return null;
-        } finally {
-            setSpeakerSessionLoading(false);
-        }
-    }, [advisors, roomSessionIds]);
-
     const switchRoom = useCallback((roomId: string) => {
         const room = teamRooms.find((item) => item.id === roomId);
         if (!room) return;
         setSelectedRoomId(room.id);
         setActiveAiSurface('room');
         setHistoryDrawerOpen(false);
-        void ensureRoomSession(room);
-    }, [ensureRoomSession, teamRooms]);
+    }, [teamRooms]);
 
     const switchAdvisor = useCallback((advisorId: string) => {
         const advisor = advisors.find((item) => item.id === advisorId);
@@ -1696,22 +1563,18 @@ export function RedClaw({
             setSelectedRoomId(room.id);
             setActiveAiSurface('room');
             setHistoryDrawerOpen(false);
-            void ensureRoomSession(room);
         } catch (error) {
             console.error('Failed to create RedClaw room:', error);
             setChatActionMessage(error instanceof Error ? error.message : '创建群聊失败');
         }
-    }, [advisors, ensureRoomSession, selectedAdvisorId]);
+    }, [advisors, selectedAdvisorId]);
 
     useEffect(() => {
         if (!isActive) return;
         if (activeAiSurface === 'advisor' && selectedAdvisor && !advisorSessionIds[selectedAdvisor.id]) {
             void ensureAdvisorSession(selectedAdvisor);
         }
-        if (activeAiSurface === 'room' && selectedRoom && !roomSessionIds[selectedRoom.id]) {
-            void ensureRoomSession(selectedRoom);
-        }
-    }, [activeAiSurface, advisorSessionIds, ensureAdvisorSession, ensureRoomSession, isActive, roomSessionIds, selectedAdvisor, selectedRoom]);
+    }, [activeAiSurface, advisorSessionIds, ensureAdvisorSession, isActive, selectedAdvisor]);
 
     const deleteHistorySession = useCallback(async (targetSessionId: string) => {
         if (!targetSessionId) return;
@@ -1780,17 +1643,6 @@ export function RedClaw({
                     setActiveAiSurface('redclaw');
                 }
                 return;
-            }
-            if (session.surface === 'room' && session.roomId) {
-                setRoomHistorySessions((prev) => prev.filter((item) => item.id !== session.id));
-                setRoomSessionIds((prev) => {
-                    const next = { ...prev };
-                    if (next[session.roomId!] === session.id) delete next[session.roomId!];
-                    return next;
-                });
-                if (activeAiSurface === 'room' && selectedRoomId === session.roomId && activeSpeakerSessionId === session.id) {
-                    setActiveAiSurface('redclaw');
-                }
             }
         } catch (error) {
             console.error('Failed to delete unified RedClaw session:', error);
@@ -2362,7 +2214,16 @@ export function RedClaw({
                                 </div>
                             )}
                             <div className="h-full min-h-0 w-full overflow-hidden">
-                                {speakerSessionLoading || !activeSpeakerSessionId ? (
+                                {activeAiSurface === 'room' ? (
+                                    <CreativeChat
+                                        isActive={isActive}
+                                        onExecutionStateChange={setIsRedClawChatExecuting}
+                                        hideRoomList={true}
+                                        selectedRoomId={selectedRoomId}
+                                        onSelectedRoomIdChange={setSelectedRoomId}
+                                        onRoomsChange={setTeamRooms}
+                                    />
+                                ) : speakerSessionLoading || !activeSpeakerSessionId ? (
                                     <div className="flex h-full items-center justify-center">
                                         <div className="flex flex-col items-center gap-3 text-text-tertiary">
                                             <Loader2 className="h-6 w-6 animate-spin" />
@@ -2436,7 +2297,7 @@ export function RedClaw({
                                 activeSpaceName={activeSpaceName}
                                 historyLoading={historyLoading}
                                 sessionList={unifiedHistorySessions}
-                                activeSessionId={activeSpeakerSessionId}
+                                activeSessionId={activeAiSurface === 'room' ? null : activeSpeakerSessionId}
                                 teamRooms={teamRooms}
                                 activeRoomId={selectedRoomId}
                                 activeSurface={activeAiSurface}
