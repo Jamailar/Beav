@@ -253,6 +253,7 @@ interface ChatProps {
   welcomeIconSrc?: string;
   welcomeAvatarText?: string;
   welcomeIconVariant?: 'default' | 'avatar';
+  welcomeIconAccessory?: React.ReactNode;
   welcomeActions?: Array<{ label: string; text?: string; url?: string; onClick?: () => void; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
@@ -279,6 +280,7 @@ interface ChatProps {
   keepComposerInputActive?: boolean;
   messageListHeader?: React.ReactNode;
   placeholder?: string;
+  fixedMemberMention?: ChatMemberMentionOption | null;
   onDispatchOverride?: (payload: ChatDispatchOverridePayload) => Promise<ChatDispatchOverrideResult | boolean>;
 }
 
@@ -668,6 +670,7 @@ export function Chat({
   welcomeIconSrc,
   welcomeAvatarText,
   welcomeIconVariant = 'default',
+  welcomeIconAccessory,
   welcomeActions = [],
   contentLayout = 'default',
   contentWidthPreset = 'default',
@@ -694,6 +697,7 @@ export function Chat({
   keepComposerInputActive = false,
   messageListHeader,
   placeholder,
+  fixedMemberMention = null,
   onDispatchOverride,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
@@ -3139,7 +3143,7 @@ export function Chat({
   const sendMessage = async (
     content: string,
     attachment?: UploadedFileAttachment,
-    memberMention: ChatMemberMentionOption | null = selectedMemberMention,
+    memberMention: ChatMemberMentionOption | null = selectedMemberMention || fixedMemberMention,
     knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
   ) => {
     const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
@@ -3486,7 +3490,7 @@ export function Chat({
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
-      <div className="flex justify-center">
+      <div className="relative flex justify-center">
         {welcomeIconSrc ? (
           welcomeIconVariant === 'avatar' ? (
             <div className={clsx(
@@ -3519,6 +3523,7 @@ export function Chat({
             <Sparkles className="w-8 h-8 text-white" />
           </div>
         )}
+        {welcomeIconAccessory}
       </div>
 
       <div className="space-y-2">

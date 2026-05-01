@@ -1,7 +1,13 @@
 import { History, Loader2, Plus, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { formatDateTime } from './helpers';
-import type { CreativeChatRoom } from '../CreativeChat';
+
+interface RedClawTeamRoom {
+    id: string;
+    name: string;
+    advisorIds?: string[];
+    isSystem?: boolean;
+}
 
 interface RedClawHistoryDrawerProps {
     open: boolean;
@@ -9,7 +15,7 @@ interface RedClawHistoryDrawerProps {
     historyLoading: boolean;
     sessionList: ContextChatSessionListItem[];
     activeSessionId: string | null;
-    teamRooms?: CreativeChatRoom[];
+    teamRooms?: RedClawTeamRoom[];
     activeRoomId?: string | null;
     activeSurface?: 'redclaw' | 'advisor' | 'room';
     onToggleOpen: () => void;
