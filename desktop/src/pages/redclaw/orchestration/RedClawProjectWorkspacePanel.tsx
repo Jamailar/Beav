@@ -113,9 +113,11 @@ export function RedClawProjectWorkspacePanel() {
     const [exportingMediaPlan, setExportingMediaPlan] = useState(false);
     const [renderingRoughCut, setRenderingRoughCut] = useState(false);
     const [exportingPublishPackage, setExportingPublishPackage] = useState(false);
+    const [exportingReviewReport, setExportingReviewReport] = useState(false);
     const [lastMediaPlanPath, setLastMediaPlanPath] = useState('');
     const [lastRoughCutPath, setLastRoughCutPath] = useState('');
     const [lastPublishPackagePath, setLastPublishPackagePath] = useState('');
+    const [lastReviewReportPath, setLastReviewReportPath] = useState('');
     const [copiedSectionId, setCopiedSectionId] = useState('');
 
     const activeProject = useMemo(() => projects[0] || null, [projects]);
@@ -265,6 +267,28 @@ export function RedClawProjectWorkspacePanel() {
             setError('导出发布包失败');
         } finally {
             setExportingPublishPackage(false);
+        }
+    }, [activeProject, loadProjects]);
+
+    const exportReviewReport = useCallback(async () => {
+        if (!activeProject) return;
+        setExportingReviewReport(true);
+        setError('');
+        try {
+            const result = await window.ipcRenderer.redclawProjects.exportReviewReport({
+                projectId: activeProject.id,
+            });
+            if (!result?.success) {
+                setError(result?.error || '导出质检报告失败');
+                return;
+            }
+            setLastReviewReportPath(String(result.markdownPath || result.packagePath || '').trim());
+            await loadProjects();
+        } catch (err) {
+            console.error('Failed to export RedClaw review report:', err);
+            setError('导出质检报告失败');
+        } finally {
+            setExportingReviewReport(false);
         }
     }, [activeProject, loadProjects]);
 
@@ -452,6 +476,22 @@ export function RedClawProjectWorkspacePanel() {
                                                     导出发布包
                                                 </button>
                                             )}
+                                            {activeSection.id === 'review' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void exportReviewReport()}
+                                                    disabled={exportingReviewReport}
+                                                    className={clsx(
+                                                        'inline-flex h-8 items-center gap-1.5 rounded-[9px] border border-border px-2.5 text-xs font-semibold transition',
+                                                        exportingReviewReport
+                                                            ? 'cursor-not-allowed bg-surface-secondary text-text-tertiary'
+                                                            : 'bg-surface-primary text-text-secondary hover:bg-surface-secondary'
+                                                    )}
+                                                >
+                                                    {exportingReviewReport ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
+                                                    导出质检
+                                                </button>
+                                            )}
                                             <button
                                                 type="button"
                                                 onClick={() => void copySectionDraft()}
@@ -489,6 +529,11 @@ export function RedClawProjectWorkspacePanel() {
                                     {activeSection.id === 'publish' && lastPublishPackagePath && (
                                         <div className="truncate rounded-[8px] bg-surface-secondary px-2 py-1.5 text-[11px] text-text-tertiary">
                                             发布包：{lastPublishPackagePath}
+                                        </div>
+                                    )}
+                                    {activeSection.id === 'review' && lastReviewReportPath && (
+                                        <div className="truncate rounded-[8px] bg-surface-secondary px-2 py-1.5 text-[11px] text-text-tertiary">
+                                            质检报告：{lastReviewReportPath}
                                         </div>
                                     )}
                                 </div>
