@@ -681,6 +681,92 @@ fn redclaw_project_id_from_metadata(metadata: Option<&Value>) -> Option<String> 
         })
 }
 
+fn orchestration_outputs_from_task(
+    task_artifacts: &[crate::runtime::RuntimeArtifact],
+) -> Vec<Value> {
+    task_artifacts
+        .iter()
+        .filter(|artifact| artifact.artifact_type == "subagent-orchestration")
+        .filter_map(|artifact| artifact.payload.as_ref())
+        .filter_map(|payload| payload.get("outputs").and_then(Value::as_array))
+        .flat_map(|items| items.iter().cloned())
+        .collect()
+}
+
+fn learning_candidates_from_outputs(outputs: &[Value], task_id: &str) -> Vec<Value> {
+    let mut candidates = Vec::new();
+    for output in outputs {
+        let role_id = value_string(output, "roleId").unwrap_or_default();
+        if role_id != "review_agent" && role_id != "reviewer" {
+            continue;
+        }
+        if let Some(items) = output.get("learningCandidates").and_then(Value::as_array) {
+            for item in items {
+                candidates.push(json!({
+                    "id": make_id("redclaw-learning"),
+                    "scope": item.get("scope").cloned().unwrap_or_else(|| json!("project")),
+                    "statement": item.get("statement").cloned().unwrap_or_else(|| item.clone()),
+                    "evidence": item.get("evidence").cloned().unwrap_or_else(|| json!([{ "taskId": task_id }])),
+                    "confidence": item.get("confidence").cloned().unwrap_or_else(|| json!(0.5)),
+                    "status": "pending",
+                    "proposedBy": role_id,
+                    "createdAt": now_iso()
+                }));
+            }
+        }
+        let issues = output
+            .get("issues")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if !issues.is_empty() {
+            candidates.push(json!({
+                "id": make_id("redclaw-learning"),
+                "scope": "project",
+                "statement": "Review Agent found reusable quality issues for this RedClaw run.",
+                "evidence": [{ "taskId": task_id, "issues": issues }],
+                "confidence": 0.6,
+                "status": "pending",
+                "proposedBy": role_id,
+                "createdAt": now_iso()
+            }));
+        }
+    }
+    candidates
+}
+
+fn skill_runs_from_graph(graph: &Value, task_id: &str, status: &str) -> Vec<Value> {
+    graph
+        .get("nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|node| {
+            let node_id = value_string(node, "id").unwrap_or_default();
+            let agent_id = value_string(node, "agentId").unwrap_or_default();
+            node.get("skillIds")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(move |skill| {
+                    let skill_id = skill.as_str()?.trim().to_string();
+                    if skill_id.is_empty() {
+                        return None;
+                    }
+                    Some(json!({
+                        "skillId": skill_id,
+                        "agentId": agent_id,
+                        "nodeId": node_id,
+                        "taskId": task_id,
+                        "status": status,
+                        "recordedAt": now_iso()
+                    }))
+                })
+        })
+        .collect()
+}
+
 pub fn sync_redclaw_project_from_runtime_task(
     store: &mut AppStore,
     task_id: &str,
@@ -723,6 +809,9 @@ pub fn sync_redclaw_project_from_runtime_task(
         .artifacts
         .iter()
         .find_map(|artifact| artifact.path.clone());
+    let outputs = orchestration_outputs_from_task(&task.artifacts);
+    let learning_candidates = learning_candidates_from_outputs(&outputs, &task.id);
+    let skill_runs = skill_runs_from_graph(&graph, &task.id, &task.status);
     let artifacts = task
         .artifacts
         .iter()
@@ -748,9 +837,12 @@ pub fn sync_redclaw_project_from_runtime_task(
         artifact_path,
         artifacts,
         checkpoints,
+        learning_candidates,
+        skill_runs,
         metadata: Some(json!({
             "source": "redclaw-orchestrator",
             "redclawTaskGraph": graph,
+            "orchestrationOutputs": outputs,
             "runtimeTaskStatus": task.status,
             "runtimeTaskError": task.last_error,
         })),

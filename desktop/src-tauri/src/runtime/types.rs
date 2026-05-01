@@ -114,6 +114,8 @@ pub struct RedclawProjectRecord {
     pub artifact_path: Option<String>,
     pub artifacts: Vec<Value>,
     pub checkpoints: Vec<Value>,
+    pub learning_candidates: Vec<Value>,
+    pub skill_runs: Vec<Value>,
     pub metadata: Option<Value>,
     pub created_at: Option<String>,
     pub updated_at: String,
