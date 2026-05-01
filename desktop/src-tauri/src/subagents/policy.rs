@@ -162,9 +162,12 @@ pub fn build_subagent_configs(
     let mut middle_index = 0usize;
     roles
         .into_iter()
-        .map(|role_id| {
+        .enumerate()
+        .map(|(role_index, role_id)| {
             let parallel_group = if role_id == "reviewer" || role_id == "review_agent" {
                 usize::MAX
+            } else if runtime_mode == "redclaw" {
+                role_index
             } else {
                 let group = parallel_group_for_role(&role_id, middle_index);
                 if role_id != "planner" {
@@ -365,6 +368,62 @@ mod tests {
                 .and_then(|items| items.first())
                 .and_then(Value::as_str),
             Some("insight")
+        );
+    }
+
+    #[test]
+    fn redclaw_xhs_roles_run_in_graph_order() {
+        let roles = vec![
+            "research_agent",
+            "topic_agent",
+            "note_architect_agent",
+            "copy_agent",
+            "visual_director_agent",
+            "image_agent",
+            "layout_agent",
+            "editor_agent",
+            "publish_agent",
+            "compliance_agent",
+            "review_agent",
+        ];
+        let route = runtime_direct_route_record(
+            "redclaw",
+            "make a rednote carousel",
+            Some(&json!({
+                "forceMultiAgent": true,
+                "subagentRoles": roles
+            })),
+        );
+        let configs = build_subagent_configs(
+            &route,
+            "redclaw",
+            "task-redclaw",
+            Some("session-redclaw"),
+            Some(&json!({
+                "subagentRoles": roles
+            })),
+            Some(&json!({"modelName": "gpt-main"})),
+        );
+        let groups = configs
+            .iter()
+            .map(|config| (config.role_id.as_str(), config.parallel_group))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            groups,
+            vec![
+                ("research_agent", 0),
+                ("topic_agent", 1),
+                ("note_architect_agent", 2),
+                ("copy_agent", 3),
+                ("visual_director_agent", 4),
+                ("image_agent", 5),
+                ("layout_agent", 6),
+                ("editor_agent", 7),
+                ("publish_agent", 8),
+                ("compliance_agent", 9),
+                ("review_agent", usize::MAX),
+            ]
         );
     }
 }
