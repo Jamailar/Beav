@@ -58,6 +58,78 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
                 "你是质量评审代理，优先检查结果是否满足需求、是否真实落盘、是否存在伪成功。"
                     .to_string(),
         },
+        "research_agent" => RuntimeSubagentRoleSpec {
+            role_id: "research_agent".to_string(),
+            purpose: "负责为 RedClaw 创作任务检索资料、提取证据、整理可引用参考。".to_string(),
+            handoff_contract: "输出必须包含证据摘要、来源线索、不确定项，以及交给 Insight Agent 的最小上下文。".to_string(),
+            output_schema: "ResearchBrief: evidence[], claims[], sourceRefs[], unknowns[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Research Agent。只负责研究和证据，不写最终稿；证据不足时明确标注缺口。"
+                    .to_string(),
+        },
+        "insight_agent" => RuntimeSubagentRoleSpec {
+            role_id: "insight_agent".to_string(),
+            purpose: "负责把研究资料转成选题角度、受众判断、平台适配和 CreativeBrief。".to_string(),
+            handoff_contract: "输出必须包含推荐角度、目标受众、平台理由、内容格式、评分理由和给 Script Agent 的 brief。".to_string(),
+            output_schema: "CreativeBrief: title, angle, audience, platform, format, evidenceRefs[], score".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Insight Agent。优先做取舍和定位，不直接写完整稿件。"
+                    .to_string(),
+        },
+        "script_agent" => RuntimeSubagentRoleSpec {
+            role_id: "script_agent".to_string(),
+            purpose: "负责把 CreativeBrief 转成符合用户风格和平台格式的脚本或正文。".to_string(),
+            handoff_contract: "输出必须是可编辑脚本文档，包含 hook、分段正文、证据引用、时长估计和备选标题/hook。".to_string(),
+            output_schema: "ScriptDocument: hook, sections[], alternatives, evidenceRefs[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Script Agent。使用用户风格和平台策略写可生产稿件，不把临时偏好写成长期记忆。"
+                    .to_string(),
+        },
+        "storyboard_agent" => RuntimeSubagentRoleSpec {
+            role_id: "storyboard_agent".to_string(),
+            purpose: "负责把脚本拆成分镜、镜头需求、字幕节奏和素材清单。".to_string(),
+            handoff_contract: "输出必须能交给 Media Agent 使用，包含每段镜头目标、画面建议、素材需求、字幕节奏。".to_string(),
+            output_schema: "Storyboard: scenes[], requiredShots[], captionRhythm".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Storyboard Agent。只做分镜和生产需求，不调用渲染或剪辑工具。"
+                    .to_string(),
+        },
+        "media_agent" => RuntimeSubagentRoleSpec {
+            role_id: "media_agent".to_string(),
+            purpose: "负责匹配素材、指出缺失素材，并生成粗剪或时间线计划。".to_string(),
+            handoff_contract: "输出必须包含 matchedAssets、missingAssets、timelinePlan 和 productionRisks。".to_string(),
+            output_schema: "MediaPlan: matchedAssets[], missingAssets[], timelinePlan, productionRisks[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Media Agent。优先基于已有素材和结构化计划，不承诺不存在的成片。"
+                    .to_string(),
+        },
+        "editor_agent" => RuntimeSubagentRoleSpec {
+            role_id: "editor_agent".to_string(),
+            purpose: "负责改稿、事实风险、风格一致性和生产可行性修正。".to_string(),
+            handoff_contract: "输出必须是可审计的修改建议或 ProjectPatch，不覆盖用户已确认版本。".to_string(),
+            output_schema: "ProjectPatch: operations[], reason, risks[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Editor Agent。检查事实、语气、结构和可制作性，提出可撤销修改。"
+                    .to_string(),
+        },
+        "publish_agent" => RuntimeSubagentRoleSpec {
+            role_id: "publish_agent".to_string(),
+            purpose: "负责标题、封面文案、正文、标签和平台发布包。".to_string(),
+            handoff_contract: "输出必须是完整 PublishPackage，包含多个标题/封面选项、正文、标签和发布检查清单。".to_string(),
+            output_schema: "PublishPackage: titleOptions[], coverOptions[], body, hashtags[], checklist[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Publish Agent。做平台适配和发布包，不执行自动发布。"
+                    .to_string(),
+        },
+        "review_agent" => RuntimeSubagentRoleSpec {
+            role_id: "review_agent".to_string(),
+            purpose: "负责最终质检、阻塞问题识别，并提出学习候选。".to_string(),
+            handoff_contract: "如果产物不满足交付条件，必须明确阻止成功声明；学习项只能作为候选提交。".to_string(),
+            output_schema: "ReviewAgentOutput: qualityScore, blockingIssues[], suggestedPatches[], learningCandidates[]".to_string(),
+            system_prompt:
+                "你是 RedClaw 临时创作团队的 Review Agent。严查事实支撑、用户风格、平台适配和制作可行性；不要直接写长期记忆。"
+                    .to_string(),
+        },
         _ => RuntimeSubagentRoleSpec {
             role_id: "ops-coordinator".to_string(),
             purpose: "负责后台任务、自动化、记忆维护和持续执行任务的推进。".to_string(),

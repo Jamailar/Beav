@@ -77,8 +77,8 @@ fn role_sequence(route: &RuntimeRouteRecord, metadata: Option<&Value>) -> Vec<St
 
 fn parallel_group_for_role(role_id: &str, middle_index: usize) -> usize {
     match role_id {
-        "planner" => 0,
-        "reviewer" => usize::MAX,
+        "planner" | "research_agent" => 0,
+        "reviewer" | "review_agent" => usize::MAX,
         _ => 1 + (middle_index / 4),
     }
 }
@@ -97,7 +97,7 @@ pub fn build_subagent_configs(
     roles
         .into_iter()
         .map(|role_id| {
-            let parallel_group = if role_id == "reviewer" {
+            let parallel_group = if role_id == "reviewer" || role_id == "review_agent" {
                 usize::MAX
             } else {
                 let group = parallel_group_for_role(&role_id, middle_index);
