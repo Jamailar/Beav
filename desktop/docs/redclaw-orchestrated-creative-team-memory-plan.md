@@ -70,7 +70,7 @@ RedClaw Page
 └── Review And Learnings   质检、复盘、可保存的长期偏好
 ```
 
-用户不需要手动选择 Research Agent 或 Script Agent。页面只展示：
+用户不需要手动选择 Research Agent 或 Script Agent，也不需要手动预览团队、建队或启动团队。RedClaw 在收到任务后自动决定需要哪些岗位，并直接创建 run 执行。页面只展示：
 
 - RedClaw 正在做什么。
 - 哪些岗位参与了。
@@ -79,7 +79,7 @@ RedClaw Page
 - 下一步建议是什么。
 - 哪些学习项可以保存为长期偏好。
 
-小红书文章、图文和配图流程不新增专属 UI。用户仍在 RedClaw 页面发任务、看团队协作和领取交付物；系统内部根据 `contentFormat` 自动组建 Topic、Note Architect、Copy、Visual、Image、Layout、Compliance 等临时岗位。
+小红书文章、图文和配图流程不新增专属 UI。用户仍在 RedClaw 页面发任务、看团队协作和领取交付物；系统内部根据 `contentFormat` 自动组建 Topic、Note Architect、Copy、Visual、Image、Layout、Compliance 等临时岗位。任何“团队预览 / 手动建队 / 手动启动”控件都不应暴露给普通用户。
 
 ## End-To-End Flow
 
@@ -890,7 +890,7 @@ type RedClawJob = {
 
 截至 2026-05-01，RedClaw scoped orchestration 已经具备端到端创作闭环的第一版：
 
-- 用户在 RedClaw 输入任务后，可由 RedClaw 自动创建临时团队 run，而不是要求用户手动激活各 Agent。
+- 用户在 RedClaw 输入任务后，可由 RedClaw 自动创建临时团队 run，而不是要求用户手动预览团队、建队、启动或激活各 Agent。
 - Team Planner 会生成固定 Agent 枚举和依赖图，Research、Insight、Script、Storyboard、Media、Editor、Publish、Review 按依赖顺序交接。
 - RedClaw 子 Agent 会收到当前节点、上下游、平台、内容格式和任务图上下文。
 - 创作项目会同步 runtime task 的 orchestration outputs，并在 Creation Workspace 中展示 Brief、Script、Storyboard、Media、Publish、Review。
@@ -905,10 +905,8 @@ type RedClawJob = {
 - 小红书子 Agent 输出会按对应 `outputContract` 做 artifact 校验；缺失 artifact、非 JSON artifact 或字段类型不匹配都会让节点不通过。
 - 小红书交付包会附带 `redclaw.xhsDeterministicCompliance.v1` 确定性质检，先稳定拦截医疗、金融、法律确定性承诺和平台高风险表述，再交给 Compliance Agent 做语义复核。
 
-当前新增/使用的 RedClaw orchestration IPC：
+当前用户侧 RedClaw orchestration IPC：
 
-- `redclaw:orchestration-plan`
-- `redclaw:orchestration-create-team`
 - `redclaw:orchestration-create-run`
 - `redclaw:orchestration-registry`
 - `redclaw:list-projects`
@@ -1121,6 +1119,7 @@ RedClaw 自研部分：
 验收：
 
 - 用户只发一个任务，UI 展示完整团队执行过程。
+- 页面不提供团队预览、手动建队或手动启动入口；团队构成必须由 RedClaw Orchestrator 自动决定。
 - 页面刷新不清空已有 run/project。
 - 失败节点能展示原因和重试入口。
 - 小红书任务不需要跳转到专属页面；在同一个 RedClaw 页面内可以看到团队执行、产物摘要、质检结果和导出入口。

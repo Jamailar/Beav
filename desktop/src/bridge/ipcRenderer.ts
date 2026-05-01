@@ -1119,10 +1119,6 @@ function createIpcRenderer() {
       taskStats: () => invokeChannel('redclaw:task-stats'),
     },
     redclawOrchestration: {
-      plan: (payload: { goal: string; projectId?: string; platform?: string; format?: string }) =>
-        invokeChannel('redclaw:orchestration-plan', payload),
-      createTeam: (payload: { goal: string; projectId?: string; platform?: string; format?: string }) =>
-        invokeChannel('redclaw:orchestration-create-team', payload),
       createRun: (payload: { goal: string; sessionId?: string; projectId?: string; platform?: string; format?: string }) =>
         invokeChannel('redclaw:orchestration-create-run', payload),
       getRegistry: () => invokeChannel('redclaw:orchestration-registry'),
