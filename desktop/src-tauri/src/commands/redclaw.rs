@@ -98,6 +98,7 @@ pub fn handle_redclaw_channel(
         "redclaw:orchestration-create-team" => create_redclaw_orchestration_team(state, payload),
         "redclaw:orchestration-create-run" => create_redclaw_orchestration_run(state, payload),
         "redclaw:learning-candidate-update" => update_redclaw_learning_candidate(state, payload),
+        "redclaw:project-section-update" => update_redclaw_project_section(state, payload),
         "redclaw:profile:get-bundle" => (|| {
             let bundle = load_redclaw_profile_prompt_bundle(state)?;
             let active_space_id =
@@ -717,6 +718,65 @@ fn update_redclaw_learning_candidate(
             "success": true,
             "project": project,
             "candidate": candidate_snapshot
+        }))
+    })
+}
+
+fn update_redclaw_project_section(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let project_id =
+        payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
+    let section_id =
+        payload_string(payload, "sectionId").ok_or_else(|| "sectionId is required".to_string())?;
+    let content =
+        payload_string(payload, "content").ok_or_else(|| "content is required".to_string())?;
+    let allowed = [
+        "brief",
+        "script",
+        "storyboard",
+        "media",
+        "publish",
+        "review",
+        "research",
+    ];
+    if !allowed.iter().any(|item| item == &section_id.as_str()) {
+        return Err("sectionId is not supported".to_string());
+    }
+    with_store_mut(state, |store| {
+        let project = store
+            .redclaw_state
+            .projects
+            .iter_mut()
+            .find(|item| item.id == project_id)
+            .ok_or_else(|| "RedClaw project not found".to_string())?;
+        let now = now_iso();
+        let mut metadata = project
+            .metadata
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut drafts = metadata
+            .get("sectionDrafts")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        drafts.insert(
+            section_id.clone(),
+            json!({
+                "content": content,
+                "updatedAt": now,
+                "source": "user_edit"
+            }),
+        );
+        metadata.insert("sectionDrafts".to_string(), Value::Object(drafts));
+        project.metadata = Some(Value::Object(metadata));
+        project.updated_at = now;
+        Ok(json!({
+            "success": true,
+            "project": project,
+            "sectionId": section_id
         }))
     })
 }

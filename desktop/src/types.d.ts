@@ -1868,6 +1868,16 @@ declare global {
           candidate?: unknown;
           error?: string;
         }>;
+        updateSection: (payload: {
+          projectId: string;
+          sectionId: string;
+          content: string;
+        }) => Promise<{
+          success?: boolean;
+          project?: unknown;
+          sectionId?: string;
+          error?: string;
+        }>;
       };
       redclawProfile: {
         getBundle: () => Promise<{
