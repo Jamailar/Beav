@@ -7,7 +7,7 @@ use crate::{
     configure_background_command, decode_base64_bytes, invoke_chat_by_protocol,
     invoke_structured_chat_by_protocol, markdown_to_html, now_ms, payload_field, payload_string,
     resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json, url_encode_component,
-    AdvisorRecord, WechatOfficialBindingRecord,
+    WechatOfficialBindingRecord,
 };
 
 pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {
@@ -285,20 +285,4 @@ pub(crate) fn run_model_structured_task_with_settings(
         user_prompt,
         require_json,
     )
-}
-
-pub(crate) fn find_advisor_name(advisors: &[AdvisorRecord], advisor_id: &str) -> String {
-    advisors
-        .iter()
-        .find(|item| item.id == advisor_id)
-        .map(|item| item.name.clone())
-        .unwrap_or_else(|| "成员".to_string())
-}
-
-pub(crate) fn find_advisor_avatar(advisors: &[AdvisorRecord], advisor_id: &str) -> String {
-    advisors
-        .iter()
-        .find(|item| item.id == advisor_id)
-        .map(|item| item.avatar.clone())
-        .unwrap_or_else(|| "🤖".to_string())
 }

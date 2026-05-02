@@ -181,43 +181,6 @@ export interface RuntimeEventStreamHandlers {
     outcome: UnknownRecord;
     raw: UnknownRecord;
   }) => void;
-  onCreativeChatUserMessage?: (payload: { roomId: string; message: UnknownRecord }) => void;
-  onCreativeChatAdvisorStart?: (payload: {
-    roomId: string;
-    advisorId: string;
-    advisorName: string;
-    advisorAvatar: string;
-    phase: string;
-  }) => void;
-  onCreativeChatThinking?: (payload: {
-    roomId: string;
-    advisorId: string;
-    thinkingType: string;
-    content: string;
-  }) => void;
-  onCreativeChatRag?: (payload: {
-    roomId: string;
-    advisorId: string;
-    ragType: string;
-    content: string;
-    sources: string[];
-  }) => void;
-  onCreativeChatTool?: (payload: {
-    roomId: string;
-    advisorId: string;
-    toolType: string;
-    tool: UnknownRecord;
-  }) => void;
-  onCreativeChatStream?: (payload: {
-    roomId: string;
-    advisorId: string;
-    advisorName: string;
-    advisorAvatar: string;
-    content: string;
-    done: boolean;
-  }) => void;
-  onCreativeChatDone?: (payload: { roomId: string }) => void;
-  onCreativeChatError?: (payload: { roomId: string; error: UnknownRecord }) => void;
 }
 
 function toRecord(value: unknown): UnknownRecord {
@@ -704,89 +667,6 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
         sessionId,
         ...runtimeMeta,
         request,
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.user_message') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatUserMessage?.({
-        roomId,
-        message: toRecord(checkpointPayload.message),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.advisor_start') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatAdvisorStart?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        advisorName: toText(checkpointPayload.advisorName),
-        advisorAvatar: toText(checkpointPayload.advisorAvatar),
-        phase: toText(checkpointPayload.phase),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.thinking') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatThinking?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        thinkingType: toText(checkpointPayload.type),
-        content: toText(checkpointPayload.content),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.rag') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatRag?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        ragType: toText(checkpointPayload.type),
-        content: toText(checkpointPayload.content),
-        sources: toTextArray(checkpointPayload.sources),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.tool') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatTool?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        toolType: toText(checkpointPayload.type),
-        tool: toRecord(checkpointPayload.tool),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.stream') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatStream?.({
-        roomId,
-        advisorId: toText(checkpointPayload.advisorId),
-        advisorName: toText(checkpointPayload.advisorName),
-        advisorAvatar: toText(checkpointPayload.advisorAvatar),
-        content: String(checkpointPayload.content || ''),
-        done: Boolean(checkpointPayload.done),
-      });
-      return;
-    }
-    if (checkpointType === 'creative_chat.done') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatDone?.({ roomId });
-      return;
-    }
-    if (checkpointType === 'creative_chat.error') {
-      const roomId = toText(checkpointPayload.roomId);
-      if (!roomId) return;
-      handlers.onCreativeChatError?.({
-        roomId,
-        error: checkpointPayload,
       });
       return;
     }

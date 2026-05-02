@@ -638,23 +638,6 @@ pub fn emit_manuscript_write_proposal_changed(
     );
 }
 
-pub fn emit_creative_chat_checkpoint(
-    app: &AppHandle,
-    room_id: &str,
-    checkpoint_type: &str,
-    payload: Value,
-) {
-    let synthetic_session_id = format!("chatroom:{room_id}");
-    emit_runtime_task_checkpoint_saved(
-        app,
-        Some(room_id),
-        Some(&synthetic_session_id),
-        checkpoint_type,
-        checkpoint_type,
-        Some(payload.clone()),
-    );
-}
-
 pub fn emit_redclaw_task_event(
     app: &AppHandle,
     event_type: &str,

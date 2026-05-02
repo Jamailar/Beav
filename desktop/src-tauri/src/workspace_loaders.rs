@@ -507,7 +507,7 @@ pub(crate) fn load_chat_rooms_from_fs(chatrooms_root: &Path) -> Vec<ChatRoomReco
             name: value
                 .get("name")
                 .and_then(|item| item.as_str())
-                .unwrap_or("未命名群聊")
+                .unwrap_or("未命名团队")
                 .to_string(),
             advisor_ids,
             created_at: value

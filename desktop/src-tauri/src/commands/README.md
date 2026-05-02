@@ -13,7 +13,6 @@
 - `assistant_daemon`：助手守护进程控制。
 - `bridge`：桥接层命令。
 - `chat` / `chat_runtime` / `chat_state` / `chat_sessions_wander`：聊天与漫步会话链路。
-- `chatrooms`：群聊房间。
 - `embeddings`：向量与嵌入任务。
 - `file_ops`：文件相关命令。
 - `generation`：生成任务入口。
