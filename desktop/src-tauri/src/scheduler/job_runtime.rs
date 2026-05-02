@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use serde_json::{json, Value};
 
-use crate::commands::redclaw_runtime::execute_redclaw_run;
+use crate::commands::redclaw_runtime::execute_redclaw_task_run;
 use crate::events::{emit_redclaw_task_event, emit_runtime_task_checkpoint_saved};
 use crate::persistence::with_store_mut;
 use crate::runtime::{RedclawJobDefinitionRecord, RedclawJobExecutionRecord};
@@ -980,7 +980,15 @@ pub fn run_job_queue_once(
 
     let heartbeat =
         start_execution_heartbeat(app, prepared.execution_id.clone(), Duration::from_secs(5));
-    let result = execute_redclaw_run(app, state, prepared.prompt.clone(), &prepared.source_label);
+    let result = execute_redclaw_task_run(
+        app,
+        state,
+        prepared.prompt.clone(),
+        &prepared.source_label,
+        prepared.source_kind.as_deref(),
+        prepared.source_task_id.as_deref(),
+        &prepared.title,
+    );
     heartbeat.stop();
 
     match result {
