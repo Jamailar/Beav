@@ -522,7 +522,9 @@ pub struct CollabTaskRecord {
     pub id: String,
     pub session_id: String,
     pub parent_task_id: Option<String>,
+    pub source: String,
     pub member_id: Option<String>,
+    pub assignee_agent_id: Option<String>,
     pub reviewer_member_id: Option<String>,
     pub title: String,
     pub objective: String,
@@ -535,6 +537,13 @@ pub struct CollabTaskRecord {
     pub blocks_task_ids: Vec<String>,
     pub runtime_task_id: Option<String>,
     pub external_task_ref: Option<String>,
+    pub attempt: i64,
+    pub max_attempts: i64,
+    pub lease_owner: Option<String>,
+    pub lease_expires_at: Option<i64>,
+    pub session_resume_id: Option<String>,
+    pub work_dir: Option<String>,
+    pub failure_reason: Option<String>,
     pub result_summary: Option<String>,
     pub progress_percent: Option<i64>,
     pub artifacts: Vec<Value>,
@@ -585,6 +594,45 @@ pub struct CollabProgressReportRecord {
     pub artifact_ids: Vec<String>,
     pub payload: Option<Value>,
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ReviewDocketRecord {
+    pub id: String,
+    pub source_kind: String,
+    pub source_id: Option<String>,
+    pub session_id: Option<String>,
+    pub task_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub body: String,
+    pub decision_type: String,
+    pub priority: String,
+    pub status: String,
+    pub risk_level: String,
+    pub proposed_action: Option<Value>,
+    pub evidence_refs: Vec<Value>,
+    pub artifact_refs: Vec<String>,
+    pub options: Vec<Value>,
+    pub created_by_agent_id: Option<String>,
+    pub assigned_to_user_id: Option<String>,
+    pub expires_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub decided_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ReviewDecisionRecord {
+    pub id: String,
+    pub docket_id: String,
+    pub decision: String,
+    pub comment: Option<String>,
+    pub selected_option_id: Option<String>,
+    pub patch: Option<Value>,
+    pub decided_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

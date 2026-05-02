@@ -1,5 +1,5 @@
 #[path = "redclaw_task_control.rs"]
-mod redclaw_task_control;
+pub(crate) mod redclaw_task_control;
 
 use serde_json::{json, Value};
 use std::{

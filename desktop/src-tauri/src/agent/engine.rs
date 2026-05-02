@@ -134,7 +134,12 @@ impl<'a> ChatExchangeRequest<'a> {
         }
     }
 
-    pub fn redclaw_run(session_id: String, prompt: String, source_label: &str) -> Self {
+    pub fn redclaw_run(
+        session_id: String,
+        prompt: String,
+        source_label: &str,
+        session_title: Option<String>,
+    ) -> Self {
         Self {
             session_id: Some(session_id),
             display_content: format!("RedClaw 执行 · {}", source_label),
@@ -144,7 +149,7 @@ impl<'a> ChatExchangeRequest<'a> {
             attachment: None,
             turn_kind: SessionAgentTurnKind::RedclawRun,
             checkpoint_summary_override: Some(format!("RedClaw completed {}", source_label)),
-            session_title_override: Some("RedClaw".to_string()),
+            session_title_override: Some(session_title.unwrap_or_else(|| "RedClaw".to_string())),
         }
     }
 
@@ -183,9 +188,19 @@ impl AssistantDaemonTurn {
 }
 
 impl RedclawRunTurn {
-    pub fn new(source_label: &str, session_id: String, prompt: String) -> Self {
+    pub fn new(
+        source_label: &str,
+        session_id: String,
+        prompt: String,
+        session_title: Option<String>,
+    ) -> Self {
         Self {
-            request: ChatExchangeRequest::redclaw_run(session_id, prompt, source_label),
+            request: ChatExchangeRequest::redclaw_run(
+                session_id,
+                prompt,
+                source_label,
+                session_title,
+            ),
         }
     }
 }
@@ -351,7 +366,7 @@ mod tests {
             SessionAgentTurnKind::AssistantDaemon
         );
         assert_eq!(
-            ChatExchangeRequest::redclaw_run("s".to_string(), "m".to_string(), "scheduler")
+            ChatExchangeRequest::redclaw_run("s".to_string(), "m".to_string(), "scheduler", None)
                 .turn_kind,
             SessionAgentTurnKind::RedclawRun
         );
@@ -389,10 +404,14 @@ mod tests {
             Some("Assistant · feishu")
         );
 
-        let redclaw =
-            ChatExchangeRequest::redclaw_run("session-r".to_string(), "prompt".to_string(), "cron");
+        let redclaw = ChatExchangeRequest::redclaw_run(
+            "session-r".to_string(),
+            "prompt".to_string(),
+            "cron",
+            Some("Cron Task".to_string()),
+        );
         assert_eq!(redclaw.checkpoint_summary_text(), "RedClaw completed cron");
-        assert_eq!(redclaw.session_title_hint_override(), Some("RedClaw"));
+        assert_eq!(redclaw.session_title_hint_override(), Some("Cron Task"));
     }
 
     #[test]

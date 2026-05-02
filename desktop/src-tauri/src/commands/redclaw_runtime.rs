@@ -2,6 +2,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
+use crate::commands::chat_state::ensure_chat_session_record;
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
     create_work_item, now_iso, redclaw_root, resolve_manuscript_path, slug_from_relative_path,
@@ -10,6 +11,18 @@ use crate::{
 
 pub fn redclaw_session_id_for_space(space_id: &str) -> String {
     let context_id = format!("redclaw-singleton:{space_id}");
+    format!(
+        "context-session:redclaw:{}",
+        slug_from_relative_path(&context_id)
+    )
+}
+
+pub fn redclaw_session_id_for_task(
+    space_id: &str,
+    source_kind: &str,
+    source_task_id: &str,
+) -> String {
+    let context_id = format!("automation:{space_id}:{source_kind}:{source_task_id}");
     format!(
         "context-session:redclaw:{}",
         slug_from_relative_path(&context_id)
@@ -107,18 +120,21 @@ pub fn save_redclaw_outputs(
     Ok(artifacts)
 }
 
-pub fn execute_redclaw_run(
+fn execute_redclaw_run_in_session(
     app: &AppHandle,
     state: &State<'_, AppState>,
     prompt: String,
     source_label: &str,
+    session_id: String,
+    session_title: String,
 ) -> Result<Value, String> {
-    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
-    let session_id = redclaw_session_id_for_space(&active_space_id);
+    let _ =
+        ensure_chat_session_record(state, Some(session_id.clone()), Some(session_title.clone()))?;
     let turn = PreparedSessionAgentTurn::redclaw_run(RedclawRunTurn::new(
         source_label,
         session_id.clone(),
         prompt.clone(),
+        Some(session_title),
     ));
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
 
@@ -165,4 +181,46 @@ pub fn execute_redclaw_run(
         "artifactKind": artifact_kind,
         "artifacts": artifacts
     }))
+}
+
+pub fn execute_redclaw_run(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    prompt: String,
+    source_label: &str,
+) -> Result<Value, String> {
+    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
+    let session_id = redclaw_session_id_for_space(&active_space_id);
+    execute_redclaw_run_in_session(
+        app,
+        state,
+        prompt,
+        source_label,
+        session_id,
+        "RedClaw".to_string(),
+    )
+}
+
+pub fn execute_redclaw_task_run(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    prompt: String,
+    source_label: &str,
+    source_kind: Option<&str>,
+    source_task_id: Option<&str>,
+    title: &str,
+) -> Result<Value, String> {
+    let active_space_id = with_store(state, |store| Ok(store.active_space_id.clone()))?;
+    let session_id = match (source_kind, source_task_id) {
+        (Some(kind), Some(task_id)) if !kind.trim().is_empty() && !task_id.trim().is_empty() => {
+            redclaw_session_id_for_task(&active_space_id, kind, task_id)
+        }
+        _ => redclaw_session_id_for_space(&active_space_id),
+    };
+    let session_title = if title.trim().is_empty() {
+        "RedClaw 自动化".to_string()
+    } else {
+        title.trim().to_string()
+    };
+    execute_redclaw_run_in_session(app, state, prompt, source_label, session_id, session_title)
 }
