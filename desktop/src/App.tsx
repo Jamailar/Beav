@@ -665,7 +665,13 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'home') && (
           <div className={currentView === 'home' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'home' ? <ViewLoadingFallback /> : null}>
-              <HomePage isActive={currentView === 'home'} />
+              <HomePage
+                isActive={currentView === 'home'}
+                onNavigateToCoverStudio={() => setCurrentView('cover-studio')}
+                onNavigateToGenerationStudio={(mode) => navigateToGenerationStudio({ mode, source: 'standalone' })}
+                onNavigateToManuscript={navigateToManuscript}
+                onNavigateToRedClaw={navigateToRedClaw}
+              />
             </Suspense>
           </div>
         )}

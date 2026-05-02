@@ -11,6 +11,7 @@ import {
     Search,
     Sparkles,
     UserRound,
+    X,
 } from 'lucide-react';
 import { formatTimestampDate } from '../utils/time';
 
@@ -92,6 +93,11 @@ interface AccountDetail {
 
 type GalleryMode = 'posts' | 'media' | 'comments';
 
+interface CreatorProfilesPanelProps {
+    isActive?: boolean;
+    embedded?: boolean;
+}
+
 const PLATFORM_LABELS: Record<string, string> = {
     xiaohongshu: '小红书',
     douyin: '抖音',
@@ -146,10 +152,11 @@ function learningStatusText(state?: AccountDetail['learningState']): string {
     return '等待导入';
 }
 
-export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
+export function CreatorProfilesPanel({ isActive = true, embedded = false }: CreatorProfilesPanelProps) {
     const [accounts, setAccounts] = useState<AccountSummary[]>([]);
     const [selectedAccountId, setSelectedAccountId] = useState('');
     const [detail, setDetail] = useState<AccountDetail | null>(null);
+    const [detailModalOpen, setDetailModalOpen] = useState(false);
     const [query, setQuery] = useState('');
     const [galleryMode, setGalleryMode] = useState<GalleryMode>('posts');
     const [loadingAccounts, setLoadingAccounts] = useState(true);
@@ -179,7 +186,7 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
             hasLoadedAccountsRef.current = true;
             setSelectedAccountId((current) => {
                 if (current && list.some((account) => account.id === current)) return current;
-                return list[0]?.id || '';
+                return embedded ? '' : list[0]?.id || '';
             });
         } catch (loadError) {
             if (requestId !== loadAccountsRequestRef.current) return;
@@ -190,7 +197,7 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                 setLoadingAccounts(false);
             }
         }
-    }, []);
+    }, [embedded]);
 
     const loadDetail = useCallback(async (accountId: string) => {
         if (!accountId) {
@@ -231,6 +238,7 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
     const media = detail?.media || [];
     const comments = detail?.comments || [];
     const memoryCandidates = detail?.memoryCandidates?.candidates || [];
+    const compact = embedded;
 
     const filteredPosts = useMemo(() => {
         const term = query.trim().toLowerCase();
@@ -255,17 +263,135 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
         return comments.filter((comment) => [comment.author, comment.text, comment.postId].some((value) => String(value || '').toLowerCase().includes(term)));
     }, [comments, query]);
 
+    if (compact) {
+        const openAccountDetail = (accountId: string) => {
+            setDetail(null);
+            setSelectedAccountId(accountId);
+            setDetailModalOpen(true);
+        };
+
+        return (
+            <div className="min-h-0">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-[14px] font-semibold text-text-primary">
+                        <BookOpenText className="h-4 w-4" />
+                        创作档案
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => void loadAccounts()}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                        title="刷新"
+                        aria-label="刷新"
+                    >
+                        <RefreshCw className={clsx('h-4 w-4', loadingAccounts && 'animate-spin')} />
+                    </button>
+                </div>
+
+                <div className="min-h-0">
+                    {error ? (
+                        <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm text-red-600">{error}</div>
+                    ) : null}
+
+                    {loadingAccounts && accounts.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border bg-surface-secondary/30 p-8 text-center text-sm text-text-tertiary">
+                            加载账号中...
+                        </div>
+                    ) : accounts.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-border bg-surface-secondary/30 p-8 text-center text-sm text-text-tertiary">
+                            暂无账号档案
+                        </div>
+                    ) : (
+                        <div className="flex gap-3 overflow-x-auto pb-2">
+                            {accounts.map((account) => (
+                                <CreatorAccountCard
+                                    key={account.id}
+                                    account={account}
+                                    onClick={() => openAccountDetail(account.id)}
+                                />
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {detailModalOpen && selectedAccount ? (
+                    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/30 px-4 py-5">
+                        <div className="flex h-full max-h-[820px] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl">
+                            <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-5">
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <AccountAvatar account={selectedAccount} sizeClassName="h-9 w-9" />
+                                    <div className="min-w-0">
+                                        <div className="truncate text-[15px] font-semibold text-text-primary">{selectedAccount.username || '未命名账号'}</div>
+                                        <div className="truncate text-xs text-text-tertiary">{platformLabel(selectedAccount.platform)} · {selectedAccount.platformUserId || selectedAccount.id}</div>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setDetailModalOpen(false)}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                    title="关闭"
+                                    aria-label="关闭"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </div>
+
+                            <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                                {loadingDetail ? (
+                                    <div className="rounded-lg border border-border bg-surface-secondary/40 p-6 text-sm text-text-tertiary">加载账号档案...</div>
+                                ) : (
+                                    <div className="space-y-5">
+                                        <div className="grid gap-2 sm:grid-cols-3">
+                                            <Metric label="内容" value={selectedAccount.postCount || posts.length} compact />
+                                            <Metric label="媒体" value={selectedAccount.mediaCount || media.length} compact />
+                                            <Metric label="评论" value={selectedAccount.commentCount || comments.length} compact />
+                                        </div>
+
+                                        <div className="grid gap-4 lg:grid-cols-2">
+                                            <InsightPanel
+                                                title="创作档案"
+                                                icon={<Bot className="h-4 w-4" />}
+                                                content={detail?.creatorProfile || detail?.learningSummary || ''}
+                                                empty="暂无档案"
+                                                compact
+                                            />
+                                            <InsightPanel
+                                                title="写作风格"
+                                                icon={<Sparkles className="h-4 w-4" />}
+                                                content={detail?.writingStyleSkill || ''}
+                                                empty="暂无风格"
+                                                compact
+                                            />
+                                        </div>
+
+                                        <section>
+                                            <div className="mb-3 text-sm font-medium text-text-primary">最近内容</div>
+                                            <PostGallery posts={posts.slice(0, 4)} compact />
+                                        </section>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                ) : null}
+            </div>
+        );
+    }
+
     return (
         <div className="flex h-full min-h-0 bg-surface-primary">
-            <aside className="w-80 border-r border-border bg-surface-secondary/30 flex flex-col min-h-0">
-                <div className="p-4 border-b border-border">
+            <aside className={clsx(
+                'border-r border-border bg-surface-secondary/30 flex flex-col min-h-0',
+                compact ? 'w-64' : 'w-80',
+            )}>
+                <div className={clsx('border-b border-border', compact ? 'p-3' : 'p-4')}>
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <div className="flex items-center gap-2 text-text-primary font-semibold">
                                 <BookOpenText className="w-4 h-4" />
                                 创作档案
                             </div>
-                            <div className="mt-1 text-xs text-text-tertiary">当前空间绑定账号</div>
+                            {!compact && <div className="mt-1 text-xs text-text-tertiary">当前空间绑定账号</div>}
                         </div>
                         <button
                             type="button"
@@ -278,12 +404,12 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                         </button>
                     </div>
                 </div>
-                <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
+                <div className={clsx('flex-1 min-h-0 overflow-y-auto space-y-2', compact ? 'p-2' : 'p-3')}>
                     {loadingAccounts && accounts.length === 0 ? (
                         <div className="px-2 py-3 text-sm text-text-tertiary">加载账号中...</div>
                     ) : accounts.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-border bg-surface-primary p-4 text-sm text-text-secondary">
-                            当前空间还没有绑定账号。打开插件 sidepanel，在账号主页绑定后，这里会显示账号画廊和学习结果。
+                        <div className={clsx('rounded-lg border border-dashed border-border bg-surface-primary text-sm text-text-secondary', compact ? 'p-3' : 'p-4')}>
+                            {compact ? '暂无账号档案' : '当前空间还没有绑定账号。打开插件 sidepanel，在账号主页绑定后，这里会显示账号画廊和学习结果。'}
                         </div>
                     ) : accounts.map((account) => (
                         <button
@@ -291,14 +417,15 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                             type="button"
                             onClick={() => setSelectedAccountId(account.id)}
                             className={clsx(
-                                'w-full rounded-lg border p-3 text-left transition-colors',
+                                'w-full rounded-lg border text-left transition-colors',
+                                compact ? 'p-2' : 'p-3',
                                 selectedAccountId === account.id
                                     ? 'border-accent-primary/40 bg-surface-primary shadow-sm'
                                     : 'border-transparent hover:border-border hover:bg-surface-primary',
                             )}
                         >
                             <div className="flex items-start gap-3">
-                                <div className="h-10 w-10 rounded-lg bg-accent-primary/10 text-accent-primary inline-flex items-center justify-center overflow-hidden shrink-0">
+                                <div className={clsx('rounded-lg bg-accent-primary/10 text-accent-primary inline-flex items-center justify-center overflow-hidden shrink-0', compact ? 'h-8 w-8' : 'h-10 w-10')}>
                                     {account.avatarUrl ? (
                                         <img src={account.avatarUrl} alt="" className="h-full w-full object-cover" />
                                     ) : (
@@ -308,7 +435,7 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                                 <div className="min-w-0 flex-1">
                                     <div className="text-sm font-medium text-text-primary truncate">{account.username || '未命名账号'}</div>
                                     <div className="mt-0.5 text-xs text-text-tertiary truncate">{platformLabel(account.platform)} · {account.platformUserId || account.id}</div>
-                                    <div className="mt-2 grid grid-cols-3 gap-1 text-[11px] text-text-secondary">
+                                    <div className={clsx('grid grid-cols-3 gap-1 text-[11px] text-text-secondary', compact ? 'mt-1' : 'mt-2')}>
                                         <span>{numberText(account.postCount)} 内容</span>
                                         <span>{numberText(account.mediaCount)} 媒体</span>
                                         <span>{numberText(account.commentCount)} 评论</span>
@@ -321,27 +448,29 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
             </aside>
 
             <main className="flex-1 min-w-0 flex flex-col">
-                <header className="px-6 py-4 border-b border-border bg-surface-primary">
+                <header className={clsx('border-b border-border bg-surface-primary', compact ? 'px-4 py-3' : 'px-6 py-4')}>
                     <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                                <h1 className="text-xl font-semibold text-text-primary truncate">{selectedAccount?.username || '账号画廊'}</h1>
+                                <h1 className={clsx('font-semibold text-text-primary truncate', compact ? 'text-base' : 'text-xl')}>{selectedAccount?.username || '账号画廊'}</h1>
                                 {selectedAccount?.platform ? (
                                     <span className="px-2 py-0.5 rounded border border-border text-xs text-text-secondary bg-surface-secondary">
                                         {platformLabel(selectedAccount.platform)}
                                     </span>
                                 ) : null}
                             </div>
-                            <div className="mt-1 text-sm text-text-tertiary">
+                            <div className={clsx('mt-1 text-text-tertiary truncate', compact ? 'text-xs' : 'text-sm')}>
                                 {selectedAccount
-                                    ? `${learningStatusText(detail?.learningState)} · 最近学习 ${formatTimestampDate(selectedAccount.lastLearnedAt) || '未学习'} · 最近导入 ${formatTimestampDate(selectedAccount.lastImportedAt) || '暂无记录'}`
+                                    ? compact
+                                        ? `${learningStatusText(detail?.learningState)} · ${formatTimestampDate(selectedAccount.lastLearnedAt) || '未学习'}`
+                                        : `${learningStatusText(detail?.learningState)} · 最近学习 ${formatTimestampDate(selectedAccount.lastLearnedAt) || '未学习'} · 最近导入 ${formatTimestampDate(selectedAccount.lastImportedAt) || '暂无记录'}`
                                     : '选择一个账号查看内容画廊和学习结果'}
                             </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-2 shrink-0">
-                            <Metric label="内容" value={selectedAccount?.postCount || posts.length} />
-                            <Metric label="媒体" value={selectedAccount?.mediaCount || media.length} />
-                            <Metric label="评论" value={selectedAccount?.commentCount || comments.length} />
+                        <div className={clsx('grid grid-cols-3 shrink-0', compact ? 'gap-1.5' : 'gap-2')}>
+                            <Metric label="内容" value={selectedAccount?.postCount || posts.length} compact={compact} />
+                            <Metric label="媒体" value={selectedAccount?.mediaCount || media.length} compact={compact} />
+                            <Metric label="评论" value={selectedAccount?.commentCount || comments.length} compact={compact} />
                         </div>
                     </div>
                 </header>
@@ -352,12 +481,15 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                             还没有账号档案可展示
                         </div>
                     ) : (
-                        <div className="p-6 space-y-6">
+                        <div className={clsx(compact ? 'p-4 space-y-4' : 'p-6 space-y-6')}>
                             {error ? (
                                 <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-600">{error}</div>
                             ) : null}
 
-                            <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
+                            <section className={clsx(
+                                'grid grid-cols-1',
+                                compact ? 'xl:grid-cols-[minmax(0,1fr)_280px] gap-4' : 'xl:grid-cols-[minmax(0,1fr)_360px] gap-6',
+                            )}>
                                 <div className="min-w-0 space-y-4">
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                         <div className="inline-flex rounded-lg border border-border bg-surface-secondary p-1 w-fit">
@@ -379,28 +511,30 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                                     {loadingDetail ? (
                                         <div className="rounded-lg border border-border bg-surface-secondary/40 p-6 text-sm text-text-tertiary">加载账号内容...</div>
                                     ) : galleryMode === 'posts' ? (
-                                        <PostGallery posts={filteredPosts} />
+                                        <PostGallery posts={filteredPosts} compact={compact} />
                                     ) : galleryMode === 'media' ? (
-                                        <MediaGallery media={filteredMedia} />
+                                        <MediaGallery media={filteredMedia} compact={compact} />
                                     ) : (
-                                        <CommentGallery comments={filteredComments} />
+                                        <CommentGallery comments={filteredComments} compact={compact} />
                                     )}
                                 </div>
 
-                                <aside className="space-y-4">
+                                <aside className={clsx(compact ? 'space-y-3' : 'space-y-4')}>
                                     <InsightPanel
                                         title="创作档案"
                                         icon={<Bot className="w-4 h-4" />}
                                         content={detail?.creatorProfile || detail?.learningSummary || ''}
-                                        empty="还没有生成创作档案。导入账号内容后会自动学习。"
+                                        empty={compact ? '暂无档案' : '还没有生成创作档案。导入账号内容后会自动学习。'}
+                                        compact={compact}
                                     />
                                     <InsightPanel
                                         title="写作风格"
                                         icon={<Sparkles className="w-4 h-4" />}
                                         content={detail?.writingStyleSkill || ''}
-                                        empty="还没有写作风格技能。"
+                                        empty={compact ? '暂无风格' : '还没有写作风格技能。'}
+                                        compact={compact}
                                     />
-                                    <section className="rounded-lg border border-border bg-surface-secondary/30 p-4">
+                                    {!compact && <section className="rounded-lg border border-border bg-surface-secondary/30 p-4">
                                         <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
                                             <MessageCircle className="w-4 h-4" />
                                             记忆候选
@@ -414,7 +548,7 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
                                                 </div>
                                             ))}
                                         </div>
-                                    </section>
+                                    </section>}
                                 </aside>
                             </section>
                         </div>
@@ -425,10 +559,61 @@ export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
     );
 }
 
-function Metric({ label, value }: { label: string; value: unknown }) {
+export function CreatorProfiles({ isActive = true }: { isActive?: boolean }) {
+    return <CreatorProfilesPanel isActive={isActive} />;
+}
+
+function AccountAvatar({ account, sizeClassName = 'h-10 w-10' }: { account: AccountSummary; sizeClassName?: string }) {
     return (
-        <div className="min-w-20 rounded-lg border border-border bg-surface-secondary/50 px-3 py-2 text-right">
-            <div className="text-base font-semibold text-text-primary">{numberText(value)}</div>
+        <div className={clsx('inline-flex shrink-0 items-center justify-center overflow-hidden rounded-xl bg-accent-primary/10 text-accent-primary', sizeClassName)}>
+            {account.avatarUrl ? (
+                <img src={account.avatarUrl} alt="" className="h-full w-full object-cover" />
+            ) : (
+                <UserRound className="h-5 w-5" />
+            )}
+        </div>
+    );
+}
+
+function CreatorAccountCard({ account, onClick }: { account: AccountSummary; onClick: () => void }) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className="group min-h-[118px] w-[220px] shrink-0 rounded-xl border border-border bg-surface-primary/72 p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-accent-primary/30 hover:bg-surface-primary hover:shadow-md"
+        >
+            <div className="flex items-start gap-3">
+                <AccountAvatar account={account} sizeClassName="h-9 w-9" />
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-text-primary">{account.username || '未命名账号'}</div>
+                    <div className="mt-1 truncate text-xs text-text-tertiary">{platformLabel(account.platform)} · {account.platformUserId || account.id}</div>
+                </div>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+                <div>
+                    <div className="text-sm font-semibold tabular-nums text-text-primary">{numberText(account.postCount)}</div>
+                    <div className="mt-0.5 text-[11px] text-text-tertiary">内容</div>
+                </div>
+                <div>
+                    <div className="text-sm font-semibold tabular-nums text-text-primary">{numberText(account.mediaCount)}</div>
+                    <div className="mt-0.5 text-[11px] text-text-tertiary">媒体</div>
+                </div>
+                <div>
+                    <div className="text-sm font-semibold tabular-nums text-text-primary">{numberText(account.commentCount)}</div>
+                    <div className="mt-0.5 text-[11px] text-text-tertiary">评论</div>
+                </div>
+            </div>
+            <div className="mt-4 truncate text-[11px] text-text-tertiary">
+                最近学习 {formatTimestampDate(account.lastLearnedAt) || '未学习'}
+            </div>
+        </button>
+    );
+}
+
+function Metric({ label, value, compact = false }: { label: string; value: unknown; compact?: boolean }) {
+    return (
+        <div className={clsx('rounded-lg border border-border bg-surface-secondary/50 text-right', compact ? 'min-w-16 px-2 py-1.5' : 'min-w-20 px-3 py-2')}>
+            <div className={clsx('font-semibold text-text-primary', compact ? 'text-sm' : 'text-base')}>{numberText(value)}</div>
             <div className="text-[11px] text-text-tertiary">{label}</div>
         </div>
     );
@@ -450,26 +635,26 @@ function ModeButton({ active, onClick, icon, label }: { active: boolean; onClick
     );
 }
 
-function PostGallery({ posts }: { posts: AccountPost[] }) {
+function PostGallery({ posts, compact = false }: { posts: AccountPost[]; compact?: boolean }) {
     if (posts.length === 0) {
         return <EmptyGallery text="没有匹配的内容" />;
     }
     return (
-        <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-4">
+        <div className={clsx('grid grid-cols-1 md:grid-cols-2', compact ? '2xl:grid-cols-2 gap-3' : '2xl:grid-cols-3 gap-4')}>
             {posts.map((post) => {
                 const cover = postCover(post);
                 return (
                     <article key={post.id} className="rounded-lg border border-border bg-surface-secondary/30 overflow-hidden">
-                        <div className="aspect-[4/3] bg-surface-secondary flex items-center justify-center">
+                        <div className={clsx('bg-surface-secondary flex items-center justify-center', compact ? 'aspect-[16/9]' : 'aspect-[4/3]')}>
                             {cover ? (
                                 <img src={cover} alt="" className="w-full h-full object-cover" />
                             ) : (
                                 <FileText className="w-8 h-8 text-text-tertiary" />
                             )}
                         </div>
-                        <div className="p-4">
+                        <div className={clsx(compact ? 'p-3' : 'p-4')}>
                             <div className="text-sm font-medium text-text-primary line-clamp-2">{titleFromPost(post)}</div>
-                            <div className="mt-2 text-xs text-text-secondary line-clamp-3">{excerpt(post.content, 150) || '无正文摘要'}</div>
+                            {!compact && <div className="mt-2 text-xs text-text-secondary line-clamp-3">{excerpt(post.content, 150) || '无正文摘要'}</div>}
                             <div className="mt-3 flex items-center justify-between text-[11px] text-text-tertiary">
                                 <span>{formatTimestampDate(post.publishedAt || post.capturedAt || post.updatedAt) || '未知日期'}</span>
                                 <span>{Array.isArray(post.media) ? post.media.length : 0} 媒体</span>
@@ -482,12 +667,12 @@ function PostGallery({ posts }: { posts: AccountPost[] }) {
     );
 }
 
-function MediaGallery({ media }: { media: AccountMedia[] }) {
+function MediaGallery({ media, compact = false }: { media: AccountMedia[]; compact?: boolean }) {
     if (media.length === 0) {
         return <EmptyGallery text="没有匹配的媒体" />;
     }
     return (
-        <div className="grid grid-cols-2 md:grid-cols-3 2xl:grid-cols-5 gap-3">
+        <div className={clsx('grid grid-cols-2 md:grid-cols-3 gap-3', compact ? '2xl:grid-cols-4' : '2xl:grid-cols-5')}>
             {media.map((item, index) => {
                 const url = String(item.url || item.localPath || '').trim();
                 const isImage = /image|cover/i.test(String(item.kind || '')) || /\.(png|jpe?g|webp|gif|avif)(\?|$)/i.test(url);
@@ -511,19 +696,19 @@ function MediaGallery({ media }: { media: AccountMedia[] }) {
     );
 }
 
-function CommentGallery({ comments }: { comments: AccountComment[] }) {
+function CommentGallery({ comments, compact = false }: { comments: AccountComment[]; compact?: boolean }) {
     if (comments.length === 0) {
         return <EmptyGallery text="没有匹配的评论" />;
     }
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {comments.map((comment) => (
-                <article key={comment.id} className="rounded-lg border border-border bg-surface-secondary/30 p-4">
+                <article key={comment.id} className={clsx('rounded-lg border border-border bg-surface-secondary/30', compact ? 'p-3' : 'p-4')}>
                     <div className="flex items-center justify-between gap-3">
                         <div className="text-sm font-medium text-text-primary truncate">{comment.author || '匿名用户'}</div>
                         <div className="text-[11px] text-text-tertiary shrink-0">{formatTimestampDate(comment.createdAt || comment.capturedAt || comment.updatedAt)}</div>
                     </div>
-                    <div className="mt-2 text-sm text-text-secondary whitespace-pre-wrap line-clamp-4">{comment.text || '无评论内容'}</div>
+                    <div className={clsx('mt-2 text-sm text-text-secondary whitespace-pre-wrap', compact ? 'line-clamp-2' : 'line-clamp-4')}>{comment.text || '无评论内容'}</div>
                     <div className="mt-3 flex items-center gap-3 text-[11px] text-text-tertiary">
                         <span>{numberText(comment.likes)} 赞</span>
                         <span>{numberText(comment.replies)} 回复</span>
@@ -535,16 +720,16 @@ function CommentGallery({ comments }: { comments: AccountComment[] }) {
     );
 }
 
-function InsightPanel({ title, icon, content, empty }: { title: string; icon: ReactNode; content: string; empty: string }) {
+function InsightPanel({ title, icon, content, empty, compact = false }: { title: string; icon: ReactNode; content: string; empty: string; compact?: boolean }) {
     const text = content.trim();
     return (
-        <section className="rounded-lg border border-border bg-surface-secondary/30 p-4">
+        <section className={clsx('rounded-lg border border-border bg-surface-secondary/30', compact ? 'p-3' : 'p-4')}>
             <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
                 {icon}
                 {title}
             </div>
-            <div className="mt-3 max-h-72 overflow-y-auto rounded-md bg-surface-primary border border-border p-3 text-xs leading-5 text-text-secondary whitespace-pre-wrap">
-                {text ? excerpt(text, 1800) : empty}
+            <div className={clsx('mt-3 overflow-y-auto rounded-md bg-surface-primary border border-border p-3 text-xs leading-5 text-text-secondary whitespace-pre-wrap', compact ? 'max-h-28' : 'max-h-72')}>
+                {text ? excerpt(text, compact ? 360 : 1800) : empty}
             </div>
         </section>
     );
