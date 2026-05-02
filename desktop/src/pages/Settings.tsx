@@ -82,6 +82,7 @@ import {
 } from './redclaw/onboardingState';
 import { hasOfficialAiPanel, loadOfficialAiPanelModule, type OfficialAiPanelProps } from '../features/official';
 import { useOfficialAuthState } from '../hooks/useOfficialAuthState';
+import { useI18n, type I18nKey } from '../i18n';
 import {
   GeneralSettingsSection,
   ExperimentalSettingsSection,
@@ -690,6 +691,7 @@ export function Settings({
   redclawOnboardingVersion?: number;
   navigationTarget?: SettingsNavigationTarget | null;
 }) {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [teamAdvisors, setTeamAdvisors] = useState<Advisor[]>([]);
   const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
@@ -5126,19 +5128,19 @@ export function Settings({
   }, [notificationSettings.sound.volume]);
 
   const tabs = [
-    { id: 'ai', label: 'AI 模型', icon: Cpu },
-    { id: 'general', label: '常规设置', icon: LayoutGrid },
-    { id: 'team', label: '团队', icon: Users },
-    { id: 'profile', label: '用户档案', icon: FileText },
-    { id: 'tools', label: '工具管理', icon: Wrench },
-    { id: 'experimental', label: '实验功能', icon: FlaskConical },
-  ] as const;
+    { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
+    { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
+    { id: 'team', labelKey: 'settings.tabs.team', icon: Users },
+    { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
+    { id: 'tools', labelKey: 'settings.tabs.tools', icon: Wrench },
+    { id: 'experimental', labelKey: 'settings.tabs.experimental', icon: FlaskConical },
+  ] satisfies Array<{ id: SettingsTab; labelKey: I18nKey; icon: ComponentType<{ className?: string }> }>;
 
   return (
-    <div className="flex h-full bg-background text-text-primary">
+    <div className="flex h-full min-w-0 text-text-primary">
       {/* Sidebar */}
       <div className="w-48 border-r border-border pt-6 pb-4 flex flex-col gap-1 px-3 bg-surface-secondary/20">
-        <h1 className="px-3 mb-4 text-xs font-bold text-text-tertiary uppercase tracking-wider">设置</h1>
+        <h1 className="px-3 mb-4 text-xs font-bold text-text-tertiary uppercase tracking-wider">{t('settings.title')}</h1>
         {tabs.map(tab => (
           <button
             key={tab.id}
@@ -5151,13 +5153,13 @@ export function Settings({
             )}
           >
             <tab.icon className="w-4 h-4" />
-            {tab.label}
+            {t(tab.labelKey)}
           </button>
         ))}
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto">
+      <div className="min-w-0 flex-1 overflow-auto">
         <div className="max-w-2xl mx-auto px-8 py-8 pb-32">
           <form onSubmit={handleSave} className="space-y-10">
 
@@ -5206,7 +5208,7 @@ export function Settings({
               <div className="space-y-10">
                 {/* LLM Connection Config */}
                 <section className="space-y-6">
-                  <h2 className="text-lg font-medium text-text-primary mb-6">AI 模型设置</h2>
+                  <h2 className="text-lg font-medium text-text-primary mb-6">{t('settings.ai.title')}</h2>
 
                   <div className="flex justify-center">
                     <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/40 p-1 shadow-sm">

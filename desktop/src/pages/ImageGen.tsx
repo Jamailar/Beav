@@ -160,7 +160,7 @@ export function ImageGen() {
     const hasConfig = Boolean(resolvedEndpoint) && Boolean(resolvedApiKey);
 
     return (
-        <div className="h-full flex flex-col bg-background">
+        <div className="h-full flex flex-col">
             <div className="border-b border-border px-6 py-4 flex items-center gap-3">
                 <h1 className="text-lg font-semibold text-text-primary">生图</h1>
                 <div className="text-xs text-text-tertiary">根据提示词生成配图并自动写入媒体库</div>

@@ -5,8 +5,15 @@ import { buildAudioDataUrl } from '../features/audio-input/audioInput';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import {
-    FolderPlus,
+    ArrowLeft,
+    Box,
+    Building2,
+    CalendarClock,
+    Check,
+    ChevronDown,
+    Grid2X2,
     ImagePlus,
+    List,
     Mic,
     Package,
     Pencil,
@@ -14,11 +21,16 @@ import {
     RefreshCw,
     Save,
     Search,
+    SlidersHorizontal,
     Tag,
     Trash2,
+    Upload,
+    UserRound,
     X,
+    type LucideIcon,
 } from 'lucide-react';
 import { resolveAssetUrl } from '../utils/pathManager';
+import { SelectMenu } from '../components/ui/SelectMenu';
 
 interface SubjectCategory {
     id: string;
@@ -76,10 +88,27 @@ interface SubjectDraft {
 }
 
 type CategoryDialogMode = 'create' | 'rename';
+type SubjectViewMode = 'grid' | 'list';
+type SubjectCategoryTab = {
+    id: string;
+    label: string;
+    icon: LucideIcon;
+    disabled?: boolean;
+};
 
 const UNCATEGORIZED_FILTER = '__uncategorized__';
+const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。';
 const SUBJECT_VOICE_RECORDING_SECONDS = 6;
+
+const categoryIconForName = (name: string) => {
+    const normalized = name.trim();
+    if (normalized === '角色' || normalized === '人物') return UserRound;
+    if (normalized === '物品' || normalized === '资产') return Package;
+    if (normalized === '品牌') return Building2;
+    if (normalized === '场景') return Box;
+    return Tag;
+};
 
 const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -139,7 +168,7 @@ function normalizeAttributes(attributes: SubjectAttribute[]): SubjectAttribute[]
         .filter((item) => item.key || item.value);
 }
 
-export function Subjects({ isActive = true }: { isActive?: boolean }) {
+export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean; onReturnHome?: () => void }) {
     const [categories, setCategories] = useState<SubjectCategory[]>([]);
     const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
     const [loading, setLoading] = useState(true);
@@ -147,7 +176,10 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
     const [error, setError] = useState('');
     const [query, setQuery] = useState('');
     const [categoryFilter, setCategoryFilter] = useState<string>('all');
+    const [viewMode, setViewMode] = useState<SubjectViewMode>('grid');
+    const [filterOpen, setFilterOpen] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isDraftCategoryMenuOpen, setIsDraftCategoryMenuOpen] = useState(false);
     const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
     const [categoryDialogMode, setCategoryDialogMode] = useState<CategoryDialogMode>('create');
     const [categoryDialogName, setCategoryDialogName] = useState('');
@@ -161,6 +193,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
     const recordingIntervalRef = useRef<number | null>(null);
     const recordingTimeoutRef = useRef<number | null>(null);
     const hasLoadedSnapshotRef = useRef(false);
+    const hasEnsuredDefaultCategoriesRef = useRef(false);
     const loadDataRequestRef = useRef(0);
 
     useEffect(() => {
@@ -200,9 +233,23 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                 throw new Error(subjectsResult?.error || '加载主体失败');
             }
             if (requestId !== loadDataRequestRef.current) return;
-            setCategories(Array.isArray(categoriesResult.categories) ? categoriesResult.categories : []);
+            const nextCategories = Array.isArray(categoriesResult.categories) ? categoriesResult.categories : [];
+            setCategories(nextCategories);
             setSubjects(Array.isArray(subjectsResult.subjects) ? subjectsResult.subjects : []);
             hasLoadedSnapshotRef.current = true;
+            if (!hasEnsuredDefaultCategoriesRef.current) {
+                const existingNames = new Set(nextCategories.map((item) => item.name.trim()));
+                const missingNames = DEFAULT_SUBJECT_CATEGORY_NAMES.filter((name) => !existingNames.has(name));
+                if (missingNames.length > 0) {
+                    hasEnsuredDefaultCategoriesRef.current = true;
+                    await Promise.all(missingNames.map((name) => window.ipcRenderer.subjects.categories.create({ name })));
+                    if (requestId === loadDataRequestRef.current) {
+                        void loadData();
+                    }
+                } else {
+                    hasEnsuredDefaultCategoriesRef.current = true;
+                }
+            }
         } catch (e) {
             if (requestId !== loadDataRequestRef.current) return;
             console.error('Failed to load subjects:', e);
@@ -253,16 +300,22 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
     }, [categories, subjects]);
 
     const openCreateModal = useCallback(() => {
-        setDraft(createEmptyDraft());
+        const nextDraft = createEmptyDraft();
+        if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER) {
+            nextDraft.categoryId = categoryFilter;
+        }
+        setDraft(nextDraft);
         setInitialVoicePresent(false);
         setError('');
+        setIsDraftCategoryMenuOpen(false);
         setIsModalOpen(true);
-    }, []);
+    }, [categoryFilter]);
 
     const openEditModal = useCallback((subject: SubjectRecord) => {
         setDraft(toDraft(subject));
         setInitialVoicePresent(Boolean(subject.voicePreviewUrl));
         setError('');
+        setIsDraftCategoryMenuOpen(false);
         setIsModalOpen(true);
     }, []);
 
@@ -325,6 +378,24 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
             ...current,
             attributes: current.attributes.filter((_, itemIndex) => itemIndex !== index),
         }));
+    }, []);
+
+    const handleNamedAttributeChange = useCallback((key: string, value: string) => {
+        setDraft((current) => {
+            const nextAttributes = [...current.attributes];
+            const existingIndex = nextAttributes.findIndex((item) => item.key === key);
+            const nextValue = value.trim();
+            if (!nextValue) {
+                if (existingIndex >= 0) nextAttributes.splice(existingIndex, 1);
+                return { ...current, attributes: nextAttributes };
+            }
+            if (existingIndex >= 0) {
+                nextAttributes[existingIndex] = { ...nextAttributes[existingIndex], value };
+            } else {
+                nextAttributes.push({ key, value });
+            }
+            return { ...current, attributes: nextAttributes };
+        });
     }, []);
 
     const handleImageInput = useCallback(async (files: FileList | null) => {
@@ -411,9 +482,24 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         }
     }, [audioRecording, clearRecordingTimers]);
 
+    const handleDraftCategoryChange = useCallback((categoryId: string) => {
+        const nextCategoryName = categories.find((item) => item.id === categoryId)?.name.trim() || '';
+        if (nextCategoryName !== '角色') {
+            stopRecordingSession();
+            setRecordingError('');
+            setRecordingHint('');
+        }
+        setDraft((current) => ({
+            ...current,
+            categoryId,
+            voice: nextCategoryName === '角色' ? current.voice : undefined,
+        }));
+    }, [categories, stopRecordingSession]);
+
     const closeModal = useCallback(() => {
         if (working) return;
         stopRecordingSession();
+        setIsDraftCategoryMenuOpen(false);
         setIsModalOpen(false);
         setDraft(createEmptyDraft());
         setInitialVoicePresent(false);
@@ -541,6 +627,20 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         setWorking(true);
         setError('');
         try {
+            const shouldSaveVoice = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
+            const nextVoicePayload = shouldSaveVoice && draft.voice
+                ? (draft.voice.relativePath
+                    ? {
+                        relativePath: draft.voice.relativePath,
+                        name: draft.voice.name,
+                        scriptText: draft.voice.scriptText.trim() || undefined,
+                    }
+                    : {
+                        dataUrl: draft.voice.dataUrl,
+                        name: draft.voice.name,
+                        scriptText: draft.voice.scriptText.trim() || undefined,
+                    })
+                : (initialVoicePresent ? {} : undefined);
             const payload = {
                 id: draft.id,
                 name: draft.name.trim(),
@@ -551,19 +651,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                 images: draft.images.map((image) => image.relativePath
                     ? { relativePath: image.relativePath, name: image.name }
                     : { dataUrl: image.dataUrl, name: image.name }),
-                voice: draft.voice
-                    ? (draft.voice.relativePath
-                        ? {
-                            relativePath: draft.voice.relativePath,
-                            name: draft.voice.name,
-                            scriptText: draft.voice.scriptText.trim() || undefined,
-                        }
-                        : {
-                            dataUrl: draft.voice.dataUrl,
-                            name: draft.voice.name,
-                            scriptText: draft.voice.scriptText.trim() || undefined,
-                        })
-                    : (initialVoicePresent ? {} : undefined),
+                voice: nextVoicePayload,
             };
             const result = draft.id
                 ? await window.ipcRenderer.subjects.update(payload)
@@ -579,7 +667,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         } finally {
             setWorking(false);
         }
-    }, [closeModal, draft, initialVoicePresent, loadData]);
+    }, [categories, closeModal, draft, initialVoicePresent, loadData]);
 
     const handleDeleteSubject = useCallback(async () => {
         if (!draft.id) return;
@@ -600,102 +688,179 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
         }
     }, [closeModal, draft.id, draft.name, loadData]);
 
+    const categoryTabs = useMemo<SubjectCategoryTab[]>(() => {
+        const customCategories = categories.filter((category) => !DEFAULT_SUBJECT_CATEGORY_NAMES.includes(category.name.trim()));
+        return [
+            { id: 'all', label: '资产', icon: Package },
+            ...DEFAULT_SUBJECT_CATEGORY_NAMES.map((name) => {
+                const category = categories.find((item) => item.name.trim() === name);
+                return {
+                    id: category?.id || `preset:${name}`,
+                    label: name,
+                    icon: categoryIconForName(name),
+                    disabled: !category?.id,
+                };
+            }),
+            ...customCategories.map((category) => ({
+                id: category.id,
+                label: category.name,
+                icon: categoryIconForName(category.name),
+            })),
+        ];
+    }, [categories]);
+
+    const draftCategoryName = categoryNameMap.get(draft.categoryId || '') || '';
+    const draftEntityLabel = draftCategoryName || '资产';
+    const isRoleDraft = draftCategoryName.trim() === '角色';
+    const draftPreviewImage = draft.images[0]?.previewUrl || '';
+    const draftAttributeValue = (key: string) => draft.attributes.find((item) => item.key === key)?.value || '';
+    const visibleDraftAttributes = draft.attributes
+        .map((attribute, index) => ({ attribute, index }))
+        .filter(({ attribute }) => !isRoleDraft || (attribute.key !== '性别' && attribute.key !== '年龄'));
+    const draftCategoryOptions = useMemo(() => [
+        { id: '', name: '未分类', icon: Tag },
+        ...categories.map((category) => ({
+            id: category.id,
+            name: category.name,
+            icon: categoryIconForName(category.name),
+        })),
+    ], [categories]);
+    const selectedDraftCategory = draftCategoryOptions.find((item) => item.id === draft.categoryId) || draftCategoryOptions[0];
+    const SelectedDraftCategoryIcon = selectedDraftCategory.icon;
+
     return (
-        <div className="h-full flex flex-col bg-background">
-            <div className="border-b border-border px-4 py-2 bg-surface-secondary/45">
-                <div className="flex items-center gap-2 min-w-0">
-                    <div className="w-7 h-7 rounded-md bg-accent-primary/15 border border-accent-primary/20 text-accent-primary flex items-center justify-center shrink-0">
-                        <Package className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                        <h1 className="text-base leading-none font-semibold text-text-primary">主体库画廊</h1>
-                        <div className="text-[11px] mt-0.5 text-text-tertiary truncate">人物、商品、场景统一管理，便于在创作时直接调用参考</div>
-                    </div>
+        <div className="h-full flex flex-col">
+            <div className="px-8 pt-6 pb-4">
+                <div className="flex items-center gap-3">
+                    {onReturnHome && (
+                        <button
+                            type="button"
+                            onClick={onReturnHome}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
+                            aria-label="返回主页"
+                            title="返回主页"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                        </button>
+                    )}
+                    <h1 className="text-[26px] leading-none font-semibold tracking-[0.01em] text-slate-900">资产库</h1>
+                    <button
+                        onClick={openCreateModal}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl bg-black px-4 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(0,0,0,0.14)] transition hover:bg-black/88"
+                    >
+                        <Upload className="h-4 w-4" />
+                        新增
+                        <ChevronDown className="h-3.5 w-3.5 opacity-80" />
+                    </button>
 
-                    <div className="hidden xl:flex items-center gap-1.5 min-w-0 ml-2">
-                        <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-primary/70 text-text-secondary whitespace-nowrap">
-                            总主体 {subjects.length}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface-primary/70 text-text-secondary whitespace-nowrap">
-                            分类 {categories.length}
-                        </span>
-                    </div>
-
-                    <div className="ml-auto flex items-center gap-1.5">
+                    <div className="ml-auto flex items-center gap-3">
                         <button
                             onClick={() => void loadData()}
-                            className="h-7 px-2.5 text-[11px] rounded-md border border-border hover:bg-surface-secondary text-text-secondary"
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-100"
                         >
-                            <span className="inline-flex items-center gap-1">
-                                <RefreshCw className={clsx('w-3.5 h-3.5', loading && 'animate-spin')} />
-                                刷新
-                            </span>
+                            <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
+                            刷新
                         </button>
-                        <button
-                            onClick={openCreateModal}
-                            className="h-7 px-2.5 text-[11px] rounded-md border border-accent-primary/30 bg-accent-primary/10 hover:bg-accent-primary/15 text-accent-primary"
-                        >
-                            <span className="inline-flex items-center gap-1">
-                                <Plus className="w-3.5 h-3.5" />
-                                新建主体
-                            </span>
-                        </button>
+                        <div className="inline-flex rounded-xl bg-slate-100 p-1">
+                            <button
+                                type="button"
+                                onClick={() => setViewMode('grid')}
+                                className={clsx(
+                                    'inline-flex h-8 w-8 items-center justify-center rounded-lg transition',
+                                    viewMode === 'grid' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                                )}
+                                aria-label="网格视图"
+                                title="网格视图"
+                            >
+                                <Grid2X2 className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setViewMode('list')}
+                                className={clsx(
+                                    'inline-flex h-8 w-8 items-center justify-center rounded-lg transition',
+                                    viewMode === 'list' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                                )}
+                                aria-label="列表视图"
+                                title="列表视图"
+                            >
+                                <List className="h-4 w-4" />
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div className="px-6 py-3 border-b border-border bg-surface-secondary/20 space-y-3">
-                <div className="flex flex-col lg:flex-row lg:items-center gap-2">
-                    <div className="relative flex-1 min-w-0">
-                        <Search className="w-4 h-4 text-text-tertiary absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input
-                            value={query}
-                            onChange={(event) => setQuery(event.target.value)}
-                            placeholder="搜索主体名称、标签、属性、描述"
-                            className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                        />
-                    </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1 text-[11px] text-text-tertiary px-2 py-1 rounded-md border border-border bg-surface-primary/70">
-                        <Tag className="w-3.5 h-3.5" />
-                        分类筛选
-                    </span>
-                    {[
-                        { id: 'all', label: '全部主体' },
-                        { id: UNCATEGORIZED_FILTER, label: '未分类' },
-                        ...categories.map((category) => ({ id: category.id, label: category.name })),
-                    ].map((item) => {
+            <div className="mx-8 flex min-h-[48px] items-end border-b border-slate-200">
+                <div className="flex min-w-0 flex-1 items-end gap-6 overflow-x-auto no-scrollbar">
+                    {categoryTabs.map((item) => {
                         const active = categoryFilter === item.id;
+                        const Icon = item.icon;
                         return (
                             <button
                                 key={item.id}
-                                onClick={() => setCategoryFilter(item.id)}
+                                onClick={() => {
+                                    if (!item.disabled) setCategoryFilter(item.id);
+                                }}
+                                disabled={item.disabled}
                                 className={clsx(
-                                    'text-[11px] px-2.5 py-1 rounded-md border transition-colors',
+                                    'inline-flex h-10 items-center gap-2 border-b-2 px-0 pb-3 text-sm font-semibold transition-colors',
                                     active
-                                        ? 'border-accent-primary/40 bg-accent-primary/10 text-accent-primary'
-                                        : 'border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary'
+                                        ? 'border-black text-slate-950'
+                                        : 'border-transparent text-slate-500 hover:text-slate-800',
+                                    item.disabled && 'cursor-wait opacity-50'
                                 )}
                             >
-                                {item.label} · {categoryStats.get(item.id) || 0}
+                                <Icon className="h-4 w-4" />
+                                {item.label}
                             </button>
                         );
                     })}
                     <button
                         onClick={openCreateCategoryDialog}
-                        className="ml-auto text-[11px] px-2.5 py-1 rounded-md border border-border bg-surface-primary text-text-secondary hover:bg-surface-secondary"
+                        className="mb-3 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                        aria-label="新建分类"
+                        title="新建分类"
                     >
-                        <span className="inline-flex items-center gap-1">
-                            <FolderPlus className="w-3.5 h-3.5" />
-                            新建分类
-                        </span>
+                        <Plus className="h-4 w-4" />
+                    </button>
+                </div>
+                <div className="mb-3 ml-auto flex shrink-0 items-center gap-4">
+                    <div className="hidden items-center gap-1.5 text-xs font-medium text-slate-500 md:inline-flex">
+                        <CalendarClock className="h-4 w-4" />
+                        按时间倒序展示
+                    </div>
+                    <div className="h-4 w-px bg-slate-200" />
+                    <button
+                        type="button"
+                        onClick={() => setFilterOpen((value) => !value)}
+                        className={clsx(
+                            'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-slate-800 transition',
+                            filterOpen || query ? 'bg-slate-200' : 'bg-slate-100 hover:bg-slate-200'
+                        )}
+                    >
+                        <SlidersHorizontal className="h-4 w-4" />
+                        筛选
+                        <ChevronDown className="h-3.5 w-3.5" />
                     </button>
                 </div>
             </div>
 
-            <div className="flex-1 overflow-auto p-6">
+            {filterOpen && (
+                <div className="mx-8 border-b border-slate-200 py-3">
+                    <div className="relative max-w-[420px]">
+                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <input
+                            value={query}
+                            onChange={(event) => setQuery(event.target.value)}
+                            placeholder="搜索名称、标签、属性、描述"
+                            className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                        />
+                    </div>
+                </div>
+            )}
+
+            <div className="flex-1 overflow-auto px-8 py-5">
                 {error && !isModalOpen && (
                     <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                         {error}
@@ -703,17 +868,19 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                 )}
 
                 {loading && subjects.length === 0 && categories.length === 0 ? (
-                    <div className="text-sm text-text-tertiary">主体库加载中...</div>
+                    <div className="text-sm text-slate-500">资产库加载中...</div>
                 ) : filteredSubjects.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-border bg-surface-primary/70 px-6 py-10 text-center text-sm text-text-tertiary">
-                        当前筛选条件下没有主体。
+                    <div className="flex min-h-[54vh] flex-col items-center justify-center text-center text-slate-500">
+                        <CalendarClock className="mb-4 h-12 w-12 stroke-[1.8]" />
+                        <div className="text-sm font-medium">暂无数据，尝试刷新</div>
+                        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-xs text-slate-500">已加载全部</div>
                     </div>
-                ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+                ) : viewMode === 'grid' ? (
+                    <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8 gap-2.5">
                         {filteredSubjects.map((subject) => (
                             <div
                                 key={subject.id}
-                                className="rounded-xl border border-border bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+                                className="overflow-hidden rounded-lg border border-border bg-surface-primary shadow-sm transition-shadow hover:shadow-md"
                             >
                                 <button
                                     type="button"
@@ -729,19 +896,19 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                             />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center text-text-tertiary">
-                                                <Package className="w-8 h-8" />
+                                                <Package className="w-6 h-6" />
                                             </div>
                                         )}
                                     </div>
-                                    <div className="p-3 space-y-2">
+                                    <div className="space-y-1.5 p-2.5">
                                         <div>
-                                            <div className="text-sm font-semibold text-text-primary truncate">{subject.name}</div>
-                                            <div className="text-xs text-text-tertiary mt-1">
+                                            <div className="truncate text-xs font-semibold text-text-primary">{subject.name}</div>
+                                            <div className="mt-0.5 text-[11px] text-text-tertiary">
                                                 {categoryNameMap.get(subject.categoryId || '') || '未分类'}
                                             </div>
                                         </div>
                                         {subject.description && (
-                                            <div className="text-xs text-text-secondary line-clamp-2">
+                                            <div className="line-clamp-2 text-[11px] text-text-secondary">
                                                 {subject.description}
                                             </div>
                                         )}
@@ -757,7 +924,7 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                                 ))}
                                             </div>
                                         )}
-                                        <div className="flex items-center justify-between text-[10px] text-text-tertiary">
+                                            <div className="flex items-center justify-between text-[9px] text-text-tertiary">
                                             <span>属性 {subject.attributes.length}</span>
                                             <span>图片 {(subject.previewUrls || []).length}</span>
                                             <span>{subject.voicePreviewUrl ? '有声音参考' : '无声音参考'}</span>
@@ -767,176 +934,284 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                             </div>
                         ))}
                     </div>
+                ) : (
+                    <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
+                        {filteredSubjects.map((subject) => (
+                            <button
+                                key={subject.id}
+                                type="button"
+                                onClick={() => openEditModal(subject)}
+                                className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-slate-50"
+                            >
+                                <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                                    {subject.primaryPreviewUrl ? (
+                                        <img src={resolveAssetUrl(subject.primaryPreviewUrl)} alt={subject.name} className="h-full w-full object-cover" />
+                                    ) : (
+                                        <div className="flex h-full w-full items-center justify-center text-slate-400">
+                                            <Package className="h-5 w-5" />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <div className="truncate text-xs font-semibold text-slate-900">{subject.name}</div>
+                                    <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                                        {categoryNameMap.get(subject.categoryId || '') || '未分类'}
+                                        {subject.description ? ` · ${subject.description}` : ''}
+                                    </div>
+                                </div>
+                                <div className="hidden text-xs text-slate-400 md:block">
+                                    {new Date(subject.updatedAt).toLocaleDateString()}
+                                </div>
+                            </button>
+                        ))}
+                    </div>
                 )}
             </div>
 
             {isModalOpen && (
-                <div className="absolute inset-0 z-30 bg-black/45 backdrop-blur-[1px] flex items-center justify-center p-6">
-                    <div className="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl border border-border bg-background shadow-2xl">
-                        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-surface-secondary/30">
-                            <div>
-                                <div className="text-base font-semibold text-text-primary">
-                                    {draft.id ? '编辑主体' : '新建主体'}
-                                </div>
-                                <div className="text-xs text-text-tertiary mt-0.5">
-                                    名称必填，图片最多 5 张。保存后可在创作时直接引用这些主体资料。
-                                </div>
-                            </div>
+                <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4">
+                    <div className="flex max-h-[88vh] w-full max-w-[960px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between px-8 pb-4 pt-6">
+                            <h2 className="text-xl font-semibold leading-none text-slate-950">
+                                {draft.id ? `编辑${draftEntityLabel}` : `新建${draftEntityLabel}`}
+                            </h2>
                             <button
                                 type="button"
                                 onClick={closeModal}
-                                className="rounded-full p-2 text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-950 transition hover:bg-slate-100"
+                                aria-label="关闭"
                             >
-                                <X className="w-4 h-4" />
+                                <X className="h-5 w-5" />
                             </button>
                         </div>
 
-                        <div className="max-h-[calc(90vh-140px)] overflow-auto p-6">
+                        <div className="min-h-0 flex-1 overflow-auto px-8 pb-5">
                             {error && (
-                                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                                     {error}
                                 </div>
                             )}
 
-                            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6">
-                                <div className="space-y-5">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <label className="block">
-                                            <div className="text-sm font-medium text-text-primary mb-2">主体名称 *</div>
-                                            <input
-                                                value={draft.name}
-                                                onChange={(event) => updateDraft({ name: event.target.value })}
-                                                placeholder="例如：张三 / Z001 跑鞋 / 城市咖啡馆"
-                                                className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                            />
-                                        </label>
-
-                                        <label className="block">
-                                            <div className="text-sm font-medium text-text-primary mb-2">分类</div>
-                                            <div className="flex gap-2">
-                                                <select
-                                                    value={draft.categoryId}
-                                                    onChange={(event) => updateDraft({ categoryId: event.target.value })}
-                                                    className="flex-1 px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none"
-                                                >
-                                                    <option value="">未分类</option>
-                                                    {categories.map((category) => (
-                                                        <option key={category.id} value={category.id}>{category.name}</option>
-                                                    ))}
-                                                </select>
+                            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                                <div className="space-y-4">
+                                    <div className="block">
+                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">类别</div>
+                                        <div className="flex gap-2">
+                                            <div className="relative flex-1">
                                                 <button
                                                     type="button"
-                                                    onClick={openCreateCategoryDialog}
-                                                    className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary"
+                                                    onClick={() => setIsDraftCategoryMenuOpen((value) => !value)}
+                                                    className={clsx(
+                                                        'flex h-10 w-full items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition',
+                                                        isDraftCategoryMenuOpen
+                                                            ? 'border-violet-400 bg-white ring-2 ring-violet-500/15'
+                                                            : 'border-transparent bg-slate-100 hover:bg-slate-200/70'
+                                                    )}
                                                 >
-                                                    新建
+                                                    <span className="flex min-w-0 items-center gap-2">
+                                                        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white text-slate-500 shadow-sm">
+                                                            <SelectedDraftCategoryIcon className="h-3.5 w-3.5" />
+                                                        </span>
+                                                        <span className="truncate font-medium text-slate-900">{selectedDraftCategory.name}</span>
+                                                    </span>
+                                                    <ChevronDown className={clsx('h-4 w-4 shrink-0 text-slate-400 transition-transform', isDraftCategoryMenuOpen && 'rotate-180')} />
                                                 </button>
+
+                                                {isDraftCategoryMenuOpen && (
+                                                    <div className="absolute left-0 right-0 top-full z-[140] mt-1.5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
+                                                        <div className="max-h-60 overflow-y-auto p-1">
+                                                            {draftCategoryOptions.map((category) => {
+                                                                const Icon = category.icon;
+                                                                const selected = category.id === draft.categoryId;
+                                                                return (
+                                                                    <button
+                                                                        key={category.id || '__uncategorized__'}
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            handleDraftCategoryChange(category.id);
+                                                                            setIsDraftCategoryMenuOpen(false);
+                                                                        }}
+                                                                        className={clsx(
+                                                                            'flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm transition',
+                                                                            selected ? 'bg-violet-50 text-violet-700' : 'text-slate-700 hover:bg-slate-50'
+                                                                        )}
+                                                                    >
+                                                                        <span className={clsx(
+                                                                            'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
+                                                                            selected ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-500'
+                                                                        )}>
+                                                                            <Icon className="h-3.5 w-3.5" />
+                                                                        </span>
+                                                                        <span className="min-w-0 flex-1 truncate font-medium">{category.name}</span>
+                                                                        {selected && <Check className="h-4 w-4 shrink-0" />}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </div>
-                                            {draft.categoryId && (
-                                                <div className="mt-2 flex items-center gap-2 text-xs text-text-tertiary">
-                                                    <button type="button" onClick={() => {
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setIsDraftCategoryMenuOpen(false);
+                                                    openCreateCategoryDialog();
+                                                }}
+                                                className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700 transition hover:bg-slate-200"
+                                                aria-label="新建分类"
+                                                title="新建分类"
+                                            >
+                                                <Plus className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                        {draft.categoryId && (
+                                            <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
                                                         const category = categories.find((item) => item.id === draft.categoryId);
                                                         if (category) openRenameCategoryDialog(category);
-                                                    }} className="hover:text-text-primary">
-                                                        重命名当前分类
-                                                    </button>
-                                                    <span>·</span>
-                                                    <button type="button" onClick={() => {
+                                                    }}
+                                                    className="transition hover:text-slate-950"
+                                                >
+                                                    重命名当前分类
+                                                </button>
+                                                <span>·</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
                                                         const category = categories.find((item) => item.id === draft.categoryId);
                                                         if (category) void handleDeleteCategory(category);
-                                                    }} className="hover:text-red-600">
-                                                        删除当前分类
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </label>
+                                                    }}
+                                                    className="transition hover:text-red-600"
+                                                >
+                                                    删除当前分类
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <label className="block">
-                                        <div className="text-sm font-medium text-text-primary mb-2">主体描述</div>
-                                        <textarea
-                                            value={draft.description}
-                                            onChange={(event) => updateDraft({ description: event.target.value })}
-                                            rows={5}
-                                            placeholder="补充人物设定、商品卖点、场景氛围等，方便 AI 精准引用。"
-                                            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary resize-y"
+                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">
+                                            {draftEntityLabel}名称 <span className="text-red-500">*</span>
+                                        </div>
+                                        <input
+                                            value={draft.name}
+                                            onChange={(event) => updateDraft({ name: event.target.value })}
+                                            placeholder={`${draftEntityLabel}名称`}
+                                            className="h-10 w-full rounded-lg border border-violet-500 bg-white px-3 text-sm text-slate-900 outline-none ring-2 ring-violet-500/15 placeholder:text-slate-400 focus:ring-violet-500/20"
                                         />
                                     </label>
 
                                     <label className="block">
-                                        <div className="text-sm font-medium text-text-primary mb-2">标签</div>
+                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">{draftEntityLabel}描述</div>
                                         <div className="relative">
-                                            <Tag className="w-4 h-4 text-text-tertiary absolute left-3 top-1/2 -translate-y-1/2" />
+                                            <textarea
+                                                value={draft.description}
+                                                onChange={(event) => updateDraft({ description: event.target.value.slice(0, 200) })}
+                                                rows={5}
+                                                maxLength={200}
+                                                placeholder={`描述${draftEntityLabel}特征或用途`}
+                                                className="min-h-[92px] w-full resize-y rounded-lg border-0 bg-slate-100 px-3 py-2.5 pr-12 text-sm leading-5 text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-violet-500"
+                                            />
+                                            <div className="absolute bottom-2.5 right-3 text-xs text-slate-500">{draft.description.length}/200</div>
+                                        </div>
+                                    </label>
+
+                                    {isRoleDraft && (
+                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                            <label className="block">
+                                                <div className="mb-1.5 text-sm font-semibold text-slate-800">性别</div>
+                                                <SelectMenu
+                                                    value={draftAttributeValue('性别')}
+                                                    onChange={(value) => handleNamedAttributeChange('性别', value)}
+                                                    options={[
+                                                        { value: '', label: '选择性别' },
+                                                        { value: '女性', label: '女性' },
+                                                        { value: '男性', label: '男性' },
+                                                        { value: '中性', label: '中性' },
+                                                        { value: '其他', label: '其他' },
+                                                    ]}
+                                                />
+                                            </label>
+                                            <label className="block">
+                                                <div className="mb-1.5 text-sm font-semibold text-slate-800">年龄</div>
+                                                <input
+                                                    value={draftAttributeValue('年龄')}
+                                                    onChange={(event) => handleNamedAttributeChange('年龄', event.target.value)}
+                                                    placeholder="角色年龄"
+                                                    className="h-10 w-full rounded-lg border-0 bg-slate-100 px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-violet-500"
+                                                />
+                                            </label>
+                                        </div>
+                                    )}
+
+                                    <label className="block">
+                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">标签</div>
+                                        <div className="relative">
+                                            <Tag className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                                             <input
                                                 value={draft.tagsText}
                                                 onChange={(event) => updateDraft({ tagsText: event.target.value })}
-                                                placeholder="多个标签用逗号分隔，例如：运动鞋, 白色, 男款"
-                                                className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                                placeholder="多个标签用逗号分隔"
+                                                className="h-10 w-full rounded-lg border-0 bg-slate-100 pl-9 pr-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-violet-500"
                                             />
                                         </div>
                                     </label>
 
-                                    <div className="rounded-2xl border border-border bg-surface-primary p-4 space-y-4">
+                                    <div className="space-y-2">
                                         <div className="flex items-center justify-between">
-                                            <div>
-                                                <div className="text-sm font-medium text-text-primary">扩展属性</div>
-                                                <div className="text-xs text-text-tertiary mt-0.5">用 key-value 描述规格、外观、背景、价格等</div>
-                                            </div>
+                                            <div className="text-sm font-semibold text-slate-800">扩展属性</div>
                                             <button
                                                 type="button"
                                                 onClick={handleAddAttribute}
-                                                className="px-3 py-1.5 text-xs rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary"
+                                                className="inline-flex h-8 items-center gap-1 rounded-lg bg-slate-100 px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200"
                                             >
-                                                添加属性
+                                                <Plus className="h-3.5 w-3.5" />
+                                                添加
                                             </button>
                                         </div>
-
-                                        {draft.attributes.length === 0 ? (
-                                            <div className="rounded-lg border border-dashed border-border px-4 py-4 text-sm text-text-tertiary">
-                                                还没有属性。比如：颜色、材质、职业、人设、价格区间。
+                                        {visibleDraftAttributes.length === 0 ? (
+                                            <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2.5 text-xs text-slate-500">
+                                                可添加颜色、材质、职业、人设、价格区间等结构化信息。
                                             </div>
                                         ) : (
-                                            <div className="space-y-3">
-                                                {draft.attributes.map((attribute, index) => (
-                                                    <div key={index} className="grid grid-cols-[minmax(0,180px)_minmax(0,1fr)_40px] gap-3">
+                                            <div className="space-y-2">
+                                                {visibleDraftAttributes.map(({ attribute, index }) => (
+                                                    <div key={index} className="grid grid-cols-[minmax(0,140px)_minmax(0,1fr)_36px] gap-2">
                                                         <input
                                                             value={attribute.key}
                                                             onChange={(event) => handleAttributeChange(index, { key: event.target.value })}
                                                             placeholder="属性名"
-                                                            className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                                            className="h-9 rounded-lg border-0 bg-slate-100 px-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-violet-500"
                                                         />
                                                         <input
                                                             value={attribute.value}
                                                             onChange={(event) => handleAttributeChange(index, { value: event.target.value })}
                                                             placeholder="属性值"
-                                                            className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
+                                                            className="h-9 rounded-lg border-0 bg-slate-100 px-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-violet-500"
                                                         />
                                                         <button
                                                             type="button"
                                                             onClick={() => handleRemoveAttribute(index)}
-                                                            className="rounded-md border border-border text-text-tertiary hover:bg-surface-secondary hover:text-red-600"
+                                                            className="inline-flex h-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500 transition hover:bg-red-50 hover:text-red-600"
+                                                            aria-label="删除属性"
                                                         >
-                                                            <X className="w-4 h-4 mx-auto" />
+                                                            <X className="h-4 w-4" />
                                                         </button>
                                                     </div>
                                                 ))}
                                             </div>
                                         )}
                                     </div>
-                                </div>
 
-                                <div className="rounded-2xl border border-border bg-surface-primary p-4 h-fit">
-                                    <div className="flex items-center justify-between mb-4">
-                                        <div>
-                                            <div className="text-sm font-medium text-text-primary">主体图片</div>
-                                            <div className="text-xs text-text-tertiary mt-0.5">最多 5 张，本地复制进主体库</div>
-                                        </div>
+                                    <div className="space-y-2">
+                                        <div className="text-sm font-semibold text-slate-800">{draftEntityLabel}图片</div>
                                         <label className={clsx(
-                                            'inline-flex items-center gap-1 px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary cursor-pointer',
+                                            'flex h-10 cursor-pointer items-center justify-center rounded-lg bg-slate-100 text-sm font-semibold text-slate-950 transition hover:bg-slate-200',
                                             draft.images.length >= 5 && 'pointer-events-none opacity-50'
                                         )}>
-                                            <ImagePlus className="w-4 h-4" />
-                                            上传图片
+                                            选择图片
                                             <input
                                                 type="file"
                                                 accept="image/*"
@@ -948,137 +1223,133 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                                 }}
                                             />
                                         </label>
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {draft.images.map((image, index) => (
-                                            <div key={`${image.relativePath || image.name}-${index}`} className="group relative rounded-xl overflow-hidden border border-border bg-surface-secondary/40 aspect-[4/5]">
-                                                <img
-                                                    src={resolveAssetUrl(image.previewUrl)}
-                                                    alt={image.name}
-                                                    className="w-full h-full object-cover"
-                                                />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleRemoveImage(index)}
-                                                    className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 text-white opacity-0 transition group-hover:opacity-100"
-                                                >
-                                                    <X className="w-3.5 h-3.5" />
-                                                </button>
-                                            </div>
-                                        ))}
-                                        {draft.images.length === 0 && (
-                                            <div className="col-span-2 rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-text-tertiary">
-                                                暂无图片。上传后 AI 可以读取这些主体的图片路径作为参考。
+                                        {draft.images.length > 0 && (
+                                            <div className="grid grid-cols-6 gap-2">
+                                                {draft.images.map((image, index) => (
+                                                    <div key={`${image.relativePath || image.name}-${index}`} className="group relative aspect-square overflow-hidden rounded-lg bg-slate-100">
+                                                        <img src={resolveAssetUrl(image.previewUrl)} alt={image.name} className="h-full w-full object-cover" />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleRemoveImage(index)}
+                                                            className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                            aria-label="删除图片"
+                                                        >
+                                                            <X className="h-3 w-3" />
+                                                        </button>
+                                                    </div>
+                                                ))}
                                             </div>
                                         )}
                                     </div>
 
-                                    {draft.id && (
-                                        <div className="mt-4 rounded-lg bg-surface-secondary/40 px-4 py-3 text-xs text-text-tertiary space-y-1">
-                                            <div>ID：{draft.id}</div>
-                                            <div>保存后可在创作时直接通过主体名称引用这些资料。</div>
-                                        </div>
-                                    )}
-
-                                    <div className="mt-4 rounded-xl border border-border bg-surface-secondary/30 p-4 space-y-3">
-                                        <div>
-                                            <div className="text-sm font-medium text-text-primary">声音参考</div>
-                                            <div className="text-xs text-text-tertiary mt-0.5">录制 5 到 10 秒，体积不超过 10MB。以后参考图视频可直接带这条声音参考。</div>
-                                        </div>
-
-                                        <div className="rounded-2xl border border-border bg-surface-primary px-4 py-4 space-y-3">
-                                            <div className="text-xs font-medium uppercase tracking-[0.18em] text-text-tertiary">
-                                                朗读采样句
+                                    {isRoleDraft && (
+                                        <div className="space-y-2 rounded-xl bg-slate-50 p-4">
+                                            <div className="text-sm font-semibold text-slate-800">声音参考</div>
+                                            <div className="rounded-xl bg-white px-4 py-3">
+                                                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">朗读采样句</div>
+                                                <div className="mt-1.5 text-sm font-medium leading-6 text-slate-900">{SUBJECT_VOICE_SAMPLE_TEXT}</div>
                                             </div>
-                                            <div className="text-xl leading-9 font-medium text-text-primary">
-                                                {SUBJECT_VOICE_SAMPLE_TEXT}
-                                            </div>
-                                            <div className="text-xs leading-5 text-text-tertiary">
-                                                请保持自然语速、音量稳定、吐字清晰。点击录音后会自动开始 6 秒采样，建议在安静环境下完成。
-                                            </div>
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => void handleRecordVoice()}
-                                                disabled={audioRecording.isRecording || audioRecording.isWorking}
-                                                className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary disabled:opacity-60"
-                                            >
-                                                <span className="inline-flex items-center gap-1">
-                                                    <Mic className="w-4 h-4" />
-                                                    {audioRecording.isRecording ? `录音中 ${recordingCountdown}s` : '点击录音'}
-                                                </span>
-                                            </button>
-                                            <label className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary cursor-pointer">
-                                                导入音频
-                                                <input
-                                                    type="file"
-                                                    accept="audio/*"
-                                                    className="hidden"
-                                                    onChange={(event) => {
-                                                        void handleVoiceFileInput(event.target.files);
-                                                        event.currentTarget.value = '';
-                                                    }}
-                                                />
-                                            </label>
-                                            {draft.voice?.previewUrl && (
+                                            <div className="flex flex-wrap items-center gap-2">
                                                 <button
                                                     type="button"
-                                                    onClick={handleRemoveVoice}
-                                                    className="px-3 py-2 text-sm rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                                                    onClick={() => void handleRecordVoice()}
+                                                    disabled={audioRecording.isRecording || audioRecording.isWorking}
+                                                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:opacity-60"
                                                 >
-                                                    删除声音
+                                                    <Mic className="h-3.5 w-3.5" />
+                                                    {audioRecording.isRecording ? `录音中 ${recordingCountdown}s` : '录制音频'}
                                                 </button>
+                                                <label className="inline-flex h-9 cursor-pointer items-center rounded-lg bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100">
+                                                    导入音频
+                                                    <input
+                                                        type="file"
+                                                        accept="audio/*"
+                                                        className="hidden"
+                                                        onChange={(event) => {
+                                                            void handleVoiceFileInput(event.target.files);
+                                                            event.currentTarget.value = '';
+                                                        }}
+                                                    />
+                                                </label>
+                                                {draft.voice?.previewUrl && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleRemoveVoice}
+                                                        className="inline-flex h-9 items-center rounded-lg bg-red-50 px-3 text-xs font-semibold text-red-700 transition hover:bg-red-100"
+                                                    >
+                                                        删除声音
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {audioRecording.isRecording && (
+                                                <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
+                                                    采样倒计时：{recordingCountdown} 秒
+                                                </div>
+                                            )}
+                                            {recordingHint && <div className="text-xs text-slate-500">{recordingHint}</div>}
+                                            {recordingError && <div className="text-xs text-red-600">{recordingError}</div>}
+                                            {draft.voice?.previewUrl && (
+                                                <div className="space-y-2 rounded-lg bg-white px-3 py-2.5">
+                                                    <div className="text-xs text-slate-500">{draft.voice.name}</div>
+                                                    <audio controls src={resolveAssetUrl(draft.voice.previewUrl)} className="w-full" />
+                                                </div>
                                             )}
                                         </div>
+                                    )}
+                                </div>
 
-                                        {audioRecording.isRecording && (
-                                            <div className="rounded-lg border border-accent-primary/25 bg-accent-primary/8 px-3 py-2 text-xs text-accent-primary">
-                                                采样倒计时：{recordingCountdown} 秒。请持续朗读示例句，录音会自动结束。
-                                            </div>
-                                        )}
-                                        {recordingHint && (
-                                            <div className="text-xs text-text-tertiary">{recordingHint}</div>
-                                        )}
-                                        {recordingError && (
-                                            <div className="text-xs text-red-600">{recordingError}</div>
-                                        )}
-                                        {draft.voice?.previewUrl && (
-                                            <div className="rounded-lg border border-border bg-surface-primary px-3 py-3 space-y-2">
-                                                <div className="text-xs text-text-secondary">{draft.voice.name}</div>
-                                                <audio controls src={resolveAssetUrl(draft.voice.previewUrl)} className="w-full" />
+                                <aside className="h-fit rounded-2xl bg-slate-100 p-4">
+                                    <div className="mb-3 text-base font-semibold text-slate-800">{draft.id ? '编辑预览' : '新增预览'}</div>
+                                    <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-white">
+                                        {draftPreviewImage ? (
+                                            <img src={resolveAssetUrl(draftPreviewImage)} alt={draft.name || draftEntityLabel} className="h-full w-full object-cover" />
+                                        ) : (
+                                            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
+                                                <ImagePlus className="h-5 w-5" />
+                                                暂无封面
                                             </div>
                                         )}
                                     </div>
-                                </div>
+                                    <div className="mt-4 space-y-2">
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                                            <span className="rounded-full bg-white px-2 py-0.5">{draftCategoryName || '未分类'}</span>
+                                            <span>{draft.images.length}/5 张图片</span>
+                                            {isRoleDraft && <span>{draft.voice?.previewUrl ? '有声音' : '未录音'}</span>}
+                                        </div>
+                                        <div className="text-base font-semibold text-slate-900">{draft.name || `${draftEntityLabel}名称`}</div>
+                                        <div className="min-h-[36px] text-xs leading-5 text-slate-500">
+                                            {draft.description || `选择图片后实时查看${draftEntityLabel}素材预览`}
+                                        </div>
+                                    </div>
+                                    {draft.id && (
+                                        <div className="mt-4 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-slate-500">
+                                            ID：{draft.id}
+                                        </div>
+                                    )}
+                                </aside>
                             </div>
                         </div>
 
-                        <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-surface-secondary/30">
-                            <div className="text-xs text-text-tertiary">
-                                {draft.id ? '编辑现有主体' : '创建新主体'}
-                            </div>
-                            <div className="flex items-center gap-2">
+                        <div className="flex items-center justify-between px-8 py-5">
+                            <div>
                                 {draft.id && (
                                     <button
                                         type="button"
                                         onClick={() => void handleDeleteSubject()}
                                         disabled={working}
-                                        className="px-3 py-2 text-sm rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
+                                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-red-50 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-60"
                                     >
-                                        <span className="inline-flex items-center gap-1">
-                                            <Trash2 className="w-4 h-4" />
-                                            删除
-                                        </span>
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                        删除
                                     </button>
                                 )}
+                            </div>
+                            <div className="flex items-center gap-3">
                                 <button
                                     type="button"
                                     onClick={closeModal}
                                     disabled={working}
-                                    className="px-3 py-2 text-sm rounded-md border border-border bg-surface-primary hover:bg-surface-secondary text-text-secondary disabled:opacity-60"
+                                    className="h-9 rounded-lg bg-slate-100 px-5 text-sm font-semibold text-slate-950 transition hover:bg-slate-200 disabled:opacity-60"
                                 >
                                     取消
                                 </button>
@@ -1086,12 +1357,10 @@ export function Subjects({ isActive = true }: { isActive?: boolean }) {
                                     type="button"
                                     onClick={() => void handleSave()}
                                     disabled={working}
-                                    className="px-3 py-2 text-sm rounded-md border border-accent-primary/30 bg-accent-primary/10 hover:bg-accent-primary/15 text-accent-primary disabled:opacity-60"
+                                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-5 text-sm font-semibold text-white transition hover:bg-black/85 disabled:opacity-60"
                                 >
-                                    <span className="inline-flex items-center gap-1">
-                                        {draft.id ? <Pencil className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-                                        {working ? '处理中...' : draft.id ? '保存修改' : '创建主体'}
-                                    </span>
+                                    {draft.id ? <Pencil className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
+                                    {working ? '处理中...' : draft.id ? '保存' : '创建'}
                                 </button>
                             </div>
                         </div>

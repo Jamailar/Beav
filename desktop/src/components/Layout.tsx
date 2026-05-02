@@ -1,5 +1,5 @@
-import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit } from 'lucide-react';
+import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,7 +35,7 @@ type SidebarNavItem = {
 
 const NAV_ITEMS: SidebarNavItem[] = [
   { key: 'new-chat', view: 'redclaw', labelKey: 'nav.newChat', icon: Edit, redclawAction: 'new', primary: true },
-  { key: 'search', view: 'knowledge', labelKey: 'nav.search', icon: Search, primary: true },
+  { key: 'search', view: 'knowledge', labelKey: 'nav.search', icon: BookOpenText, primary: true },
   { key: 'assets', view: 'subjects', labelKey: 'nav.assets', icon: Folder, primary: true },
   { key: 'automation', view: 'automation', labelKey: 'nav.automation', icon: Clock3, primary: true },
   { key: 'home', view: 'home', labelKey: 'nav.home', icon: Home },
@@ -60,9 +60,28 @@ interface AppUpdateNoticePayload {
 }
 
 type SpaceDialogMode = 'create' | 'rename';
+type GlobalKnowledgeSearchItem = {
+  itemId?: string;
+  kind?: 'redbook-note' | 'youtube-video' | 'document-source' | string;
+  title?: string;
+  author?: string;
+  siteName?: string;
+  previewText?: string;
+  updatedAt?: string;
+};
+type GlobalKnowledgeSearchResponse = {
+  items?: GlobalKnowledgeSearchItem[];
+  total?: number;
+};
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
+const SIDEBAR_WIDTH_STORAGE_KEY = 'redbox:layout-sidebar-width:v1';
+const SIDEBAR_DEFAULT_WIDTH = 320;
+const SIDEBAR_MIN_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 460;
 const SIDEBAR_CONTENT_ANIMATION_MS = 170;
+const GLOBAL_KNOWLEDGE_SEARCH_EVENT = 'redbox:global-knowledge-search';
+const GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY = 'redbox:global-knowledge-search-query';
 
 function readInitialThemeMode(): ThemeMode {
   if (typeof window === 'undefined') return 'light';
@@ -72,6 +91,16 @@ function readInitialThemeMode(): ThemeMode {
 function readInitialSidebarCollapsed(): boolean {
   if (typeof window === 'undefined') return false;
   return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+}
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)));
+}
+
+function readInitialSidebarWidth(): number {
+  if (typeof window === 'undefined') return SIDEBAR_DEFAULT_WIDTH;
+  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+  return Number.isFinite(storedWidth) ? clampSidebarWidth(storedWidth) : SIDEBAR_DEFAULT_WIDTH;
 }
 
 function shouldUseMacOverlayTitleBar(): boolean {
@@ -85,6 +114,7 @@ function AppTitleBar({
   content,
   isSidebarCollapsed,
   toggleSidebarCollapsed,
+  openGlobalSearch,
   notificationDrawerOpen,
   unreadNotificationCount,
   toggleNotificationDrawer,
@@ -96,6 +126,7 @@ function AppTitleBar({
   content: ReactNode;
   isSidebarCollapsed: boolean;
   toggleSidebarCollapsed: () => void;
+  openGlobalSearch: () => void;
   notificationDrawerOpen: boolean;
   unreadNotificationCount: number;
   toggleNotificationDrawer: () => void;
@@ -134,6 +165,16 @@ function AppTitleBar({
           data-no-window-drag
         >
           <PanelLeft className="w-[15px] h-[15px]" strokeWidth={1.7} />
+        </button>
+        <button
+          type="button"
+          onClick={openGlobalSearch}
+          className="app-titlebar-sidebar-toggle"
+          title="搜索"
+          aria-label="搜索"
+          data-no-window-drag
+        >
+          <Search className="w-[15px] h-[15px]" strokeWidth={1.7} />
         </button>
       </div>
       <div data-tauri-drag-region className="app-titlebar-title">
@@ -176,6 +217,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [appVersion, setAppVersion] = useState('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readInitialSidebarCollapsed);
+  const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
   const [isSidebarAnimating, setIsSidebarAnimating] = useState(false);
   const [sidebarAnimationDirection, setSidebarAnimationDirection] = useState<'collapsing' | 'expanding' | null>(null);
   const [activeSpaceId, setActiveSpaceId] = useState<string>('');
@@ -189,11 +231,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
+  const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [globalSearchResults, setGlobalSearchResults] = useState<GlobalKnowledgeSearchItem[]>([]);
+  const [isGlobalSearchLoading, setIsGlobalSearchLoading] = useState(false);
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
   const spaceMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarAnimationTimerRef = useRef<number | null>(null);
+  const sidebarResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const globalSearchRequestRef = useRef(0);
   const isFixedViewportView = currentView === 'manuscripts';
   const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
   const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
@@ -281,6 +330,65 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
   }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!isGlobalSearchOpen) return;
+    const focusTimer = window.setTimeout(() => globalSearchInputRef.current?.focus(), 0);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setIsGlobalSearchOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isGlobalSearchOpen]);
+
+  useEffect(() => {
+    if (!isGlobalSearchOpen) {
+      setGlobalSearchResults([]);
+      setIsGlobalSearchLoading(false);
+      return;
+    }
+
+    const query = globalSearchQuery.trim();
+    if (!query) {
+      setGlobalSearchResults([]);
+      setIsGlobalSearchLoading(false);
+      return;
+    }
+
+    const requestId = globalSearchRequestRef.current + 1;
+    globalSearchRequestRef.current = requestId;
+    setIsGlobalSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      void window.ipcRenderer.knowledge.listPage<GlobalKnowledgeSearchResponse>({
+        limit: 6,
+        query,
+        sort: 'updated-desc',
+      }).then((response) => {
+        if (requestId !== globalSearchRequestRef.current) return;
+        setGlobalSearchResults(Array.isArray(response?.items) ? response.items : []);
+      }).catch((error) => {
+        if (requestId !== globalSearchRequestRef.current) return;
+        console.warn('[RedBox] global knowledge search failed:', error);
+        setGlobalSearchResults([]);
+      }).finally(() => {
+        if (requestId === globalSearchRequestRef.current) {
+          setIsGlobalSearchLoading(false);
+        }
+      });
+    }, 160);
+
+    return () => window.clearTimeout(timer);
+  }, [globalSearchQuery, isGlobalSearchOpen]);
 
   useEffect(() => {
     if (sidebarVisualCollapsed) {
@@ -421,6 +529,73 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     }, SIDEBAR_CONTENT_ANIMATION_MS);
   }, [isSidebarAnimating, isSidebarCollapsed]);
 
+  const openGlobalSearch = useCallback(() => {
+    setIsGlobalSearchOpen(true);
+  }, []);
+
+  const closeGlobalSearch = useCallback(() => {
+    setIsGlobalSearchOpen(false);
+  }, []);
+
+  const submitGlobalSearch = useCallback(() => {
+    const query = globalSearchQuery.trim();
+    if (query) {
+      window.sessionStorage.setItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY, query);
+    } else {
+      window.sessionStorage.removeItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY);
+    }
+    onNavigate('knowledge');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(GLOBAL_KNOWLEDGE_SEARCH_EVENT, { detail: { query } }));
+    }, 0);
+    setIsGlobalSearchOpen(false);
+  }, [globalSearchQuery, onNavigate]);
+
+  const navigateToGlobalSearch = useCallback((queryOverride?: string) => {
+    const query = (queryOverride ?? globalSearchQuery).trim();
+    if (query) {
+      window.sessionStorage.setItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY, query);
+    } else {
+      window.sessionStorage.removeItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY);
+    }
+    onNavigate('knowledge');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(GLOBAL_KNOWLEDGE_SEARCH_EVENT, { detail: { query } }));
+    }, 0);
+    setIsGlobalSearchOpen(false);
+  }, [globalSearchQuery, onNavigate]);
+
+  const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (sidebarVisualCollapsed || isSidebarAnimating) return;
+    event.preventDefault();
+    event.stopPropagation();
+    sidebarResizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: sidebarWidth,
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const resizeState = sidebarResizeStateRef.current;
+      if (!resizeState) return;
+      setSidebarWidth(clampSidebarWidth(resizeState.startWidth + moveEvent.clientX - resizeState.startX));
+    };
+
+    const stopResize = () => {
+      sidebarResizeStateRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopResize);
+      window.removeEventListener('pointercancel', stopResize);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopResize);
+    window.addEventListener('pointercancel', stopResize);
+  }, [isSidebarAnimating, sidebarVisualCollapsed, sidebarWidth]);
+
   const submitSpaceDialog = useCallback(async () => {
     const trimmedName = spaceDialogName.trim();
     if (!trimmedName) {
@@ -542,6 +717,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         content={titleBarContent}
         isSidebarCollapsed={isSidebarCollapsed}
         toggleSidebarCollapsed={toggleSidebarCollapsed}
+        openGlobalSearch={openGlobalSearch}
         notificationDrawerOpen={notificationDrawerOpen}
         unreadNotificationCount={unreadNotificationCount}
         toggleNotificationDrawer={toggleNotificationDrawer}
@@ -572,6 +748,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             isSidebarAnimating && 'app-sidebar-shell--animating',
             sidebarVisualCollapsed ? 'app-sidebar-shell--collapsed' : 'app-sidebar-shell--expanded'
           )}
+          style={!sidebarVisualCollapsed ? { '--app-sidebar-expanded-width': `${sidebarWidth}px` } as React.CSSProperties : undefined}
         >
           {/* Navigation */}
           <nav className={clsx('app-sidebar-nav', visibleGlobalSidebarContent ? 'shrink-0' : 'flex-1', sidebarVisualCollapsed ? 'app-sidebar-nav--collapsed' : 'app-sidebar-nav--expanded')}>
@@ -734,14 +911,25 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
               <span>{appVersion ? `v${appVersion}` : 'v--'}</span>
             </div>
           </div>
+
+          {!sidebarVisualCollapsed && (
+            <div
+              className="app-sidebar-resize-handle"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整侧边栏宽度"
+              title="调整侧边栏宽度"
+              data-no-window-drag
+              onPointerDown={startSidebarResize}
+            />
+          )}
         </aside>
       )}
 
       {/* Main Content */}
       <main
         className={clsx(
-          'app-main-shell flex-1 flex flex-col min-w-0 relative',
-          immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-surface-primary'
+          'app-main-shell flex-1 flex flex-col min-w-0 relative'
         )}
       >
         {/* Content */}
@@ -801,6 +989,82 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 {isSpaceDialogSubmitting ? t('app.processing') : t('app.confirm')}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isGlobalSearchOpen && (
+        <div
+          className="fixed inset-0 z-[125] flex items-center justify-center bg-black/18 px-4"
+          style={{ backdropFilter: 'blur(18px) saturate(1.25)', WebkitBackdropFilter: 'blur(18px) saturate(1.25)' }}
+          onMouseDown={closeGlobalSearch}
+        >
+          <div
+            className="w-full max-w-xl space-y-2"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex h-14 items-center gap-3 rounded-2xl border border-accent-primary/70 bg-surface-primary px-4 shadow-[0_0_0_1px_rgba(52,211,153,0.24),0_0_34px_rgba(52,211,153,0.34),0_22px_70px_-32px_rgba(0,0,0,0.55)]">
+              <Search className="h-4 w-4 shrink-0 text-accent-primary" strokeWidth={1.8} />
+              <input
+                ref={globalSearchInputRef}
+                value={globalSearchQuery}
+                onChange={(event) => setGlobalSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    submitGlobalSearch();
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closeGlobalSearch();
+                  }
+                }}
+                className="h-full min-w-0 flex-1 bg-transparent text-[15px] text-text-primary caret-accent-primary outline-none placeholder:text-text-tertiary"
+                placeholder="搜索知识库"
+              />
+            </div>
+
+            {globalSearchQuery.trim() && (
+              <div className="overflow-hidden rounded-2xl border border-border/80 bg-surface-primary/92 shadow-[0_22px_70px_-34px_rgba(0,0,0,0.58)] backdrop-blur-md">
+                {isGlobalSearchLoading && globalSearchResults.length === 0 ? (
+                  <div className="h-12 px-4 text-[13px] text-text-tertiary flex items-center">搜索中...</div>
+                ) : globalSearchResults.length === 0 ? (
+                  <div className="h-12 px-4 text-[13px] text-text-tertiary flex items-center">没有结果</div>
+                ) : (
+                  <div className="max-h-[360px] overflow-y-auto py-1">
+                    {globalSearchResults.map((item, index) => {
+                      const title = String(item.title || '').trim() || '未命名';
+                      const preview = String(item.previewText || item.author || item.siteName || '').trim();
+                      const kindLabel = item.kind === 'youtube-video'
+                        ? '视频'
+                        : item.kind === 'document-source' ? '文档' : '笔记';
+                      return (
+                        <button
+                          key={`${item.kind || 'item'}-${item.itemId || index}`}
+                          type="button"
+                          onClick={() => navigateToGlobalSearch(globalSearchQuery)}
+                          className="group flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-accent-primary/8"
+                        >
+                          <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-secondary text-accent-primary group-hover:bg-accent-primary/12">
+                            <BookOpenText className="h-3.5 w-3.5" strokeWidth={1.8} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2">
+                              <span className="truncate text-[14px] font-medium text-text-primary">{title}</span>
+                              <span className="shrink-0 rounded-md bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-tertiary">
+                                {kindLabel}
+                              </span>
+                            </span>
+                            {preview && (
+                              <span className="mt-1 block truncate text-[12px] text-text-tertiary">{preview}</span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

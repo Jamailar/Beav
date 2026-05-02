@@ -299,6 +299,8 @@ function App() {
   const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
   const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
+  const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
+  const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -661,6 +663,11 @@ function App() {
         immersiveMode={immersiveMode}
         globalNotice={globalAuthNotice}
         globalSidebarContent={redClawGlobalSidebarContent}
+        renderTitleBarContent={({ currentView }) => {
+          if (currentView === 'wander') return wanderTitleBarContent;
+          if (currentView === 'knowledge') return knowledgeTitleBarContent;
+          return null;
+        }}
       >
         {shouldRenderView(mountedViews, currentView, persistentViews, 'home') && (
           <div className={currentView === 'home' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
@@ -688,6 +695,7 @@ function App() {
               <KnowledgePage
                 onNavigateToRedClaw={navigateToRedClaw}
                 isActive={currentView === 'knowledge'}
+                onTitleBarContentChange={setKnowledgeTitleBarContent}
               />
             </Suspense>
           </div>
@@ -739,6 +747,7 @@ function App() {
                 onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
                 onExecutionStateChange={handleWanderExecutionStateChange}
+                onTitleBarContentChange={setWanderTitleBarContent}
                 isActive={currentView === 'wander'}
               />
             </Suspense>

@@ -31,7 +31,7 @@ const zhCN = {
   'app.processing': '处理中...',
 
   'nav.newChat': '新对话',
-  'nav.search': '搜索',
+  'nav.search': '知识库',
   'nav.assets': '资产库',
   'nav.automation': '自动化',
   'nav.home': '主页',
@@ -118,7 +118,7 @@ const enUS: Record<keyof typeof zhCN, string> = {
   'app.processing': 'Processing...',
 
   'nav.newChat': 'New chat',
-  'nav.search': 'Search',
+  'nav.search': 'Knowledge',
   'nav.assets': 'Assets',
   'nav.automation': 'Automation',
   'nav.home': 'Home',

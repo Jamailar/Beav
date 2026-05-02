@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from 'react';
 import { RefreshCw, Sparkles, History, X, Trash2, Dices, FileText, Play, MessageSquarePlus, Search, Square, CheckSquare, Shuffle } from 'lucide-react';
 import { clsx } from 'clsx';
 import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
@@ -118,11 +118,12 @@ interface WanderProgressCard {
 interface WanderProps {
   isActive?: boolean;
   onExecutionStateChange?: (active: boolean) => void;
+  onTitleBarContentChange?: (content: ReactNode | null) => void;
   onNavigateToManuscript?: (filePath: string) => void;
   onNavigateToRedClaw?: (payload: PendingChatMessage) => void;
 }
 
-export function Wander({ isActive = true, onExecutionStateChange, onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
+export function Wander({ isActive = true, onExecutionStateChange, onTitleBarContentChange, onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
   const [items, setItems] = useState<WanderItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);
@@ -1046,79 +1047,78 @@ export function Wander({ isActive = true, onExecutionStateChange, onNavigateToMa
     return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
   };
 
-  return (
-    <div className="h-full flex flex-col bg-surface-primary overflow-hidden">
-      <div className="px-6 py-3 border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px] flex items-center justify-between gap-4 shrink-0 z-30">
-        <div className="min-w-0 flex items-center gap-3">
-          <h1 className="min-w-0 text-[14px] font-extrabold text-text-primary flex items-center gap-2 truncate tracking-tight">
-            <Dices className="w-4 h-4 text-accent-primary shrink-0" />
-            <span className="truncate">灵感漫步</span>
-          </h1>
-          <div className="w-[1px] h-3.5 bg-black/[0.06] hidden md:block" />
-          <span className="hidden md:block text-[11px] font-bold text-text-tertiary/60 uppercase tracking-widest truncate">
-            Random Inspiration Collision
-          </span>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {phase !== 'idle' && (
-            <>
-              <button
-                onClick={() => { void loadHistoryList(); setShowHistory(true); }}
-                className="flex items-center gap-2 px-3.5 py-1.5 text-[12px] font-bold text-text-tertiary hover:text-text-primary hover:bg-black/[0.04] rounded-xl transition-all active:scale-95"
-              >
-                <History className="w-3.5 h-3.5" />
-                历史
-              </button>
-              <button
-                onClick={startWander}
-                disabled={loading}
-                className="flex items-center gap-2 px-3.5 py-1.5 bg-black/[0.03] hover:bg-black/[0.06] text-text-primary text-[12px] font-bold rounded-xl transition-all disabled:opacity-40 active:scale-95"
-              >
-                <RefreshCw className={clsx('w-3.5 h-3.5', loading && 'animate-spin')} />
-                再次漫步
-              </button>
-
-            </>
-          )}
-          <div className="flex h-8 items-center rounded-xl bg-black/[0.04] p-0.5">
-            {[
-              ['random', '随机'] as const,
-              ['manual', '手工'] as const,
-            ].map(([mode, label]) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => handleSelectionModeChange(mode)}
-                disabled={loading}
-                className={clsx(
-                  'h-7 rounded-lg px-3 text-[11px] font-black transition-all disabled:opacity-50',
-                  selectionMode === mode
-                    ? 'bg-white text-text-primary shadow-sm'
-                    : 'text-text-tertiary hover:text-text-primary'
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="text-[11px] font-bold text-text-tertiary/60 uppercase tracking-tight">
-              多选题
-            </div>
-            <button
-              type="button"
-              onClick={() => void handleToggleMultiChoice()}
-              disabled={isSavingMode || loading}
-              className="ui-switch-track shrink-0 disabled:opacity-50"
-              data-size="sm"
-              data-state={multiChoiceEnabled ? 'on' : 'off'}
-            >
-              <div className="ui-switch-thumb" />
-            </button>
-          </div>
-        </div>
+  const titleBarContent = useMemo(() => (
+    <div className="flex w-full min-w-0 items-center justify-end gap-2 pr-2" data-no-window-drag>
+      {phase !== 'idle' && (
+        <>
+          <button
+            type="button"
+            onClick={() => { void loadHistoryList(); setShowHistory(true); }}
+            className="flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+          >
+            <History className="h-3.5 w-3.5" />
+            历史
+          </button>
+          <button
+            type="button"
+            onClick={startWander}
+            disabled={loading}
+            className="flex h-7 items-center gap-1.5 rounded-lg bg-surface-secondary px-2.5 text-[11px] font-bold text-text-primary transition-colors hover:bg-surface-tertiary disabled:opacity-40"
+          >
+            <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
+            再次漫步
+          </button>
+        </>
+      )}
+      <div className="flex h-7 items-center rounded-lg bg-surface-secondary p-0.5">
+        {[
+          ['random', '随机'] as const,
+          ['manual', '手工'] as const,
+        ].map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => handleSelectionModeChange(mode)}
+            disabled={loading}
+            className={clsx(
+              'h-6 rounded-md px-2.5 text-[11px] font-black transition-all disabled:opacity-50',
+              selectionMode === mode
+                ? 'bg-surface-primary text-text-primary shadow-sm'
+                : 'text-text-tertiary hover:text-text-primary'
+            )}
+          >
+            {label}
+          </button>
+        ))}
       </div>
+      <div className="flex items-center gap-2">
+        <div className="text-[11px] font-bold text-text-tertiary/70">
+          多选题
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleToggleMultiChoice()}
+          disabled={isSavingMode || loading}
+          className="ui-switch-track shrink-0 disabled:opacity-50"
+          data-size="sm"
+          data-state={multiChoiceEnabled ? 'on' : 'off'}
+        >
+          <div className="ui-switch-thumb" />
+        </button>
+      </div>
+    </div>
+  ), [handleSelectionModeChange, handleToggleMultiChoice, isSavingMode, loadHistoryList, loading, multiChoiceEnabled, phase, selectionMode, startWander]);
 
+  useEffect(() => {
+    if (!onTitleBarContentChange) return;
+    onTitleBarContentChange(isActive ? titleBarContent : null);
+    return () => {
+      onTitleBarContentChange(null);
+    };
+  }, [isActive, onTitleBarContentChange, titleBarContent]);
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden">
       {phase === 'idle' ? (
         <div className="flex-1 flex flex-col items-center justify-center p-8 relative">
             {/* 饰品背景 */}

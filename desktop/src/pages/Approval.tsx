@@ -183,7 +183,7 @@ export function ApprovalPanel({ isActive = true }: { isActive?: boolean }) {
     }, [loadDockets, nextPendingDocket?.id, selectedDocket]);
 
     return (
-        <div className="legacy-theme-panel h-full min-h-0 bg-[#fbfaf7] text-[#191919]">
+        <div className="legacy-theme-panel h-full min-h-0 text-[#191919]">
             <div className="flex h-full min-h-0 flex-col gap-4 px-6 py-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="inline-flex items-center gap-1.5 rounded-full border border-[#ece3d5] bg-white px-2.5 py-1 text-[11px] text-[#7c7468]">

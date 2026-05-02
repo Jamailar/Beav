@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+    ArrowLeft,
     ExternalLink,
     FolderOpen,
     ImagePlus,
@@ -101,6 +102,7 @@ interface CoverTemplateListResponse {
 interface CoverStudioProps {
     isActive?: boolean;
     onExecutionStateChange?: (active: boolean) => void;
+    onReturnHome?: () => void;
 }
 
 interface CoverGenerationJob {
@@ -367,7 +369,7 @@ const normalizeTitleEntries = (entries: CoverTitleEntry[]): Array<{ type: string
         .slice(0, 20);
 };
 
-export function CoverStudio({ isActive = false, onExecutionStateChange }: CoverStudioProps) {
+export function CoverStudio({ isActive = false, onExecutionStateChange, onReturnHome }: CoverStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [spaceId, setSpaceId] = useState('default');
     const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
@@ -806,7 +808,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange }: CoverS
     }, []);
 
     return (
-        <div className="flex h-full min-h-0 bg-background overflow-hidden">
+        <div className="flex h-full min-h-0 overflow-hidden">
             <div className="flex-1 min-h-0 flex overflow-hidden">
                 <div className="w-80 border-r border-border bg-surface-secondary/30 flex flex-col shrink-0">
                     <div className="p-4 border-b border-border flex items-center justify-between">
@@ -898,6 +900,17 @@ export function CoverStudio({ isActive = false, onExecutionStateChange }: CoverS
                 <div className="flex-1 min-w-0 flex flex-col">
                     <div className="px-6 py-2.5 border-b border-border bg-surface-primary/60 space-y-1">
                         <div className="flex items-center gap-3">
+                            {onReturnHome && (
+                                <button
+                                    type="button"
+                                    onClick={onReturnHome}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-primary text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                    aria-label="返回主页"
+                                    title="返回主页"
+                                >
+                                    <ArrowLeft className="h-4 w-4" />
+                                </button>
+                            )}
                             <h1 className="text-lg font-semibold text-text-primary">封面</h1>
                             <div className="ml-auto flex items-center gap-2">
                                 <button

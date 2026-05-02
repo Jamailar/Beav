@@ -11,8 +11,8 @@ use crate::runtime::{
 };
 use crate::session_manager::{
     create_context_session, create_session, delete_session, ensure_context_session, fork_session,
-    list_context_sessions, list_sessions, resolve_resume_target_session_id, session_detail_value,
-    session_list_item_value, session_resume_value, update_metadata,
+    list_context_sessions, list_sessions, rename_session, resolve_resume_target_session_id,
+    session_detail_value, session_list_item_value, session_resume_value, update_metadata,
 };
 use crate::*;
 use base64::Engine;
@@ -1599,6 +1599,7 @@ pub fn handle_chat_sessions_wander_channel(
             | "sessions:get-tool-results"
             | "chat:get-messages"
             | "chat:create-session"
+            | "chat:rename-session"
             | "chat:delete-session"
             | "chat:clear-messages"
             | "chat:compact-context"
@@ -2106,6 +2107,28 @@ pub fn handle_chat_sessions_wander_channel(
                     let _ = update_metadata(store, &session_id, metadata);
                     Ok(json!({ "success": true }))
                 })
+            }
+            "chat:rename-session" => {
+                let session_id = payload_string(&payload, "sessionId").unwrap_or_default();
+                let title = payload_string(&payload, "title").unwrap_or_default();
+                if session_id.trim().is_empty() {
+                    return Err("missing sessionId".to_string());
+                }
+                if title.trim().is_empty() {
+                    return Err("missing title".to_string());
+                }
+                let session = with_store_mut(state, |store| {
+                    rename_session(store, &session_id, title)
+                        .ok_or_else(|| "session not found".to_string())
+                })?;
+                let _ = app.emit(
+                    "chat:session-title-updated",
+                    json!({
+                        "sessionId": session.id,
+                        "title": session.title,
+                    }),
+                );
+                Ok(json!({ "success": true, "session": session }))
             }
             "chat:bind-editor-session" => {
                 let request =

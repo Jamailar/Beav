@@ -368,7 +368,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
     }, [onNavigateToRedClaw]);
 
     return (
-        <main className="h-full min-h-0 overflow-y-auto bg-background px-6 py-5" aria-label="主页">
+        <main className="h-full min-h-0 overflow-y-auto px-6 py-5" aria-label="主页">
             <div className="mx-auto grid min-h-full w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <div className="flex min-w-0 flex-col gap-5">
                     <div className="flex flex-wrap items-start justify-between gap-3">

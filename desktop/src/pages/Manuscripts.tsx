@@ -3280,7 +3280,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
         ]));
 
         return (
-            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench ? 'editor-ui-shell bg-background text-text-primary' : 'bg-surface-primary')}>
+            <div className={clsx('h-full min-h-0 flex flex-col', isImmersiveWorkbench && 'editor-ui-shell text-text-primary')}>
                 <div className={clsx(
                     'flex items-center justify-between gap-3 px-6 py-3.5 backdrop-blur-md z-30',
                     isImmersiveWorkbench
@@ -3681,7 +3681,7 @@ export function Manuscripts({ pendingFile, onFileConsumed, onNavigateToRedClaw, 
 
     return (
         <>
-        <div className="h-full min-h-0 overflow-auto bg-surface-primary text-text-primary">
+        <div className="h-full min-h-0 overflow-auto text-text-primary">
             <div className="mx-auto flex w-full max-w-[1680px] flex-col px-6 py-2">
                 {/* 顶部导航与操作栏 - 更加精致 */}
                 <div className="border-b border-black/[0.03] py-5 px-1">

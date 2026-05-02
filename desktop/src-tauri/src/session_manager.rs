@@ -183,6 +183,21 @@ pub(crate) fn update_metadata(
     false
 }
 
+pub(crate) fn rename_session(
+    store: &mut AppStore,
+    session_id: &str,
+    title: impl Into<String>,
+) -> Option<ChatSessionRecord> {
+    let next_title = normalize_title(title.into());
+    let session = store
+        .chat_sessions
+        .iter_mut()
+        .find(|item| item.id == session_id)?;
+    session.title = next_title;
+    session.updated_at = now_iso();
+    Some(session.clone())
+}
+
 pub(crate) fn delete_session(store: &mut AppStore, session_id: &str) -> bool {
     let had_session = store.chat_sessions.iter().any(|item| item.id == session_id);
     if !had_session {

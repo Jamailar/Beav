@@ -35,9 +35,55 @@ const explicitCommandRoutes: Record<string, string> = {
   'knowledge:open-index-root': 'knowledge_open_index_root',
   'redclaw:runner-status': 'redclaw_runner_status',
 };
+const explicitChannelByCommand = Object.fromEntries(
+  Object.entries(explicitCommandRoutes).map(([channel, command]) => [command, channel]),
+) as Record<string, string>;
+const BROWSER_IPC_BASE_URL = 'http://127.0.0.1:31937/api/ipc';
+
+function isTauriRuntime(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  const tauriWindow = window as unknown as {
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  };
+  return Boolean(tauriWindow.__TAURI_INTERNALS__ || tauriWindow.__TAURI__);
+}
+
+async function invokeBrowserHost(channel: string, payload?: unknown): Promise<any> {
+  const response = await fetch(`${BROWSER_IPC_BASE_URL}/invoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel, payload: payload ?? null }),
+  });
+  const value = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = value && typeof value === 'object' && 'error' in value
+      ? String((value as { error?: unknown }).error || response.statusText)
+      : response.statusText;
+    throw new Error(message || `HTTP ${response.status}`);
+  }
+  return value;
+}
+
+function browserPayloadForCommand(command: string, args?: unknown): unknown {
+  if (
+    command.startsWith('knowledge_')
+    && args
+    && typeof args === 'object'
+    && Object.prototype.hasOwnProperty.call(args, 'payload')
+  ) {
+    return (args as { payload?: unknown }).payload ?? null;
+  }
+  return args;
+}
 
 async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
   try {
+    if (!isTauriRuntime()) {
+      return await invokeBrowserHost(channel, payload);
+    }
     const explicitCommand = explicitCommandRoutes[channel];
     if (explicitCommand) {
       return await invokeCommand(explicitCommand, payload);
@@ -50,6 +96,12 @@ async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
 }
 
 function sendChannel(channel: string, payload?: unknown): void {
+  if (!isTauriRuntime()) {
+    void invokeBrowserHost(channel, payload).catch((error) => {
+      console.warn(`[RedBox] browser send failed for ${channel}:`, error);
+    });
+    return;
+  }
   void invoke('ipc_send', { channel, payload: payload ?? null }).catch((error) => {
     console.warn(`[RedBox] send failed for ${channel}:`, error);
   });
@@ -57,6 +109,13 @@ function sendChannel(channel: string, payload?: unknown): void {
 
 async function invokeCommand(command: string, args?: unknown): Promise<any> {
   try {
+    if (!isTauriRuntime()) {
+      const channel = explicitChannelByCommand[command];
+      if (!channel) {
+        throw new Error(`Browser host does not expose command "${command}"`);
+      }
+      return await invokeBrowserHost(channel, browserPayloadForCommand(command, args));
+    }
     return await invoke(command, args as Record<string, unknown> | undefined);
   } catch (error) {
     console.warn(`[RedBox] command invoke failed for ${command}:`, error);
@@ -498,6 +557,9 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
 }
 
 function on(channel: string, listener: Listener): void {
+  if (!isTauriRuntime()) {
+    return;
+  }
   const entry: ListenerRecord = {};
   if (!channelListeners.has(channel)) {
     channelListeners.set(channel, new Map());
@@ -1125,6 +1187,7 @@ function createIpcRenderer() {
         invokeChannel('chat:create-context-session', payload),
       getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; metadata?: Record<string, unknown> }) =>
         invokeChannel('chat:getOrCreateContextSession', params),
+      renameSession: (payload: { sessionId: string; title: string }) => invokeChannel('chat:rename-session', payload),
       deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
       getMessages: (sessionId: string) => invokeChannel('chat:get-messages', sessionId),
       clearMessages: (sessionId: string) => invokeChannel('chat:clear-messages', sessionId),
@@ -1258,7 +1321,9 @@ function createIpcRenderer() {
       oauthStatus: (serverId: string) => invokeChannel('mcp:oauth-status', { serverId })
     },
     windowControls: {
-      startDragging: () => getCurrentWindow().startDragging(),
+      startDragging: () => isTauriRuntime()
+        ? getCurrentWindow().startDragging()
+        : Promise.resolve(),
     },
     checkYtdlp: () => invokeChannel('youtube:check-ytdlp'),
     installYtdlp: () => invokeChannel('youtube:install'),
