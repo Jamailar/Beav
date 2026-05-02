@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AlertCircle, ArrowLeft, ArrowRight, Loader2, Sparkles, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Slider } from '../../vendor/freecut/components/ui/slider';
+import { APP_BRAND } from '../../config/brand';
 import {
   REDCLAW_ONBOARDING_DEFAULT_ANSWERS,
   REDCLAW_ONBOARDING_MVP_QUESTIONS,
@@ -164,7 +165,8 @@ function SliderQuestionView({
               max={100}
               step={1}
               onValueChange={(values) => onChange(values[0] ?? value)}
-              className="relative z-20 w-full cursor-grab py-6 active:cursor-grabbing [&>span:first-child]:h-12 [&>span:first-child]:bg-transparent [&>span:first-child>span]:bg-transparent [&>span:last-child]:h-16 [&>span:last-child]:w-16 [&>span:last-child]:rounded-none [&>span:last-child]:border-0 [&>span:last-child]:bg-[url('/Box.png')] [&>span:last-child]:bg-contain [&>span:last-child]:bg-center [&>span:last-child]:bg-no-repeat [&>span:last-child]:bg-transparent [&>span:last-child]:shadow-none [&>span:last-child]:outline-none [&>span:last-child]:ring-0 [&>span:last-child]:focus:outline-none [&>span:last-child]:focus-visible:outline-none [&>span:last-child]:focus-visible:ring-0"
+              style={{ '--redclaw-welcome-icon': `url("${APP_BRAND.logoSrc}")` } as CSSProperties}
+              className="relative z-20 w-full cursor-grab py-6 active:cursor-grabbing [&>span:first-child]:h-12 [&>span:first-child]:bg-transparent [&>span:first-child>span]:bg-transparent [&>span:last-child]:h-16 [&>span:last-child]:w-16 [&>span:last-child]:rounded-none [&>span:last-child]:border-0 [&>span:last-child]:bg-[image:var(--redclaw-welcome-icon)] [&>span:last-child]:bg-contain [&>span:last-child]:bg-center [&>span:last-child]:bg-no-repeat [&>span:last-child]:bg-transparent [&>span:last-child]:shadow-none [&>span:last-child]:outline-none [&>span:last-child]:ring-0 [&>span:last-child]:focus:outline-none [&>span:last-child]:focus-visible:outline-none [&>span:last-child]:focus-visible:ring-0"
             />
           </div>
 

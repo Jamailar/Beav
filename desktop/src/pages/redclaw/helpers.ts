@@ -1,5 +1,5 @@
 import type { RunnerResult, RunnerScheduledTask } from './types';
-import { REDCLAW_CONTEXT, REDCLAW_CONTEXT_ID, WEEKDAY_OPTIONS } from './config';
+import { REDCLAW_CONTEXT, REDCLAW_CONTEXT_ID, REDCLAW_DISPLAY_NAME, WEEKDAY_OPTIONS } from './config';
 
 export function normalizeClawHubSlug(input: string): string {
     const value = (input || '').trim();
@@ -44,7 +44,7 @@ export function buildRedClawContextId(activeSpaceId: string): string {
 }
 
 export function buildRedClawSessionTitle(spaceName: string): string {
-    return `RedClaw · ${spaceName}`;
+    return `${REDCLAW_DISPLAY_NAME} · ${spaceName}`;
 }
 
 export function buildRedClawInitialContext(spaceName: string, activeSpaceId: string): string {

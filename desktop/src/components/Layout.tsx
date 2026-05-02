@@ -1,10 +1,13 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, ImagePlus, Sun, Moon, X, Download, AlertCircle, Sparkles, Bell, BookOpenText, Home, PanelLeft, Search, Clock3, Edit } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ImmersiveMode, ViewType } from '../App';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
+import { APP_BRAND } from '../config/brand';
+import { applyAppTheme, CUSTOM_THEME_CHANGED_EVENT, readThemeMode, THEME_MODE_STORAGE_KEY, type ThemeMode } from '../config/theme';
+import { useI18n, type I18nKey } from '../i18n';
 import { appAlert } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
@@ -23,7 +26,7 @@ interface LayoutProps {
 type SidebarNavItem = {
   key: string;
   view: ViewType;
-  label: string;
+  labelKey: I18nKey;
   icon: typeof MessageSquare;
   redclawAction?: 'new';
   settingsTab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
@@ -31,16 +34,13 @@ type SidebarNavItem = {
 };
 
 const NAV_ITEMS: SidebarNavItem[] = [
-  { key: 'new-chat', view: 'redclaw', label: '新对话', icon: Edit, redclawAction: 'new', primary: true },
-  { key: 'search', view: 'knowledge', label: '搜索', icon: Search, primary: true },
-  { key: 'assets', view: 'subjects', label: '资产库', icon: Folder, primary: true },
-  { key: 'automation', view: 'automation', label: '自动化', icon: Clock3, primary: true },
-  { key: 'home', view: 'home', label: '主页', icon: Home },
-  { key: 'wander', view: 'wander', label: '漫步', icon: Dices },
-  { key: 'manuscripts', view: 'manuscripts', label: '稿件', icon: FileEdit },
-  { key: 'creator-profiles', view: 'creator-profiles', label: '创作档案', icon: BookOpenText },
-  { key: 'cover-studio', view: 'cover-studio', label: '封面', icon: ImagePlus },
-  { key: 'generation-studio', view: 'generation-studio', label: '创作', icon: Sparkles },
+  { key: 'new-chat', view: 'redclaw', labelKey: 'nav.newChat', icon: Edit, redclawAction: 'new', primary: true },
+  { key: 'search', view: 'knowledge', labelKey: 'nav.search', icon: Search, primary: true },
+  { key: 'assets', view: 'subjects', labelKey: 'nav.assets', icon: Folder, primary: true },
+  { key: 'automation', view: 'automation', labelKey: 'nav.automation', icon: Clock3, primary: true },
+  { key: 'home', view: 'home', labelKey: 'nav.home', icon: Home },
+  { key: 'wander', view: 'wander', labelKey: 'nav.wander', icon: Dices },
+  { key: 'manuscripts', view: 'manuscripts', labelKey: 'nav.manuscripts', icon: FileEdit },
   // { id: 'archives', label: '档案', icon: Archive },
   // { id: 'skills', label: '技能库', icon: Lightbulb },
 ];
@@ -60,19 +60,13 @@ interface AppUpdateNoticePayload {
 }
 
 type SpaceDialogMode = 'create' | 'rename';
-type ThemeMode = 'light' | 'dark';
 
-const THEME_STORAGE_KEY = 'redbox:theme-mode:v1';
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
 const SIDEBAR_CONTENT_ANIMATION_MS = 170;
 
 function readInitialThemeMode(): ThemeMode {
   if (typeof window === 'undefined') return 'light';
-  const saved = String(window.localStorage.getItem(THEME_STORAGE_KEY) || '').trim().toLowerCase();
-  if (saved === 'light' || saved === 'dark') {
-    return saved;
-  }
-  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return readThemeMode();
 }
 
 function readInitialSidebarCollapsed(): boolean {
@@ -108,6 +102,7 @@ function AppTitleBar({
   themeMode: ThemeMode;
   setThemeMode: Dispatch<SetStateAction<ThemeMode>>;
 }) {
+  const { t } = useI18n();
   if (!enabled) return null;
 
   const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
@@ -134,8 +129,8 @@ function AppTitleBar({
           type="button"
           onClick={toggleSidebarCollapsed}
           className="app-titlebar-sidebar-toggle"
-          title={isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
-          aria-label={isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          title={isSidebarCollapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
+          aria-label={isSidebarCollapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
           data-no-window-drag
         >
           <PanelLeft className="w-[15px] h-[15px]" strokeWidth={1.7} />
@@ -149,8 +144,8 @@ function AppTitleBar({
           type="button"
           onClick={toggleNotificationDrawer}
           className="app-titlebar-button"
-          title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
-          aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+          title={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
+          aria-label={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
         >
           <Bell className="w-[13px] h-[13px]" strokeWidth={1.75} />
           {unreadNotificationCount > 0 && (
@@ -163,8 +158,8 @@ function AppTitleBar({
           type="button"
           onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
           className="app-titlebar-button"
-          title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-          aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+          title={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
+          aria-label={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
         >
           {themeMode === 'dark'
             ? <Sun className="w-[13px] h-[13px]" strokeWidth={1.75} />
@@ -176,6 +171,7 @@ function AppTitleBar({
 }
 
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null, globalSidebarContent, renderTitleBarContent }: LayoutProps) {
+  const { t } = useI18n();
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
@@ -204,8 +200,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const activeSpaceName = useMemo(
-    () => spaces.find((space) => space.id === activeSpaceId)?.name || '暂无空间',
-    [activeSpaceId, spaces]
+    () => spaces.find((space) => space.id === activeSpaceId)?.name || t('layout.defaultSpaceName'),
+    [activeSpaceId, spaces, t]
   );
 
   const loadSpaces = useCallback(async () => {
@@ -270,10 +266,16 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
   useEffect(() => {
     const effectiveTheme = immersiveMode === 'dark' ? 'dark' : themeMode;
-    const root = document.documentElement;
-    root.setAttribute('data-theme', effectiveTheme);
-    root.classList.toggle('dark', effectiveTheme === 'dark');
-    window.localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    applyAppTheme(effectiveTheme);
+    window.localStorage.setItem(THEME_MODE_STORAGE_KEY, themeMode);
+  }, [immersiveMode, themeMode]);
+
+  useEffect(() => {
+    const handleCustomThemeChanged = () => {
+      applyAppTheme(immersiveMode === 'dark' ? 'dark' : themeMode);
+    };
+    window.addEventListener(CUSTOM_THEME_CHANGED_EVENT, handleCustomThemeChanged);
+    return () => window.removeEventListener(CUSTOM_THEME_CHANGED_EVENT, handleCustomThemeChanged);
   }, [immersiveMode, themeMode]);
 
   useEffect(() => {
@@ -336,11 +338,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     try {
       const result = await window.ipcRenderer.openAppReleasePage(updateNotice.htmlUrl);
       if (!result?.success) {
-        void appAlert(result?.error || '打开下载页面失败');
+        void appAlert(result?.error || t('layout.openDownloadFailed'));
       }
     } catch (error) {
       console.error('Failed to open release page:', error);
-      void appAlert('打开下载页面失败');
+      void appAlert(t('layout.openDownloadFailed'));
     } finally {
       setIsOpeningReleasePage(false);
     }
@@ -352,18 +354,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     try {
       const result = await window.ipcRenderer.spaces.switch(nextSpaceId) as { success?: boolean; error?: string } | null;
       if (!result?.success) {
-        void appAlert(result?.error || '切换空间失败');
+        void appAlert(result?.error || t('layout.switchSpaceFailed'));
         return;
       }
       setIsSpaceMenuOpen(false);
       window.location.reload();
     } catch (error) {
       console.error('Failed to switch space:', error);
-      void appAlert('切换空间失败，请重试');
+      void appAlert(t('layout.switchSpaceFailedRetry'));
     } finally {
       setIsSwitchingSpace(false);
     }
-  }, [activeSpaceId]);
+  }, [activeSpaceId, t]);
 
   const openCreateSpaceDialog = useCallback(() => {
     setIsSpaceMenuOpen(false);
@@ -422,7 +424,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const submitSpaceDialog = useCallback(async () => {
     const trimmedName = spaceDialogName.trim();
     if (!trimmedName) {
-      void appAlert('空间名称不能为空');
+      void appAlert(t('layout.spaceNameRequired'));
       return;
     }
 
@@ -431,7 +433,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       if (spaceDialogMode === 'create') {
         const result = await window.ipcRenderer.spaces.create(trimmedName) as { success?: boolean; space?: WorkspaceSpace; error?: string } | null;
         if (!result?.success || !result.space) {
-          void appAlert(result?.error || '创建空间失败');
+          void appAlert(result?.error || t('layout.createSpaceFailed'));
           return;
         }
         setIsSpaceDialogOpen(false);
@@ -443,13 +445,13 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       }
 
       if (!spaceDialogTargetId) {
-        void appAlert('未找到要重命名的空间');
+        void appAlert(t('layout.renameSpaceMissing'));
         return;
       }
 
       const result = await window.ipcRenderer.spaces.rename({ id: spaceDialogTargetId, name: trimmedName }) as { success?: boolean; error?: string } | null;
       if (!result?.success) {
-        void appAlert(result?.error || '重命名失败');
+        void appAlert(result?.error || t('layout.renameSpaceFailed'));
         return;
       }
 
@@ -459,11 +461,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       await loadSpaces();
     } catch (error) {
       console.error('Failed to submit space dialog:', error);
-      void appAlert(spaceDialogMode === 'create' ? '创建空间失败，请重试' : '重命名空间失败，请重试');
+      void appAlert(spaceDialogMode === 'create' ? t('layout.createSpaceFailedRetry') : t('layout.renameSpaceFailedRetry'));
     } finally {
       setIsSpaceDialogSubmitting(false);
     }
-  }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId]);
+  }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId, t]);
 
   const handleSidebarNavigate = useCallback((item: SidebarNavItem) => {
     if (item.settingsTab || item.redclawAction) {
@@ -480,7 +482,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [onNavigate]);
 
   const renderSidebarNavItem = (item: SidebarNavItem) => {
-    const { key, view, label, icon: Icon, primary } = item;
+    const { key, view, labelKey, icon: Icon, primary } = item;
+    const label = t(labelKey);
     const isActive = !item.redclawAction && currentView === view && !item.settingsTab;
     return (
       <button
@@ -507,7 +510,16 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             )
         )}
       >
-        <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={primary ? 1.6 : 1.65} />
+        {key === 'new-chat' ? (
+          <img
+            src={APP_BRAND.logoSrc}
+            alt=""
+            className="app-sidebar-nav-icon shrink-0 object-contain"
+            aria-hidden="true"
+          />
+        ) : (
+          <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={primary ? 1.6 : 1.65} />
+        )}
         {!sidebarVisualCollapsed && (
           <span className="app-sidebar-nav-label truncate whitespace-nowrap opacity-100 translate-x-0">
             {label}
@@ -579,7 +591,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 <div
                   className="max-h-4 text-[10px] tracking-[0.04em] text-text-tertiary overflow-hidden whitespace-nowrap opacity-100 translate-y-0"
                 >
-                  空间
+                  {t('layout.space')}
                 </div>
                 <div ref={spaceMenuRef} className="relative">
                   <button
@@ -599,7 +611,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                       <div className="max-h-44 overflow-y-auto">
                         {spaces.length === 0 ? (
                           <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
-                            暂无空间
+                            {t('layout.noSpace')}
                           </div>
                         ) : (
                           spaces.map((space) => {
@@ -635,7 +647,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                                     'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
                                     showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
                                   )}
-                                  title="重命名空间"
+                                  title={t('layout.renameSpace')}
                                 >
                                   <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
                                 </button>
@@ -655,7 +667,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                         className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
                       >
                         <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                        新建空间
+                        {t('layout.createSpace')}
                       </button>
                     </div>
                   )}
@@ -667,8 +679,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 type="button"
                 onClick={() => onNavigate('settings')}
                 className="h-8 w-8 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
-                title="设置"
-                aria-label="设置"
+                title={t('nav.settings')}
+                aria-label={t('nav.settings')}
               >
                 <SettingsIcon className="w-[14px] h-[14px]" strokeWidth={1.75} />
               </button>
@@ -685,8 +697,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 type="button"
                 onClick={() => onNavigate('settings')}
                 className="h-5 w-5 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
-                title="设置"
-                aria-label="设置"
+                title={t('nav.settings')}
+                aria-label={t('nav.settings')}
               >
                 <SettingsIcon className="w-[11px] h-[11px]" strokeWidth={1.75} />
               </button>
@@ -696,8 +708,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                     type="button"
                     onClick={toggleNotificationDrawer}
                     className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                    title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
-                    aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+                    title={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
+                    aria-label={notificationDrawerOpen ? t('layout.closeNotificationCenter') : t('layout.openNotificationCenter')}
                   >
                     <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
                     {unreadNotificationCount > 0 && (
@@ -710,8 +722,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                     type="button"
                     onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
                     className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                    title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-                    aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+                    title={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
+                    aria-label={themeMode === 'dark' ? t('layout.switchToLight') : t('layout.switchToDark')}
                   >
                     {themeMode === 'dark'
                       ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
@@ -754,7 +766,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="text-sm font-medium text-text-primary">
-              {spaceDialogMode === 'create' ? '新建空间' : '重命名空间'}
+              {spaceDialogMode === 'create' ? t('layout.createSpace') : t('layout.renameSpace')}
             </div>
             <input
               autoFocus
@@ -769,7 +781,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 }
               }}
               className="w-full h-9 rounded-md border border-border bg-surface-secondary px-3 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent-primary"
-              placeholder="请输入空间名称"
+              placeholder={t('layout.spaceNamePlaceholder')}
             />
             <div className="flex items-center justify-end gap-2">
               <button
@@ -777,7 +789,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 disabled={isSpaceDialogSubmitting}
                 className="h-8 px-3 text-xs rounded-md border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary disabled:opacity-50"
               >
-                取消
+                {t('app.cancel')}
               </button>
               <button
                 onClick={() => {
@@ -786,7 +798,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 disabled={isSpaceDialogSubmitting}
                 className="h-8 px-3 text-xs rounded-md bg-accent-primary text-white hover:bg-accent-hover disabled:opacity-50"
               >
-                {isSpaceDialogSubmitting ? '处理中...' : '确定'}
+                {isSpaceDialogSubmitting ? t('app.processing') : t('app.confirm')}
               </button>
             </div>
           </div>
@@ -803,12 +815,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="px-8 pt-6 pb-4 border-b border-border flex items-center justify-between gap-3">
-              <h2 className="text-2xl font-semibold text-text-primary">软件更新</h2>
+              <h2 className="text-2xl font-semibold text-text-primary">{t('layout.softwareUpdate')}</h2>
               <button
                 type="button"
                 onClick={() => setUpdateNotice(null)}
                 className="h-9 w-9 rounded-lg border border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center"
-                title="关闭"
+                title={t('layout.close')}
               >
                 <X className="w-5 h-5" />
               </button>
@@ -821,11 +833,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                     <Download className="w-6 h-6" />
                   </div>
                   <div>
-                    <div className="text-3xl font-semibold text-text-primary leading-tight">发现新版本</div>
+                    <div className="text-3xl font-semibold text-text-primary leading-tight">{t('layout.newVersionFound')}</div>
                     <div className="text-xl text-text-secondary mt-1">→ {updateNotice.latestVersion}</div>
                     <div className="text-xs text-text-tertiary mt-2">
-                      当前版本 {updateNotice.currentVersion}
-                      {updatePublishedDateLabel ? ` · 发布于 ${updatePublishedDateLabel}` : ''}
+                      {t('layout.currentVersion', { version: updateNotice.currentVersion })}
+                      {updatePublishedDateLabel ? ` · ${t('layout.publishedAt', { date: updatePublishedDateLabel })}` : ''}
                     </div>
                   </div>
                 </div>
@@ -837,14 +849,14 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                   disabled={isOpeningReleasePage}
                   className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap"
                 >
-                  {isOpeningReleasePage ? '打开中...' : '下载并安装'}
+                  {isOpeningReleasePage ? t('layout.opening') : t('layout.downloadAndInstall')}
                 </button>
               </div>
             </div>
 
             <div className="px-8 py-6 overflow-y-auto min-h-0">
               <div className="text-3xl font-semibold text-text-primary mb-4">
-                {updateNotice.name || '更新说明'}
+                {updateNotice.name || t('layout.releaseNotes')}
               </div>
               <div
                 className={clsx(
@@ -863,7 +875,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 )}
               >
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {String(updateNotice.body || '').trim() || '暂无更新说明。'}
+                  {String(updateNotice.body || '').trim() || t('layout.noReleaseNotes')}
                 </ReactMarkdown>
               </div>
             </div>

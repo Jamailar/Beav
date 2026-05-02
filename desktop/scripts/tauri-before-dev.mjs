@@ -10,6 +10,7 @@ const PORT = Number(process.env.REDBOX_DEV_PORT || process.env.LEXBOX_DEV_PORT |
 const DEV_URL = process.env.REDBOX_DEV_URL || process.env.LEXBOX_DEV_URL || `http://localhost:${PORT}`;
 const cwd = process.cwd();
 const isProbe = process.argv.includes('--probe');
+const requestedBrand = String(process.env.REDBOX_BRAND || process.env.APP_BRAND || '').trim().toLowerCase();
 
 async function isHealthy(url) {
   try {
@@ -89,6 +90,34 @@ async function terminateProcess(pid) {
   }
 }
 
+async function terminateStaleDevAppForBrand() {
+  if (!requestedBrand) return;
+  const staleBinary = requestedBrand === 'thrive' ? 'redbox' : 'thrive';
+  const targetMarker = `${cwd}/src-tauri/target/debug/${staleBinary}`;
+
+  let stdout = '';
+  try {
+    ({ stdout } = await execFile('ps', ['-axo', 'pid=,command=']));
+  } catch {
+    return;
+  }
+
+  const stalePids = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(.+)$/);
+      return match ? { pid: Number(match[1]), command: match[2] } : null;
+    })
+    .filter((entry) => entry && Number.isFinite(entry.pid) && entry.command.includes(targetMarker));
+
+  for (const entry of stalePids) {
+    console.log(`[tauri-before-dev] Stopping stale ${staleBinary} dev app ${entry.pid}`);
+    await terminateProcess(entry.pid);
+  }
+}
+
 async function holdForReusedServer() {
   console.log(`[tauri-before-dev] Reusing healthy Vite server on ${DEV_URL}`);
 
@@ -137,6 +166,7 @@ async function startDevServer() {
 async function main() {
   await runCommand('node', ['./scripts/tauri-preflight.mjs'], { cwd });
   await syncVersion({ cwd });
+  await terminateStaleDevAppForBrand();
 
   const state = await getPortState();
 
@@ -149,6 +179,15 @@ async function main() {
     const foreignProcess = state.processes.find((entry) => !isRepoViteCommand(entry.command));
     if (foreignProcess) {
       throw new Error(`Port ${PORT} is in use by another process: PID ${foreignProcess.pid} (${foreignProcess.command})`);
+    }
+    if (requestedBrand) {
+      const repoVite = state.processes.find((entry) => isRepoViteCommand(entry.command));
+      if (repoVite) {
+        console.log(`[tauri-before-dev] Restarting Vite for brand "${requestedBrand}"`);
+        await terminateProcess(repoVite.pid);
+        await startDevServer();
+        return;
+      }
     }
     await holdForReusedServer();
     return;

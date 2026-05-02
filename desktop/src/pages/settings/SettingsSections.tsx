@@ -1,6 +1,9 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
+import { APP_BRAND } from '../../config/brand';
+import { applyAppTheme, readCustomThemePreference, readThemeMode, writeCustomThemePreference, type CustomThemePreference } from '../../config/theme';
+import { SUPPORTED_LANGUAGES, useI18n, type AppLanguage } from '../../i18n';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
   CliRuntimeEnvironmentRecord,
@@ -560,6 +563,69 @@ function FileIndexSettingsPanel({
     );
 }
 
+function ThemeSettingsCard() {
+    const [preference, setPreference] = useState<CustomThemePreference>(() => readCustomThemePreference());
+
+    const commitPreference = (next: CustomThemePreference) => {
+        setPreference(next);
+        writeCustomThemePreference(next);
+        applyAppTheme(readThemeMode());
+    };
+
+    const normalizedAccent = preference.accentHex || readCustomThemePreference().accentHex;
+
+    return (
+        <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                    <h3 className="text-sm font-medium text-text-primary">主题色</h3>
+                    <p className="mt-1 text-xs text-text-tertiary">
+                        默认跟随 {APP_BRAND.displayName}；开启后仅覆盖本机强调色。
+                    </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                    <button
+                        type="button"
+                        onClick={() => commitPreference({ ...preference, enabled: !preference.enabled })}
+                        className={clsx(
+                            'inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors',
+                            preference.enabled
+                                ? 'border-accent-primary bg-accent-muted text-accent-primary'
+                                : 'border-border bg-surface-primary text-text-secondary hover:text-text-primary',
+                        )}
+                    >
+                        {preference.enabled && <Check className="h-3.5 w-3.5" />}
+                        {preference.enabled ? '自定义' : '跟随品牌'}
+                    </button>
+                    {preference.enabled && (
+                        <>
+                            <label
+                                className="h-8 w-8 overflow-hidden rounded-md border border-border bg-surface-primary"
+                                title="选择主题色"
+                            >
+                                <span className="sr-only">选择主题色</span>
+                                <input
+                                    type="color"
+                                    value={normalizedAccent}
+                                    onChange={(event) => commitPreference({ enabled: true, accentHex: event.target.value })}
+                                    className="h-10 w-10 -translate-x-1 -translate-y-1 cursor-pointer border-0 bg-transparent p-0"
+                                />
+                            </label>
+                            <button
+                                type="button"
+                                onClick={() => commitPreference({ enabled: false, accentHex: normalizedAccent })}
+                                className="h-8 rounded-md border border-border px-2.5 text-xs font-medium text-text-secondary hover:bg-surface-secondary hover:text-text-primary"
+                            >
+                                重置
+                            </button>
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function GeneralSettingsSectionInner({
     appVersion,
     formData,
@@ -586,32 +652,62 @@ function GeneralSettingsSectionInner({
     handleVersionTap,
     handleOpenDownloadPage,
 }: GeneralSettingsSectionProps) {
+    const { language, setLanguage, t } = useI18n();
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
     const [isDebugLogsExpanded, setIsDebugLogsExpanded] = useState(false);
 
     return (
         <section className="space-y-6">
-            <h2 className="text-lg font-medium text-text-primary mb-6">常规设置</h2>
+            <h2 className="text-lg font-medium text-text-primary mb-6">{t('settings.general.title')}</h2>
+
+            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
+                <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                        <h3 className="text-sm font-medium text-text-primary">
+                            {t('settings.language.title')}
+                        </h3>
+                        <p className="text-xs text-text-tertiary mt-1">
+                            {t('settings.language.description')}
+                        </p>
+                    </div>
+                    <label className="shrink-0">
+                        <span className="sr-only">{t('settings.language.selectLabel')}</span>
+                        <select
+                            value={language}
+                            onChange={(event) => setLanguage(event.target.value as AppLanguage)}
+                            className="h-8 rounded-md border border-border bg-surface-primary px-2.5 text-xs text-text-primary focus:border-accent-primary focus:outline-none"
+                        >
+                            {SUPPORTED_LANGUAGES.map((item) => (
+                                <option key={item.value} value={item.value}>
+                                    {item.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                </div>
+            </div>
+
+            <ThemeSettingsCard />
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between">
                     <div>
                         <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
                             <Info className="w-4 h-4" />
-                            应用版本
+                            {t('settings.general.appVersion')}
                         </h3>
                         <p className="text-xs text-text-tertiary mt-1">
-                            当前版本:{' '}
+                            {t('settings.general.currentVersion')}{' '}
                             <button
                                 type="button"
                                 onClick={handleVersionTap}
                                 className="font-mono hover:text-text-primary transition-colors"
                             >
-                                {appVersion ?? '加载中...'}
+                                {appVersion ?? t('settings.general.loading')}
                             </button>
                         </p>
                         <p className="text-xs text-text-tertiary mt-1">
-                            启动时自动检查新版本，安装包从 RedBox 下载源获取。
+                            {t('settings.general.updateDescription')}
                         </p>
                     </div>
                     <button
@@ -620,17 +716,17 @@ function GeneralSettingsSectionInner({
                         className="flex items-center gap-2 px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary"
                     >
                         <Download className="w-3 h-3" />
-                        打开下载页
+                        {t('settings.general.openDownloadPage')}
                     </button>
                 </div>
             </div>
 
             <div className="group">
                 <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                    工作区根目录
+                    {t('settings.general.workspaceRoot')}
                 </label>
                 <p className="text-[10px] text-text-tertiary mb-2">
-                    RedConvert 会在这里创建完整工作区结构。留空则使用默认目录 ~/.redconvert
+                    {t('settings.general.workspaceDescription')}
                 </p>
                 <div className="flex items-center gap-2">
                     <div className="flex-1 relative">
@@ -648,7 +744,7 @@ function GeneralSettingsSectionInner({
                         onClick={() => void handlePickWorkspaceDir()}
                         className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-primary hover:bg-surface-secondary transition-colors"
                     >
-                        选择文件夹
+                        {t('settings.general.pickFolder')}
                     </button>
                     <button
                         type="button"
@@ -656,11 +752,11 @@ function GeneralSettingsSectionInner({
                         disabled={!String(formData.workspace_dir || '').trim()}
                         className="shrink-0 rounded border border-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-secondary transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        恢复默认
+                        {t('settings.general.restoreDefault')}
                     </button>
                 </div>
                 <p className="text-[10px] text-text-tertiary mt-2">
-                    不要直接选择现有的稿件目录、<code className="bg-surface-secondary px-1 rounded">manuscripts</code> 目录或 <code className="bg-surface-secondary px-1 rounded">documents</code> 目录，否则应用会在其中创建 <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> 等完整工作区结构。
+                    {t('settings.general.workspaceWarningPrefix')}<code className="bg-surface-secondary px-1 rounded">manuscripts</code> {t('settings.general.workspaceWarningMiddle')} <code className="bg-surface-secondary px-1 rounded">documents</code>{t('settings.general.workspaceWarningSuffix')} <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> {t('settings.general.workspaceWarningEnd')}
                 </p>
             </div>
 
@@ -675,7 +771,7 @@ function GeneralSettingsSectionInner({
                     <div>
                         <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
                             <Bell className="w-4 h-4" />
-                            通知中心
+                            {t('settings.general.notificationCenter')}
                         </h3>
                     </div>
                     <button
@@ -688,18 +784,18 @@ function GeneralSettingsSectionInner({
                                 : 'border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
                         )}
                     >
-                        {notificationSettings.enabled ? '已开启' : '已关闭'}
+                        {notificationSettings.enabled ? t('settings.general.enabled') : t('settings.general.disabled')}
                     </button>
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]">
                     <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
-                        <div className="text-xs font-medium text-text-primary">声音提醒</div>
+                        <div className="text-xs font-medium text-text-primary">{t('settings.general.sound')}</div>
                         <button
                             type="button"
                             role="switch"
                             aria-checked={notificationSettings.sound.enabled}
-                            aria-label="声音提醒"
+                            aria-label={t('settings.general.sound')}
                             onClick={() => setNotificationSettings((current) => ({
                                 ...current,
                                 sound: { ...current.sound, enabled: !current.sound.enabled },
@@ -719,7 +815,7 @@ function GeneralSettingsSectionInner({
                     </div>
                     <div className="rounded-lg border border-border bg-surface-primary px-3 py-2">
                         <div className="mb-2 flex items-center justify-between gap-3">
-                            <label className="text-xs font-medium text-text-primary">音量</label>
+                            <label className="text-xs font-medium text-text-primary">{t('settings.general.volume')}</label>
                             <span className="text-[11px] text-text-tertiary">
                                 {Math.round(notificationSettings.sound.volume * 100)}%
                             </span>
@@ -4987,17 +5083,18 @@ interface SettingsSaveBarProps {
 }
 
 export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
+    const { t } = useI18n();
     if (activeTab !== 'general' && activeTab !== 'ai' && activeTab !== 'profile' && activeTab !== 'experimental') {
         return null;
     }
 
-    const buttonLabel = activeTab === 'profile' ? '保存档案' : '保存配置';
+    const buttonLabel = activeTab === 'profile' ? t('settings.save.profile') : t('settings.save.config');
 
     return (
-        <div className="fixed bottom-0 left-48 right-0 p-4 bg-surface-primary border-t border-border flex items-center justify-between z-10 transition-all">
+        <div className="sticky bottom-0 -mx-8 mt-8 flex items-center justify-between border-t border-border bg-surface-primary/95 px-8 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.06)] backdrop-blur-xl transition-all">
             <div className="text-xs">
-                {status === 'saved' && <span className="text-status-success">保存成功</span>}
-                {status === 'error' && <span className="text-status-error">保存失败</span>}
+                {status === 'saved' && <span className="text-status-success">{t('settings.save.saved')}</span>}
+                {status === 'error' && <span className="text-status-error">{t('settings.save.error')}</span>}
             </div>
 
             <button
@@ -5006,7 +5103,7 @@ export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
                 className="flex items-center px-6 py-2 bg-text-primary text-background text-sm font-medium rounded-md hover:opacity-90 transition-opacity disabled:opacity-50 shadow-sm"
             >
                 <Save className="w-4 h-4 mr-2" />
-                {status === 'saving' ? '保存中...' : buttonLabel}
+                {status === 'saving' ? t('settings.save.saving') : buttonLabel}
             </button>
         </div>
     );

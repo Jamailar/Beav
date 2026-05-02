@@ -17,8 +17,9 @@ function replaceCargoPackageVersion(contents, version) {
   );
 }
 
-function replaceCargoLockRootVersion(contents, version) {
-  const pattern = /(\[\[package\]\]\nname = "redbox"\nversion = )"[^"]+"/;
+function replaceCargoLockRootVersion(contents, packageName, version) {
+  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`(\\[\\[package\\]\\]\\nname = "${escapedPackageName}"\\nversion = )"[^"]+"`);
   if (!pattern.test(contents)) {
     throw new Error('Failed to locate src-tauri/Cargo.lock root package version');
   }
@@ -53,9 +54,13 @@ export async function syncVersion({ cwd = process.cwd() } = {}) {
 
   const cargoTomlRaw = await fs.readFile(cargoTomlPath, 'utf8');
   const cargoLockRaw = await fs.readFile(cargoLockPath, 'utf8');
+  const packageName = cargoTomlRaw.match(/\[package\][\s\S]*?\nname = "([^"]+)"/)?.[1];
+  if (!packageName) {
+    throw new Error('Failed to locate src-tauri/Cargo.toml package.name');
+  }
 
   const nextCargoToml = replaceCargoPackageVersion(cargoTomlRaw, version);
-  const nextCargoLock = replaceCargoLockRootVersion(cargoLockRaw, version);
+  const nextCargoLock = replaceCargoLockRootVersion(cargoLockRaw, packageName, version);
 
   const [cargoTomlChanged, cargoLockChanged] = await Promise.all([
     writeIfChanged(cargoTomlPath, nextCargoToml),

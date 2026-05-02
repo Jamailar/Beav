@@ -22,11 +22,59 @@
   --color-accent-primary: 162 120 75;
   --color-accent-hover: 137 101 63;
   --color-accent-muted: 246 237 224;
+  --color-accent-border: 217 195 162;
+  --color-focus-ring: 162 120 75;
+  --color-primary: 162 120 75;
+  --color-primary-hover: 137 101 63;
+  --color-primary-pressed: 112 82 50;
+  --color-primary-text: 255 255 255;
   --color-status-success: 0 180 42;
   --color-status-warning: 255 125 0;
   --color-status-error: 245 63 63;
+  --color-success-bg: 232 250 236;
+  --color-success-text: 13 117 39;
+  --color-warning-bg: 255 244 222;
+  --color-warning-text: 122 75 0;
+  --color-danger-bg: 255 240 240;
+  --color-danger-text: 122 27 27;
+  --color-info: 55 107 255;
+  --color-info-bg: 238 243 255;
+  --color-info-text: 23 58 168;
   --color-brand-red: 225 29 72;
   --color-brand-red-text: 190 18 60;
+  --app-shell-background:
+    radial-gradient(1200px 500px at 90% -20%, rgb(var(--color-accent-primary) / 0.06), transparent 60%),
+    linear-gradient(180deg, rgb(var(--color-background) / 1) 0%, rgb(var(--color-surface-secondary) / 0.78) 100%);
+  --app-sidebar-background:
+    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94) 0%, rgb(var(--color-surface-secondary) / 0.96) 100%);
+  --app-sidebar-item-color: rgb(118 130 136 / 0.96);
+  --app-sidebar-item-hover-background: rgb(var(--color-surface-primary) / 0.46);
+  --app-sidebar-item-hover-color: rgb(89 102 109 / 1);
+  --app-sidebar-item-active-background: rgb(var(--color-surface-primary) / 0.28);
+  --app-sidebar-item-active-color: rgb(103 116 122 / 1);
+  --app-sidebar-item-active-icon-color: rgb(var(--color-accent-primary) / 0.95);
+  --app-card-shadow: 0 18px 44px rgba(30, 24, 16, 0.06);
+  --app-card-hover-shadow: 0 24px 64px rgba(30, 24, 16, 0.1);
+  --ai-panel-background:
+    radial-gradient(circle at 28% 0%, rgb(var(--color-accent-primary) / 0.12), transparent 34%),
+    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94), rgb(var(--color-surface-secondary) / 0.88));
+  --ai-panel-border: rgb(var(--color-accent-primary) / 0.16);
+  --ai-panel-shadow: 0 24px 60px rgba(30, 24, 16, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  --ai-chip-background: rgb(var(--color-accent-primary) / 0.12);
+  --ai-chip-color: rgb(var(--color-accent-primary) / 1);
+  --ai-chip-border: rgb(var(--color-accent-primary) / 0.18);
+  --module-ideate-bg: #f0fbf3;
+  --module-ideate-icon: #34d66b;
+  --module-write-bg: #f3f7ff;
+  --module-write-icon: #376bff;
+  --module-repurpose-bg: #f6f3ff;
+  --module-repurpose-icon: #8b5cf6;
+  --module-schedule-bg: #fff8ea;
+  --module-schedule-icon: #f5a524;
+  --module-analytics-bg: #effcf9;
+  --module-analytics-icon: #22c7b8;
+  --module-brand-bg: #f2f8f4;
+  --module-brand-icon: #0e4a39;
   --ui-radius-sm: 8px;
   --ui-radius-md: 12px;
   --ui-radius-lg: 16px;
@@ -53,11 +101,59 @@
   --color-accent-primary: 77 159 255;
   --color-accent-hover: 115 181 255;
   --color-accent-muted: 42 42 42;
+  --color-accent-border: 77 159 255;
+  --color-focus-ring: 77 159 255;
+  --color-primary: 77 159 255;
+  --color-primary-hover: 115 181 255;
+  --color-primary-pressed: 44 133 230;
+  --color-primary-text: 6 19 15;
   --color-status-success: 35 195 67;
   --color-status-warning: 255 154 46;
   --color-status-error: 247 101 96;
+  --color-success-bg: 21 58 32;
+  --color-success-text: 189 251 210;
+  --color-warning-bg: 64 47 20;
+  --color-warning-text: 255 225 161;
+  --color-danger-bg: 65 31 31;
+  --color-danger-text: 255 197 199;
+  --color-info: 125 165 255;
+  --color-info-bg: 28 43 79;
+  --color-info-text: 215 227 255;
   --color-brand-red: 245 95 95;
   --color-brand-red-text: 255 178 178;
+  --app-shell-background:
+    radial-gradient(1200px 500px at 90% -20%, rgb(var(--color-accent-primary) / 0.12), transparent 60%),
+    linear-gradient(180deg, rgb(var(--color-background) / 1) 0%, rgb(var(--color-surface-secondary) / 0.6) 100%);
+  --app-sidebar-background:
+    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94) 0%, rgb(var(--color-surface-secondary) / 0.9) 100%);
+  --app-sidebar-item-color: rgb(158 166 170 / 0.94);
+  --app-sidebar-item-hover-background: rgb(var(--color-surface-primary) / 0.46);
+  --app-sidebar-item-hover-color: rgb(214 218 220 / 1);
+  --app-sidebar-item-active-background: rgb(var(--color-surface-primary) / 0.28);
+  --app-sidebar-item-active-color: rgb(214 218 220 / 1);
+  --app-sidebar-item-active-icon-color: rgb(var(--color-accent-primary) / 0.95);
+  --app-card-shadow: 0 24px 70px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --app-card-hover-shadow: 0 28px 80px rgba(0, 0, 0, 0.36), 0 0 48px rgb(var(--color-accent-primary) / 0.08);
+  --ai-panel-background:
+    radial-gradient(circle at 36% 0%, rgb(var(--color-accent-primary) / 0.18), transparent 38%),
+    linear-gradient(180deg, rgb(var(--color-surface-secondary) / 0.92), rgb(var(--color-background) / 0.88));
+  --ai-panel-border: rgb(var(--color-accent-primary) / 0.16);
+  --ai-panel-shadow: 0 24px 70px rgba(0, 0, 0, 0.36), 0 0 60px rgb(var(--color-accent-primary) / 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --ai-chip-background: rgb(var(--color-accent-primary) / 0.14);
+  --ai-chip-color: rgb(var(--color-accent-primary) / 1);
+  --ai-chip-border: rgb(var(--color-accent-primary) / 0.18);
+  --module-ideate-bg: rgba(85, 233, 134, 0.12);
+  --module-ideate-icon: #55e986;
+  --module-write-bg: rgba(125, 165, 255, 0.12);
+  --module-write-icon: #7da5ff;
+  --module-repurpose-bg: rgba(167, 139, 250, 0.12);
+  --module-repurpose-icon: #a78bfa;
+  --module-schedule-bg: rgba(245, 165, 36, 0.13);
+  --module-schedule-icon: #f8c66b;
+  --module-analytics-bg: rgba(53, 216, 200, 0.12);
+  --module-analytics-icon: #35d8c8;
+  --module-brand-bg: rgba(189, 251, 210, 0.1);
+  --module-brand-icon: #bdfbd2;
   --ui-shadow-1: 0 10px 28px rgba(0, 0, 0, 0.32);
   --ui-shadow-2: 0 28px 64px rgba(0, 0, 0, 0.45);
 }
@@ -190,9 +286,8 @@ select {
 }
 
 .app-sidebar-shell {
-  background:
-    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94) 0%, rgb(var(--color-surface-secondary) / 0.96) 100%);
-  backdrop-filter: saturate(1.05) blur(8px);
+  background: var(--app-sidebar-background);
+  backdrop-filter: saturate(1.05) blur(24px);
 }
 
 .app-sidebar-shell--expanded {
@@ -226,7 +321,7 @@ select {
 }
 
 .app-sidebar-nav-item {
-  color: rgb(118 130 136 / 0.96);
+  color: var(--app-sidebar-item-color);
   letter-spacing: 0;
 }
 
@@ -252,19 +347,19 @@ select {
 }
 
 .app-sidebar-nav-item--plain:hover {
-  background: rgb(var(--color-surface-primary) / 0.46);
-  color: rgb(89 102 109 / 1);
+  background: var(--app-sidebar-item-hover-background);
+  color: var(--app-sidebar-item-hover-color);
 }
 
 .app-sidebar-nav-item--active {
-  background: rgb(var(--color-surface-primary) / 0.28);
-  color: rgb(103 116 122 / 1);
+  background: var(--app-sidebar-item-active-background);
+  color: var(--app-sidebar-item-active-color);
   box-shadow: none;
 }
 
 .app-sidebar-nav-item--active-special {
   background: transparent;
-  color: rgb(var(--color-accent-primary) / 0.95);
+  color: var(--app-sidebar-item-active-icon-color);
 }
 
 .app-sidebar-nav-icon {
@@ -393,18 +488,9 @@ select {
   text-align: center;
 }
 
-[data-theme='dark'] .app-sidebar-shell {
-  background:
-    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.94) 0%, rgb(var(--color-surface-secondary) / 0.9) 100%);
-}
-
-[data-theme='dark'] .app-sidebar-nav-item {
-  color: rgb(158 166 170 / 0.94);
-}
-
 [data-theme='dark'] .app-sidebar-nav-item--plain:hover,
 [data-theme='dark'] .app-sidebar-nav-item--active {
-  color: rgb(214 218 220 / 1);
+  color: var(--app-sidebar-item-hover-color);
 }
 
 .automation-page {
@@ -958,15 +1044,7 @@ select {
 }
 
 .app-main-shell {
-  background:
-    radial-gradient(1200px 500px at 90% -20%, rgb(var(--color-accent-primary) / 0.06), transparent 60%),
-    linear-gradient(180deg, rgb(var(--color-background) / 1) 0%, rgb(var(--color-surface-secondary) / 0.78) 100%);
-}
-
-[data-theme='dark'] .app-main-shell {
-  background:
-    radial-gradient(1200px 500px at 90% -20%, rgb(var(--color-accent-primary) / 0.12), transparent 60%),
-    linear-gradient(180deg, rgb(var(--color-background) / 1) 0%, rgb(var(--color-surface-secondary) / 0.6) 100%);
+  background: var(--app-shell-background);
 }
 
 /* Runtime fallback: force semantic utility classes to follow CSS variables
@@ -1511,128 +1589,101 @@ select {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(700px 300px at 18% 16%, rgb(var(--color-accent-primary) / 0.18), transparent 65%),
-    radial-gradient(520px 260px at 86% 14%, rgb(var(--color-brand-red) / 0.16), transparent 62%),
-    linear-gradient(180deg, rgb(17 17 17 / 0.32) 0%, rgb(17 17 17 / 0.52) 100%);
+    linear-gradient(180deg, rgb(17 17 17 / 0.22) 0%, rgb(17 17 17 / 0.38) 100%);
   animation: redbox-tour-fade-in 320ms ease-out both;
 }
 
 .redbox-tour-panel {
   position: relative;
-  width: min(920px, calc(100vw - 56px));
-  border-radius: 28px;
+  width: min(460px, calc(100vw - 40px));
+  border-radius: 14px;
   overflow: hidden;
-  background:
-    linear-gradient(180deg, rgb(var(--color-surface-primary) / 0.98) 0%, rgb(var(--color-surface-secondary) / 0.98) 100%);
+  background: rgb(var(--color-surface-primary) / 0.98);
   border: 1px solid rgb(var(--color-border) / 0.85);
   box-shadow:
-    0 30px 80px rgba(16, 18, 27, 0.22),
-    0 8px 24px rgba(16, 18, 27, 0.12);
+    0 24px 64px rgba(16, 18, 27, 0.18),
+    0 6px 18px rgba(16, 18, 27, 0.10);
   animation: redbox-tour-panel-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.redbox-tour-panel-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgb(var(--color-text-primary) / 0.22);
+  border-radius: 8px;
+  background: rgb(var(--color-surface-primary) / 0.18);
+  color: rgb(var(--color-text-primary) / 0.86);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.redbox-tour-panel-close:hover {
+  background: rgb(var(--color-surface-primary) / 0.34);
 }
 
 .redbox-tour-hero {
   position: relative;
-  min-height: 216px;
+  min-height: 204px;
   overflow: hidden;
-  padding: 26px 28px 20px;
-  background:
-    radial-gradient(420px 220px at 18% 18%, rgb(var(--color-accent-primary) / 0.16), transparent 70%),
-    radial-gradient(380px 200px at 84% 24%, rgb(var(--color-brand-red) / 0.16), transparent 68%),
-    linear-gradient(135deg, rgb(var(--color-surface-secondary) / 1) 0%, rgb(var(--color-surface-primary) / 1) 100%);
-}
-
-.redbox-tour-hero-orbit {
-  position: absolute;
-  border-radius: 999px;
-  border: 1px solid rgb(var(--color-border) / 0.6);
-  animation: redbox-tour-orbit 16s linear infinite;
-}
-
-.redbox-tour-hero-orbit--one {
-  inset: 24px auto auto 22px;
-  width: 180px;
-  height: 180px;
-}
-
-.redbox-tour-hero-orbit--two {
-  inset: auto 54px 14px auto;
-  width: 240px;
-  height: 240px;
-  animation-direction: reverse;
-  animation-duration: 22s;
-}
-
-.redbox-tour-hero-grid {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
-  align-items: end;
-  min-height: 170px;
-}
-
-.redbox-tour-hero-grid--compact {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: center;
-  min-height: 132px;
-}
-
-.redbox-tour-hero-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 54px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  border: 1px solid rgb(var(--color-border) / 0.7);
-  background: rgb(var(--color-surface-primary) / 0.78);
+  justify-content: center;
+  padding: 48px 28px 36px;
+  background:
+    radial-gradient(260px 120px at 20% 82%, rgb(var(--color-brand-red) / 0.26), transparent 70%),
+    radial-gradient(360px 180px at 48% 48%, rgb(255 255 255 / 0.58), transparent 72%),
+    linear-gradient(135deg, #60c8ff 0%, #42afea 50%, #3ba8e6 100%);
+}
+
+.redbox-tour-hero-blob {
+  position: absolute;
+  border-radius: 48% 52% 55% 45%;
+  filter: blur(10px);
+  opacity: 0.72;
+  background: rgb(236 230 255 / 0.9);
+}
+
+.redbox-tour-hero-blob--one {
+  width: 260px;
+  height: 118px;
+  left: 24px;
+  top: 42px;
+  transform: rotate(14deg);
+}
+
+.redbox-tour-hero-blob--two {
+  width: 180px;
+  height: 90px;
+  right: 22px;
+  bottom: 10px;
+  transform: rotate(-16deg);
+}
+
+.redbox-tour-hero-pill {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 12px 16px;
+  background: rgb(var(--color-surface-primary) / 0.84);
   color: rgb(var(--color-text-primary) / 1);
-  box-shadow: 0 12px 32px rgba(16, 18, 27, 0.08);
-  backdrop-filter: blur(10px);
-  animation: redbox-tour-card-float 6s ease-in-out infinite;
-}
-
-.redbox-tour-hero-card--compact {
-  grid-column: span 1;
-  min-height: 52px;
-}
-
-.redbox-tour-hero-card span {
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-
-.redbox-tour-hero-card--knowledge {
-  grid-column: span 2;
-}
-
-.redbox-tour-hero-card--wander {
-  grid-column: span 2;
-  margin-top: 18px;
-  animation-delay: 0.5s;
-}
-
-.redbox-tour-hero-card--draft {
-  grid-column: span 2;
-  animation-delay: 1s;
-}
-
-.redbox-tour-hero-card--generate {
-  grid-column: span 3;
-  animation-delay: 1.5s;
-}
-
-.redbox-tour-hero-card--automation {
-  grid-column: span 3;
-  margin-bottom: 8px;
-  animation-delay: 2s;
+  box-shadow: 0 10px 28px rgba(16, 18, 27, 0.14);
+  backdrop-filter: blur(14px);
 }
 
 .redbox-tour-panel-body {
-  padding: 28px;
+  padding: 32px 28px 36px;
+  text-align: center;
 }
 
 .redbox-tour-panel-kicker {
@@ -1648,17 +1699,17 @@ select {
 }
 
 .redbox-tour-panel-title {
-  margin: 16px 0 10px;
-  font-size: clamp(28px, 3.6vw, 38px);
-  line-height: 1.06;
-  letter-spacing: -0.03em;
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.3;
+  letter-spacing: 0;
 }
 
 .redbox-tour-panel-desc {
-  margin: 0;
-  max-width: 640px;
+  margin: 12px auto 0;
+  max-width: 330px;
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 1.55;
   color: rgb(var(--color-text-secondary) / 1);
 }
 
@@ -1784,15 +1835,15 @@ select {
 .redbox-tour-panel-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 24px;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 28px;
 }
 
 .redbox-tour-panel-btn {
   border: 0;
-  border-radius: 14px;
-  padding: 11px 16px;
+  border-radius: 999px;
+  padding: 10px 20px;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
@@ -1804,10 +1855,9 @@ select {
 }
 
 .redbox-tour-panel-btn-primary {
-  background:
-    linear-gradient(135deg, rgb(var(--color-accent-primary) / 1) 0%, rgb(var(--color-brand-red) / 0.82) 100%);
+  background: rgb(var(--color-text-primary) / 0.82);
   color: #ffffff;
-  box-shadow: 0 16px 30px rgb(var(--color-brand-red) / 0.18);
+  box-shadow: none;
 }
 
 @keyframes redbox-tour-fade-in {

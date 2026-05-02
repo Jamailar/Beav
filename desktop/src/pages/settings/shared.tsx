@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Eye, EyeOff, FileText, Image as ImageIcon, Video, AudioLines } from 'lucide-react';
 import clsx from 'clsx';
+import { APP_BRAND } from '../../config/brand';
 import {
   type AiSourcePreset,
   type AiSourceConfig,
@@ -18,7 +19,7 @@ import {
   type ModelInputCapability,
 } from '../../../shared/modelCapabilities';
 
-const REDBOX_OFFICIAL_LOGO_URL = new URL('../../../redbox.png', import.meta.url).href;
+const REDBOX_OFFICIAL_LOGO_URL = APP_BRAND.logoSrc;
 
 export interface UserMemory {
   id: string;

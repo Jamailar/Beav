@@ -4,27 +4,23 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import 'tippy.js/dist/tippy.css'
 import './index.css'
+import { APP_BRAND } from './config/brand'
+import { applyAppTheme, readThemeMode } from './config/theme'
 import { appAlert, appConfirm } from './utils/appDialogs'
 import { installRendererDiagnostics, reportRendererError } from './logging/client'
-
-const THEME_STORAGE_KEY = 'redbox:theme-mode:v1';
+import { I18nProvider } from './i18n'
 
 const initializeThemeMode = () => {
   try {
-    const saved = String(window.localStorage.getItem(THEME_STORAGE_KEY) || '').trim().toLowerCase();
-    const mode = (saved === 'light' || saved === 'dark')
-      ? saved
-      : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    document.documentElement.setAttribute('data-theme', mode);
-    document.documentElement.classList.toggle('dark', mode === 'dark');
+    applyAppTheme(readThemeMode());
   } catch {
-    document.documentElement.setAttribute('data-theme', 'light');
-    document.documentElement.classList.remove('dark');
+    applyAppTheme('light');
   }
 };
 
 initializeThemeMode();
 installRendererDiagnostics();
+document.title = APP_BRAND.htmlTitle;
 
 window.alert = ((message?: unknown) => {
   void appAlert(String(message ?? ''));
@@ -98,7 +94,9 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 const appTree = (
   <ErrorBoundary>
-    <App />
+    <I18nProvider>
+      <App />
+    </I18nProvider>
   </ErrorBoundary>
 );
 

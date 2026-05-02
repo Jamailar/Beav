@@ -1,5 +1,6 @@
 import { History, Loader2, Plus, Trash2, Users } from 'lucide-react';
 import { clsx } from 'clsx';
+import { REDCLAW_DISPLAY_NAME } from './config';
 import { formatDateTime } from './helpers';
 
 interface RedClawTeamRoom {
@@ -16,6 +17,11 @@ export interface RedClawHistoryListItem extends ContextChatSessionListItem {
     speakerLabel: string;
     advisorId?: string;
     roomId?: string;
+}
+
+function displaySessionTitle(title: string, surface: RedClawHistorySurface): string {
+    if (surface !== 'redclaw') return title;
+    return title.replace(/^RedClaw(\s*·\s*)/, `${REDCLAW_DISPLAY_NAME}$1`);
 }
 
 interface RedClawHistorySidebarSectionProps {
@@ -134,10 +140,10 @@ export function RedClawHistorySidebarSection({
                     <div className="space-y-0.5 pb-6">
                         {sessionList.map((session) => {
                             const isActive = session.id === activeSessionId;
-                            const title = session.chatSession?.title?.trim() || '未命名会话';
+                            const title = displaySessionTitle(session.chatSession?.title?.trim() || '未命名会话', session.surface);
                             const time = formatDateTime(session.chatSession?.updatedAt || session.chatSession?.createdAt || null);
                             const summary = session.summary?.trim();
-                            const speakerLabel = session.speakerLabel || 'RedClaw';
+                            const speakerLabel = session.speakerLabel || REDCLAW_DISPLAY_NAME;
 
                             return (
                                 <div
