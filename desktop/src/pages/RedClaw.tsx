@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, Plus, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
@@ -36,7 +36,7 @@ import {
     normalizeClawHubSlug,
     sortContextSessionItems,
 } from './redclaw/helpers';
-import { RedClawHistoryDrawer, type RedClawHistoryListItem } from './redclaw/RedClawHistoryDrawer';
+import { RedClawHistorySidebarSection, type RedClawHistoryListItem } from './redclaw/RedClawHistoryDrawer';
 import { RedClawFilePreviewPane } from './redclaw/RedClawFilePreviewPane';
 import {
     isRedClawOnboardingCompleted,
@@ -317,12 +317,16 @@ const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): Ch
 interface RedClawProps {
     pendingMessage?: PendingChatMessage | null;
     onPendingMessageConsumed?: () => void;
+    navigationAction?: { action: 'new'; nonce: number } | null;
+    onNavigationActionConsumed?: () => void;
     isActive?: boolean;
     onExecutionStateChange?: (active: boolean) => void;
     onOpenRedClawOnboarding?: () => void;
     redclawOnboardingVersion?: number;
     composerShortcutInputs?: RedClawComposerShortcutInput[];
     welcomeShortcutInputs?: RedClawComposerShortcutInput[];
+    onGlobalSidebarContentChange?: (content: ReactNode | null) => void;
+    onOpenChatSurface?: () => void;
 }
 
 interface RedClawSpaceListPayload {
@@ -988,12 +992,16 @@ function RedClawRoomConversation({
 export function RedClaw({
     pendingMessage,
     onPendingMessageConsumed,
+    navigationAction,
+    onNavigationActionConsumed,
     isActive = true,
     onExecutionStateChange,
     onOpenRedClawOnboarding,
     redclawOnboardingVersion = 0,
     composerShortcutInputs,
     welcomeShortcutInputs,
+    onGlobalSidebarContentChange,
+    onOpenChatSurface,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -1004,7 +1012,6 @@ export function RedClaw({
     const [advisorHistorySessions, setAdvisorHistorySessions] = useState<RedClawHistoryListItem[]>([]);
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
-    const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
     const [activeSpaceName, setActiveSpaceName] = useState<string>('默认空间');
     const [activeSpaceId, setActiveSpaceId] = useState<string>('default');
     const [chatRefreshKey, setChatRefreshKey] = useState(0);
@@ -1089,6 +1096,8 @@ export function RedClaw({
     const [longAdvanced, setLongAdvanced] = useState(false);
     const [longDraft, setLongDraft] = useState<LongDraft>(() => longDraftFromTemplate(LONG_TEMPLATES[0]));
     const [isAddingLong, setIsAddingLong] = useState(false);
+    const shouldSyncGlobalHistory = Boolean(onGlobalSidebarContentChange);
+    const shouldLoadHistory = isActive || shouldSyncGlobalHistory;
     const sessionRequestIdRef = useRef(0);
     const activeSessionIdRef = useRef<string | null>(null);
     const sessionListRef = useRef<ContextChatSessionListItem[]>([]);
@@ -1099,6 +1108,7 @@ export function RedClaw({
     const hasRunnerSnapshotRef = useRef(false);
     const hasSkillsSnapshotRef = useRef(false);
     const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
+    const consumedNavigationActionNonceRef = useRef<number | null>(null);
 
     useEffect(() => {
         activeSessionIdRef.current = activeSessionId;
@@ -1121,7 +1131,7 @@ export function RedClaw({
     }, [activeAiSurface]);
 
     useEffect(() => {
-        if (!isActive) return;
+        if (!shouldLoadHistory) return;
         let cancelled = false;
 
         const loadTeamData = async () => {
@@ -1148,7 +1158,7 @@ export function RedClaw({
             cancelled = true;
             window.removeEventListener('redclaw:team-settings-changed', handleTeamSettingsChanged);
         };
-    }, [isActive]);
+    }, [shouldLoadHistory]);
 
     useEffect(() => {
         onExecutionStateChange?.(isRedClawChatExecuting);
@@ -1180,7 +1190,7 @@ export function RedClaw({
     }, [advisors, selectedAdvisorId]);
 
     useEffect(() => {
-        if (!isActive || advisors.length === 0) return;
+        if (!shouldLoadHistory || advisors.length === 0) return;
         let cancelled = false;
 
         const loadAdvisorHistories = async () => {
@@ -1223,7 +1233,7 @@ export function RedClaw({
         return () => {
             cancelled = true;
         };
-    }, [advisors, isActive]);
+    }, [advisors, shouldLoadHistory]);
 
     const selectedAdvisor = useMemo(
         () => advisors.find((advisor) => advisor.id === selectedAdvisorId) || null,
@@ -1595,10 +1605,12 @@ export function RedClaw({
     }, [debugUi]);
 
     useEffect(() => {
-        if (!isActive) return;
+        if (!shouldLoadHistory) return;
         void initSession();
-        void loadRunnerStatus(true);
-    }, [initSession, isActive, loadRunnerStatus]);
+        if (isActive) {
+            void loadRunnerStatus(true);
+        }
+    }, [initSession, isActive, loadRunnerStatus, shouldLoadHistory]);
 
     useEffect(() => {
         if (!isActive || !activeSessionId) return;
@@ -1614,20 +1626,22 @@ export function RedClaw({
     }, [loadOnboardingBundle, loadSkills, redclawOnboardingVersion]);
 
     useEffect(() => {
-        if (!isActive) return;
+        if (!shouldLoadHistory) return;
         const onSpaceChanged = () => {
             setOnboardingState(undefined);
             void initSession();
-            void loadRunnerStatus(true);
-            void loadSkills();
-            void loadOnboardingBundle();
+            if (isActive) {
+                void loadRunnerStatus(true);
+                void loadSkills();
+                void loadOnboardingBundle();
+            }
             setHideOnboardingPrompt(false);
         };
         window.ipcRenderer.on('space:changed', onSpaceChanged);
         return () => {
             window.ipcRenderer.off('space:changed', onSpaceChanged);
         };
-    }, [initSession, isActive, loadOnboardingBundle, loadRunnerStatus, loadSkills]);
+    }, [initSession, isActive, loadOnboardingBundle, loadRunnerStatus, loadSkills, shouldLoadHistory]);
 
     useEffect(() => {
         setOnboardingState(undefined);
@@ -1653,7 +1667,7 @@ export function RedClaw({
     }, [isActive]);
 
     useEffect(() => {
-        if (!isActive) return;
+        if (!shouldLoadHistory) return;
         const onSessionTitleUpdated = (_event: unknown, payload: { sessionId?: string; title?: string }) => {
             const nextSessionId = String(payload?.sessionId || '').trim();
             const nextTitle = String(payload?.title || '').trim();
@@ -1676,16 +1690,7 @@ export function RedClaw({
         return () => {
             window.ipcRenderer.off('chat:session-title-updated', onSessionTitleUpdated);
         };
-    }, [isActive]);
-
-    useEffect(() => {
-        if (!isActive || !historyDrawerOpen) return;
-        void loadContextSessions(activeSpaceId || 'default', activeSpaceName || '默认空间', {
-            preferredSessionId: activeSessionIdRef.current,
-            createIfEmpty: true,
-            silent: false,
-        });
-    }, [activeSpaceId, activeSpaceName, historyDrawerOpen, isActive, loadContextSessions]);
+    }, [shouldLoadHistory]);
 
     useEffect(() => {
         if (!chatActionMessage) return;
@@ -1759,6 +1764,17 @@ export function RedClaw({
         }
     }, [activeSpaceId, activeSpaceName, debugUi]);
 
+    useEffect(() => {
+        if (!isActive || !navigationAction) return;
+        if (navigationAction.action !== 'new') return;
+        if (consumedNavigationActionNonceRef.current === navigationAction.nonce) return;
+        consumedNavigationActionNonceRef.current = navigationAction.nonce;
+        setActiveAiSurface('redclaw');
+        void createNewSession().finally(() => {
+            onNavigationActionConsumed?.();
+        });
+    }, [createNewSession, isActive, navigationAction, onNavigationActionConsumed]);
+
     const switchSession = useCallback((nextSessionId: string) => {
         if (!nextSessionId || nextSessionId === activeSessionIdRef.current) return;
         setActiveAiSurface('redclaw');
@@ -1791,22 +1807,20 @@ export function RedClaw({
 
     const switchHistorySession = useCallback((session: RedClawHistoryListItem) => {
         if (!session?.id) return;
+        onOpenChatSurface?.();
         if (session.surface === 'advisor' && session.advisorId) {
             setSelectedAdvisorId(session.advisorId);
             setAdvisorSessionIds((prev) => ({ ...prev, [session.advisorId!]: session.id }));
             setActiveAiSurface('advisor');
-            setHistoryDrawerOpen(false);
             return;
         }
         if (session.surface === 'room' && session.roomId) {
             setSelectedRoomId(session.roomId);
             setActiveAiSurface('room');
-            setHistoryDrawerOpen(false);
             return;
         }
         switchSession(session.id);
-        setHistoryDrawerOpen(false);
-    }, [switchSession]);
+    }, [onOpenChatSurface, switchSession]);
 
     const createAdvisorSession = useCallback(async (advisor: AdvisorProfile): Promise<string | null> => {
         setSpeakerSessionLoading(true);
@@ -1919,10 +1933,10 @@ export function RedClaw({
     const switchRoom = useCallback((roomId: string) => {
         const room = teamRooms.find((item) => item.id === roomId);
         if (!room) return;
+        onOpenChatSurface?.();
         setSelectedRoomId(room.id);
         setActiveAiSurface('room');
-        setHistoryDrawerOpen(false);
-    }, [teamRooms]);
+    }, [onOpenChatSurface, teamRooms]);
 
     const switchAdvisor = useCallback((advisorId: string) => {
         const advisor = advisors.find((item) => item.id === advisorId);
@@ -1983,7 +1997,6 @@ export function RedClaw({
             setTeamRooms((prev) => [...prev.filter((item) => item.id !== room.id), room]);
             setSelectedRoomId(room.id);
             setActiveAiSurface('room');
-            setHistoryDrawerOpen(false);
         } catch (error) {
             console.error('Failed to create RedClaw room:', error);
             setChatActionMessage(error instanceof Error ? error.message : '创建群聊失败');
@@ -2584,6 +2597,49 @@ export function RedClaw({
         };
     }, [activeSessionId]);
 
+    useEffect(() => {
+        if (!onGlobalSidebarContentChange) return;
+        onGlobalSidebarContentChange(
+            <RedClawHistorySidebarSection
+                historyLoading={historyLoading}
+                sessionList={unifiedHistorySessions}
+                activeSessionId={activeAiSurface === 'room' ? null : activeSpeakerSessionId}
+                teamRooms={teamRooms}
+                activeRoomId={selectedRoomId}
+                activeSurface={activeAiSurface}
+                onCreateSession={() => {
+                    onOpenChatSurface?.();
+                    void createNewSession();
+                }}
+                onCreateRoom={createRoomFromRedClaw}
+                onSwitchRoom={switchRoom}
+                onSwitchSession={switchHistorySession}
+                onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
+            />
+        );
+    }, [
+        activeAiSurface,
+        activeSpeakerSessionId,
+        createNewSession,
+        createRoomFromRedClaw,
+        deleteUnifiedHistorySession,
+        historyLoading,
+        onGlobalSidebarContentChange,
+        selectedRoomId,
+        switchHistorySession,
+        switchRoom,
+        teamRooms,
+        unifiedHistorySessions,
+    ]);
+
+    useEffect(() => () => {
+        onGlobalSidebarContentChange?.(null);
+    }, [onGlobalSidebarContentChange]);
+
+    if (!isActive && shouldSyncGlobalHistory) {
+        return <div className="hidden" />;
+    }
+
 
     return (
         <div className="h-full min-h-0 flex overflow-hidden bg-surface-primary">
@@ -2714,23 +2770,6 @@ export function RedClaw({
                                     />
                                 )}
                             </div>
-                            <RedClawHistoryDrawer
-                                open={historyDrawerOpen}
-                                activeSpaceName={activeSpaceName}
-                                historyLoading={historyLoading}
-                                sessionList={unifiedHistorySessions}
-                                activeSessionId={activeAiSurface === 'room' ? null : activeSpeakerSessionId}
-                                teamRooms={teamRooms}
-                                activeRoomId={selectedRoomId}
-                                activeSurface={activeAiSurface}
-                                onToggleOpen={() => setHistoryDrawerOpen((value) => !value)}
-                                onClose={() => setHistoryDrawerOpen(false)}
-                                onCreateSession={() => void createNewSession()}
-                                onCreateRoom={createRoomFromRedClaw}
-                                onSwitchRoom={switchRoom}
-                                onSwitchSession={switchHistorySession}
-                                onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
-                            />
                             <RedClawSidebar
                                 open={!sidebarCollapsed}
                                 chatActionMessage={chatActionMessage}

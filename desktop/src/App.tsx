@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
 import { Link2, Loader2 } from 'lucide-react';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
@@ -11,7 +11,7 @@ import { RedClawOnboardingFlowHost } from './pages/redclaw/RedClawOnboardingFlow
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
-const ChatPage = lazy(async () => ({ default: (await import('./pages/Chat')).Chat }));
+const HomePage = lazy(async () => ({ default: (await import('./pages/Home')).Home }));
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
@@ -24,10 +24,9 @@ const MediaLibraryPage = lazy(async () => ({ default: (await import('./pages/Med
 const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/CoverStudio')).CoverStudio }));
 const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages/GenerationStudio')).GenerationStudio }));
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
-const WorkboardPage = lazy(async () => ({ default: (await import('./pages/Workboard')).Workboard }));
-const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
+const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
 
-export type ViewType = 'chat' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'workboard' | 'approval';
+export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'group-chat' | 'members';
 type SettingsNavigationTarget = {
@@ -35,11 +34,15 @@ type SettingsNavigationTarget = {
   aiModelSubTab?: 'custom' | 'login';
   nonce: number;
 };
+type RedClawNavigationAction = {
+  action: 'new';
+  nonce: number;
+};
 
 const PINNED_VIEWS: ViewType[] = [];
 const MAX_CACHED_VIEWS = 0;
 const NON_CACHEABLE_VIEWS = new Set<ViewType>([
-  'chat',
+  'home',
   'skills',
   'knowledge',
   'settings',
@@ -52,8 +55,7 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'cover-studio',
   'generation-studio',
   'subjects',
-  'workboard',
-  'approval',
+  'automation',
 ]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 const OFFICIAL_AUTH_NOTICE_ENABLED = false;
@@ -277,15 +279,15 @@ function clearStaleOfficialAuthSnapshots(): boolean {
 function App() {
   useOfficialAuthLifecycle();
 
-  const [currentView, setCurrentView] = useState<ViewType>('manuscripts');
+  const [currentView, setCurrentView] = useState<ViewType>('home');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
   const [redclawOnboardingOpen, setRedclawOnboardingOpen] = useState(false);
   const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
-  const [pendingChatMessage, setPendingChatMessage] = useState<PendingChatMessage | null>(null);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
+  const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
-  const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['manuscripts']));
+  const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['home']));
   const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
   const [clipboardCandidate, setClipboardCandidate] = useState<YouTubeClipboardCandidate | null>(null);
   const [isCapturePromptOpen, setIsCapturePromptOpen] = useState(false);
@@ -296,11 +298,12 @@ function App() {
   const [startupMigrationDismissed, setStartupMigrationDismissed] = useState(false);
   const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
   const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
+  const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
   const capturedYouTubeSetRef = useRef<Set<string>>(new Set());
-  const viewHistoryRef = useRef<ViewType[]>(['manuscripts']);
+  const viewHistoryRef = useRef<ViewType[]>(['home']);
   const capturePromptOpenRef = useRef(false);
   const captureStatusRef = useRef<'idle' | 'saving' | 'success' | 'error'>('idle');
   const lastAuthStatusRef = useRef('');
@@ -380,6 +383,7 @@ function App() {
         view?: ViewType;
         settingsTab?: SettingsNavigationTarget['tab'];
         aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
+        redclawAction?: RedClawNavigationAction['action'];
       }>).detail;
       const nextView = detail?.view;
       if (!nextView) return;
@@ -387,6 +391,12 @@ function App() {
         setSettingsNavigationTarget({
           tab: detail.settingsTab,
           aiModelSubTab: detail.aiModelSubTab,
+          nonce: Date.now(),
+        });
+      }
+      if (nextView === 'redclaw' && detail.redclawAction === 'new') {
+        setRedClawNavigationAction({
+          action: 'new',
           nonce: Date.now(),
         });
       }
@@ -407,18 +417,6 @@ function App() {
     captureStatusRef.current = captureStatus;
   }, [captureStatus]);
 
-  // 导航到 Chat 页面并发送消息
-  const navigateToChat = (message: PendingChatMessage) => {
-    uiTraceInteraction('app', 'nav_to_chat', { to: 'chat' });
-    setPendingChatMessage(message);
-    setCurrentView('chat');
-  };
-
-  // Chat 页面消费消息后清除
-  const clearPendingMessage = () => {
-    setPendingChatMessage(null);
-  };
-
   const openRedClawOnboarding = useCallback(() => {
     setRedclawOnboardingOpen(true);
   }, []);
@@ -431,6 +429,10 @@ function App() {
 
   const clearPendingRedClawMessage = () => {
     setPendingRedClawMessage(null);
+  };
+
+  const clearRedClawNavigationAction = () => {
+    setRedClawNavigationAction(null);
   };
 
   // 导航到稿件页面并打开指定文件
@@ -470,10 +472,6 @@ function App() {
       return next;
     });
   }, []);
-
-  const handleChatExecutionStateChange = useCallback((active: boolean) => {
-    setViewPersistent('chat', active);
-  }, [setViewPersistent]);
 
   const handleWanderExecutionStateChange = useCallback((active: boolean) => {
     setViewPersistent('wander', active);
@@ -662,16 +660,12 @@ function App() {
         onNavigate={setCurrentView}
         immersiveMode={immersiveMode}
         globalNotice={globalAuthNotice}
+        globalSidebarContent={redClawGlobalSidebarContent}
       >
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'chat') && (
-          <div className={currentView === 'chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'chat' ? <ViewLoadingFallback /> : null}>
-              <ChatPage
-                isActive={currentView === 'chat' || persistentViews.has('chat')}
-                onExecutionStateChange={handleChatExecutionStateChange}
-                pendingMessage={pendingChatMessage}
-                onMessageConsumed={clearPendingMessage}
-              />
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'home') && (
+          <div className={currentView === 'home' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'home' ? <ViewLoadingFallback /> : null}>
+              <HomePage isActive={currentView === 'home'} />
             </Suspense>
           </div>
         )}
@@ -744,16 +738,20 @@ function App() {
             </Suspense>
           </div>
         )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'redclaw') && (
+        {(currentView !== 'redclaw' || shouldRenderView(mountedViews, currentView, persistentViews, 'redclaw')) && (
           <div className={currentView === 'redclaw' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'redclaw' ? <ViewLoadingFallback /> : null}>
               <RedClawPage
                 pendingMessage={pendingRedClawMessage}
                 onPendingMessageConsumed={clearPendingRedClawMessage}
+                navigationAction={redClawNavigationAction}
+                onNavigationActionConsumed={clearRedClawNavigationAction}
                 isActive={currentView === 'redclaw' || persistentViews.has('redclaw')}
                 onExecutionStateChange={handleRedClawExecutionStateChange}
                 onOpenRedClawOnboarding={openRedClawOnboarding}
                 redclawOnboardingVersion={redclawOnboardingVersion}
+                onGlobalSidebarContentChange={setRedClawGlobalSidebarContent}
+                onOpenChatSurface={() => setCurrentView('redclaw')}
               />
             </Suspense>
           </div>
@@ -797,20 +795,10 @@ function App() {
             </Suspense>
           </div>
         )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'workboard') && (
-          <div className={currentView === 'workboard' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'workboard' ? <ViewLoadingFallback /> : null}>
-              <WorkboardPage
-                isActive={currentView === 'workboard'}
-                onNavigateToApproval={() => setCurrentView('approval')}
-              />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'approval') && (
-          <div className={currentView === 'approval' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'approval' ? <ViewLoadingFallback /> : null}>
-              <ApprovalPage isActive={currentView === 'approval'} />
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'automation') && (
+          <div className={currentView === 'automation' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'automation' ? <ViewLoadingFallback /> : null}>
+              <AutomationPage isActive={currentView === 'automation'} />
             </Suspense>
           </div>
         )}

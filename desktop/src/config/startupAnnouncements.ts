@@ -55,7 +55,7 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
       { id: 'draft', label: '过程回放', icon: 'draft' },
     ],
     shortcuts: [
-      { id: 'workboard', label: '去工作台', view: 'workboard' },
+      { id: 'automation', label: '去自动化', view: 'automation' },
       { id: 'redclaw', label: '去 RedClaw', view: 'redclaw' },
       { id: 'skills', label: '去技能', view: 'skills' },
     ],

@@ -79,7 +79,7 @@ function ApprovalMetaPill({ label, value }: { label: string; value: string }) {
     );
 }
 
-export function Approval({ isActive = true }: { isActive?: boolean }) {
+export function ApprovalPanel({ isActive = true }: { isActive?: boolean }) {
     const [dockets, setDockets] = useState<ReviewDocketRecord[]>([]);
     const [selectedId, setSelectedId] = useState('');
     const [loading, setLoading] = useState(true);
@@ -376,4 +376,8 @@ export function Approval({ isActive = true }: { isActive?: boolean }) {
             </div>
         </div>
     );
+}
+
+export function Approval(props: { isActive?: boolean }) {
+    return <ApprovalPanel {...props} />;
 }
