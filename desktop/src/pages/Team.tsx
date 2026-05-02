@@ -179,7 +179,7 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   };
 
   return (
-    <div className="flex h-full min-h-0 bg-background">
+    <div className="flex h-full min-h-0">
       <aside className="w-[17.5rem] shrink-0 border-r border-border bg-surface-secondary/25 flex flex-col">
         <div className="border-b border-border px-4 py-4">
           <div className="flex items-center justify-between gap-3">

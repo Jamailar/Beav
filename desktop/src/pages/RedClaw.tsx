@@ -888,7 +888,7 @@ function RedClawRoomConversation({
     }
 
     return (
-        <div className="flex h-full min-h-0 flex-col bg-surface-primary">
+        <div className="flex h-full min-h-0 flex-col">
             <div className="shrink-0 border-b border-border/70 px-6 py-4">
                 <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4">
                     <div className="min-w-0">
@@ -938,7 +938,7 @@ function RedClawRoomConversation({
                 </div>
             </div>
 
-            <div className="shrink-0 bg-surface-primary pb-4 pt-2 md:pb-5">
+            <div className="shrink-0 bg-transparent pb-4 pt-2 md:pb-5">
                 <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-4">
                     {errorNotice && (
                         <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
@@ -1027,6 +1027,11 @@ export function RedClaw({
     const [advisorSessionIds, setAdvisorSessionIds] = useState<Record<string, string>>({});
     const [speakerSessionLoading, setSpeakerSessionLoading] = useState(false);
     const [advisorCreateModalOpen, setAdvisorCreateModalOpen] = useState(false);
+    const [roomCreateModalOpen, setRoomCreateModalOpen] = useState(false);
+    const [roomCreateName, setRoomCreateName] = useState('');
+    const [roomCreateAdvisorIds, setRoomCreateAdvisorIds] = useState<string[]>([]);
+    const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+    const [roomCreateError, setRoomCreateError] = useState('');
     const [isRedClawChatExecuting, setIsRedClawChatExecuting] = useState(false);
 
     const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
@@ -1816,6 +1821,38 @@ export function RedClaw({
         ));
     }, []);
 
+    const applyHistorySessionTitle = useCallback((sessionId: string, title: string) => {
+        const nextSessionId = String(sessionId || '').trim();
+        const nextTitle = String(title || '').trim();
+        if (!nextSessionId || !nextTitle) return;
+        const nextUpdatedAt = new Date().toISOString();
+        const updateItem = <T extends ContextChatSessionListItem,>(item: T): T => (
+            item.id !== nextSessionId
+                ? item
+                : {
+                    ...item,
+                    chatSession: {
+                        id: item.chatSession?.id || item.id,
+                        title: nextTitle,
+                        updatedAt: nextUpdatedAt,
+                        createdAt: item.chatSession?.createdAt,
+                    },
+                }
+        );
+        setSessionList((prev) => sortContextSessionItems(prev.map(updateItem)));
+        setAdvisorHistorySessions((prev) => (
+            [...prev.map(updateItem)].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
+        ));
+    }, []);
+
+    const renameUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem, title: string) => {
+        const nextSessionId = String(session?.id || '').trim();
+        const nextTitle = String(title || '').trim();
+        if (!nextSessionId || !nextTitle) return;
+        await window.ipcRenderer.chat.renameSession({ sessionId: nextSessionId, title: nextTitle });
+        applyHistorySessionTitle(nextSessionId, nextTitle);
+    }, [applyHistorySessionTitle]);
+
     const switchHistorySession = useCallback((session: RedClawHistoryListItem) => {
         if (!session?.id) return;
         onOpenChatSurface?.();
@@ -1948,20 +1985,61 @@ export function RedClaw({
         }
     }, []);
 
-    const createRoomFromRedClaw = useCallback(async () => {
-        const name = typeof window !== 'undefined' ? window.prompt('新群聊名称')?.trim() : '';
-        if (!name) return;
+    const createRoomFromRedClaw = useCallback(() => {
+        const visibleAdvisorIds = advisors
+            .filter((advisor) => advisor.redclawVisible !== false)
+            .map((advisor) => advisor.id);
+        const defaultAdvisorIds = selectedAdvisorId && visibleAdvisorIds.includes(selectedAdvisorId)
+            ? [selectedAdvisorId]
+            : visibleAdvisorIds.slice(0, 3);
+        setRoomCreateName('');
+        setRoomCreateAdvisorIds(defaultAdvisorIds);
+        setRoomCreateError('');
+        setRoomCreateModalOpen(true);
+    }, [advisors, selectedAdvisorId]);
+
+    const closeRoomCreateModal = useCallback(() => {
+        if (isCreatingRoom) return;
+        setRoomCreateModalOpen(false);
+        setRoomCreateName('');
+        setRoomCreateAdvisorIds([]);
+        setRoomCreateError('');
+    }, [isCreatingRoom]);
+
+    const toggleRoomCreateAdvisor = useCallback((advisorId: string) => {
+        setRoomCreateAdvisorIds((current) => current.includes(advisorId)
+            ? current.filter((id) => id !== advisorId)
+            : [...current, advisorId]);
+    }, []);
+
+    const submitRoomCreate = useCallback(async () => {
+        const name = roomCreateName.trim();
+        if (!name) {
+            setRoomCreateError('请输入团队名称');
+            return;
+        }
+        if (roomCreateAdvisorIds.length === 0) {
+            setRoomCreateError('请至少选择一位成员');
+            return;
+        }
+        setIsCreatingRoom(true);
+        setRoomCreateError('');
         try {
-            const advisorIds = selectedAdvisorId ? [selectedAdvisorId] : advisors.slice(0, 3).map((advisor) => advisor.id);
-            const room = await window.ipcRenderer.invoke('chatrooms:create', { name, advisorIds }) as RedClawTeamRoom;
+            const room = await window.ipcRenderer.invoke('chatrooms:create', { name, advisorIds: roomCreateAdvisorIds }) as RedClawTeamRoom;
             setTeamRooms((prev) => [...prev.filter((item) => item.id !== room.id), room]);
             setSelectedRoomId(room.id);
+            onOpenChatSurface?.();
             setActiveAiSurface('room');
+            setRoomCreateModalOpen(false);
+            setRoomCreateName('');
+            setRoomCreateAdvisorIds([]);
         } catch (error) {
             console.error('Failed to create RedClaw room:', error);
-            setChatActionMessage(error instanceof Error ? error.message : '创建群聊失败');
+            setRoomCreateError(error instanceof Error ? error.message : '创建团队失败');
+        } finally {
+            setIsCreatingRoom(false);
         }
-    }, [advisors, selectedAdvisorId]);
+    }, [onOpenChatSurface, roomCreateAdvisorIds, roomCreateName]);
 
     const deleteHistorySession = useCallback(async (targetSessionId: string) => {
         if (!targetSessionId) return;
@@ -2036,6 +2114,21 @@ export function RedClaw({
             setChatActionMessage('删除对话失败，请稍后重试');
         }
     }, [activeAiSurface, activeSpeakerSessionId, deleteHistorySession, selectedAdvisorId, selectedRoomId]);
+
+    const deleteRoomFromRedClaw = useCallback(async (room: RedClawTeamRoom) => {
+        if (!room?.id) return;
+        try {
+            await window.ipcRenderer.invoke('chatrooms:delete', room.id);
+            setTeamRooms((prev) => prev.filter((item) => item.id !== room.id));
+            if (activeAiSurface === 'room' && selectedRoomId === room.id) {
+                setSelectedRoomId(null);
+                setActiveAiSurface('redclaw');
+            }
+        } catch (error) {
+            console.error('Failed to delete RedClaw room:', error);
+            setChatActionMessage(error instanceof Error ? error.message : '删除团队失败');
+        }
+    }, [activeAiSurface, selectedRoomId]);
 
     const compactRedClawContext = useCallback(async () => {
         if (!activeSessionId || chatActionLoading) return;
@@ -2560,22 +2653,24 @@ export function RedClaw({
                 teamRooms={teamRooms}
                 activeRoomId={selectedRoomId}
                 activeSurface={activeAiSurface}
-                onCreateSession={startNewDraftSession}
                 onCreateRoom={createRoomFromRedClaw}
                 onSwitchRoom={switchRoom}
+                onDeleteRoom={(room) => void deleteRoomFromRedClaw(room)}
                 onSwitchSession={switchHistorySession}
                 onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
+                onRenameSession={renameUnifiedHistorySession}
             />
         );
     }, [
         activeAiSurface,
         activeSpeakerSessionId,
         createRoomFromRedClaw,
+        deleteRoomFromRedClaw,
         deleteUnifiedHistorySession,
         historyLoading,
         onGlobalSidebarContentChange,
+        renameUnifiedHistorySession,
         selectedRoomId,
-        startNewDraftSession,
         switchHistorySession,
         switchRoom,
         teamRooms,
@@ -2592,7 +2687,7 @@ export function RedClaw({
 
 
     return (
-        <div className="h-full min-h-0 flex overflow-hidden bg-surface-primary">
+        <div className="h-full min-h-0 flex overflow-hidden">
             <div className="relative flex-1 min-w-0 overflow-hidden">
                 {isSessionLoading ? (
                     <div className="h-full flex items-center justify-center">
@@ -2744,6 +2839,107 @@ export function RedClaw({
                                     onSave={saveAdvisorFromRedClaw}
                                     onClose={() => setAdvisorCreateModalOpen(false)}
                                 />
+                            )}
+                            {roomCreateModalOpen && (
+                                <div
+                                    className="fixed inset-0 z-[160] flex items-center justify-center bg-black/[0.28] px-4 backdrop-blur-sm"
+                                    onMouseDown={closeRoomCreateModal}
+                                >
+                                    <div
+                                        className="w-full max-w-[420px] rounded-2xl border border-border bg-surface-primary p-5 shadow-[0_24px_70px_-30px_rgba(0,0,0,0.55)]"
+                                        onMouseDown={(event) => event.stopPropagation()}
+                                    >
+                                        <div className="mb-4 flex items-center justify-between gap-3">
+                                            <div>
+                                                <div className="text-base font-semibold text-text-primary">新建团队</div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={closeRoomCreateModal}
+                                                disabled={isCreatingRoom}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                                aria-label="关闭"
+                                            >
+                                                <X className="h-4 w-4" />
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <input
+                                                autoFocus
+                                                value={roomCreateName}
+                                                onChange={(event) => setRoomCreateName(event.target.value)}
+                                                onKeyDown={(event) => {
+                                                    if (event.key === 'Enter') {
+                                                        event.preventDefault();
+                                                        void submitRoomCreate();
+                                                    } else if (event.key === 'Escape') {
+                                                        closeRoomCreateModal();
+                                                    }
+                                                }}
+                                                className="h-10 w-full rounded-xl border border-border bg-surface-secondary/40 px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary/60 focus:bg-surface-primary focus:ring-2 focus:ring-accent-primary/10"
+                                                placeholder="团队名称"
+                                            />
+
+                                            <div className="max-h-56 overflow-y-auto rounded-xl border border-border/80 p-1 custom-scrollbar">
+                                                {advisors.filter((advisor) => advisor.redclawVisible !== false).length === 0 ? (
+                                                    <div className="px-3 py-4 text-center text-xs text-text-tertiary">暂无可选成员</div>
+                                                ) : advisors.filter((advisor) => advisor.redclawVisible !== false).map((advisor) => {
+                                                    const checked = roomCreateAdvisorIds.includes(advisor.id);
+                                                    return (
+                                                        <button
+                                                            key={advisor.id}
+                                                            type="button"
+                                                            onClick={() => toggleRoomCreateAdvisor(advisor.id)}
+                                                            className={clsx(
+                                                                'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors',
+                                                                checked ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary/70'
+                                                            )}
+                                                        >
+                                                            <span className={clsx(
+                                                                'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                                                                checked ? 'border-accent-primary bg-accent-primary' : 'border-border bg-surface-primary'
+                                                            )}>
+                                                                {checked && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                                                            </span>
+                                                            <span className="min-w-0 flex-1">
+                                                                <span className="block truncate text-sm font-medium text-text-primary">{advisor.name || '未命名成员'}</span>
+                                                                {advisor.personality && (
+                                                                    <span className="mt-0.5 block truncate text-[11px] text-text-tertiary">{advisor.personality}</span>
+                                                                )}
+                                                            </span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+
+                                            {roomCreateError && (
+                                                <div className="rounded-lg border border-red-500/25 bg-red-500/[0.08] px-3 py-2 text-xs text-red-600">
+                                                    {roomCreateError}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="mt-5 flex items-center justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={closeRoomCreateModal}
+                                                disabled={isCreatingRoom}
+                                                className="h-9 rounded-xl border border-border px-4 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                            >
+                                                取消
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void submitRoomCreate()}
+                                                disabled={isCreatingRoom}
+                                                className="inline-flex h-9 items-center justify-center rounded-xl bg-accent-primary px-4 text-sm font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-50"
+                                            >
+                                                {isCreatingRoom ? '创建中...' : '创建'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
                             )}
                         </div>
                     </div>

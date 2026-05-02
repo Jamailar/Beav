@@ -286,12 +286,13 @@ select {
 }
 
 .app-sidebar-shell {
+  position: relative;
   background: var(--app-sidebar-background);
   backdrop-filter: saturate(1.05) blur(24px);
 }
 
 .app-sidebar-shell--expanded {
-  width: 20rem;
+  width: var(--app-sidebar-expanded-width, 20rem);
 }
 
 .app-sidebar-shell--collapsed {
@@ -300,6 +301,32 @@ select {
 
 .app-sidebar-shell--animating {
   backdrop-filter: none;
+}
+
+.app-sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  z-index: 20;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.app-sidebar-resize-handle::after {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  bottom: 0;
+  width: 1px;
+  content: '';
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.app-sidebar-resize-handle:hover::after {
+  background: rgb(var(--color-accent-primary) / 0.42);
 }
 
 .app-sidebar-nav {
@@ -380,7 +407,7 @@ select {
   left: 0;
   z-index: 70;
   display: grid;
-  grid-template-columns: 144px minmax(0, 1fr) auto;
+  grid-template-columns: 172px minmax(0, 1fr) auto;
   align-items: center;
   height: var(--app-titlebar-height);
   background: transparent;

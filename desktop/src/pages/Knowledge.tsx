@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
 import type { SyntheticEvent } from 'react';
 import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp } from 'lucide-react';
 import { clsx } from 'clsx';
@@ -10,6 +10,15 @@ import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { formatTimestampDateTime } from '../utils/time';
+import { SelectMenu } from '../components/ui/SelectMenu';
+
+const GLOBAL_KNOWLEDGE_SEARCH_EVENT = 'redbox:global-knowledge-search';
+const GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY = 'redbox:global-knowledge-search-query';
+const KNOWLEDGE_SORT_OPTIONS = [
+    { value: 'updated-desc', label: '最新采集' },
+    { value: 'created-desc', label: '笔记时间' },
+    { value: 'title-asc', label: '标题 A-Z' },
+];
 
 interface Note { type?: string; sourceUrl?: string;
     id: string;
@@ -234,6 +243,7 @@ interface KnowledgeProps {
     isEmbedded?: boolean;
     isActive?: boolean;
     onNavigateToRedClaw?: (message: PendingChatMessage) => void;
+    onTitleBarContentChange?: (content: ReactNode | null) => void;
     referenceContent?: string; // 用于相似度排序的参考内容
 }
 
@@ -374,7 +384,7 @@ const hashContent = (content: string): string => {
     return hash.toString(16);
 };
 
-export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = true, referenceContent }: KnowledgeProps) {
+export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = true, onTitleBarContentChange, referenceContent }: KnowledgeProps) {
     const [notes, setNotes] = useState<Note[]>([]);
     const [youtubeVideos, setYoutubeVideos] = useState<YouTubeVideo[]>([]);
     const [documentSources, setDocumentSources] = useState<DocumentKnowledgeSource[]>([]);
@@ -438,6 +448,30 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     // 搜索框状态
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const searchInputRef = useRef<HTMLInputElement>(null);
+
+    const applyGlobalKnowledgeSearch = useCallback((query: string) => {
+        setIsSearchOpen(true);
+        setSearchQuery(query);
+        setDebouncedSearchQuery(query.trim());
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+    }, []);
+
+    useEffect(() => {
+        const handleGlobalSearch = (event: Event) => {
+            const query = (event as CustomEvent<{ query?: string }>).detail?.query || '';
+            applyGlobalKnowledgeSearch(query);
+        };
+
+        window.addEventListener(GLOBAL_KNOWLEDGE_SEARCH_EVENT, handleGlobalSearch);
+        if (isActive) {
+            const pendingQuery = window.sessionStorage.getItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY);
+            if (pendingQuery !== null) {
+                window.sessionStorage.removeItem(GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY);
+                applyGlobalKnowledgeSearch(pendingQuery);
+            }
+        }
+        return () => window.removeEventListener(GLOBAL_KNOWLEDGE_SEARCH_EVENT, handleGlobalSearch);
+    }, [applyGlobalKnowledgeSearch, isActive]);
 
     useEffect(() => {
         notesRef.current = notes;
@@ -1647,10 +1681,156 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
         );
     };
 
+    const typeFilterControls = useMemo(() => (
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto no-scrollbar">
+            {typeFilters.map((item) => (
+                <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setSelectedTypeFilter(item.key)}
+                    className={clsx(
+                        'inline-flex shrink-0 items-center gap-2 rounded-xl border px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95',
+                        selectedTypeFilter === item.key
+                            ? 'border-transparent bg-accent-primary text-white shadow-lg shadow-accent-primary/20'
+                            : 'border-border/70 bg-surface-secondary/70 text-text-secondary hover:bg-surface-tertiary/70 hover:text-text-primary'
+                    )}
+                >
+                    <span>{item.label}</span>
+                    <span className={clsx(
+                        'rounded-lg px-1.5 py-0.5 text-[10px] font-bold',
+                        selectedTypeFilter === item.key
+                            ? 'bg-white/20 text-white'
+                            : 'bg-surface-primary/70 text-text-tertiary'
+                    )}>
+                        {item.count}
+                    </span>
+                </button>
+            ))}
+        </div>
+    ), [selectedTypeFilter, typeFilters]);
+
+    const topControls = useMemo(() => (
+        <div className="flex w-full min-w-0 items-center justify-end gap-2 pr-2" data-no-window-drag>
+            <div className="flex min-w-0 shrink items-center justify-end gap-1.5">
+                    <div className="relative w-[148px]">
+                        <ArrowDownUp className="pointer-events-none absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
+                        <SelectMenu
+                            value={sortOrder}
+                            onChange={(value) => setSortOrder(value as KnowledgeSortOrder)}
+                            options={KNOWLEDGE_SORT_OPTIONS}
+                            className="w-full [&>button]:h-9 [&>button]:rounded-xl [&>button]:pl-8 [&>button]:text-[12px] [&>button]:font-bold"
+                            menuClassName="min-w-[148px]"
+                        />
+                    </div>
+
+                    {isSearchOpen ? (
+                        <div className="flex items-center gap-1.5 animate-in fade-in slide-in-from-right-4 duration-300">
+                            <div className="relative w-[220px]">
+                                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
+                                <input
+                                    ref={searchInputRef}
+                                    type="text"
+                                    value={searchQuery}
+                                    onChange={(event) => setSearchQuery(event.target.value)}
+                                    placeholder="搜索知识库..."
+                                    autoFocus
+                                    className="h-9 w-full rounded-xl border border-border/70 bg-surface-secondary/70 pl-8 pr-8 text-[12px] font-bold text-text-primary outline-none transition-all placeholder:text-text-tertiary/70 focus:bg-surface-elevated focus:ring-2 focus:ring-accent-primary/10"
+                                />
+                                {searchQuery && (
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setSearchQuery('');
+                                            setDebouncedSearchQuery('');
+                                        }}
+                                        className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-text-tertiary transition-colors hover:text-text-primary"
+                                    >
+                                        <X className="h-3.5 w-3.5" />
+                                    </button>
+                                )}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setIsSearchOpen(false);
+                                    setSearchQuery('');
+                                    setDebouncedSearchQuery('');
+                                }}
+                                className="h-9 rounded-xl px-2.5 text-[12px] font-bold text-text-secondary transition-all hover:bg-surface-secondary/80 hover:text-text-primary"
+                            >
+                                取消
+                            </button>
+                        </div>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={() => setIsSearchOpen(true)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-text-secondary transition-all hover:bg-surface-secondary/80 hover:text-text-primary active:scale-90"
+                            title="搜索 (Cmd+F)"
+                        >
+                            <Search className="h-4 w-4" />
+                        </button>
+                    )}
+
+                    {(selectedTypeFilter === 'all' || selectedTypeFilter === 'youtube') && youtubeSummaryPendingCount > 0 && (
+                        <button
+                            type="button"
+                            onClick={() => void handleRefreshYoutubeSummaries()}
+                            disabled={isRefreshingYoutubeSummaries}
+                            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-accent-primary/10 px-3 text-[12px] font-bold text-accent-primary transition-all hover:bg-accent-primary/20 active:scale-95 disabled:opacity-40"
+                        >
+                            {isRefreshingYoutubeSummaries ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                            补全摘要
+                            <span className="rounded-lg bg-accent-primary/10 px-1.5 py-0.5 text-[10px] font-bold">
+                                {youtubeSummaryPendingCount}
+                            </span>
+                        </button>
+                    )}
+
+                    <div className="flex items-center gap-1 rounded-xl border border-border/80 bg-surface-elevated p-1 shadow-lg shadow-black/10">
+                        <button
+                            type="button"
+                            onClick={handleAddDocumentFiles}
+                            className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary transition-all hover:bg-surface-secondary/80 active:scale-95"
+                        >
+                            <Plus className="h-3.5 w-3.5" />
+                            文件
+                        </button>
+                        <button
+                            type="button"
+                            onClick={handleAddDocumentFolder}
+                            className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary transition-all hover:bg-surface-secondary/80 active:scale-95"
+                        >
+                            <FolderPlus className="h-3.5 w-3.5" />
+                            文件夹
+                        </button>
+                    </div>
+            </div>
+        </div>
+    ), [
+        handleAddDocumentFiles,
+        handleAddDocumentFolder,
+        handleRefreshYoutubeSummaries,
+        isRefreshingYoutubeSummaries,
+        isSearchOpen,
+        searchQuery,
+        selectedTypeFilter,
+        sortOrder,
+        youtubeSummaryPendingCount,
+    ]);
+
+    useEffect(() => {
+        if (!onTitleBarContentChange) return;
+        onTitleBarContentChange(isActive && !isEmbedded ? topControls : null);
+        return () => {
+            onTitleBarContentChange(null);
+        };
+    }, [isActive, isEmbedded, onTitleBarContentChange, topControls]);
+
     // Embedded View Renders
     if (isEmbedded && selectedNote) {
         return (
-            <div className="h-full overflow-y-auto bg-surface-primary p-4">
+            <div className="h-full overflow-y-auto p-4">
                 <div className="flex items-center justify-between mb-4">
                     <button 
                         onClick={() => setSelectedNote(null)}
@@ -1873,140 +2053,16 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     }
 
     return (
-        <div className="flex h-full flex-col bg-surface-primary">
+        <div className="flex h-full flex-col">
             <div
                 className={clsx(
-                    'z-30 border-b border-border/50 bg-surface-primary/90 backdrop-blur-[32px]',
-                    isEmbedded ? 'px-3 py-2' : 'px-6 py-4'
+                    'z-30',
+                    isEmbedded ? 'border-b border-border/50 px-3 py-2' : 'px-6 py-4'
                 )}
             >
                 <div className={clsx('flex flex-col', isEmbedded ? 'gap-2' : 'gap-3.5')}>
                     <div className="flex items-center gap-3 py-1">
-                        <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar">
-                            {typeFilters.map((item) => (
-                                <button
-                                    key={item.key}
-                                    onClick={() => setSelectedTypeFilter(item.key)}
-                                    className={clsx(
-                                        'shrink-0 px-3.5 py-1.5 text-[12px] font-bold rounded-xl border transition-all flex items-center gap-2 active:scale-95',
-                                        selectedTypeFilter === item.key
-                                            ? 'border-transparent bg-accent-primary text-white shadow-lg shadow-accent-primary/20'
-                                            : 'border-border/70 bg-surface-secondary/70 text-text-secondary hover:bg-surface-tertiary/70 hover:text-text-primary'
-                                    )}
-                                >
-                                    <span>{item.label}</span>
-                                    <span className={clsx(
-                                        'text-[10px] px-1.5 py-0.5 rounded-lg font-bold',
-                                        selectedTypeFilter === item.key
-                                            ? 'bg-white/20 text-white'
-                                            : 'bg-surface-primary/70 text-text-tertiary'
-                                    )}>
-                                        {item.count}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-
-                        {!isEmbedded && (
-                            <div className="relative shrink-0">
-                                <ArrowDownUp className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
-                                <select
-                                    value={sortOrder}
-                                    onChange={(event) => setSortOrder(event.target.value as KnowledgeSortOrder)}
-                                    className="h-9 appearance-none rounded-xl border border-border/70 bg-surface-secondary/70 pl-8 pr-8 text-[12px] font-bold text-text-primary outline-none transition-all hover:bg-surface-tertiary/70 focus:bg-surface-elevated focus:ring-2 focus:ring-accent-primary/10"
-                                    title="排序"
-                                >
-                                    <option value="updated-desc">最新采集</option>
-                                    <option value="created-desc">笔记时间</option>
-                                    <option value="title-asc">标题 A-Z</option>
-                                </select>
-                                <ChevronRight className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 rotate-90 text-text-tertiary/70" />
-                            </div>
-                        )}
-
-                        {isSearchOpen ? (
-                            <div className="flex items-center gap-2 shrink-0 animate-in fade-in slide-in-from-right-4 duration-300">
-                                <div className="relative w-[240px] sm:w-[300px]">
-                                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-tertiary" />
-                                    <input
-                                        ref={searchInputRef}
-                                        type="text"
-                                        value={searchQuery}
-                                        onChange={(e) => setSearchQuery(e.target.value)}
-                                        placeholder="搜索知识库..."
-                                        autoFocus
-                                        className="w-full rounded-xl border border-border/70 bg-surface-secondary/70 pl-9 pr-8 py-2 text-[13px] font-bold text-text-primary placeholder:text-text-tertiary/70 focus:bg-surface-elevated focus:outline-none focus:ring-2 focus:ring-accent-primary/10 transition-all"
-                                    />
-                                    {searchQuery && (
-                                        <button
-                                            onClick={() => {
-                                                setSearchQuery('');
-                                                setDebouncedSearchQuery('');
-                                            }}
-                                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-text-tertiary hover:text-text-primary transition-colors"
-                                        >
-                                            <X className="w-3.5 h-3.5" />
-                                        </button>
-                                    )}
-                                </div>
-                                <button
-                                    onClick={() => {
-                                        setIsSearchOpen(false);
-                                        setSearchQuery('');
-                                        setDebouncedSearchQuery('');
-                                    }}
-                                    className="rounded-xl px-3.5 py-2 text-[12px] font-bold text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary transition-all"
-                                >
-                                    取消
-                                </button>
-                            </div>
-                        ) : (
-                            <div className="flex items-center gap-1.5 shrink-0">
-                                <button
-                                    onClick={() => setIsSearchOpen(true)}
-                                    className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary transition-all active:scale-90"
-                                    title="搜索 (Cmd+F)"
-                                >
-                                    <Search className="w-4 h-4" />
-                                </button>
-                                {!isEmbedded && (
-                                    <>
-                                        <div className="mx-1 h-4 w-[1px] bg-border/80" />
-                                        
-                                        {(selectedTypeFilter === 'all' || selectedTypeFilter === 'youtube') && youtubeSummaryPendingCount > 0 && (
-                                            <button
-                                                onClick={() => void handleRefreshYoutubeSummaries()}
-                                                disabled={isRefreshingYoutubeSummaries}
-                                                className="inline-flex items-center gap-1.5 h-9 px-3.5 text-[12px] font-bold rounded-xl bg-accent-primary/10 text-accent-primary hover:bg-accent-primary/20 transition-all disabled:opacity-40 active:scale-95"
-                                            >
-                                                {isRefreshingYoutubeSummaries ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                                                补全摘要
-                                                <span className="text-[10px] px-1.5 py-0.5 rounded-lg bg-accent-primary/10 font-bold">
-                                                    {youtubeSummaryPendingCount}
-                                                </span>
-                                            </button>
-                                        )}
-
-                                        <div className="flex items-center gap-1 rounded-xl border border-border/80 bg-surface-elevated p-1 shadow-lg shadow-black/10">
-                                            <button
-                                                onClick={handleAddDocumentFiles}
-                                                className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary hover:bg-surface-secondary/80 transition-all active:scale-95"
-                                            >
-                                                <Plus className="w-3.5 h-3.5" />
-                                                文件
-                                            </button>
-                                            <button
-                                                onClick={handleAddDocumentFolder}
-                                                className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-text-primary hover:bg-surface-secondary/80 transition-all active:scale-95"
-                                            >
-                                                <FolderPlus className="w-3.5 h-3.5" />
-                                                文件夹
-                                            </button>
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        )}
+                        {typeFilterControls}
                     </div>
 
                     {!isEmbedded && allTags.length > 0 && (

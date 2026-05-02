@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    ArrowLeft,
     ArrowUp,
     ChevronDown,
     Clapperboard,
@@ -165,6 +166,7 @@ interface GenerationStudioProps {
     pendingIntent?: GenerationIntent | null;
     onIntentConsumed?: () => void;
     onExecutionStateChange?: (active: boolean) => void;
+    onReturnHome?: () => void;
 }
 
 const FEED_STORAGE_KEY = 'redbox:generation-studio:feed:v1';
@@ -1616,6 +1618,7 @@ export function GenerationStudio({
     pendingIntent = null,
     onIntentConsumed,
     onExecutionStateChange,
+    onReturnHome,
 }: GenerationStudioProps) {
     const [settings, setSettings] = useState<SettingsShape>({});
     const [contextIntent, setContextIntent] = useState<GenerationIntent | null>(null);
@@ -2562,9 +2565,22 @@ export function GenerationStudio({
     );
 
     return (
-        <div className="h-full min-h-0 bg-background text-text-primary">
+        <div className="h-full min-h-0 text-text-primary">
             <div className="mx-auto flex h-full min-h-0 max-w-[1180px] flex-col px-6">
-                <main ref={feedScrollRef} className="flex-1 min-h-0 overflow-y-auto pt-6">
+                {onReturnHome && (
+                    <div className="flex h-12 shrink-0 items-center">
+                        <button
+                            type="button"
+                            onClick={onReturnHome}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-primary text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            aria-label="返回主页"
+                            title="返回主页"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                        </button>
+                    </div>
+                )}
+                <main ref={feedScrollRef} className={clsx('flex-1 min-h-0 overflow-y-auto', onReturnHome ? 'pt-0' : 'pt-6')}>
                     {feedEntries.length === 0 ? (
                         <div className="min-h-[280px]" />
                     ) : (

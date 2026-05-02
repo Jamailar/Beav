@@ -379,7 +379,7 @@ export function CreatorProfilesPanel({ isActive = true, embedded = false }: Crea
     }
 
     return (
-        <div className="flex h-full min-h-0 bg-surface-primary">
+        <div className="flex h-full min-h-0">
             <aside className={clsx(
                 'border-r border-border bg-surface-secondary/30 flex flex-col min-h-0',
                 compact ? 'w-64' : 'w-80',

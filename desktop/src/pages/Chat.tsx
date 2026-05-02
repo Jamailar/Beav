@@ -243,6 +243,8 @@ interface ChatProps {
   navigationAction?: { action: 'new'; nonce: number } | null;
   onNavigationActionConsumed?: () => void;
   fixedSessionId?: string | null;
+  fixedSessionDraft?: boolean;
+  onEnsureSessionForSend?: () => Promise<string | null>;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
   shortcuts?: ChatShortcutProvider;
@@ -663,6 +665,8 @@ export function Chat({
   onNavigationActionConsumed,
   defaultCollapsed = true,
   fixedSessionId,
+  fixedSessionDraft = false,
+  onEnsureSessionForSend,
   showClearButton = true,
   fixedSessionBannerText = '当前对话已关联到文档',
   shortcuts: shortcutsProp,
@@ -741,7 +745,8 @@ export function Chat({
   const [knowledgeMentionOptions, setKnowledgeMentionOptions] = useState<ChatKnowledgeMentionOption[]>([]);
   const [selectedKnowledgeMentions, setSelectedKnowledgeMentions] = useState<ChatKnowledgeMentionOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
-  const attachmentDraftScopeId = fixedSessionId || currentSessionId || '__new__';
+  const fixedSessionMode = Boolean(fixedSessionId) || fixedSessionDraft;
+  const attachmentDraftScopeId = fixedSessionId || currentSessionId || (fixedSessionDraft ? '__fixed_draft__' : '__new__');
 
   useEffect(() => {
     onExecutionStateChange?.(isProcessing);
@@ -1179,7 +1184,7 @@ export function Chat({
   }, [selectedChatModel]);
 
   const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
-    if (fixedSessionId) return;
+    if (fixedSessionMode) return;
     const requestId = ++chatRoomsRequestIdRef.current;
     const silent = Boolean(options?.silent);
     if (!silent) {
@@ -1202,7 +1207,7 @@ export function Chat({
         setIsRoomPickerLoading(false);
       }
     }
-  }, [fixedSessionId]);
+  }, [fixedSessionMode]);
 
   // 判断是否是空会话（新建或无消息）
   const isEmptySession = messages.length === 0;
@@ -1253,7 +1258,7 @@ export function Chat({
   // Load sessions on mount
   useEffect(() => {
     if (!isActive) return;
-    if (!fixedSessionId) {
+    if (!fixedSessionMode) {
       void loadChatRooms({ silent: true });
     }
 
@@ -1262,6 +1267,11 @@ export function Chat({
        setSidebarCollapsed(true);
        selectSession(fixedSessionId);
        return;
+    }
+
+    if (fixedSessionMode) {
+      setSidebarCollapsed(true);
+      return;
     }
 
     // 只有没有 pendingMessage 时才自动选择会话
@@ -1274,7 +1284,7 @@ export function Chat({
         setSessions(list);
       }).catch(console.error);
     }
-  }, [fixedSessionId, isActive, loadChatRooms]); // Add fixedSessionId dependency
+  }, [fixedSessionId, fixedSessionMode, isActive, loadChatRooms]); // Add fixedSessionId dependency
 
   const dispatchChatSend = useCallback((payload: {
     sessionId?: string;
@@ -1816,7 +1826,7 @@ export function Chat({
   }, [appendAssistantChunk]);
 
   useEffect(() => {
-    if (!isActive || fixedSessionId) return;
+    if (!isActive || fixedSessionMode) return;
     const handleSpaceChanged = () => {
       setShowRoomPicker(false);
       setSelectionMenu(prev => ({ ...prev, visible: false }));
@@ -1826,7 +1836,7 @@ export function Chat({
     return () => {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
-  }, [fixedSessionId, isActive, loadChatRooms]);
+  }, [fixedSessionMode, isActive, loadChatRooms]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -3194,8 +3204,23 @@ export function Chat({
       baseRuntimeMessage,
       knowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${knowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
     ].filter(Boolean).join('');
+    let targetSessionId = currentSessionIdRef.current || currentSessionId || null;
+    if (!targetSessionId && onEnsureSessionForSend) {
+      try {
+        targetSessionId = await onEnsureSessionForSend();
+      } catch (error) {
+        console.error('Failed to create chat session before send:', error);
+        targetSessionId = null;
+      }
+      if (!targetSessionId) {
+        setErrorNotice('创建对话失败，请稍后重试');
+        return;
+      }
+      currentSessionIdRef.current = targetSessionId;
+      setCurrentSessionId(targetSessionId);
+    }
     const processingStartedAt = Date.now();
-    notifySessionActivity(currentSessionId, new Date(processingStartedAt).toISOString());
+    notifySessionActivity(targetSessionId, new Date(processingStartedAt).toISOString());
     const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
       type: 'member',
       memberId: memberMention.id,
@@ -3238,7 +3263,7 @@ export function Chat({
     if (onDispatchOverride) {
       try {
         const overrideResult = await onDispatchOverride({
-          sessionId: currentSessionId || undefined,
+          sessionId: targetSessionId || undefined,
           message: runtimeMessage,
           displayContent: displayText,
           attachment: attachment as Message['attachment'],
@@ -3297,7 +3322,7 @@ export function Chat({
     );
 
     dispatchChatSend({
-      sessionId: currentSessionId || undefined,
+      sessionId: targetSessionId || undefined,
       message: runtimeMessage,
       displayContent: displayText,
       attachment: stripTransientAttachmentPreview(resolvedAttachment),
@@ -3380,7 +3405,7 @@ export function Chat({
   const composerTheme = darkEmbedded ? 'dark' : 'default';
   const inputAreaShellClass = darkEmbedded
     ? 'bg-transparent pb-4 pt-2 md:pb-5'
-    : 'bg-surface-primary pb-4 pt-2 md:pb-5';
+    : 'bg-transparent pb-4 pt-2 md:pb-5';
   const shortcutChipClass = darkEmbedded
     ? 'flex-shrink-0 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/62 transition-colors hover:border-white/20 hover:text-white disabled:opacity-50'
     : 'flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50';
@@ -3411,7 +3436,7 @@ export function Chat({
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
   const shouldCollapseEmptyFixedSession = Boolean(
     collapseEmptyFixedSession &&
-    fixedSessionId &&
+    fixedSessionMode &&
     isEmptySession &&
     !showComposer &&
     !showWelcomeHeader &&
@@ -3644,7 +3669,7 @@ export function Chat({
   return (
     <div className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}>
       {/* Sidebar - Session List (可折叠) - Only show if not fixed session */}
-      {!fixedSessionId && (
+      {!fixedSessionMode && (
         <div className={clsx(
           "bg-surface-secondary border-r border-border flex flex-col transition-all duration-300",
           sidebarCollapsed ? "w-0 overflow-hidden" : "w-64"
@@ -3695,7 +3720,7 @@ export function Chat({
       {/* Main Chat Area */}
       <div className="flex-1 min-w-0 flex flex-col h-full relative overflow-hidden">
         {/* Header - Sidebar Controls - Hide if fixed session */}
-        {!fixedSessionId && (
+        {!fixedSessionMode && (
           <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}

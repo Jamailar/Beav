@@ -1642,6 +1642,7 @@ declare global {
         listContextSessions: (payload: { contextId: string; contextType: string }) => Promise<ContextChatSessionListItem[]>;
         createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
         getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; metadata?: Record<string, unknown> }) => Promise<ChatSession>;
+        renameSession: (payload: { sessionId: string; title: string }) => Promise<{ success: boolean; session?: ChatSession; error?: string }>;
         deleteSession: (sessionId: string) => Promise<{ success: boolean }>;
         getMessages: (sessionId: string) => Promise<ChatMessage[]>;
         clearMessages: (sessionId: string) => Promise<{ success: boolean }>;

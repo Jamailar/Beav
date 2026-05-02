@@ -878,7 +878,7 @@ export function MediaLibrary({
     }, []);
 
     return (
-        <div className="h-full flex flex-col bg-background">
+        <div className="h-full flex flex-col">
             <div className="border-b border-border px-4 py-2 bg-surface-secondary/45">
                 <div className="flex items-center gap-2 min-w-0">
                     <div className="w-7 h-7 rounded-md bg-accent-primary/15 border border-accent-primary/20 text-accent-primary flex items-center justify-center shrink-0">
