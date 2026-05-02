@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
+import { syncBrand } from './sync-brand.mjs';
 
 const cwd = process.cwd();
 const targetRoot = path.join(cwd, 'src-tauri', 'target');
@@ -118,6 +119,8 @@ async function removeIfStale(targetPath, label) {
 }
 
 async function main() {
+  await syncBrand({ cwd });
+
   let changed = false;
 
   if (await directoryContainsStaleWorkspaceRefs(targetRoot)) {

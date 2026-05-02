@@ -1,0 +1,24 @@
+{
+  "variant": "redbox",
+  "displayName": "RedBox",
+  "windowTitle": "RedBox",
+  "htmlTitle": "RedBox",
+  "redClawDisplayName": "RedClaw",
+  "logoSrc": "/branding/logo.png",
+  "theme": {
+    "light": {
+      "accentPrimary": "162 120 75",
+      "accentHover": "137 101 63",
+      "accentMuted": "246 237 224",
+      "brandRed": "225 29 72",
+      "brandRedText": "190 18 60"
+    },
+    "dark": {
+      "accentPrimary": "77 159 255",
+      "accentHover": "115 181 255",
+      "accentMuted": "42 42 42",
+      "brandRed": "245 95 95",
+      "brandRedText": "255 178 178"
+    }
+  }
+}

@@ -1,10 +1,12 @@
 import type { ChatShortcut, ChatShortcutContext } from '../Chat';
+import { APP_BRAND } from '../../config/brand';
 import type { LongDraft, LongTemplate, ScheduleDraft, ScheduleTemplate } from './types';
 
 export const REDCLAW_CONTEXT_ID = 'redclaw-singleton';
 export const REDCLAW_CONTEXT_TYPE = 'redclaw';
+export const REDCLAW_DISPLAY_NAME = APP_BRAND.redClawDisplayName;
 export const REDCLAW_CONTEXT = [
-    'RedClaw 是一个面向自媒体内容生产与运营的 AI 工作台。',
+    `${REDCLAW_DISPLAY_NAME} 是一个面向自媒体内容生产与运营的 AI 工作台。`,
     '工作目标：基于用户目标推进选题、内容、配图、发布与复盘，并给出可执行的工作流建议。',
     '默认输出结构：目标拆解、内容策略、执行步骤、风险提示。',
     '当产出、保存或更新可交付文件时，必须用 Markdown 链接报告路径，优先使用 workspace://、media://、manuscripts://、knowledge://、cover:// 或 redclaw:// 这类 app 内虚拟路径。',
@@ -109,7 +111,7 @@ export const HEARTBEAT_INTERVAL_OPTIONS = [15, 30, 60, 120];
 export const REDCLAW_SIDEBAR_MIN_WIDTH = 300;
 export const REDCLAW_SIDEBAR_MAX_WIDTH = 560;
 export const REDCLAW_SIDEBAR_DEFAULT_WIDTH = 380;
-export const REDCLAW_WELCOME_ICON_SRC = '/Box.png';
+export const REDCLAW_WELCOME_ICON_SRC = APP_BRAND.logoSrc;
 
 export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
     {
