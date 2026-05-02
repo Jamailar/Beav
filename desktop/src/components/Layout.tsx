@@ -1,5 +1,5 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package, AlertCircle, Sparkles, ListTodo, Bell, BookOpenText } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, ImagePlus, Sun, Moon, X, Download, AlertCircle, Sparkles, Bell, BookOpenText, Home, PanelLeft, Search, Clock3, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,9 +7,8 @@ import type { ImmersiveMode, ViewType } from '../App';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { appAlert } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
+import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 import { uiMeasure } from '../utils/uiDebug';
-
-const appLogo = '/Box.png';
 
 interface LayoutProps {
   children: ReactNode;
@@ -17,22 +16,31 @@ interface LayoutProps {
   onNavigate: (view: ViewType) => void;
   immersiveMode?: ImmersiveMode;
   globalNotice?: string | null;
+  globalSidebarContent?: ReactNode;
+  renderTitleBarContent?: (context: { currentView: ViewType }) => ReactNode;
 }
 
-const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; group?: string }[] = [
-  // { id: 'chat', label: 'AI 对话', icon: MessageSquare },
-  { id: 'knowledge', label: '知识库', icon: FolderOpen },
-  { id: 'wander', label: '漫步', icon: Dices },
-  { id: 'manuscripts', label: '稿件', icon: FileEdit },
-  { id: 'creator-profiles', label: '创作档案', icon: BookOpenText },
-  { id: 'redclaw', label: 'RedClaw', icon: Bot },
-  { id: 'workboard', label: '任务', icon: ListTodo },
-  { id: 'approval', label: '审批', icon: Bell },
-  { id: 'subjects', label: '主体', icon: Package },
-  { id: 'cover-studio', label: '封面', icon: ImagePlus },
-  { id: 'generation-studio', label: '创作', icon: Sparkles },
-  { id: 'media-library', label: '媒体', icon: Image },
-  { id: 'settings', label: '设置', icon: SettingsIcon },
+type SidebarNavItem = {
+  key: string;
+  view: ViewType;
+  label: string;
+  icon: typeof MessageSquare;
+  redclawAction?: 'new';
+  settingsTab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+  primary?: boolean;
+};
+
+const NAV_ITEMS: SidebarNavItem[] = [
+  { key: 'new-chat', view: 'redclaw', label: '新对话', icon: Edit, redclawAction: 'new', primary: true },
+  { key: 'search', view: 'knowledge', label: '搜索', icon: Search, primary: true },
+  { key: 'assets', view: 'subjects', label: '资产库', icon: Folder, primary: true },
+  { key: 'automation', view: 'automation', label: '自动化', icon: Clock3, primary: true },
+  { key: 'home', view: 'home', label: '主页', icon: Home },
+  { key: 'wander', view: 'wander', label: '漫步', icon: Dices },
+  { key: 'manuscripts', view: 'manuscripts', label: '稿件', icon: FileEdit },
+  { key: 'creator-profiles', view: 'creator-profiles', label: '创作档案', icon: BookOpenText },
+  { key: 'cover-studio', view: 'cover-studio', label: '封面', icon: ImagePlus },
+  { key: 'generation-studio', view: 'generation-studio', label: '创作', icon: Sparkles },
   // { id: 'archives', label: '档案', icon: Archive },
   // { id: 'skills', label: '技能库', icon: Lightbulb },
 ];
@@ -78,26 +86,28 @@ function shouldUseMacOverlayTitleBar(): boolean {
 }
 
 function AppTitleBar({
-  appVersion,
   immersiveMode,
   enabled,
+  content,
+  isSidebarCollapsed,
+  toggleSidebarCollapsed,
   notificationDrawerOpen,
   unreadNotificationCount,
   toggleNotificationDrawer,
   themeMode,
   setThemeMode,
 }: {
-  appVersion: string;
   immersiveMode: ImmersiveMode;
   enabled: boolean;
+  content: ReactNode;
+  isSidebarCollapsed: boolean;
+  toggleSidebarCollapsed: () => void;
   notificationDrawerOpen: boolean;
   unreadNotificationCount: number;
   toggleNotificationDrawer: () => void;
   themeMode: ThemeMode;
   setThemeMode: Dispatch<SetStateAction<ThemeMode>>;
 }) {
-  const title = appVersion ? `RedBox v${appVersion}` : 'RedBox';
-
   if (!enabled) return null;
 
   const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
@@ -118,11 +128,21 @@ function AppTitleBar({
         'app-titlebar shrink-0',
         immersiveMode === 'dark' && 'app-titlebar--dark'
       )}
-      title={title}
     >
-      <div data-tauri-drag-region className="app-titlebar-controls-spacer" />
+      <div data-tauri-drag-region className="app-titlebar-controls">
+        <button
+          type="button"
+          onClick={toggleSidebarCollapsed}
+          className="app-titlebar-sidebar-toggle"
+          title={isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          aria-label={isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          data-no-window-drag
+        >
+          <PanelLeft className="w-[15px] h-[15px]" strokeWidth={1.7} />
+        </button>
+      </div>
       <div data-tauri-drag-region className="app-titlebar-title">
-        RedBox
+        {content}
       </div>
       <div className="app-titlebar-actions">
         <button
@@ -155,7 +175,7 @@ function AppTitleBar({
   );
 }
 
-export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null }: LayoutProps) {
+export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null, globalSidebarContent, renderTitleBarContent }: LayoutProps) {
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
@@ -173,7 +193,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
-  const [pendingReviewCount, setPendingReviewCount] = useState(0);
   const notificationDrawerOpen = useNotificationStore((state) => state.drawerOpen);
   const toggleNotificationDrawer = useNotificationStore((state) => state.toggleDrawer);
   const unreadNotificationCount = useNotificationStore(selectNotificationUnreadCount);
@@ -181,7 +200,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const sidebarAnimationTimerRef = useRef<number | null>(null);
   const isFixedViewportView = currentView === 'manuscripts';
   const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
+  const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
+  const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const activeSpaceName = useMemo(
     () => spaces.find((space) => space.id === activeSpaceId)?.name || '暂无空间',
     [activeSpaceId, spaces]
@@ -227,26 +248,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     void loadVersion();
   }, []);
 
-  const loadPendingReviewCount = useCallback(async () => {
-    try {
-      const stats = await window.ipcRenderer.teamRuntime.reviewDocketStats();
-      setPendingReviewCount(Number(stats?.pending || 0));
-    } catch {
-      setPendingReviewCount(0);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadPendingReviewCount();
-    const listener = (_event: unknown, envelope?: unknown) => {
-      const eventRecord = envelope && typeof envelope === 'object' ? envelope as Record<string, unknown> : {};
-      if (String(eventRecord.eventType || '') !== 'runtime:review-docket-changed') return;
-      void loadPendingReviewCount();
-    };
-    window.ipcRenderer.teamRuntime.onEvent(listener);
-    return () => window.ipcRenderer.teamRuntime.offEvent(listener);
-  }, [loadPendingReviewCount]);
-
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (!spaceMenuRef.current) return;
@@ -278,6 +279,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
   }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    if (sidebarVisualCollapsed) {
+      setIsSpaceMenuOpen(false);
+    }
+  }, [sidebarVisualCollapsed]);
 
   useEffect(() => () => {
     if (sidebarAnimationTimerRef.current !== null) {
@@ -323,7 +330,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     if (!Number.isFinite(ts)) return '';
     return new Date(ts).toLocaleDateString();
   }, [updateNotice?.publishedAt]);
-
   const openReleasePage = useCallback(async () => {
     if (!updateNotice?.htmlUrl || isOpeningReleasePage) return;
     setIsOpeningReleasePage(true);
@@ -459,6 +465,58 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     }
   }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId]);
 
+  const handleSidebarNavigate = useCallback((item: SidebarNavItem) => {
+    if (item.settingsTab || item.redclawAction) {
+      window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, {
+        detail: {
+          view: item.view,
+          settingsTab: item.settingsTab,
+          redclawAction: item.redclawAction,
+        },
+      }));
+      return;
+    }
+    onNavigate(item.view);
+  }, [onNavigate]);
+
+  const renderSidebarNavItem = (item: SidebarNavItem) => {
+    const { key, view, label, icon: Icon, primary } = item;
+    const isActive = !item.redclawAction && currentView === view && !item.settingsTab;
+    return (
+      <button
+        key={key}
+        type="button"
+        data-guide-id={`nav-${key}`}
+        onClick={() => handleSidebarNavigate(item)}
+        title={label}
+        aria-label={label}
+        className={clsx(
+          'app-sidebar-nav-item relative w-full rounded-xl transition-all font-normal inline-flex items-center',
+          sidebarVisualCollapsed ? 'app-sidebar-nav-item--collapsed justify-center' : 'app-sidebar-nav-item--expanded',
+          primary && 'app-sidebar-nav-item--primary',
+          view === 'subjects'
+            ? (
+              isActive
+                ? 'app-sidebar-nav-item--active-special shadow-none'
+                : 'app-sidebar-nav-item--plain'
+            )
+            : (
+              isActive
+                ? 'app-sidebar-nav-item--active shadow-sm'
+                : 'app-sidebar-nav-item--plain'
+            )
+        )}
+      >
+        <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={primary ? 1.6 : 1.65} />
+        {!sidebarVisualCollapsed && (
+          <span className="app-sidebar-nav-label truncate whitespace-nowrap opacity-100 translate-x-0">
+            {label}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div
       className={clsx(
@@ -467,9 +525,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       )}
     >
       <AppTitleBar
-        appVersion={appVersion}
         immersiveMode={immersiveMode}
         enabled={usesMacOverlayTitleBar}
+        content={titleBarContent}
+        isSidebarCollapsed={isSidebarCollapsed}
+        toggleSidebarCollapsed={toggleSidebarCollapsed}
         notificationDrawerOpen={notificationDrawerOpen}
         unreadNotificationCount={unreadNotificationCount}
         toggleNotificationDrawer={toggleNotificationDrawer}
@@ -498,205 +558,121 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
             usesMacOverlayTitleBar && 'pt-[var(--app-titlebar-height)]',
             isSidebarAnimating && 'app-sidebar-shell--animating',
-            isSidebarCollapsed ? 'w-[4.5rem]' : 'w-[9rem]'
+            sidebarVisualCollapsed ? 'app-sidebar-shell--collapsed' : 'app-sidebar-shell--expanded'
           )}
         >
-          {/* App Title */}
-          <div
-            className={clsx(
-              'border-b border-border/50',
-              sidebarVisualCollapsed
-                ? 'px-2 py-3 flex flex-col items-center gap-2'
-                : 'h-11 px-4 flex items-center'
-            )}
-          >
-            <div
-              className={clsx('flex items-center min-w-0', sidebarVisualCollapsed ? 'justify-center' : 'gap-2')}
-              title={appVersion ? `红盒子 v${appVersion}` : '红盒子'}
-            >
-              <img src={appLogo} alt="RedBox" className="w-[18px] h-[18px] shrink-0" />
-              <span
-                className={clsx(
-                  'font-medium text-[14px] tracking-[0.01em] truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out',
-                  sidebarVisualCollapsed ? 'max-w-0 opacity-0 -translate-x-1' : 'max-w-[7rem] opacity-100 translate-x-0'
-                )}
-              >
-                红盒子
-              </span>
-            </div>
-            <div className={clsx('flex items-center gap-2', sidebarVisualCollapsed ? 'flex-col' : 'ml-auto')}>
-              <button
-                type="button"
-                onClick={toggleSidebarCollapsed}
-                className="h-7 w-7 rounded-lg text-text-secondary hover:text-text-primary transition-colors inline-flex items-center justify-center"
-                title={isSidebarCollapsed ? '展开侧边栏' : '折叠为仅图标'}
-                aria-label={isSidebarCollapsed ? '展开侧边栏' : '折叠为仅图标'}
-              >
-                {isSidebarCollapsed
-                  ? <ChevronRight className="w-[14px] h-[14px]" strokeWidth={1.75} />
-                  : <ChevronLeft className="w-[14px] h-[14px]" strokeWidth={1.75} />}
-              </button>
-            </div>
-          </div>
-
           {/* Navigation */}
-          <nav className={clsx('flex-1 py-3 space-y-1.5', sidebarVisualCollapsed ? 'px-2' : 'px-2.5')}>
-            {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                data-guide-id={`nav-${id}`}
-                onClick={() => onNavigate(id)}
-                title={label}
-                aria-label={label}
-                className={clsx(
-                  'relative w-full rounded-xl transition-all tracking-[0.01em] font-normal inline-flex items-center',
-                  sidebarVisualCollapsed ? 'h-11 justify-center px-0' : 'gap-3 px-3.5 py-2.5 text-[13px]',
-                  id === 'subjects'
-                    ? (
-                      currentView === id
-                        ? 'bg-transparent text-accent-primary shadow-none'
-                        : 'bg-transparent text-text-secondary/90 hover:bg-transparent hover:text-text-primary'
-                    )
-                    : (
-                      currentView === id
-                        ? 'bg-surface-primary text-accent-primary shadow-sm'
-                        : 'text-text-secondary/90 hover:bg-surface-primary/55 hover:text-text-primary'
-                    )
-                )}
-              >
-                <Icon className="w-[15px] h-[15px] shrink-0" strokeWidth={1.75} />
-                <span
-                  className={clsx(
-                    'truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out',
-                    sidebarVisualCollapsed ? 'max-w-0 opacity-0 translate-x-1' : 'max-w-[7rem] opacity-100 translate-x-0'
-                  )}
-                >
-                  {label}
-                </span>
-                {id === 'approval' && pendingReviewCount > 0 && (
-                  <span
-                    className={clsx(
-                      'shrink-0 rounded-full bg-[#c75d43] text-white',
-                      sidebarVisualCollapsed
-                        ? 'absolute right-2 top-2 h-2.5 min-w-2.5'
-                        : 'ml-auto min-w-[18px] px-1.5 py-0.5 text-[10px] leading-4 text-center'
-                    )}
-                  >
-                    {sidebarVisualCollapsed ? '' : Math.min(pendingReviewCount, 99)}
-                  </span>
-                )}
-              </button>
-            ))}
+          <nav className={clsx('app-sidebar-nav', visibleGlobalSidebarContent ? 'shrink-0' : 'flex-1', sidebarVisualCollapsed ? 'app-sidebar-nav--collapsed' : 'app-sidebar-nav--expanded')}>
+            {NAV_ITEMS.map(renderSidebarNavItem)}
           </nav>
+
+          {visibleGlobalSidebarContent && (
+            <div className="min-h-0 flex-1 overflow-hidden px-2 pb-3 flex flex-col">
+              {visibleGlobalSidebarContent}
+            </div>
+          )}
 
           {/* Footer */}
           <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-3 flex flex-col items-center gap-2.5' : 'px-4 py-3 space-y-2.5')}>
-            <div className={clsx(sidebarVisualCollapsed ? 'w-full flex justify-center' : 'space-y-1.5')}>
-              <div
-                className={clsx(
-                  'text-[10px] tracking-[0.04em] text-text-tertiary overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
-                  sidebarVisualCollapsed ? 'max-h-0 opacity-0 -translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
-                )}
-              >
-                空间
-              </div>
-              <div ref={spaceMenuRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setIsSpaceMenuOpen((prev) => !prev)}
-                  disabled={isSwitchingSpace}
-                  title={sidebarVisualCollapsed ? `当前空间：${activeSpaceName}` : undefined}
-                  aria-label={sidebarVisualCollapsed ? `当前空间：${activeSpaceName}` : undefined}
-                  className={clsx(
-                    'rounded-lg border border-border bg-surface-primary text-text-primary disabled:opacity-50',
-                    sidebarVisualCollapsed
-                      ? 'w-10 h-10 inline-flex items-center justify-center'
-                      : 'w-full h-8 px-2.5 text-[12px] flex items-center justify-between'
-                  )}
+            {!sidebarVisualCollapsed && (
+              <div className="space-y-1.5">
+                <div
+                  className="max-h-4 text-[10px] tracking-[0.04em] text-text-tertiary overflow-hidden whitespace-nowrap opacity-100 translate-y-0"
                 >
-                  {sidebarVisualCollapsed ? (
-                    <FolderOpen className="w-[16px] h-[16px] text-text-secondary" strokeWidth={1.75} />
-                  ) : (
-                    <>
-                      <span className="truncate">{activeSpaceName}</span>
-                      <ChevronDown className={clsx('w-[13px] h-[13px] text-text-tertiary transition-transform', isSpaceMenuOpen && 'rotate-180')} strokeWidth={1.75} />
-                    </>
-                  )}
-                </button>
-
-                {isSpaceMenuOpen && (
-                  <div
-                    className={clsx(
-                      'absolute rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden',
-                      sidebarVisualCollapsed ? 'bottom-0 left-full ml-2 w-56' : 'left-0 right-0 bottom-full mb-1.5'
-                    )}
+                  空间
+                </div>
+                <div ref={spaceMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsSpaceMenuOpen((prev) => !prev)}
+                    disabled={isSwitchingSpace}
+                    className="w-full h-8 px-2.5 text-[12px] flex items-center justify-between rounded-lg border border-border bg-surface-primary text-text-primary disabled:opacity-50"
                   >
-                    <div className="max-h-44 overflow-y-auto">
-                      {spaces.length === 0 ? (
-                        <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
-                          暂无空间
-                        </div>
-                      ) : (
-                        spaces.map((space) => {
-                          const isActive = space.id === activeSpaceId;
-                          const showEdit = hoveredSpaceId === space.id;
-                          return (
-                            <div
-                              key={space.id}
-                              className={clsx(
-                                'h-9 px-2.5 flex items-center gap-1.5',
-                                isActive ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary'
-                              )}
-                              onMouseEnter={() => setHoveredSpaceId(space.id)}
-                              onMouseLeave={() => setHoveredSpaceId((prev) => (prev === space.id ? null : prev))}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  void handleSwitchSpace(space.id);
-                                }}
-                                className={clsx('flex-1 text-left text-[12px] truncate', isActive ? 'text-accent-primary' : 'text-text-primary')}
-                              >
-                                {space.name}
-                              </button>
-                              <button
-                                type="button"
-                                onMouseDown={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  openRenameSpaceDialog(space);
-                                }}
-                                className={clsx(
-                                  'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
-                                  showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
-                                )}
-                                title="重命名空间"
-                              >
-                                <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                              </button>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
+                    <span className="truncate">{activeSpaceName}</span>
+                    <ChevronDown className={clsx('w-[13px] h-[13px] text-text-tertiary transition-transform', isSpaceMenuOpen && 'rotate-180')} strokeWidth={1.75} />
+                  </button>
 
-                    <button
-                      type="button"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openCreateSpaceDialog();
-                      }}
-                      className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
+                  {isSpaceMenuOpen && (
+                    <div
+                      className="absolute left-0 right-0 bottom-full mb-1.5 rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden"
                     >
-                      <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                      新建空间
-                    </button>
-                  </div>
-                )}
+                      <div className="max-h-44 overflow-y-auto">
+                        {spaces.length === 0 ? (
+                          <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
+                            暂无空间
+                          </div>
+                        ) : (
+                          spaces.map((space) => {
+                            const isActive = space.id === activeSpaceId;
+                            const showEdit = hoveredSpaceId === space.id;
+                            return (
+                              <div
+                                key={space.id}
+                                className={clsx(
+                                  'h-9 px-2.5 flex items-center gap-1.5',
+                                  isActive ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary'
+                                )}
+                                onMouseEnter={() => setHoveredSpaceId(space.id)}
+                                onMouseLeave={() => setHoveredSpaceId((prev) => (prev === space.id ? null : prev))}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void handleSwitchSpace(space.id);
+                                  }}
+                                  className={clsx('flex-1 text-left text-[12px] truncate', isActive ? 'text-accent-primary' : 'text-text-primary')}
+                                >
+                                  {space.name}
+                                </button>
+                                <button
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    openRenameSpaceDialog(space);
+                                  }}
+                                  className={clsx(
+                                    'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
+                                    showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                                  )}
+                                  title="重命名空间"
+                                >
+                                  <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                                </button>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openCreateSpaceDialog();
+                        }}
+                        className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
+                      >
+                        <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                        新建空间
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
+            {sidebarVisualCollapsed && (
+              <button
+                type="button"
+                onClick={() => onNavigate('settings')}
+                className="h-8 w-8 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
+                title="设置"
+                aria-label="设置"
+              >
+                <SettingsIcon className="w-[14px] h-[14px]" strokeWidth={1.75} />
+              </button>
+            )}
             <div
               className={clsx(
                 'flex items-center justify-center gap-2 text-[11px] text-text-tertiary/90 overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
@@ -705,6 +681,15 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                   : sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
               )}
             >
+              <button
+                type="button"
+                onClick={() => onNavigate('settings')}
+                className="h-5 w-5 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
+                title="设置"
+                aria-label="设置"
+              >
+                <SettingsIcon className="w-[11px] h-[11px]" strokeWidth={1.75} />
+              </button>
               {!usesMacOverlayTitleBar && (
                 <>
                   <button

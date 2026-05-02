@@ -27,10 +27,8 @@ export type NotificationAction =
     };
 
 export type NotificationView =
-  | 'chat'
   | 'redclaw'
   | 'generation-studio'
-  | 'workboard'
   | 'manuscripts'
   | 'settings';
 
