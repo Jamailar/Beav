@@ -47,14 +47,6 @@ interface Session {
   updatedAt: string;
 }
 
-// 群聊接口
-interface ChatRoom {
-  id: string;
-  name: string;
-  advisorIds: string[];
-  createdAt: string;
-}
-
 interface AdvisorMentionRecord {
   id: string;
   name?: string;
@@ -730,9 +722,6 @@ export function Chat({
   }, [sidebarCollapsed]);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu>({ visible: false, x: 0, y: 0, text: '' });
-  const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
-  const [showRoomPicker, setShowRoomPicker] = useState(false);
-  const [isRoomPickerLoading, setIsRoomPickerLoading] = useState(false);
   const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
   ));
@@ -780,7 +769,6 @@ export function Chat({
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStreamChunkRef = useRef<{ content: string; at: number }>({ content: '', at: 0 });
   const localMessageMutationRef = useRef(0);
-  const chatRoomsRequestIdRef = useRef(0);
   const sessionsRequestIdRef = useRef(0);
   const isActiveRef = useRef(isActive);
   const coldRecoveryPendingRef = useRef(true);
@@ -931,7 +919,6 @@ export function Chat({
       updateTimerRef.current = null;
     }
     pendingUpdateRef.current = null;
-    setShowRoomPicker(false);
     setSelectionMenu((prev) => ({ ...prev, visible: false }));
     setComposerSuppressed(false);
   }, [blurComposer, debugUi, isActive, suppressComposerFocus]);
@@ -1183,32 +1170,6 @@ export function Chat({
     };
   }, [selectedChatModel]);
 
-  const loadChatRooms = useCallback(async (options?: { silent?: boolean }) => {
-    if (fixedSessionMode) return;
-    const requestId = ++chatRoomsRequestIdRef.current;
-    const silent = Boolean(options?.silent);
-    if (!silent) {
-      setIsRoomPickerLoading(true);
-    }
-    try {
-      const rooms = await uiMeasure('chat', 'load_chat_rooms', async () => (
-        window.ipcRenderer.invoke('chatrooms:list') as Promise<ChatRoom[]>
-      ), { silent });
-      if (requestId !== chatRoomsRequestIdRef.current) {
-        return;
-      }
-      if (Array.isArray(rooms)) {
-        setChatRooms(rooms);
-      }
-    } catch (error) {
-      console.error('Failed to load chat rooms:', error);
-    } finally {
-      if (requestId === chatRoomsRequestIdRef.current && !silent) {
-        setIsRoomPickerLoading(false);
-      }
-    }
-  }, [fixedSessionMode]);
-
   // 判断是否是空会话（新建或无消息）
   const isEmptySession = messages.length === 0;
 
@@ -1258,9 +1219,6 @@ export function Chat({
   // Load sessions on mount
   useEffect(() => {
     if (!isActive) return;
-    if (!fixedSessionMode) {
-      void loadChatRooms({ silent: true });
-    }
 
     // Handle fixed session (File-Bound Mode)
     if (fixedSessionId) {
@@ -1284,7 +1242,7 @@ export function Chat({
         setSessions(list);
       }).catch(console.error);
     }
-  }, [fixedSessionId, fixedSessionMode, isActive, loadChatRooms]); // Add fixedSessionId dependency
+  }, [fixedSessionId, fixedSessionMode, isActive]);
 
   const dispatchChatSend = useCallback((payload: {
     sessionId?: string;
@@ -1828,15 +1786,13 @@ export function Chat({
   useEffect(() => {
     if (!isActive || fixedSessionMode) return;
     const handleSpaceChanged = () => {
-      setShowRoomPicker(false);
       setSelectionMenu(prev => ({ ...prev, visible: false }));
-      void loadChatRooms({ silent: true });
     };
     window.ipcRenderer.on('space:changed', handleSpaceChanged);
     return () => {
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
-  }, [fixedSessionMode, isActive, loadChatRooms]);
+  }, [fixedSessionMode, isActive]);
 
   useEffect(() => {
     if (!isActive) return;

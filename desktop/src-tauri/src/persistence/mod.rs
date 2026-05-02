@@ -54,11 +54,6 @@ pub(crate) struct SubjectsHydrationSnapshot {
     subjects: Vec<crate::SubjectRecord>,
 }
 
-pub(crate) struct ChatroomsHydrationSnapshot {
-    chat_rooms: Vec<crate::ChatRoomRecord>,
-    chatroom_messages: Vec<crate::ChatRoomMessageRecord>,
-}
-
 pub(crate) struct MediaHydrationSnapshot {
     media_assets: Vec<crate::MediaAssetRecord>,
 }
@@ -141,22 +136,6 @@ pub(crate) fn apply_subjects_hydration_snapshot(
 ) {
     store.categories = snapshot.categories;
     store.subjects = snapshot.subjects;
-}
-
-pub(crate) fn load_chatrooms_hydration_snapshot(root: &Path) -> ChatroomsHydrationSnapshot {
-    let chatrooms_root = root.join("chatrooms");
-    ChatroomsHydrationSnapshot {
-        chat_rooms: load_chat_rooms_from_fs(&chatrooms_root),
-        chatroom_messages: load_chatroom_messages_from_fs(&chatrooms_root),
-    }
-}
-
-pub(crate) fn apply_chatrooms_hydration_snapshot(
-    store: &mut AppStore,
-    snapshot: ChatroomsHydrationSnapshot,
-) {
-    store.chat_rooms = snapshot.chat_rooms;
-    store.chatroom_messages = snapshot.chatroom_messages;
 }
 
 pub(crate) fn load_media_hydration_snapshot(root: &Path) -> MediaHydrationSnapshot {

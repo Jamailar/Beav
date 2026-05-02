@@ -56,9 +56,9 @@ use commands::chat_state::{
     resolve_runtime_mode_for_session, update_chat_runtime_state,
 };
 use events::{
-    emit_creative_chat_checkpoint, emit_runtime_done, emit_runtime_stream_start,
-    emit_runtime_task_checkpoint_saved, emit_runtime_text_delta, emit_runtime_tool_partial,
-    emit_runtime_tool_request, emit_runtime_tool_result, split_stream_chunks,
+    emit_runtime_done, emit_runtime_stream_start, emit_runtime_task_checkpoint_saved,
+    emit_runtime_text_delta, emit_runtime_tool_partial, emit_runtime_tool_request,
+    emit_runtime_tool_result,
 };
 use persistence::{
     build_store_path, ensure_store_hydrated_for_knowledge, hydrate_store_from_workspace_files,
@@ -782,7 +782,6 @@ struct AppState {
     chat_runtime_states: Mutex<std::collections::HashMap<String, ChatRuntimeStateRecord>>,
     editor_runtime_states: Mutex<std::collections::HashMap<String, EditorRuntimeStateRecord>>,
     active_chat_requests: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
-    creative_chat_cancellations: Mutex<HashSet<String>>,
     assistant_runtime: Mutex<Option<AssistantRuntime>>,
     assistant_sidecar: Mutex<Option<AssistantSidecarRuntime>>,
     redclaw_runtime: Mutex<Option<RedclawRuntime>>,
@@ -8651,26 +8650,6 @@ fn run_model_structured_task_with_settings(
     )
 }
 
-fn find_advisor_name(advisors: &[AdvisorRecord], advisor_id: &str) -> String {
-    chat_helpers::find_advisor_name(advisors, advisor_id)
-}
-
-fn find_advisor_avatar(advisors: &[AdvisorRecord], advisor_id: &str) -> String {
-    chat_helpers::find_advisor_avatar(advisors, advisor_id)
-}
-
-fn chatroom_response_phase(index: usize, total: usize) -> String {
-    if total <= 1 {
-        "discussion".to_string()
-    } else if index + 1 == total {
-        "summary".to_string()
-    } else if index == 0 {
-        "introduction".to_string()
-    } else {
-        "discussion".to_string()
-    }
-}
-
 fn parse_youtube_channel(url: &str) -> (String, String) {
     let trimmed = url.trim().trim_end_matches('/');
     let slug = trimmed
@@ -9337,11 +9316,6 @@ fn handle_channel(
     {
         return result;
     }
-    if let Some(result) =
-        commands::chatrooms::handle_chatrooms_channel(app, state, channel, &payload)
-    {
-        return result;
-    }
     if let Some(result) = commands::library::handle_library_channel(app, state, channel, &payload) {
         return result;
     }
@@ -9424,7 +9398,6 @@ async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Re
     if channel == "chat:send-message"
         || channel == "ai:start-chat"
         || channel == "wander:brainstorm"
-        || channel == "chatrooms:send"
     {
         let app_handle = app.clone();
         let channel_name = channel.clone();
@@ -9470,30 +9443,6 @@ async fn ipc_send(app: AppHandle, channel: String, payload: Option<Value>) -> Re
                             }),
                         );
                     }
-                }
-            } else if channel_name == "chatrooms:send" {
-                if let Err(error) = handle_channel(
-                    &app_handle,
-                    &channel_name,
-                    payload_value.clone(),
-                    &managed_state,
-                ) {
-                    let room_id = payload_string(&payload_value, "roomId").unwrap_or_default();
-                    emit_creative_chat_checkpoint(
-                        &app_handle,
-                        &room_id,
-                        "creative_chat.error",
-                        json!({
-                            "roomId": room_id.clone(),
-                            "message": error,
-                        }),
-                    );
-                    emit_creative_chat_checkpoint(
-                        &app_handle,
-                        &room_id,
-                        "creative_chat.done",
-                        json!({ "roomId": room_id }),
-                    );
                 }
             } else if let Err(error) = commands::chat::handle_send_channel(
                 &app_handle,
@@ -9677,7 +9626,6 @@ fn main() {
             chat_runtime_states: Mutex::new(std::collections::HashMap::new()),
             editor_runtime_states: Mutex::new(std::collections::HashMap::new()),
             active_chat_requests: Mutex::new(HashMap::new()),
-            creative_chat_cancellations: Mutex::new(HashSet::new()),
             assistant_runtime: Mutex::new(None),
             assistant_sidecar: Mutex::new(None),
             redclaw_runtime: Mutex::new(None),

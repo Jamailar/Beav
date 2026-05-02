@@ -442,7 +442,7 @@ mod tests {
         startup_migration, AppStore, ApprovalRuntimeState, AuthRuntimeState, DiagnosticsState,
         RuntimeWarmState,
     };
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -484,7 +484,6 @@ mod tests {
                 chat_runtime_states: Mutex::new(HashMap::new()),
                 editor_runtime_states: Mutex::new(HashMap::new()),
                 active_chat_requests: Mutex::new(HashMap::new()),
-                creative_chat_cancellations: Mutex::new(HashSet::new()),
                 assistant_runtime: Mutex::new(None),
                 assistant_sidecar: Mutex::new(None),
                 redclaw_runtime: Mutex::new(None),
