@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package, AlertCircle, Sparkles, ListTodo, Bell, BookOpenText } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
@@ -72,6 +72,89 @@ function readInitialSidebarCollapsed(): boolean {
   return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
 }
 
+function shouldUseMacOverlayTitleBar(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /\bMac\b/i.test(navigator.platform || '') || /\bMac OS X\b/i.test(navigator.userAgent || '');
+}
+
+function AppTitleBar({
+  appVersion,
+  immersiveMode,
+  enabled,
+  notificationDrawerOpen,
+  unreadNotificationCount,
+  toggleNotificationDrawer,
+  themeMode,
+  setThemeMode,
+}: {
+  appVersion: string;
+  immersiveMode: ImmersiveMode;
+  enabled: boolean;
+  notificationDrawerOpen: boolean;
+  unreadNotificationCount: number;
+  toggleNotificationDrawer: () => void;
+  themeMode: ThemeMode;
+  setThemeMode: Dispatch<SetStateAction<ThemeMode>>;
+}) {
+  const title = appVersion ? `RedBox v${appVersion}` : 'RedBox';
+
+  if (!enabled) return null;
+
+  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
+    event.preventDefault();
+    void window.ipcRenderer.windowControls.startDragging().catch((error) => {
+      console.warn('[RedBox] failed to start window drag:', error);
+    });
+  };
+
+  return (
+    <header
+      data-tauri-drag-region
+      onMouseDown={startWindowDrag}
+      className={clsx(
+        'app-titlebar shrink-0',
+        immersiveMode === 'dark' && 'app-titlebar--dark'
+      )}
+      title={title}
+    >
+      <div data-tauri-drag-region className="app-titlebar-controls-spacer" />
+      <div data-tauri-drag-region className="app-titlebar-title">
+        RedBox
+      </div>
+      <div className="app-titlebar-actions">
+        <button
+          type="button"
+          onClick={toggleNotificationDrawer}
+          className="app-titlebar-button"
+          title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+          aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+        >
+          <Bell className="w-[13px] h-[13px]" strokeWidth={1.75} />
+          {unreadNotificationCount > 0 && (
+            <span className="app-titlebar-badge">
+              {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+          className="app-titlebar-button"
+          title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+          aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+        >
+          {themeMode === 'dark'
+            ? <Sun className="w-[13px] h-[13px]" strokeWidth={1.75} />
+            : <Moon className="w-[13px] h-[13px]" strokeWidth={1.75} />}
+        </button>
+      </div>
+    </header>
+  );
+}
+
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null }: LayoutProps) {
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
@@ -97,6 +180,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const spaceMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarAnimationTimerRef = useRef<number | null>(null);
   const isFixedViewportView = currentView === 'manuscripts';
+  const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
   const activeSpaceName = useMemo(
     () => spaces.find((space) => space.id === activeSpaceId)?.name || '暂无空间',
@@ -382,8 +466,24 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-background'
       )}
     >
+      <AppTitleBar
+        appVersion={appVersion}
+        immersiveMode={immersiveMode}
+        enabled={usesMacOverlayTitleBar}
+        notificationDrawerOpen={notificationDrawerOpen}
+        unreadNotificationCount={unreadNotificationCount}
+        toggleNotificationDrawer={toggleNotificationDrawer}
+        themeMode={themeMode}
+        setThemeMode={setThemeMode}
+      />
+
       {globalNotice && (
-        <div className="pointer-events-none absolute left-1/2 top-3 z-[80] -translate-x-1/2">
+        <div
+          className={clsx(
+            'pointer-events-none absolute left-1/2 z-[80] -translate-x-1/2',
+            usesMacOverlayTitleBar ? 'top-[calc(var(--app-titlebar-height)+0.75rem)]' : 'top-3'
+          )}
+        >
           <div className="inline-flex items-center gap-2 rounded-full border border-red-200/80 bg-red-50/96 px-4 py-2 text-[12px] font-medium text-red-700 shadow-[0_12px_30px_-18px_rgba(220,38,38,0.55)] backdrop-blur">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
             <span className="whitespace-nowrap">{globalNotice}</span>
@@ -396,6 +496,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <aside
           className={clsx(
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
+            usesMacOverlayTitleBar && 'pt-[var(--app-titlebar-height)]',
             isSidebarAnimating && 'app-sidebar-shell--animating',
             isSidebarCollapsed ? 'w-[4.5rem]' : 'w-[9rem]'
           )}
@@ -599,34 +700,40 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             <div
               className={clsx(
                 'flex items-center justify-center gap-2 text-[11px] text-text-tertiary/90 overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
-                sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
+                usesMacOverlayTitleBar
+                  ? 'max-h-4 opacity-100 translate-y-0'
+                  : sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
               )}
             >
-              <button
-                type="button"
-                onClick={toggleNotificationDrawer}
-                className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
-                aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
-              >
-                <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
-                {unreadNotificationCount > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
-                    {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
-                  </span>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
-                className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-                aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-              >
-                {themeMode === 'dark'
-                  ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
-                  : <Moon className="w-[11px] h-[11px]" strokeWidth={1.75} />}
-              </button>
+              {!usesMacOverlayTitleBar && (
+                <>
+                  <button
+                    type="button"
+                    onClick={toggleNotificationDrawer}
+                    className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+                    aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+                  >
+                    <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                    {unreadNotificationCount > 0 && (
+                      <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
+                        {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+                    className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+                    aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+                  >
+                    {themeMode === 'dark'
+                      ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                      : <Moon className="w-[11px] h-[11px]" strokeWidth={1.75} />}
+                  </button>
+                </>
+              )}
               <span>{appVersion ? `v${appVersion}` : 'v--'}</span>
             </div>
           </div>
@@ -644,6 +751,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <div
           className={clsx(
             'flex-1',
+            usesMacOverlayTitleBar && 'pt-[var(--app-titlebar-height)]',
             isFixedViewportView ? 'min-h-0 flex flex-col overflow-hidden' : 'overflow-auto'
           )}
         >

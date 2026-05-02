@@ -853,6 +853,9 @@ declare global {
 
   interface Window {
     ipcRenderer: {
+      windowControls: {
+        startDragging: () => Promise<void>;
+      };
       audio: {
         getCaptureCapability: () => Promise<{
           success?: boolean;
