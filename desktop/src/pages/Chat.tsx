@@ -240,6 +240,8 @@ interface ChatProps {
   defaultCollapsed?: boolean;
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
+  navigationAction?: { action: 'new'; nonce: number } | null;
+  onNavigationActionConsumed?: () => void;
   fixedSessionId?: string | null;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
@@ -657,6 +659,8 @@ export function Chat({
   onExecutionStateChange,
   pendingMessage,
   onMessageConsumed,
+  navigationAction,
+  onNavigationActionConsumed,
   defaultCollapsed = true,
   fixedSessionId,
   showClearButton = true,
@@ -1665,7 +1669,7 @@ export function Chat({
     }
   };
 
-  const createNewSession = async () => {
+  const createNewSession = useCallback(async () => {
     try {
       const session = await window.ipcRenderer.chat.createSession('New Chat');
       setSessions(prev => [session, ...prev]);
@@ -1675,7 +1679,18 @@ export function Chat({
     } catch (error) {
       console.error('Failed to create session:', error);
     }
-  };
+  }, []);
+
+  const handledNavigationActionNonceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isActive || navigationAction?.action !== 'new') return;
+    if (handledNavigationActionNonceRef.current === navigationAction.nonce) return;
+    handledNavigationActionNonceRef.current = navigationAction.nonce;
+    void createNewSession().finally(() => {
+      onNavigationActionConsumed?.();
+    });
+  }, [createNewSession, isActive, navigationAction, onNavigationActionConsumed]);
 
   const clearSession = async () => {
     if (!currentSessionId) return;

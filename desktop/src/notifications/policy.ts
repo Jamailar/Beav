@@ -69,7 +69,7 @@ function summarizeRuntimeMode(runtimeMode: string): string {
 
 function shouldMuteSuccessForForeground(context: NotificationContextSnapshot, source: string): boolean {
   if (!context.hasFocus || context.visibilityState !== 'visible') return false;
-  if (source === 'runtime' && (context.currentView === 'chat' || context.currentView === 'redclaw')) return true;
+  if (source === 'runtime' && context.currentView === 'redclaw') return true;
   if (source === 'generation' && context.currentView === 'generation-studio') return true;
   if (source === 'redclaw' && context.currentView === 'redclaw') return true;
   return false;
@@ -146,7 +146,7 @@ export function mapRuntimeDoneToNotification(
         id: 'open-runtime',
         label: '查看',
         action: 'navigate',
-        payload: { view: payload.runtimeMode === 'redclaw' ? 'redclaw' : 'chat' },
+        payload: { view: 'redclaw' },
       },
     ],
     meta: {
@@ -181,7 +181,7 @@ export function mapRuntimeTaskNodeFailureToNotification(
         id: 'open-runtime',
         label: '查看',
         action: 'navigate',
-        payload: { view: context.currentView === 'redclaw' ? 'redclaw' : 'chat' },
+        payload: { view: 'redclaw' },
       },
     ],
     meta: {
@@ -216,7 +216,7 @@ export function mapRuntimeToolConfirmToNotification(
         id: 'open-runtime',
         label: '去处理',
         action: 'navigate',
-        payload: { view: context.currentView === 'redclaw' ? 'redclaw' : 'chat' },
+        payload: { view: 'redclaw' },
       },
     ],
     meta: {
@@ -250,7 +250,7 @@ export function mapRuntimeCliEscalationToNotification(
         id: 'open-runtime',
         label: '去处理',
         action: 'navigate',
-        payload: { view: context.currentView === 'redclaw' ? 'redclaw' : 'chat' },
+        payload: { view: 'redclaw' },
       },
     ],
   };
@@ -288,7 +288,7 @@ export function mapRuntimeErrorToNotification(
         action: 'navigate',
         payload: shouldOpenLoginSettings
           ? { view: 'settings', settingsTab: 'ai', aiModelSubTab: 'login' }
-          : { view: context.currentView === 'redclaw' ? 'redclaw' : 'chat' },
+          : { view: 'redclaw' },
       },
     ],
   };
