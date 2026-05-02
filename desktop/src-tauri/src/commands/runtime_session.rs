@@ -45,6 +45,13 @@ pub fn handle_runtime_session_channel(
         "team-runtime:add-member" | "collab:members:add" => {
             runtime_collab::add_member_value(app, state, payload)
         }
+        "team-runtime:set-session-coordinator" => {
+            runtime_collab::set_session_coordinator_value(app, state, payload)
+        }
+        "team-runtime:rename-member" => runtime_collab::rename_member_value(app, state, payload),
+        "team-runtime:shutdown-member" => {
+            runtime_collab::shutdown_member_value(app, state, payload)
+        }
         "team-runtime:create-task" | "collab:tasks:create" => {
             runtime_collab::create_task_value(app, state, payload)
         }

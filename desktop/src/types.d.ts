@@ -1074,6 +1074,7 @@ declare global {
         getSession: (payload: { sessionId: string; mailboxLimit?: number; reportLimit?: number }) => Promise<CollabSessionSnapshot>;
         listMembers: (payload: { sessionId: string }) => Promise<CollabMemberRecord[]>;
         addMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
+        setSessionCoordinator: (payload: Record<string, unknown>) => Promise<CollabSessionRecord>;
         matchMember: (payload: Record<string, unknown>) => Promise<CollabMemberMatchResult>;
         renameMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
         shutdownMember: (payload: Record<string, unknown>) => Promise<CollabMemberRecord>;
@@ -1111,6 +1112,8 @@ declare global {
         listTools: () => Promise<Array<Record<string, unknown>>>;
         executeTool: (payload: { action: string; payload?: Record<string, unknown> }) => Promise<unknown>;
         runExternalMember: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        onEvent: (listener: (event: RuntimeUnifiedEvent) => void) => void;
+        offEvent: (listener: (event: RuntimeUnifiedEvent) => void) => void;
       };
       collab: Window['ipcRenderer']['teamRuntime'];
       toolHooks: {

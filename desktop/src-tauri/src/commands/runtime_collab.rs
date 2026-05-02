@@ -6,12 +6,13 @@ use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, archive_review_docket, collab_session_snapshot, create_collab_session,
-    create_collab_task, create_review_docket, decide_review_docket, get_review_docket,
-    list_collab_members, list_collab_messages, list_collab_reports, list_collab_sessions,
-    list_collab_tasks, list_review_dockets, pin_collab_task_session, post_collab_message,
-    read_collab_mailbox, request_collab_report, retry_collab_task, review_docket_stats,
-    submit_collab_report, transition_collab_task, update_collab_session_status, update_collab_task,
-    ReviewDocketRecord,
+    create_collab_task, create_review_docket, decide_review_docket,
+    ensure_collab_session_coordinator, get_review_docket, list_collab_members,
+    list_collab_messages, list_collab_reports, list_collab_sessions, list_collab_tasks,
+    list_review_dockets, pin_collab_task_session, post_collab_message, read_collab_mailbox,
+    rename_collab_member, request_collab_report, retry_collab_task, review_docket_stats,
+    set_collab_session_coordinator, shutdown_collab_member, submit_collab_report,
+    transition_collab_task, update_collab_session_status, update_collab_task, ReviewDocketRecord,
 };
 use crate::subagents::{execute_team_tool, team_tool_descriptors, tick_team_wake_runtime};
 use crate::{parse_timestamp_ms, payload_string, AppState};
@@ -59,7 +60,25 @@ pub fn create_session_value(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
-    let session = with_store_mut(state, |store| create_collab_session(store, payload))?;
+    let (session, coordinator) = with_store_mut(state, |store| {
+        let session = create_collab_session(store, payload)?;
+        let runtime_mode = session.runtime_mode.trim().to_ascii_lowercase();
+        let source = session.source.trim().to_ascii_lowercase();
+        if runtime_mode == "team" || source == "team-workbench" {
+            let (session, member, created) = ensure_collab_session_coordinator(store, &session.id)?;
+            Ok((session, created.then_some(member)))
+        } else {
+            Ok((session, None))
+        }
+    })?;
+    if let Some(member) = coordinator {
+        emit_collab_event(
+            app,
+            "runtime:collab-member-changed",
+            None,
+            json!({ "collabSessionId": member.session_id, "member": member }),
+        );
+    }
     emit_collab_event(
         app,
         "runtime:collab-session-changed",
@@ -151,6 +170,53 @@ pub fn add_member_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let member = with_store_mut(state, |store| add_collab_member(store, payload))?;
+    emit_collab_event(
+        app,
+        "runtime:collab-member-changed",
+        None,
+        json!({ "collabSessionId": member.session_id, "member": member }),
+    );
+    Ok(json!(member))
+}
+
+pub fn set_session_coordinator_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let session = with_store_mut(state, |store| {
+        set_collab_session_coordinator(store, payload)
+    })?;
+    emit_collab_event(
+        app,
+        "runtime:collab-session-changed",
+        session.owner_session_id.as_deref(),
+        json!({ "collabSessionId": session.id, "session": session }),
+    );
+    Ok(json!(session))
+}
+
+pub fn rename_member_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let member = with_store_mut(state, |store| rename_collab_member(store, payload))?;
+    emit_collab_event(
+        app,
+        "runtime:collab-member-changed",
+        None,
+        json!({ "collabSessionId": member.session_id, "member": member }),
+    );
+    Ok(json!(member))
+}
+
+pub fn shutdown_member_value(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let member = with_store_mut(state, |store| shutdown_collab_member(store, payload))?;
     emit_collab_event(
         app,
         "runtime:collab-member-changed",

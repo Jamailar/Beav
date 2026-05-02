@@ -330,7 +330,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
       scopes: [],
     };
   }
-  if (channel === 'chat:get-sessions' || channel === 'chatrooms:list' || channel === 'work:list' || channel === 'work:ready') {
+  if (channel === 'chat:get-sessions' || channel === 'work:list' || channel === 'work:ready') {
     return [];
   }
   if (channel === 'chat:list-context-sessions') {
@@ -941,12 +941,14 @@ function createIpcRenderer() {
         invokeChannel('team-runtime:get-session', payload),
       listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
       addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
+      setSessionCoordinator: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:set-session-coordinator', payload),
       matchMember: (payload: Record<string, unknown>) =>
         invokeChannel('team-runtime:execute-tool', { action: 'team.member.match', payload }),
       renameMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.member.rename', payload }),
+        invokeChannel('team-runtime:rename-member', payload),
       shutdownMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.member.shutdown', payload }),
+        invokeChannel('team-runtime:shutdown-member', payload),
       listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
       createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
       updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
@@ -994,12 +996,14 @@ function createIpcRenderer() {
         invokeChannel('team-runtime:get-session', payload),
       listMembers: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-members', payload),
       addMember: (payload: Record<string, unknown>) => invokeChannel('team-runtime:add-member', payload),
+      setSessionCoordinator: (payload: Record<string, unknown>) =>
+        invokeChannel('team-runtime:set-session-coordinator', payload),
       matchMember: (payload: Record<string, unknown>) =>
         invokeChannel('team-runtime:execute-tool', { action: 'team.member.match', payload }),
       renameMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.member.rename', payload }),
+        invokeChannel('team-runtime:rename-member', payload),
       shutdownMember: (payload: Record<string, unknown>) =>
-        invokeChannel('team-runtime:execute-tool', { action: 'team.member.shutdown', payload }),
+        invokeChannel('team-runtime:shutdown-member', payload),
       listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
       createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
       updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
