@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   preflightGenerationMediaPayload,
   preflightInlineAttachmentPayload,
@@ -1255,6 +1256,9 @@ function createIpcRenderer() {
       discoverLocal: () => invokeChannel('mcp:discover-local'),
       importLocal: () => invokeChannel('mcp:import-local'),
       oauthStatus: (serverId: string) => invokeChannel('mcp:oauth-status', { serverId })
+    },
+    windowControls: {
+      startDragging: () => getCurrentWindow().startDragging(),
     },
     checkYtdlp: () => invokeChannel('youtube:check-ytdlp'),
     installYtdlp: () => invokeChannel('youtube:install'),

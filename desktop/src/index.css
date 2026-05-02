@@ -31,6 +31,7 @@
   --ui-radius-lg: 16px;
   --ui-shadow-1: 0 8px 24px rgba(30, 24, 16, 0.05);
   --ui-shadow-2: 0 20px 48px rgba(30, 24, 16, 0.1);
+  --app-titlebar-height: 42px;
 
   /* Disable elastic scrolling on macOS */
   overscroll-behavior: none;
@@ -195,6 +196,84 @@ select {
 
 .app-sidebar-shell--animating {
   backdrop-filter: none;
+}
+
+.app-titlebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 70;
+  display: grid;
+  grid-template-columns: 144px minmax(0, 1fr) auto;
+  align-items: center;
+  height: var(--app-titlebar-height);
+  background: transparent;
+  color: rgb(var(--color-text-primary) / 1);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.app-titlebar--dark {
+  background: transparent;
+}
+
+.app-titlebar-controls-spacer,
+.app-titlebar-title {
+  min-width: 0;
+}
+
+.app-titlebar-title {
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--color-text-primary) / 0.78);
+}
+
+.app-titlebar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding-right: 14px;
+}
+
+.app-titlebar-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgb(var(--color-border) / 0.72);
+  border-radius: 9px;
+  background: rgb(var(--color-surface-primary) / 0.62);
+  color: rgb(var(--color-text-secondary) / 0.95);
+}
+
+.app-titlebar-button:hover {
+  background: rgb(var(--color-surface-primary) / 0.88);
+  color: rgb(var(--color-text-primary) / 1);
+}
+
+.app-titlebar-badge {
+  position: absolute;
+  top: -4px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgb(var(--color-accent-primary) / 1);
+  color: #fff;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
 }
 
 [data-theme='dark'] .app-sidebar-shell {
