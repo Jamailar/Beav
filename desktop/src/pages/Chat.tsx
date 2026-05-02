@@ -240,6 +240,8 @@ interface ChatProps {
   defaultCollapsed?: boolean;
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
+  navigationAction?: { action: 'new'; nonce: number } | null;
+  onNavigationActionConsumed?: () => void;
   fixedSessionId?: string | null;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
@@ -253,6 +255,7 @@ interface ChatProps {
   welcomeIconSrc?: string;
   welcomeAvatarText?: string;
   welcomeIconVariant?: 'default' | 'avatar';
+  welcomeIconAccessory?: React.ReactNode;
   welcomeActions?: Array<{ label: string; text?: string; url?: string; onClick?: () => void; icon?: React.ReactNode; color?: string }>;
   contentLayout?: 'default' | 'center-2-3' | 'wide';
   contentWidthPreset?: 'default' | 'narrow';
@@ -279,7 +282,9 @@ interface ChatProps {
   keepComposerInputActive?: boolean;
   messageListHeader?: React.ReactNode;
   placeholder?: string;
+  fixedMemberMention?: ChatMemberMentionOption | null;
   onDispatchOverride?: (payload: ChatDispatchOverridePayload) => Promise<ChatDispatchOverrideResult | boolean>;
+  onSessionActivity?: (sessionId: string, updatedAt: string) => void;
 }
 
 interface ChatContextUsage {
@@ -654,6 +659,8 @@ export function Chat({
   onExecutionStateChange,
   pendingMessage,
   onMessageConsumed,
+  navigationAction,
+  onNavigationActionConsumed,
   defaultCollapsed = true,
   fixedSessionId,
   showClearButton = true,
@@ -668,6 +675,7 @@ export function Chat({
   welcomeIconSrc,
   welcomeAvatarText,
   welcomeIconVariant = 'default',
+  welcomeIconAccessory,
   welcomeActions = [],
   contentLayout = 'default',
   contentWidthPreset = 'default',
@@ -694,7 +702,9 @@ export function Chat({
   keepComposerInputActive = false,
   messageListHeader,
   placeholder,
+  fixedMemberMention = null,
   onDispatchOverride,
+  onSessionActivity,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -1305,6 +1315,12 @@ export function Chat({
     });
   }, [debugUi]);
 
+  const notifySessionActivity = useCallback((sessionId: string | null | undefined, updatedAt = new Date().toISOString()) => {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) return;
+    onSessionActivity?.(safeSessionId, updatedAt);
+  }, [onSessionActivity]);
+
   // 处理从其他页面传来的待发送消息（如知识库的"AI脑爆"）
   useEffect(() => {
     // 已处理过或正在处理中，跳过
@@ -1418,6 +1434,7 @@ export function Chat({
 
       // 构建用户消息 - 注意：attachment 和 displayContent 用于 UI 显示
       const processingStartedAt = Date.now();
+      notifySessionActivity(sessionId, new Date(processingStartedAt).toISOString());
       const userMsg: Message = {
         id: processingStartedAt.toString(),
         role: 'user',
@@ -1469,7 +1486,7 @@ export function Chat({
     };
 
     sendPendingMessage();
-  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig, setPendingAttachment]);
+  }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig, notifySessionActivity, setPendingAttachment]);
 
   const loadSessions = async () => {
     if (!isActiveRef.current) return;
@@ -1652,7 +1669,7 @@ export function Chat({
     }
   };
 
-  const createNewSession = async () => {
+  const createNewSession = useCallback(async () => {
     try {
       const session = await window.ipcRenderer.chat.createSession('New Chat');
       setSessions(prev => [session, ...prev]);
@@ -1662,7 +1679,18 @@ export function Chat({
     } catch (error) {
       console.error('Failed to create session:', error);
     }
-  };
+  }, []);
+
+  const handledNavigationActionNonceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isActive || navigationAction?.action !== 'new') return;
+    if (handledNavigationActionNonceRef.current === navigationAction.nonce) return;
+    handledNavigationActionNonceRef.current = navigationAction.nonce;
+    void createNewSession().finally(() => {
+      onNavigationActionConsumed?.();
+    });
+  }, [createNewSession, isActive, navigationAction, onNavigationActionConsumed]);
 
   const clearSession = async () => {
     if (!currentSessionId) return;
@@ -3139,7 +3167,7 @@ export function Chat({
   const sendMessage = async (
     content: string,
     attachment?: UploadedFileAttachment,
-    memberMention: ChatMemberMentionOption | null = selectedMemberMention,
+    memberMention: ChatMemberMentionOption | null = selectedMemberMention || fixedMemberMention,
     knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
   ) => {
     const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
@@ -3167,6 +3195,7 @@ export function Chat({
       knowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${knowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
     ].filter(Boolean).join('');
     const processingStartedAt = Date.now();
+    notifySessionActivity(currentSessionId, new Date(processingStartedAt).toISOString());
     const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
       type: 'member',
       memberId: memberMention.id,
@@ -3486,39 +3515,46 @@ export function Chat({
 
   const welcomeHeaderBlock = showWelcomeHeader ? (
     <>
-      <div className="flex justify-center">
-        {welcomeIconSrc ? (
-          welcomeIconVariant === 'avatar' ? (
-            <div className={clsx(
-              'flex items-center justify-center overflow-hidden border shadow-lg',
-              darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
-              'h-24 w-24 rounded-[28px]',
-            )}>
+      <div className="flex flex-col items-center gap-4">
+        <div className="flex justify-center">
+          {welcomeIconSrc ? (
+            welcomeIconVariant === 'avatar' ? (
+              <div className={clsx(
+                'flex items-center justify-center overflow-hidden border shadow-lg',
+                darkEmbedded ? 'border-white/10 bg-white/5' : 'border-border bg-surface-primary',
+                'h-24 w-24 rounded-[28px]',
+              )}>
+                <img
+                  src={welcomeIconSrc}
+                  alt={welcomeTitle}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            ) : (
               <img
                 src={welcomeIconSrc}
                 alt={welcomeTitle}
-                className="h-full w-full object-cover"
+                className="w-24 h-24 object-contain"
               />
+            )
+          ) : welcomeAvatarText ? (
+            <div className={clsx(
+              'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
+              darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
+            )}>
+              {welcomeAvatarText}
             </div>
           ) : (
-            <img
-              src={welcomeIconSrc}
-              alt={welcomeTitle}
-              className="w-24 h-24 object-contain"
-            />
-          )
-        ) : welcomeAvatarText ? (
-          <div className={clsx(
-            'flex h-24 w-24 items-center justify-center overflow-hidden rounded-[28px] border text-[34px] font-semibold shadow-lg',
-            darkEmbedded ? 'border-white/10 bg-white/5 text-white' : 'border-border bg-surface-primary text-text-primary',
-          )}>
-            {welcomeAvatarText}
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
+              <Sparkles className="w-8 h-8 text-white" />
+            </div>
+          )}
+        </div>
+        {welcomeIconAccessory ? (
+          <div className="flex justify-center">
+            {welcomeIconAccessory}
           </div>
-        ) : (
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shadow-lg">
-            <Sparkles className="w-8 h-8 text-white" />
-          </div>
-        )}
+        ) : null}
       </div>
 
       <div className="space-y-2">

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   preflightGenerationMediaPayload,
   preflightInlineAttachmentPayload,
@@ -292,6 +293,12 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   }
   if (channel === 'team-runtime:list-agent-backends' || channel === 'team-runtime:list-tools') {
     return [];
+  }
+  if (channel === 'review:dockets:list' || channel === 'team-runtime:list-review-dockets') {
+    return [];
+  }
+  if (channel.startsWith('review:dockets:')) {
+    return { success: false, error: `RedBox review docket action failed for "${channel}": ${message}` };
   }
   if (channel === 'collab:sessions:get' || channel === 'team-runtime:get-session') {
     return {
@@ -862,6 +869,9 @@ function createIpcRenderer() {
       getToolResults: (payload: { sessionId: string; limit?: number }) => invokeChannel('runtime:get-tool-results', payload),
       listApprovals: () => invokeChannel('runtime:list-approvals')
     },
+    taskPanel: {
+      list: (payload?: { limit?: number }) => invokeChannel('task-panel:list', payload || {})
+    },
     teamRuntime: {
       listSessions: () => invokeChannel('team-runtime:list-sessions'),
       createSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-session', payload),
@@ -878,6 +888,21 @@ function createIpcRenderer() {
       listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
       createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
       updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
+      claimTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:claim-task', payload),
+      startTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:start-task', payload),
+      waitReviewTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:wait-review-task', payload),
+      completeTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:complete-task', payload),
+      failTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:fail-task', payload),
+      cancelTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:cancel-task', payload),
+      pinTaskSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:pin-task-session', payload),
+      retryTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:retry-task', payload),
+      listReviewDockets: (payload: Record<string, unknown> = {}) => invokeChannel('review:dockets:list', payload),
+      getReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:get', payload),
+      reviewDocketStats: () => invokeChannel('review:dockets:stats', {}),
+      createReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:create', payload),
+      decideReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:decide', payload),
+      skipReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:skip', payload),
+      archiveReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:archive', payload),
       listMessages: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-messages', payload),
       readMailbox: (payload: Record<string, unknown>) => invokeChannel('team-runtime:read-mailbox', payload),
       sendMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
@@ -916,6 +941,21 @@ function createIpcRenderer() {
       listTasks: (payload: { sessionId: string }) => invokeChannel('team-runtime:list-tasks', payload),
       createTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:create-task', payload),
       updateTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:update-task', payload),
+      claimTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:claim-task', payload),
+      startTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:start-task', payload),
+      waitReviewTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:wait-review-task', payload),
+      completeTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:complete-task', payload),
+      failTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:fail-task', payload),
+      cancelTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:cancel-task', payload),
+      pinTaskSession: (payload: Record<string, unknown>) => invokeChannel('team-runtime:pin-task-session', payload),
+      retryTask: (payload: Record<string, unknown>) => invokeChannel('team-runtime:retry-task', payload),
+      listReviewDockets: (payload: Record<string, unknown> = {}) => invokeChannel('review:dockets:list', payload),
+      getReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:get', payload),
+      reviewDocketStats: () => invokeChannel('review:dockets:stats', {}),
+      createReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:create', payload),
+      decideReviewDocket: (payload: Record<string, unknown>) => invokeChannel('review:dockets:decide', payload),
+      skipReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:skip', payload),
+      archiveReviewDocket: (payload: { docketId: string }) => invokeChannel('review:dockets:archive', payload),
       listMessages: (payload: Record<string, unknown>) => invokeChannel('team-runtime:list-messages', payload),
       readMailbox: (payload: Record<string, unknown>) => invokeChannel('team-runtime:read-mailbox', payload),
       sendMessage: (payload: Record<string, unknown>) => invokeChannel('team-runtime:send-message', payload),
@@ -1216,6 +1256,9 @@ function createIpcRenderer() {
       discoverLocal: () => invokeChannel('mcp:discover-local'),
       importLocal: () => invokeChannel('mcp:import-local'),
       oauthStatus: (serverId: string) => invokeChannel('mcp:oauth-status', { serverId })
+    },
+    windowControls: {
+      startDragging: () => getCurrentWindow().startDragging(),
     },
     checkYtdlp: () => invokeChannel('youtube:check-ytdlp'),
     installYtdlp: () => invokeChannel('youtube:install'),

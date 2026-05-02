@@ -398,6 +398,7 @@ pub fn handle_advisor_channel(
             "advisors:create" => {
                 let advisor = with_store_mut(state, |store| {
                     let timestamp = now_iso();
+                    let redclaw_order = store.advisors.len() as i64;
                     let advisor = AdvisorRecord {
                         id: make_id("advisor"),
                         name: payload_string(payload, "name")
@@ -424,6 +425,8 @@ pub fn handle_advisor_channel(
                         detected_knowledge_language: None,
                         language_detection_status: None,
                         language_confidence: None,
+                        redclaw_visible: Some(true),
+                        redclaw_order: Some(redclaw_order),
                         created_at: timestamp.clone(),
                         updated_at: timestamp,
                     };
@@ -498,6 +501,12 @@ pub fn handle_advisor_channel(
                     }
                     if let Some(youtube_channel) = payload_field(payload, "youtubeChannel") {
                         advisor.youtube_channel = Some(youtube_channel.clone());
+                    }
+                    if let Some(value) = payload_field(payload, "redclawVisible") {
+                        advisor.redclaw_visible = value.as_bool();
+                    }
+                    if let Some(value) = payload_field(payload, "redclawOrder") {
+                        advisor.redclaw_order = value.as_i64();
                     }
                     advisor.updated_at = now_iso();
                     Ok(json!({ "success": true, "advisor": advisor.clone() }))

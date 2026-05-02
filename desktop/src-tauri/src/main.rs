@@ -72,9 +72,10 @@ use runtime::{
     CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, InteractiveLoopGuard,
     InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord, RedclawJobDefinitionRecord,
     RedclawJobExecutionRecord, RedclawLongCycleTaskRecord, RedclawRuntime,
-    RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, RuntimeHookRecord,
-    RuntimeTaskRecord, RuntimeTaskTraceRecord, RuntimeWarmEntry, RuntimeWarmState,
-    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SkillRecord,
+    RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, ReviewDecisionRecord,
+    ReviewDocketRecord, RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
+    RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord,
+    SessionTranscriptRecord, SkillRecord,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
@@ -237,6 +238,8 @@ struct AdvisorRecord {
     detected_knowledge_language: Option<String>,
     language_detection_status: Option<String>,
     language_confidence: Option<f64>,
+    redclaw_visible: Option<bool>,
+    redclaw_order: Option<i64>,
     created_at: String,
     updated_at: String,
 }
@@ -378,6 +381,8 @@ struct AppStore {
     collab_tasks: Vec<CollabTaskRecord>,
     collab_mailbox_messages: Vec<CollabMailboxMessageRecord>,
     collab_progress_reports: Vec<CollabProgressReportRecord>,
+    review_dockets: Vec<ReviewDocketRecord>,
+    review_decisions: Vec<ReviewDecisionRecord>,
     cli_tools: Vec<cli_runtime::CliToolRecord>,
     cli_environments: Vec<cli_runtime::CliEnvironmentRecord>,
     cli_manifests: Vec<cli_runtime::CliToolManifestRecord>,

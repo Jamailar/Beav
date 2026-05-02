@@ -5,7 +5,7 @@ import { Chat } from './Chat';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
-interface Advisor {
+export interface Advisor {
     id: string;
     name: string;
     avatar: string;
@@ -25,6 +25,8 @@ interface Advisor {
     detectedKnowledgeLanguage?: string;
     languageDetectionStatus?: string;
     languageConfidence?: number;
+    redclawVisible?: boolean;
+    redclawOrder?: number;
     createdAt: string;
 }
 
@@ -1051,7 +1053,7 @@ function AdvisorHistoryPanel({
     );
 }
 
-function AdvisorSettingsPanel({
+export function AdvisorSettingsPanel({
     advisor,
     isActive,
     downloadStatus,
@@ -1858,7 +1860,7 @@ function VideoManagement({ advisorId, isActive = true }: { advisorId: string; is
 }
 
 // Modal Component
-function AdvisorModal({
+export function AdvisorModal({
     advisor,
     defaultMode,
     onSave,
@@ -2019,7 +2021,7 @@ function AdvisorModal({
         }
 
         if (!name.trim()) return;
-        if (mode === 'manual' && pendingKnowledgeFiles.length === 0) {
+        if (!advisor && mode === 'manual' && pendingKnowledgeFiles.length === 0) {
             void appAlert('手动创建成员时必须导入至少一个知识库文件');
             return;
         }

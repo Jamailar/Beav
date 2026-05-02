@@ -942,6 +942,7 @@ fn generate_redclaw_initialization_artifact_via_agent(
         &format!("onboarding-{artifact_kind}"),
         session_id,
         prompt,
+        Some("RedClaw 初始化".to_string()),
     ));
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
     Ok(GeneratedRedclawInitializationArtifacts {

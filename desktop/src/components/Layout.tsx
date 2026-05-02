@@ -1,5 +1,5 @@
-import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, ChevronLeft, ChevronRight, Bot, Image, Users, ImagePlus, Sun, Moon, X, Download, Package, AlertCircle, Sparkles, ListTodo, Bell, BookOpenText } from 'lucide-react';
+import { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, ImagePlus, Sun, Moon, X, Download, AlertCircle, Sparkles, Bell, BookOpenText, Home, PanelLeft, Search, Clock3, Edit } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,9 +7,8 @@ import type { ImmersiveMode, ViewType } from '../App';
 import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { appAlert } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
+import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 import { uiMeasure } from '../utils/uiDebug';
-
-const appLogo = '/Box.png';
 
 interface LayoutProps {
   children: ReactNode;
@@ -17,22 +16,31 @@ interface LayoutProps {
   onNavigate: (view: ViewType) => void;
   immersiveMode?: ImmersiveMode;
   globalNotice?: string | null;
+  globalSidebarContent?: ReactNode;
+  renderTitleBarContent?: (context: { currentView: ViewType }) => ReactNode;
 }
 
-const NAV_ITEMS: { id: ViewType; label: string; icon: typeof MessageSquare; group?: string }[] = [
-  // { id: 'chat', label: 'AI 对话', icon: MessageSquare },
-  { id: 'knowledge', label: '知识库', icon: FolderOpen },
-  { id: 'wander', label: '漫步', icon: Dices },
-  { id: 'manuscripts', label: '稿件', icon: FileEdit },
-  { id: 'creator-profiles', label: '创作档案', icon: BookOpenText },
-  { id: 'redclaw', label: 'RedClaw', icon: Bot },
-  { id: 'workboard', label: '任务', icon: ListTodo },
-  { id: 'subjects', label: '主体', icon: Package },
-  { id: 'team', label: '团队', icon: Users },
-  { id: 'cover-studio', label: '封面', icon: ImagePlus },
-  { id: 'generation-studio', label: '创作', icon: Sparkles },
-  { id: 'media-library', label: '媒体', icon: Image },
-  { id: 'settings', label: '设置', icon: SettingsIcon },
+type SidebarNavItem = {
+  key: string;
+  view: ViewType;
+  label: string;
+  icon: typeof MessageSquare;
+  redclawAction?: 'new';
+  settingsTab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
+  primary?: boolean;
+};
+
+const NAV_ITEMS: SidebarNavItem[] = [
+  { key: 'new-chat', view: 'redclaw', label: '新对话', icon: Edit, redclawAction: 'new', primary: true },
+  { key: 'search', view: 'knowledge', label: '搜索', icon: Search, primary: true },
+  { key: 'assets', view: 'subjects', label: '资产库', icon: Folder, primary: true },
+  { key: 'automation', view: 'automation', label: '自动化', icon: Clock3, primary: true },
+  { key: 'home', view: 'home', label: '主页', icon: Home },
+  { key: 'wander', view: 'wander', label: '漫步', icon: Dices },
+  { key: 'manuscripts', view: 'manuscripts', label: '稿件', icon: FileEdit },
+  { key: 'creator-profiles', view: 'creator-profiles', label: '创作档案', icon: BookOpenText },
+  { key: 'cover-studio', view: 'cover-studio', label: '封面', icon: ImagePlus },
+  { key: 'generation-studio', view: 'generation-studio', label: '创作', icon: Sparkles },
   // { id: 'archives', label: '档案', icon: Archive },
   // { id: 'skills', label: '技能库', icon: Lightbulb },
 ];
@@ -72,7 +80,102 @@ function readInitialSidebarCollapsed(): boolean {
   return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
 }
 
-export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null }: LayoutProps) {
+function shouldUseMacOverlayTitleBar(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /\bMac\b/i.test(navigator.platform || '') || /\bMac OS X\b/i.test(navigator.userAgent || '');
+}
+
+function AppTitleBar({
+  immersiveMode,
+  enabled,
+  content,
+  isSidebarCollapsed,
+  toggleSidebarCollapsed,
+  notificationDrawerOpen,
+  unreadNotificationCount,
+  toggleNotificationDrawer,
+  themeMode,
+  setThemeMode,
+}: {
+  immersiveMode: ImmersiveMode;
+  enabled: boolean;
+  content: ReactNode;
+  isSidebarCollapsed: boolean;
+  toggleSidebarCollapsed: () => void;
+  notificationDrawerOpen: boolean;
+  unreadNotificationCount: number;
+  toggleNotificationDrawer: () => void;
+  themeMode: ThemeMode;
+  setThemeMode: Dispatch<SetStateAction<ThemeMode>>;
+}) {
+  if (!enabled) return null;
+
+  const startWindowDrag = (event: ReactMouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
+    event.preventDefault();
+    void window.ipcRenderer.windowControls.startDragging().catch((error) => {
+      console.warn('[RedBox] failed to start window drag:', error);
+    });
+  };
+
+  return (
+    <header
+      data-tauri-drag-region
+      onMouseDown={startWindowDrag}
+      className={clsx(
+        'app-titlebar shrink-0',
+        immersiveMode === 'dark' && 'app-titlebar--dark'
+      )}
+    >
+      <div data-tauri-drag-region className="app-titlebar-controls">
+        <button
+          type="button"
+          onClick={toggleSidebarCollapsed}
+          className="app-titlebar-sidebar-toggle"
+          title={isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          aria-label={isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
+          data-no-window-drag
+        >
+          <PanelLeft className="w-[15px] h-[15px]" strokeWidth={1.7} />
+        </button>
+      </div>
+      <div data-tauri-drag-region className="app-titlebar-title">
+        {content}
+      </div>
+      <div className="app-titlebar-actions">
+        <button
+          type="button"
+          onClick={toggleNotificationDrawer}
+          className="app-titlebar-button"
+          title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+          aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+        >
+          <Bell className="w-[13px] h-[13px]" strokeWidth={1.75} />
+          {unreadNotificationCount > 0 && (
+            <span className="app-titlebar-badge">
+              {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+          className="app-titlebar-button"
+          title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+          aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+        >
+          {themeMode === 'dark'
+            ? <Sun className="w-[13px] h-[13px]" strokeWidth={1.75} />
+            : <Moon className="w-[13px] h-[13px]" strokeWidth={1.75} />}
+        </button>
+      </div>
+    </header>
+  );
+}
+
+export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null, globalSidebarContent, renderTitleBarContent }: LayoutProps) {
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
@@ -96,7 +199,10 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const spaceMenuRef = useRef<HTMLDivElement | null>(null);
   const sidebarAnimationTimerRef = useRef<number | null>(null);
   const isFixedViewportView = currentView === 'manuscripts';
+  const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
+  const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
+  const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const activeSpaceName = useMemo(
     () => spaces.find((space) => space.id === activeSpaceId)?.name || '暂无空间',
     [activeSpaceId, spaces]
@@ -174,6 +280,12 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
   }, [isSidebarCollapsed]);
 
+  useEffect(() => {
+    if (sidebarVisualCollapsed) {
+      setIsSpaceMenuOpen(false);
+    }
+  }, [sidebarVisualCollapsed]);
+
   useEffect(() => () => {
     if (sidebarAnimationTimerRef.current !== null) {
       window.clearTimeout(sidebarAnimationTimerRef.current);
@@ -218,7 +330,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     if (!Number.isFinite(ts)) return '';
     return new Date(ts).toLocaleDateString();
   }, [updateNotice?.publishedAt]);
-
   const openReleasePage = useCallback(async () => {
     if (!updateNotice?.htmlUrl || isOpeningReleasePage) return;
     setIsOpeningReleasePage(true);
@@ -354,6 +465,58 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     }
   }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId]);
 
+  const handleSidebarNavigate = useCallback((item: SidebarNavItem) => {
+    if (item.settingsTab || item.redclawAction) {
+      window.dispatchEvent(new CustomEvent(REDBOX_NAVIGATE_EVENT, {
+        detail: {
+          view: item.view,
+          settingsTab: item.settingsTab,
+          redclawAction: item.redclawAction,
+        },
+      }));
+      return;
+    }
+    onNavigate(item.view);
+  }, [onNavigate]);
+
+  const renderSidebarNavItem = (item: SidebarNavItem) => {
+    const { key, view, label, icon: Icon, primary } = item;
+    const isActive = !item.redclawAction && currentView === view && !item.settingsTab;
+    return (
+      <button
+        key={key}
+        type="button"
+        data-guide-id={`nav-${key}`}
+        onClick={() => handleSidebarNavigate(item)}
+        title={label}
+        aria-label={label}
+        className={clsx(
+          'app-sidebar-nav-item relative w-full rounded-xl transition-all font-normal inline-flex items-center',
+          sidebarVisualCollapsed ? 'app-sidebar-nav-item--collapsed justify-center' : 'app-sidebar-nav-item--expanded',
+          primary && 'app-sidebar-nav-item--primary',
+          view === 'subjects'
+            ? (
+              isActive
+                ? 'app-sidebar-nav-item--active-special shadow-none'
+                : 'app-sidebar-nav-item--plain'
+            )
+            : (
+              isActive
+                ? 'app-sidebar-nav-item--active shadow-sm'
+                : 'app-sidebar-nav-item--plain'
+            )
+        )}
+      >
+        <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={primary ? 1.6 : 1.65} />
+        {!sidebarVisualCollapsed && (
+          <span className="app-sidebar-nav-label truncate whitespace-nowrap opacity-100 translate-x-0">
+            {label}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div
       className={clsx(
@@ -361,8 +524,26 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-background'
       )}
     >
+      <AppTitleBar
+        immersiveMode={immersiveMode}
+        enabled={usesMacOverlayTitleBar}
+        content={titleBarContent}
+        isSidebarCollapsed={isSidebarCollapsed}
+        toggleSidebarCollapsed={toggleSidebarCollapsed}
+        notificationDrawerOpen={notificationDrawerOpen}
+        unreadNotificationCount={unreadNotificationCount}
+        toggleNotificationDrawer={toggleNotificationDrawer}
+        themeMode={themeMode}
+        setThemeMode={setThemeMode}
+      />
+
       {globalNotice && (
-        <div className="pointer-events-none absolute left-1/2 top-3 z-[80] -translate-x-1/2">
+        <div
+          className={clsx(
+            'pointer-events-none absolute left-1/2 z-[80] -translate-x-1/2',
+            usesMacOverlayTitleBar ? 'top-[calc(var(--app-titlebar-height)+0.75rem)]' : 'top-3'
+          )}
+        >
           <div className="inline-flex items-center gap-2 rounded-full border border-red-200/80 bg-red-50/96 px-4 py-2 text-[12px] font-medium text-red-700 shadow-[0_12px_30px_-18px_rgba(220,38,38,0.55)] backdrop-blur">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
             <span className="whitespace-nowrap">{globalNotice}</span>
@@ -375,227 +556,169 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <aside
           className={clsx(
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
+            usesMacOverlayTitleBar && 'pt-[var(--app-titlebar-height)]',
             isSidebarAnimating && 'app-sidebar-shell--animating',
-            isSidebarCollapsed ? 'w-[4.5rem]' : 'w-[9rem]'
+            sidebarVisualCollapsed ? 'app-sidebar-shell--collapsed' : 'app-sidebar-shell--expanded'
           )}
         >
-          {/* App Title */}
-          <div
-            className={clsx(
-              'border-b border-border/50',
-              sidebarVisualCollapsed
-                ? 'px-2 py-3 flex flex-col items-center gap-2'
-                : 'h-11 px-4 flex items-center'
-            )}
-          >
-            <div
-              className={clsx('flex items-center min-w-0', sidebarVisualCollapsed ? 'justify-center' : 'gap-2')}
-              title={appVersion ? `红盒子 v${appVersion}` : '红盒子'}
-            >
-              <img src={appLogo} alt="RedBox" className="w-[18px] h-[18px] shrink-0" />
-              <span
-                className={clsx(
-                  'font-medium text-[14px] tracking-[0.01em] truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out',
-                  sidebarVisualCollapsed ? 'max-w-0 opacity-0 -translate-x-1' : 'max-w-[7rem] opacity-100 translate-x-0'
-                )}
-              >
-                红盒子
-              </span>
-            </div>
-            <div className={clsx('flex items-center gap-2', sidebarVisualCollapsed ? 'flex-col' : 'ml-auto')}>
-              <button
-                type="button"
-                onClick={toggleSidebarCollapsed}
-                className="h-7 w-7 rounded-lg text-text-secondary hover:text-text-primary transition-colors inline-flex items-center justify-center"
-                title={isSidebarCollapsed ? '展开侧边栏' : '折叠为仅图标'}
-                aria-label={isSidebarCollapsed ? '展开侧边栏' : '折叠为仅图标'}
-              >
-                {isSidebarCollapsed
-                  ? <ChevronRight className="w-[14px] h-[14px]" strokeWidth={1.75} />
-                  : <ChevronLeft className="w-[14px] h-[14px]" strokeWidth={1.75} />}
-              </button>
-            </div>
-          </div>
-
           {/* Navigation */}
-          <nav className={clsx('flex-1 py-3 space-y-1.5', sidebarVisualCollapsed ? 'px-2' : 'px-2.5')}>
-            {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                data-guide-id={`nav-${id}`}
-                onClick={() => {
-                  onNavigate(id);
-                }}
-                title={label}
-                aria-label={label}
-                className={clsx(
-                  'w-full rounded-xl transition-all tracking-[0.01em] font-normal inline-flex items-center',
-                  sidebarVisualCollapsed ? 'h-11 justify-center px-0' : 'gap-3 px-3.5 py-2.5 text-[13px]',
-                  id === 'subjects'
-                    ? (
-                      currentView === id
-                        ? 'bg-transparent text-accent-primary shadow-none'
-                        : 'bg-transparent text-text-secondary/90 hover:bg-transparent hover:text-text-primary'
-                    )
-                    : (
-                      currentView === id
-                        ? 'bg-surface-primary text-accent-primary shadow-sm'
-                        : 'text-text-secondary/90 hover:bg-surface-primary/55 hover:text-text-primary'
-                    )
-                )}
-              >
-                <Icon className="w-[15px] h-[15px] shrink-0" strokeWidth={1.75} />
-                <span
-                  className={clsx(
-                    'truncate whitespace-nowrap transition-[max-width,opacity,transform] duration-150 ease-out',
-                    sidebarVisualCollapsed ? 'max-w-0 opacity-0 translate-x-1' : 'max-w-[7rem] opacity-100 translate-x-0'
-                  )}
-                >
-                  {label}
-                </span>
-              </button>
-            ))}
+          <nav className={clsx('app-sidebar-nav', visibleGlobalSidebarContent ? 'shrink-0' : 'flex-1', sidebarVisualCollapsed ? 'app-sidebar-nav--collapsed' : 'app-sidebar-nav--expanded')}>
+            {NAV_ITEMS.map(renderSidebarNavItem)}
           </nav>
+
+          {visibleGlobalSidebarContent && (
+            <div className="min-h-0 flex-1 overflow-hidden px-2 pb-3 flex flex-col">
+              {visibleGlobalSidebarContent}
+            </div>
+          )}
 
           {/* Footer */}
           <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-3 flex flex-col items-center gap-2.5' : 'px-4 py-3 space-y-2.5')}>
-            <div className={clsx(sidebarVisualCollapsed ? 'w-full flex justify-center' : 'space-y-1.5')}>
-              <div
-                className={clsx(
-                  'text-[10px] tracking-[0.04em] text-text-tertiary overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
-                  sidebarVisualCollapsed ? 'max-h-0 opacity-0 -translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
-                )}
-              >
-                空间
-              </div>
-              <div ref={spaceMenuRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setIsSpaceMenuOpen((prev) => !prev)}
-                  disabled={isSwitchingSpace}
-                  title={sidebarVisualCollapsed ? `当前空间：${activeSpaceName}` : undefined}
-                  aria-label={sidebarVisualCollapsed ? `当前空间：${activeSpaceName}` : undefined}
-                  className={clsx(
-                    'rounded-lg border border-border bg-surface-primary text-text-primary disabled:opacity-50',
-                    sidebarVisualCollapsed
-                      ? 'w-10 h-10 inline-flex items-center justify-center'
-                      : 'w-full h-8 px-2.5 text-[12px] flex items-center justify-between'
-                  )}
+            {!sidebarVisualCollapsed && (
+              <div className="space-y-1.5">
+                <div
+                  className="max-h-4 text-[10px] tracking-[0.04em] text-text-tertiary overflow-hidden whitespace-nowrap opacity-100 translate-y-0"
                 >
-                  {sidebarVisualCollapsed ? (
-                    <FolderOpen className="w-[16px] h-[16px] text-text-secondary" strokeWidth={1.75} />
-                  ) : (
-                    <>
-                      <span className="truncate">{activeSpaceName}</span>
-                      <ChevronDown className={clsx('w-[13px] h-[13px] text-text-tertiary transition-transform', isSpaceMenuOpen && 'rotate-180')} strokeWidth={1.75} />
-                    </>
-                  )}
-                </button>
-
-                {isSpaceMenuOpen && (
-                  <div
-                    className={clsx(
-                      'absolute rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden',
-                      sidebarVisualCollapsed ? 'bottom-0 left-full ml-2 w-56' : 'left-0 right-0 bottom-full mb-1.5'
-                    )}
+                  空间
+                </div>
+                <div ref={spaceMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsSpaceMenuOpen((prev) => !prev)}
+                    disabled={isSwitchingSpace}
+                    className="w-full h-8 px-2.5 text-[12px] flex items-center justify-between rounded-lg border border-border bg-surface-primary text-text-primary disabled:opacity-50"
                   >
-                    <div className="max-h-44 overflow-y-auto">
-                      {spaces.length === 0 ? (
-                        <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
-                          暂无空间
-                        </div>
-                      ) : (
-                        spaces.map((space) => {
-                          const isActive = space.id === activeSpaceId;
-                          const showEdit = hoveredSpaceId === space.id;
-                          return (
-                            <div
-                              key={space.id}
-                              className={clsx(
-                                'h-9 px-2.5 flex items-center gap-1.5',
-                                isActive ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary'
-                              )}
-                              onMouseEnter={() => setHoveredSpaceId(space.id)}
-                              onMouseLeave={() => setHoveredSpaceId((prev) => (prev === space.id ? null : prev))}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  void handleSwitchSpace(space.id);
-                                }}
-                                className={clsx('flex-1 text-left text-[12px] truncate', isActive ? 'text-accent-primary' : 'text-text-primary')}
-                              >
-                                {space.name}
-                              </button>
-                              <button
-                                type="button"
-                                onMouseDown={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  openRenameSpaceDialog(space);
-                                }}
-                                className={clsx(
-                                  'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
-                                  showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
-                                )}
-                                title="重命名空间"
-                              >
-                                <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                              </button>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
+                    <span className="truncate">{activeSpaceName}</span>
+                    <ChevronDown className={clsx('w-[13px] h-[13px] text-text-tertiary transition-transform', isSpaceMenuOpen && 'rotate-180')} strokeWidth={1.75} />
+                  </button>
 
-                    <button
-                      type="button"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openCreateSpaceDialog();
-                      }}
-                      className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
+                  {isSpaceMenuOpen && (
+                    <div
+                      className="absolute left-0 right-0 bottom-full mb-1.5 rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden"
                     >
-                      <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                      新建空间
-                    </button>
-                  </div>
-                )}
+                      <div className="max-h-44 overflow-y-auto">
+                        {spaces.length === 0 ? (
+                          <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
+                            暂无空间
+                          </div>
+                        ) : (
+                          spaces.map((space) => {
+                            const isActive = space.id === activeSpaceId;
+                            const showEdit = hoveredSpaceId === space.id;
+                            return (
+                              <div
+                                key={space.id}
+                                className={clsx(
+                                  'h-9 px-2.5 flex items-center gap-1.5',
+                                  isActive ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary'
+                                )}
+                                onMouseEnter={() => setHoveredSpaceId(space.id)}
+                                onMouseLeave={() => setHoveredSpaceId((prev) => (prev === space.id ? null : prev))}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void handleSwitchSpace(space.id);
+                                  }}
+                                  className={clsx('flex-1 text-left text-[12px] truncate', isActive ? 'text-accent-primary' : 'text-text-primary')}
+                                >
+                                  {space.name}
+                                </button>
+                                <button
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    openRenameSpaceDialog(space);
+                                  }}
+                                  className={clsx(
+                                    'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
+                                    showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                                  )}
+                                  title="重命名空间"
+                                >
+                                  <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                                </button>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openCreateSpaceDialog();
+                        }}
+                        className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
+                      >
+                        <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                        新建空间
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
+            {sidebarVisualCollapsed && (
+              <button
+                type="button"
+                onClick={() => onNavigate('settings')}
+                className="h-8 w-8 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
+                title="设置"
+                aria-label="设置"
+              >
+                <SettingsIcon className="w-[14px] h-[14px]" strokeWidth={1.75} />
+              </button>
+            )}
             <div
               className={clsx(
                 'flex items-center justify-center gap-2 text-[11px] text-text-tertiary/90 overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
-                sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
+                usesMacOverlayTitleBar
+                  ? 'max-h-4 opacity-100 translate-y-0'
+                  : sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
               )}
             >
               <button
                 type="button"
-                onClick={toggleNotificationDrawer}
-                className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
-                aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+                onClick={() => onNavigate('settings')}
+                className="h-5 w-5 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
+                title="设置"
+                aria-label="设置"
               >
-                <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
-                {unreadNotificationCount > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
-                    {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
-                  </span>
-                )}
+                <SettingsIcon className="w-[11px] h-[11px]" strokeWidth={1.75} />
               </button>
-              <button
-                type="button"
-                onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
-                className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
-                title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-                aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
-              >
-                {themeMode === 'dark'
-                  ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
-                  : <Moon className="w-[11px] h-[11px]" strokeWidth={1.75} />}
-              </button>
+              {!usesMacOverlayTitleBar && (
+                <>
+                  <button
+                    type="button"
+                    onClick={toggleNotificationDrawer}
+                    className="relative h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+                    aria-label={notificationDrawerOpen ? '关闭通知中心' : '打开通知中心'}
+                  >
+                    <Bell className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                    {unreadNotificationCount > 0 && (
+                      <span className="absolute -right-1.5 -top-1.5 min-w-[14px] h-[14px] rounded-full bg-accent-primary px-1 text-[9px] leading-[14px] text-white">
+                        {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setThemeMode((prev) => prev === 'dark' ? 'light' : 'dark')}
+                    className="h-5 w-5 rounded-md border border-border bg-surface-primary text-text-secondary hover:text-text-primary hover:bg-surface-secondary transition-colors inline-flex items-center justify-center shrink-0"
+                    title={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+                    aria-label={themeMode === 'dark' ? '切换到白天模式' : '切换到黑夜模式'}
+                  >
+                    {themeMode === 'dark'
+                      ? <Sun className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                      : <Moon className="w-[11px] h-[11px]" strokeWidth={1.75} />}
+                  </button>
+                </>
+              )}
               <span>{appVersion ? `v${appVersion}` : 'v--'}</span>
             </div>
           </div>
@@ -613,6 +736,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         <div
           className={clsx(
             'flex-1',
+            usesMacOverlayTitleBar && 'pt-[var(--app-titlebar-height)]',
             isFixedViewportView ? 'min-h-0 flex flex-col overflow-hidden' : 'overflow-auto'
           )}
         >
