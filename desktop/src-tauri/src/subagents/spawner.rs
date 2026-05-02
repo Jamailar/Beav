@@ -14,8 +14,9 @@ use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, append_runtime_task_trace_scoped, append_session_checkpoint_scoped,
     create_collab_session, create_collab_task, create_review_docket, create_runtime_task,
-    record_runtime_node, runtime_subagent_role_spec, submit_collab_report, update_collab_task,
-    RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
+    ensure_collab_session_coordinator, record_runtime_node, runtime_subagent_role_spec,
+    submit_collab_report, update_collab_task, CollabSessionRecord, RuntimeArtifact,
+    RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::subagents::{
     build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
@@ -370,9 +371,9 @@ fn ensure_collab_session_for_parent_task(
                 .as_deref()
                 == Some(parent_task_id)
         })
-        .map(|session| session.id.clone())
+        .cloned()
     {
-        return Ok(existing);
+        return Ok(existing.id);
     }
     let session = create_collab_session(
         store,
@@ -389,7 +390,16 @@ fn ensure_collab_session_for_parent_task(
             }
         }),
     )?;
+    let _ = ensure_collab_session_coordinator(store, &session.id)?;
     Ok(session.id)
+}
+
+fn collab_session_by_id(store: &AppStore, session_id: &str) -> Option<CollabSessionRecord> {
+    store
+        .collab_sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .cloned()
 }
 
 fn ensure_collab_records_for_child_runtime(
@@ -1031,9 +1041,21 @@ pub fn run_real_subagent_orchestration_for_task(
 ) -> Result<Value, String> {
     let _ = settings;
     let parent_runtime_id = ensure_parent_runtime_id(state, task_id, session_id)?;
-    let collab_session_id = with_store_mut(state, |store| {
-        ensure_collab_session_for_parent_task(store, task_id, session_id, runtime_mode, route)
+    let (collab_session_id, collab_session) = with_store_mut(state, |store| {
+        let collab_session_id =
+            ensure_collab_session_for_parent_task(store, task_id, session_id, runtime_mode, route)?;
+        let collab_session = collab_session_by_id(store, &collab_session_id);
+        Ok((collab_session_id, collab_session))
     })?;
+    if let Some(collab_session) = collab_session {
+        emit_runtime_event(
+            app,
+            "runtime:collab-session-changed",
+            collab_session.owner_session_id.as_deref(),
+            None,
+            json!({ "collabSessionId": collab_session.id, "session": collab_session }),
+        );
+    }
     let metadata_with_collab = metadata_with_collab_session_id(metadata, &collab_session_id);
     let mut configs = build_subagent_configs(
         route,
