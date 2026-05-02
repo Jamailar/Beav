@@ -1,4 +1,4 @@
-import { Download, Loader2, Sparkles, X } from 'lucide-react';
+import { Download, Loader2, X } from 'lucide-react';
 import { clsx } from 'clsx';
 
 interface RedClawSidebarProps {
@@ -10,7 +10,6 @@ interface RedClawSidebarProps {
     enabledSkillCount: number;
     installSource: string;
     isInstallingSkill: boolean;
-    onToggleOpen: () => void;
     onCollapse: () => void;
     onInstallSourceChange: (value: string) => void;
     onInstallSkill: () => void | Promise<void>;
@@ -26,7 +25,6 @@ export function RedClawSidebar({
     enabledSkillCount,
     installSource,
     isInstallingSkill,
-    onToggleOpen,
     onCollapse,
     onInstallSourceChange,
     onInstallSkill,
@@ -34,24 +32,6 @@ export function RedClawSidebar({
 }: RedClawSidebarProps) {
     return (
         <>
-            <div className="absolute top-4 right-5 z-30 flex items-center gap-2">
-                <button
-                    type="button"
-                    onClick={onToggleOpen}
-                    className={clsx(
-                        'flex items-center gap-2 rounded-xl border px-3.5 py-1.5 text-[12px] font-bold shadow-sm backdrop-blur-xl transition-all active:scale-95',
-                        open
-                            ? 'border-transparent bg-accent-primary text-white'
-                            : 'border-border/80 bg-surface-elevated/92 text-text-secondary hover:bg-surface-primary hover:text-text-primary'
-                    )}
-                    title="查看技能面板"
-                    aria-label="查看技能面板"
-                >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>技能</span>
-                </button>
-            </div>
-
             {open && (
                 <div className="absolute inset-0 z-40">
                     <button

@@ -3,10 +3,10 @@ import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, Plus, Spark
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import { AdvisorModal, type Advisor, type AdvisorProfile } from './Advisors';
+import { TeamWorkbench } from './team-workbench/TeamWorkbench';
+import type { TeamWorkbenchSession } from './team-workbench/teamWorkbenchTypes';
 import type { PendingChatMessage } from '../App';
-import { ChatComposer, type ChatComposerHandle } from '../components/ChatComposer';
-import { MessageItem, type Message, type ChatMessageLinkKind, type ChatMessageLinkTarget } from '../components/MessageItem';
-import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
+import { type ChatMessageLinkKind, type ChatMessageLinkTarget } from '../components/MessageItem';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
 import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobTerminal, isMediaJobSuccessful, type MediaJobProjection } from '../features/media-jobs/types';
@@ -76,33 +76,39 @@ interface RedClawTeamRoom {
     id: string;
     name: string;
     advisorIds?: string[];
+    session?: TeamWorkbenchSession;
     createdAt?: string;
     isSystem?: boolean;
     systemType?: string;
 }
 
-interface RedClawRoomMessageRecord {
-    id: string;
-    role: 'user' | 'advisor' | 'director';
-    advisorId?: string;
-    advisorName?: string;
-    advisorAvatar?: string;
-    content: string;
-    timestamp: string;
-    isStreaming?: boolean;
-}
-
 const REDCLAW_AI_SURFACE_STORAGE_KEY = 'redbox:redclaw-ai-surface:v1';
 const ADVISOR_CHAT_CONTEXT_TYPE = 'advisor-discussion';
-const REDCLAW_DIRECTOR_ID = 'director-system';
-const REDCLAW_DIRECTOR_NAME = '总监';
-const REDCLAW_DIRECTOR_AVATAR = '🎯';
-const REDCLAW_ROOM_STREAM_FLUSH_INTERVAL_MS = 120;
 
 function readInitialRedClawAiSurface(): RedClawAiSurface {
     if (typeof window === 'undefined') return 'redclaw';
     const saved = String(window.localStorage.getItem(REDCLAW_AI_SURFACE_STORAGE_KEY) || '').trim();
     return saved === 'advisor' || saved === 'room' ? saved : 'redclaw';
+}
+
+function visibleTeamSessions(sessions: TeamWorkbenchSession[]): TeamWorkbenchSession[] {
+    return sessions.filter((session) => !['archived', 'completed'].includes(String(session.status || '').toLowerCase()));
+}
+
+function teamRoomFromSession(session: TeamWorkbenchSession): RedClawTeamRoom {
+    const metadata = session.metadata && typeof session.metadata === 'object'
+        ? session.metadata as Record<string, unknown>
+        : {};
+    const advisorIds = Array.isArray(metadata.advisorIds)
+        ? metadata.advisorIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+    return {
+        id: session.id,
+        name: session.title || '未命名团队',
+        advisorIds,
+        session,
+        createdAt: session.createdAt ? new Date(session.createdAt).toISOString() : undefined,
+    };
 }
 
 function advisorAvatarText(advisor: AdvisorProfile): string {
@@ -113,29 +119,6 @@ function advisorAvatarText(advisor: AdvisorProfile): string {
 
 function isRenderableAdvisorAvatar(advisor: AdvisorProfile): boolean {
     return hasRenderableAssetUrl(advisor.avatar);
-}
-
-function redClawRoomMessageToMessage(message: RedClawRoomMessageRecord): Message {
-    const isUser = message.role === 'user';
-    const isDirector = message.role === 'director' || message.advisorId === REDCLAW_DIRECTOR_ID;
-    const displayName = isDirector
-        ? REDCLAW_DIRECTOR_NAME
-        : String(message.advisorName || '成员').trim();
-    return {
-        id: message.id,
-        role: isUser ? 'user' : 'ai',
-        messageType: 'reply',
-        content: String(message.content || ''),
-        tools: [],
-        timeline: [],
-        isStreaming: message.isStreaming,
-        memberActor: isUser ? undefined : {
-            type: 'member',
-            memberId: String(message.advisorId || (isDirector ? REDCLAW_DIRECTOR_ID : displayName)).trim(),
-            displayName,
-            avatar: String(message.advisorAvatar || (isDirector ? REDCLAW_DIRECTOR_AVATAR : '')).trim() || undefined,
-        },
-    };
 }
 
 function advisorRedClawOrder(advisor: AdvisorProfile, index: number): number {
@@ -318,7 +301,7 @@ const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): Ch
 interface RedClawProps {
     pendingMessage?: PendingChatMessage | null;
     onPendingMessageConsumed?: () => void;
-    navigationAction?: { action: 'new'; nonce: number } | null;
+    navigationAction?: { action: 'new' | 'open-team'; sessionId?: string; nonce: number } | null;
     onNavigationActionConsumed?: () => void;
     isActive?: boolean;
     onExecutionStateChange?: (active: boolean) => void;
@@ -619,377 +602,6 @@ function RedClawAiSwitchBar({
     );
 }
 
-function RedClawRoomConversation({
-    room,
-    advisors,
-    isActive,
-    onExecutionStateChange,
-    onPreviewLink,
-    activePreviewHref,
-    shortcuts,
-}: {
-    room: RedClawTeamRoom | null;
-    advisors: AdvisorProfile[];
-    isActive: boolean;
-    onExecutionStateChange: (active: boolean) => void;
-    onPreviewLink: (target: ChatMessageLinkTarget) => void;
-    activePreviewHref: string | null;
-    shortcuts: ReturnType<typeof createRedClawComposerShortcuts>;
-}) {
-    const [messages, setMessages] = useState<Message[]>([]);
-    const [input, setInput] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [isSending, setIsSending] = useState(false);
-    const [errorNotice, setErrorNotice] = useState<string | null>(null);
-    const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-    const composerRef = useRef<ChatComposerHandle>(null);
-    const messagesEndRef = useRef<HTMLDivElement | null>(null);
-    const activeRoomIdRef = useRef<string | null>(room?.id || null);
-    const pendingStreamMapRef = useRef<Record<string, {
-        roomId?: string;
-        advisorId: string;
-        advisorName?: string;
-        advisorAvatar?: string;
-        content: string;
-        done: boolean;
-    }>>({});
-    const streamFlushTimerRef = useRef<number | null>(null);
-
-    const roomMembers = useMemo(() => {
-        if (!room) return [];
-        const advisorIds = Array.isArray(room.advisorIds) ? room.advisorIds : [];
-        return advisors.filter((advisor) => advisorIds.includes(advisor.id));
-    }, [advisors, room]);
-
-    useEffect(() => {
-        activeRoomIdRef.current = room?.id || null;
-    }, [room?.id]);
-
-    useEffect(() => {
-        onExecutionStateChange(isSending);
-    }, [isSending, onExecutionStateChange]);
-
-    useEffect(() => () => {
-        onExecutionStateChange(false);
-    }, [onExecutionStateChange]);
-
-    const loadMessages = useCallback(async (roomId: string) => {
-        setIsLoading(true);
-        setErrorNotice(null);
-        try {
-            const records = await window.ipcRenderer.invoke('chatrooms:messages', roomId) as RedClawRoomMessageRecord[];
-            if (activeRoomIdRef.current !== roomId) return;
-            setMessages((Array.isArray(records) ? records : []).map(redClawRoomMessageToMessage));
-        } catch (error) {
-            console.error('Failed to load RedClaw room messages:', error);
-            setErrorNotice('群聊消息读取失败');
-        } finally {
-            if (activeRoomIdRef.current === roomId) {
-                setIsLoading(false);
-            }
-        }
-    }, []);
-
-    useEffect(() => {
-        if (!room?.id) {
-            setMessages([]);
-            return;
-        }
-        void loadMessages(room.id);
-    }, [loadMessages, room?.id]);
-
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ block: 'end' });
-    }, [messages]);
-
-    const flushBufferedStreams = useCallback(() => {
-        streamFlushTimerRef.current = null;
-        const pending = Object.values(pendingStreamMapRef.current);
-        if (pending.length === 0) return;
-        pendingStreamMapRef.current = {};
-        const activeRoomId = activeRoomIdRef.current;
-        setMessages((prev) => {
-            const next = [...prev];
-            for (const item of pending) {
-                if (item.roomId && activeRoomId && item.roomId !== activeRoomId) continue;
-                const existingIndex = [...next].reverse().findIndex((message) => (
-                    message.isStreaming && message.memberActor?.memberId === item.advisorId
-                ));
-                const targetIndex = existingIndex >= 0 ? next.length - 1 - existingIndex : -1;
-                if (targetIndex >= 0) {
-                    next[targetIndex] = {
-                        ...next[targetIndex],
-                        content: `${next[targetIndex].content || ''}${item.content || ''}`,
-                        isStreaming: !item.done,
-                    };
-                    continue;
-                }
-                const isDirector = item.advisorId === REDCLAW_DIRECTOR_ID;
-                next.push({
-                    id: `room-stream-${Date.now()}-${item.advisorId}`,
-                    role: 'ai',
-                    messageType: 'reply',
-                    content: item.content || '',
-                    tools: [],
-                    timeline: [],
-                    isStreaming: !item.done,
-                    memberActor: {
-                        type: 'member',
-                        memberId: item.advisorId,
-                        displayName: item.advisorName || (isDirector ? REDCLAW_DIRECTOR_NAME : '成员'),
-                        avatar: item.advisorAvatar || (isDirector ? REDCLAW_DIRECTOR_AVATAR : undefined),
-                    },
-                });
-            }
-            return next;
-        });
-    }, []);
-
-    const scheduleBufferedStreamFlush = useCallback(() => {
-        if (streamFlushTimerRef.current !== null) return;
-        streamFlushTimerRef.current = window.setTimeout(() => {
-            flushBufferedStreams();
-        }, REDCLAW_ROOM_STREAM_FLUSH_INTERVAL_MS);
-    }, [flushBufferedStreams]);
-
-    useEffect(() => {
-        if (!isActive) return undefined;
-        const dispose = subscribeRuntimeEventStream({
-            onCreativeChatUserMessage: ({ roomId, message }) => {
-                if (roomId !== activeRoomIdRef.current) return;
-                const nextMessage = redClawRoomMessageToMessage(message as unknown as RedClawRoomMessageRecord);
-                setMessages((prev) => {
-                    if (prev.some((item) => item.id === nextMessage.id)) return prev;
-                    if (nextMessage.role === 'user' && prev.some((item) => (
-                        item.role === 'user' && String(item.content || '').trim() === String(nextMessage.content || '').trim()
-                    ))) {
-                        return prev;
-                    }
-                    return [...prev, nextMessage];
-                });
-            },
-            onCreativeChatAdvisorStart: ({ roomId, advisorId, advisorName, advisorAvatar }) => {
-                if (roomId !== activeRoomIdRef.current) return;
-                setMessages((prev) => {
-                    if (prev.some((item) => item.isStreaming && item.memberActor?.memberId === advisorId)) return prev;
-                    const isDirector = advisorId === REDCLAW_DIRECTOR_ID;
-                    return [...prev, {
-                        id: `room-advisor-${Date.now()}-${advisorId}`,
-                        role: 'ai',
-                        messageType: 'reply',
-                        content: '',
-                        tools: [],
-                        timeline: [],
-                        isStreaming: true,
-                        memberActor: {
-                            type: 'member',
-                            memberId: advisorId,
-                            displayName: advisorName || (isDirector ? REDCLAW_DIRECTOR_NAME : '成员'),
-                            avatar: advisorAvatar || (isDirector ? REDCLAW_DIRECTOR_AVATAR : undefined),
-                        },
-                    }];
-                });
-            },
-            onCreativeChatStream: ({ roomId, advisorId, advisorName, advisorAvatar, content, done }) => {
-                if (roomId !== activeRoomIdRef.current) return;
-                const key = `${roomId}:${advisorId}`;
-                const existing = pendingStreamMapRef.current[key];
-                pendingStreamMapRef.current[key] = {
-                    roomId,
-                    advisorId,
-                    advisorName,
-                    advisorAvatar,
-                    content: `${existing?.content || ''}${content || ''}`,
-                    done: Boolean(done),
-                };
-                scheduleBufferedStreamFlush();
-            },
-            onCreativeChatDone: ({ roomId }) => {
-                if (roomId !== activeRoomIdRef.current) return;
-                flushBufferedStreams();
-                setIsSending(false);
-                setMessages((prev) => prev.map((message) => (
-                    message.isStreaming ? { ...message, isStreaming: false } : message
-                )));
-            },
-            onCreativeChatError: ({ roomId, error }) => {
-                if (roomId !== activeRoomIdRef.current) return;
-                flushBufferedStreams();
-                setIsSending(false);
-                setMessages((prev) => prev.map((message) => (
-                    message.isStreaming ? { ...message, isStreaming: false } : message
-                )));
-                setErrorNotice(String((error as { message?: unknown })?.message || '群聊回复失败'));
-            },
-        });
-        return () => {
-            if (streamFlushTimerRef.current !== null) {
-                window.clearTimeout(streamFlushTimerRef.current);
-                streamFlushTimerRef.current = null;
-            }
-            dispose();
-        };
-    }, [flushBufferedStreams, isActive, scheduleBufferedStreamFlush]);
-
-    const handleCopyMessage = useCallback((id: string, content: string) => {
-        void navigator.clipboard?.writeText(content || '');
-        setCopiedMessageId(id);
-        window.setTimeout(() => setCopiedMessageId((current) => current === id ? null : current), 1200);
-    }, []);
-
-    const handleCancel = useCallback(async () => {
-        if (!room?.id) return;
-        try {
-            await window.ipcRenderer.invoke('chatrooms:cancel', { roomId: room.id });
-        } catch (error) {
-            console.error('Failed to cancel RedClaw room chat:', error);
-        }
-        setIsSending(false);
-        setMessages((prev) => prev.map((message) => (
-            message.isStreaming ? { ...message, isStreaming: false } : message
-        )));
-    }, [room?.id]);
-
-    const sendRoomMessage = useCallback((rawContent: string) => {
-        const content = rawContent.trim();
-        if (!room?.id || !content || isSending) return;
-        const clientMessageId = `room-user-${Date.now()}`;
-        setMessages((prev) => [...prev, {
-            id: clientMessageId,
-            role: 'user',
-            content,
-            tools: [],
-            timeline: [],
-        }]);
-        setInput('');
-        setErrorNotice(null);
-        setIsSending(true);
-        composerRef.current?.resetHeight();
-        window.ipcRenderer.send('chatrooms:send', {
-            roomId: room.id,
-            message: content,
-            clientMessageId,
-        });
-    }, [isSending, room?.id]);
-
-    const handleSend = useCallback(() => {
-        sendRoomMessage(input);
-    }, [input, sendRoomMessage]);
-
-    if (!room) {
-        return (
-            <div className="flex h-full items-center justify-center text-text-tertiary">
-                <div className="text-center">
-                    <MessageSquarePlus className="mx-auto mb-3 h-10 w-10 opacity-30" />
-                    <p className="text-sm">选择一个群聊</p>
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="flex h-full min-h-0 flex-col">
-            <div className="shrink-0 border-b border-border/70 px-6 py-4">
-                <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4">
-                    <div className="min-w-0">
-                        <h2 className="truncate text-base font-semibold text-text-primary">{room.name || '团队群聊'}</h2>
-                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                            <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600">
-                                {REDCLAW_DIRECTOR_NAME}
-                            </span>
-                            {roomMembers.map((advisor) => (
-                                <span key={advisor.id} className="rounded-full bg-surface-secondary px-2 py-0.5 text-[11px] font-medium text-text-tertiary">
-                                    {advisor.name}
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 custom-scrollbar">
-                <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
-                    {isLoading ? (
-                        <div className="flex h-[40vh] items-center justify-center text-text-tertiary">
-                            <Loader2 className="h-5 w-5 animate-spin" />
-                        </div>
-                    ) : messages.length === 0 ? (
-                        <div className="flex h-[40vh] flex-col items-center justify-center text-center text-text-tertiary">
-                            <MessageSquarePlus className="mb-3 h-10 w-10 opacity-30" />
-                            <div className="text-sm font-medium text-text-secondary">{room.name || '团队群聊'}</div>
-                        </div>
-                    ) : (
-                        messages.map((message) => (
-                            <MessageItem
-                                key={message.id}
-                                msg={message}
-                                copiedMessageId={copiedMessageId}
-                                onCopyMessage={handleCopyMessage}
-                                workflowPlacement="bottom"
-                                workflowVariant="compact"
-                                workflowFailureTone="neutral"
-                                linkRenderMode="preview-card"
-                                onPreviewLink={onPreviewLink}
-                                activePreviewHref={activePreviewHref}
-                            />
-                        ))
-                    )}
-                    <div ref={messagesEndRef} />
-                </div>
-            </div>
-
-            <div className="shrink-0 bg-transparent pb-4 pt-2 md:pb-5">
-                <div className="mx-auto flex w-full max-w-[52rem] flex-col gap-3 px-4">
-                    {errorNotice && (
-                        <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-                            {errorNotice}
-                        </div>
-                    )}
-                    {shortcuts.length > 0 && (
-                        <div className="flex gap-2 overflow-x-auto py-1 no-scrollbar">
-                            {shortcuts.map((shortcut) => (
-                                <button
-                                    key={shortcut.label}
-                                    type="button"
-                                    onClick={() => {
-                                        if ((shortcut.action || 'send') === 'inject') {
-                                            setInput(shortcut.text);
-                                            requestAnimationFrame(() => composerRef.current?.focus());
-                                            return;
-                                        }
-                                        if (!room?.id || isSending) return;
-                                        setInput(shortcut.text);
-                                        requestAnimationFrame(() => {
-                                            composerRef.current?.focus();
-                                        });
-                                        sendRoomMessage(shortcut.text);
-                                    }}
-                                    disabled={isSending}
-                                    className="flex-shrink-0 rounded-full border border-border bg-surface-primary px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-accent-primary/30 hover:text-accent-primary disabled:opacity-50"
-                                >
-                                    {shortcut.label}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                    <ChatComposer
-                        ref={composerRef}
-                        theme="default"
-                        variant="main"
-                        value={input}
-                        onValueChange={setInput}
-                        onSubmit={handleSend}
-                        placeholder="描述创作目标，团队会一起讨论&#10;使用 # 调用知识库"
-                        isBusy={isSending}
-                        onCancel={() => void handleCancel()}
-                        showCancelWhenBusy={true}
-                    />
-                </div>
-            </div>
-        </div>
-    );
-}
-
 export function RedClaw({
     pendingMessage,
     onPendingMessageConsumed,
@@ -1115,6 +727,7 @@ export function RedClaw({
     const hasSkillsSnapshotRef = useRef(false);
     const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
     const consumedNavigationActionNonceRef = useRef<number | null>(null);
+    const pendingRoomSelectionRef = useRef<string | null>(null);
 
     useEffect(() => {
         activeSessionIdRef.current = activeSessionId;
@@ -1142,12 +755,19 @@ export function RedClaw({
 
         const loadTeamData = async () => {
             try {
-                const [roomList, advisorList] = await Promise.all([
-                    window.ipcRenderer.invoke('chatrooms:list') as Promise<RedClawTeamRoom[]>,
+                const [teamSessionList, advisorList] = await Promise.all([
+                    window.ipcRenderer.teamRuntime.listSessions() as Promise<TeamWorkbenchSession[]>,
                     window.ipcRenderer.advisors.list<AdvisorProfile>(),
                 ]);
                 if (cancelled) return;
-                setTeamRooms(Array.isArray(roomList) ? roomList : []);
+                const sessions = Array.isArray(teamSessionList) ? visibleTeamSessions(teamSessionList) : [];
+                setTeamRooms(sessions.map(teamRoomFromSession));
+                const pendingRoomId = pendingRoomSelectionRef.current;
+                if (pendingRoomId && sessions.some((session) => session.id === pendingRoomId)) {
+                    pendingRoomSelectionRef.current = null;
+                    setSelectedRoomId(pendingRoomId);
+                    setActiveAiSurface('room');
+                }
                 setAdvisors(Array.isArray(advisorList) ? advisorList : []);
             } catch (error) {
                 if (cancelled) return;
@@ -1159,10 +779,16 @@ export function RedClaw({
         const handleTeamSettingsChanged = () => {
             void loadTeamData();
         };
+        const handleTeamRuntimeEvent = (event: { eventType?: string }) => {
+            if (!String(event?.eventType || '').startsWith('runtime:collab-')) return;
+            void loadTeamData();
+        };
         window.addEventListener('redclaw:team-settings-changed', handleTeamSettingsChanged);
+        window.ipcRenderer.teamRuntime.onEvent(handleTeamRuntimeEvent);
         return () => {
             cancelled = true;
             window.removeEventListener('redclaw:team-settings-changed', handleTeamSettingsChanged);
+            window.ipcRenderer.teamRuntime.offEvent(handleTeamRuntimeEvent);
         };
     }, [shouldLoadHistory]);
 
@@ -1176,6 +802,7 @@ export function RedClaw({
 
     useEffect(() => {
         if (teamRooms.length === 0) {
+            if (pendingRoomSelectionRef.current) return;
             setSelectedRoomId(null);
             return;
         }
@@ -1271,7 +898,7 @@ export function RedClaw({
     const activeWelcomeTitle = activeAiSurface === 'advisor' && selectedAdvisor
         ? selectedAdvisor.name
         : activeAiSurface === 'room' && selectedRoom
-            ? selectedRoom.name || '团队群聊'
+            ? selectedRoom.name || '未命名团队'
             : `${REDCLAW_DISPLAY_NAME} 自媒体AI工作台`;
     const activeWelcomeIconSrc = activeAiSurface === 'advisor' && selectedAdvisor && isRenderableAdvisorAvatar(selectedAdvisor)
         ? resolveAssetUrl(selectedAdvisor.avatar)
@@ -1280,18 +907,6 @@ export function RedClaw({
         ? advisorAvatarText(selectedAdvisor)
         : undefined;
     const activeWelcomeIconVariant = activeAiSurface === 'advisor' ? 'avatar' as const : 'default' as const;
-    const roomComposerShortcuts = useMemo(() => (
-        Array.isArray(composerShortcuts)
-            ? composerShortcuts
-            : composerShortcuts({
-                input: '',
-                hasInput: false,
-                attachment: null,
-                selectedMemberMention: null,
-                selectedKnowledgeMentions: [],
-            })
-    ), [composerShortcuts]);
-
     useEffect(() => {
         if (!pendingMessage) {
             routedPendingMessageRef.current = null;
@@ -1784,12 +1399,18 @@ export function RedClaw({
 
     useEffect(() => {
         if (!isActive || !navigationAction) return;
-        if (navigationAction.action !== 'new') return;
         if (consumedNavigationActionNonceRef.current === navigationAction.nonce) return;
         consumedNavigationActionNonceRef.current = navigationAction.nonce;
-        startNewDraftSession();
+        if (navigationAction.action === 'new') {
+            startNewDraftSession();
+        } else if (navigationAction.action === 'open-team' && navigationAction.sessionId) {
+            pendingRoomSelectionRef.current = navigationAction.sessionId;
+            setSelectedRoomId(navigationAction.sessionId);
+            setActiveAiSurface('room');
+            onOpenChatSurface?.();
+        }
         onNavigationActionConsumed?.();
-    }, [isActive, navigationAction, onNavigationActionConsumed, startNewDraftSession]);
+    }, [isActive, navigationAction, onNavigationActionConsumed, onOpenChatSurface, startNewDraftSession]);
 
     const switchSession = useCallback((nextSessionId: string) => {
         if (!nextSessionId || nextSessionId === activeSessionIdRef.current) return;
@@ -2025,7 +1646,41 @@ export function RedClaw({
         setIsCreatingRoom(true);
         setRoomCreateError('');
         try {
-            const room = await window.ipcRenderer.invoke('chatrooms:create', { name, advisorIds: roomCreateAdvisorIds }) as RedClawTeamRoom;
+            const session = await window.ipcRenderer.teamRuntime.createSession({
+                title: name,
+                objective: `团队 ${name} 的协作任务`,
+                source: 'team-workbench',
+                runtimeMode: 'team',
+                metadata: {
+                    advisorIds: roomCreateAdvisorIds,
+                    surface: 'redclaw',
+                },
+            }) as TeamWorkbenchSession;
+            for (const advisorId of roomCreateAdvisorIds) {
+                const advisor = advisors.find((item) => item.id === advisorId);
+                if (!advisor) continue;
+                await window.ipcRenderer.teamRuntime.addMember({
+                    sessionId: session.id,
+                    displayName: advisor.name || '成员',
+                    roleId: advisor.id,
+                    backend: 'redbox-runtime',
+                    status: 'idle',
+                    capabilities: ['discussion', 'creation'],
+                    metadata: {
+                        advisorId: advisor.id,
+                        avatar: advisor.avatar,
+                        personality: advisor.personality,
+                    },
+                });
+            }
+            const room = teamRoomFromSession({
+                ...session,
+                metadata: {
+                    ...(session.metadata || {}),
+                    advisorIds: roomCreateAdvisorIds,
+                    surface: 'redclaw',
+                },
+            });
             setTeamRooms((prev) => [...prev.filter((item) => item.id !== room.id), room]);
             setSelectedRoomId(room.id);
             onOpenChatSurface?.();
@@ -2039,7 +1694,7 @@ export function RedClaw({
         } finally {
             setIsCreatingRoom(false);
         }
-    }, [onOpenChatSurface, roomCreateAdvisorIds, roomCreateName]);
+    }, [advisors, onOpenChatSurface, roomCreateAdvisorIds, roomCreateName]);
 
     const deleteHistorySession = useCallback(async (targetSessionId: string) => {
         if (!targetSessionId) return;
@@ -2118,7 +1773,7 @@ export function RedClaw({
     const deleteRoomFromRedClaw = useCallback(async (room: RedClawTeamRoom) => {
         if (!room?.id) return;
         try {
-            await window.ipcRenderer.invoke('chatrooms:delete', room.id);
+            await window.ipcRenderer.teamRuntime.archiveSession({ sessionId: room.id });
             setTeamRooms((prev) => prev.filter((item) => item.id !== room.id));
             if (activeAiSurface === 'room' && selectedRoomId === room.id) {
                 setSelectedRoomId(null);
@@ -2737,15 +2392,16 @@ export function RedClaw({
                             )}
                             <div className="h-full min-h-0 w-full overflow-hidden">
                                 {activeAiSurface === 'room' ? (
-                                    <RedClawRoomConversation
-                                        room={selectedRoom}
-                                        advisors={advisors}
-                                        isActive={isActive}
-                                        onExecutionStateChange={setIsRedClawChatExecuting}
-                                        onPreviewLink={handlePreviewLink}
-                                        activePreviewHref={previewTarget?.href || null}
-                                        shortcuts={roomComposerShortcuts}
-                                    />
+                                    selectedRoom?.session ? (
+                                        <TeamWorkbench
+                                            session={selectedRoom.session}
+                                            isActive={isActive}
+                                        />
+                                    ) : (
+                                        <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
+                                            请选择或创建团队
+                                        </div>
+                                    )
                                 ) : speakerSessionLoading ? (
                                     <div className="flex h-full items-center justify-center">
                                         <div className="flex flex-col items-center gap-3 text-text-tertiary">
@@ -2826,7 +2482,6 @@ export function RedClaw({
                                 enabledSkillCount={enabledSkillCount}
                                 installSource={installSource}
                                 isInstallingSkill={isInstallingSkill}
-                                onToggleOpen={() => setSidebarCollapsed((value) => !value)}
                                 onCollapse={() => setSidebarCollapsed(true)}
                                 onInstallSourceChange={setInstallSource}
                                 onInstallSkill={() => void installSkill()}

@@ -196,8 +196,8 @@ export function RedClawHistorySidebarSection({
                                 type="button"
                                 onClick={() => void onCreateRoom()}
                                 className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                                title="创建群聊"
-                                aria-label="创建群聊"
+                                title="创建团队"
+                                aria-label="创建团队"
                             >
                                 <Plus className="h-3.5 w-3.5" />
                             </button>
@@ -205,7 +205,7 @@ export function RedClawHistorySidebarSection({
                     </div>
                     {teamRooms.length === 0 ? (
                         <div className="mx-3 rounded-lg border border-dashed border-border/80 px-3 py-3 text-center text-[11px] text-text-tertiary">
-                            暂无群聊
+                            暂无团队
                         </div>
                     ) : (
                         <div className="space-y-0.5">
@@ -237,10 +237,10 @@ export function RedClawHistorySidebarSection({
                                                 'truncate pr-7 text-[13px] font-bold leading-tight',
                                                 isActiveRoom ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
                                             )}>
-                                                {room.name || '未命名群聊'}
+                                                {room.name || '未命名团队'}
                                             </div>
                                             <div className="mt-0.5 text-[9px] font-bold uppercase tracking-tighter text-text-tertiary/60">
-                                                {room.isSystem ? '系统群聊' : `${memberCount} 位成员`}
+                                                {`${memberCount} 位成员`}
                                             </div>
                                         </div>
                                         <button

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, MessageSquarePlus, Plus, Users } from 'lucide-react';
+import { Bot, ChevronDown, Plus, Users } from 'lucide-react';
 import { clsx } from 'clsx';
-import { CreativeChat, type CreativeChatRoom } from './CreativeChat';
 import { Advisors, type AdvisorCreateMode, type AdvisorProfile } from './Advisors';
 import type { TeamSection } from '../App';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
+import { appAlert } from '../utils/appDialogs';
+import { TeamWorkbench } from './team-workbench/TeamWorkbench';
+import type { TeamWorkbenchSession } from './team-workbench/teamWorkbenchTypes';
 
 interface TeamProps {
   isActive?: boolean;
@@ -14,25 +16,14 @@ interface TeamProps {
 const TEAM_SECTION_STORAGE_KEY = 'redbox:team-section:v1';
 
 function readInitialTeamSection(): TeamSection {
-  if (typeof window === 'undefined') return 'group-chat';
+  if (typeof window === 'undefined') return 'team-workbench';
   const saved = String(window.localStorage.getItem(TEAM_SECTION_STORAGE_KEY) || '').trim();
-  return saved === 'members' ? 'members' : 'group-chat';
+  if (saved === 'team-workbench') return 'team-workbench';
+  return saved === 'members' ? 'members' : 'team-workbench';
 }
 
-function getRoomAvatarMembers(room: CreativeChatRoom, advisors: AdvisorProfile[]): AdvisorProfile[] {
-  const advisorIds = Array.isArray(room.advisorIds) ? room.advisorIds : [];
-  const normalizedIds = advisorIds.map((id) => String(id || '').trim()).filter(Boolean);
-  return advisors.filter((advisor) => normalizedIds.includes(advisor.id)).slice(0, 9);
-}
-
-function getRoomAvatarGridSpec(count: number): { columns: number; rows: number } {
-  if (count <= 1) {
-    return { columns: 1, rows: 1 };
-  }
-  if (count <= 4) {
-    return { columns: 2, rows: Math.ceil(count / 2) };
-  }
-  return { columns: 3, rows: Math.ceil(count / 3) };
+function visibleCollabSessions(sessions: TeamWorkbenchSession[]): TeamWorkbenchSession[] {
+  return sessions.filter((session) => !['archived', 'completed'].includes(String(session.status || '').toLowerCase()));
 }
 
 function renderAdvisorAvatarPreview(advisor: AdvisorProfile, compact = false) {
@@ -56,31 +47,28 @@ function renderAdvisorAvatarPreview(advisor: AdvisorProfile, compact = false) {
 export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   const [activeSection, setActiveSection] = useState<TeamSection>(readInitialTeamSection);
   const [mountedSections, setMountedSections] = useState<TeamSection[]>(() => [readInitialTeamSection()]);
-  const [rooms, setRooms] = useState<CreativeChatRoom[]>([]);
   const [advisors, setAdvisors] = useState<AdvisorProfile[]>([]);
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [collabSessions, setCollabSessions] = useState<TeamWorkbenchSession[]>([]);
   const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
-  const [roomCreateRequestKey, setRoomCreateRequestKey] = useState(0);
+  const [selectedCollabSessionId, setSelectedCollabSessionId] = useState<string | null>(null);
   const [advisorCreateRequestKey, setAdvisorCreateRequestKey] = useState(0);
   const [advisorCreateMode, setAdvisorCreateMode] = useState<AdvisorCreateMode>('manual');
-  const [isCreativeChatExecuting, setIsCreativeChatExecuting] = useState(false);
   const [isCreatePickerOpen, setIsCreatePickerOpen] = useState(false);
-  const [isRoomsSectionOpen, setIsRoomsSectionOpen] = useState(true);
   const [isAdvisorsSectionOpen, setIsAdvisorsSectionOpen] = useState(true);
   const createMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-        const loadSidebarData = async () => {
+    const loadSidebarData = async () => {
       try {
-        const [roomList, advisorList] = await Promise.all([
-          window.ipcRenderer.invoke('chatrooms:list') as Promise<CreativeChatRoom[]>,
+        const [advisorList, collabList] = await Promise.all([
           window.ipcRenderer.advisors.list<AdvisorProfile>(),
+          window.ipcRenderer.teamRuntime.listSessions(),
         ]);
         if (cancelled) return;
-        setRooms(Array.isArray(roomList) ? roomList : []);
         setAdvisors(Array.isArray(advisorList) ? advisorList : []);
+        setCollabSessions(Array.isArray(collabList) ? visibleCollabSessions(collabList as TeamWorkbenchSession[]) : []);
       } catch (error) {
         if (cancelled) return;
         console.error('Failed to load team sidebar data:', error);
@@ -95,15 +83,25 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   }, []);
 
   useEffect(() => {
+    const handleRuntimeEvent = (event: { eventType?: string }) => {
+      if (!String(event?.eventType || '').startsWith('runtime:collab-')) return;
+      window.ipcRenderer.teamRuntime.listSessions()
+        .then((sessions) => setCollabSessions(Array.isArray(sessions) ? visibleCollabSessions(sessions as TeamWorkbenchSession[]) : []))
+        .catch((error) => console.error('Failed to refresh collaboration sessions:', error));
+    };
+
+    window.ipcRenderer.teamRuntime.onEvent(handleRuntimeEvent);
+    return () => {
+      window.ipcRenderer.teamRuntime.offEvent(handleRuntimeEvent);
+    };
+  }, []);
+
+  useEffect(() => {
     window.localStorage.setItem(TEAM_SECTION_STORAGE_KEY, activeSection);
     setMountedSections((prev) => (
       prev.includes(activeSection) ? prev : [...prev, activeSection]
     ));
   }, [activeSection]);
-
-  useEffect(() => {
-    onExecutionStateChange?.(isCreativeChatExecuting);
-  }, [isCreativeChatExecuting, onExecutionStateChange]);
 
   useEffect(() => {
     return () => {
@@ -136,14 +134,14 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
   }, [isCreatePickerOpen]);
 
   useEffect(() => {
-    if (rooms.length === 0) {
-      setSelectedRoomId(null);
+    if (collabSessions.length === 0) {
+      setSelectedCollabSessionId(null);
       return;
     }
-    if (!selectedRoomId || !rooms.some((room) => room.id === selectedRoomId)) {
-      setSelectedRoomId(rooms[0].id);
+    if (!selectedCollabSessionId || !collabSessions.some((session) => session.id === selectedCollabSessionId)) {
+      setSelectedCollabSessionId(collabSessions[0].id);
     }
-  }, [rooms, selectedRoomId]);
+  }, [collabSessions, selectedCollabSessionId]);
 
   useEffect(() => {
     if (advisors.length === 0) {
@@ -155,27 +153,48 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
     }
   }, [advisors, selectedAdvisorId]);
 
-  const selectedRoom = useMemo(
-    () => rooms.find((room) => room.id === selectedRoomId) || null,
-    [rooms, selectedRoomId],
-  );
   const selectedAdvisor = useMemo(
     () => advisors.find((advisor) => advisor.id === selectedAdvisorId) || null,
     [advisors, selectedAdvisorId],
   );
-  const shouldKeepChatActive = isCreativeChatExecuting;
-
-  const openRoomCreate = () => {
-    setActiveSection('group-chat');
-    setRoomCreateRequestKey((value) => value + 1);
-    setIsCreatePickerOpen(false);
-  };
-
+  const selectedCollabSession = useMemo(
+    () => collabSessions.find((session) => session.id === selectedCollabSessionId) || null,
+    [collabSessions, selectedCollabSessionId],
+  );
   const openAdvisorCreate = (mode: AdvisorCreateMode = 'manual') => {
     setActiveSection('members');
     setAdvisorCreateMode(mode);
     setAdvisorCreateRequestKey((value) => value + 1);
     setIsCreatePickerOpen(false);
+  };
+
+  const createCollabSession = async () => {
+    setIsCreatePickerOpen(false);
+    let createdSession: TeamWorkbenchSession | null = null;
+    try {
+      const session = await window.ipcRenderer.teamRuntime.createSession({
+        title: `团队 ${collabSessions.length + 1}`,
+        objective: '请在 team 模式中拆解、执行并汇总这个任务。',
+        source: 'team-workbench',
+        runtimeMode: 'team',
+      }) as TeamWorkbenchSession;
+      createdSession = session;
+      const nextSessions = await window.ipcRenderer.teamRuntime.listSessions() as TeamWorkbenchSession[];
+      setCollabSessions(Array.isArray(nextSessions) ? visibleCollabSessions(nextSessions) : [session]);
+      setSelectedCollabSessionId(session.id);
+      setActiveSection('team-workbench');
+    } catch (error) {
+      console.error('Failed to create collaboration session:', error);
+      if (createdSession?.id) {
+        await window.ipcRenderer.teamRuntime.archiveSession({ sessionId: createdSession.id }).catch(() => {});
+        const nextSessions = await window.ipcRenderer.teamRuntime.listSessions().catch(() => []) as TeamWorkbenchSession[];
+        setCollabSessions(Array.isArray(nextSessions) ? visibleCollabSessions(nextSessions) : []);
+      }
+      void appAlert('团队创建失败，已清理未完成的数据。', {
+        title: '创建团队失败',
+        tone: 'danger',
+      });
+    }
   };
 
   return (
@@ -202,11 +221,11 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
                   <div className="py-1.5">
                     <button
                       type="button"
-                      onClick={openRoomCreate}
+                      onClick={() => void createCollabSession()}
                       className="flex h-10 w-full items-center gap-2.5 px-3 text-left text-sm text-text-primary transition-colors hover:bg-surface-secondary"
                     >
-                      <MessageSquarePlus className="h-4 w-4 shrink-0 text-text-tertiary" />
-                      <div className="font-medium">创建群聊</div>
+                      <Bot className="h-4 w-4 shrink-0 text-text-tertiary" />
+                      <div className="font-medium">创建团队</div>
                     </button>
 
                     <div className="mx-3 h-px bg-border" />
@@ -231,88 +250,49 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
           <section className="space-y-2">
             <button
               type="button"
-              onClick={() => setIsRoomsSectionOpen((prev) => !prev)}
+              onClick={() => setActiveSection('team-workbench')}
               className="flex w-full items-center justify-between rounded-xl px-1 py-1 text-left text-xs font-medium tracking-[0.04em] text-text-tertiary transition-colors hover:text-text-primary"
             >
-              <span>群聊</span>
-              <ChevronDown
-                className={clsx('h-4 w-4 transition-transform', isRoomsSectionOpen ? 'rotate-0' : '-rotate-90')}
-                strokeWidth={1.75}
-              />
+              <span>团队</span>
+              <ChevronDown className="h-4 w-4" strokeWidth={1.75} />
             </button>
 
-            {isRoomsSectionOpen && (
-              rooms.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-border px-4 py-5 text-center text-xs text-text-tertiary">
-                  暂无群聊
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {rooms.map((room) => {
-                    const isSelected = activeSection === 'group-chat' && selectedRoomId === room.id;
-                    const memberCount = Array.isArray(room.advisorIds) ? room.advisorIds.length : 0;
-                    const roomAvatarMembers = getRoomAvatarMembers(room, advisors);
-                    const avatarGridSpec = getRoomAvatarGridSpec(roomAvatarMembers.length);
-                    return (
-                      <button
-                        key={room.id}
-                        type="button"
-                        onClick={() => {
-                          setActiveSection('group-chat');
-                          setSelectedRoomId(room.id);
-                        }}
-                        className={clsx(
-                          'w-full rounded-2xl border px-3 py-3 text-left transition-all',
-                          isSelected
-                            ? 'border-accent-primary/30 bg-accent-primary/10 shadow-sm'
-                            : 'border-transparent hover:border-border hover:bg-surface-primary/70',
-                        )}
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-surface-primary p-1">
-                            {roomAvatarMembers.length > 0 ? (
-                              <div
-                                className="grid h-full w-full gap-[1.5px] overflow-hidden rounded-xl"
-                                style={{
-                                  gridTemplateColumns: `repeat(${avatarGridSpec.columns}, minmax(0, 1fr))`,
-                                  gridTemplateRows: `repeat(${avatarGridSpec.rows}, minmax(0, 1fr))`,
-                                }}
-                              >
-                                {roomAvatarMembers.map((advisor) => (
-                                  <div
-                                    key={`${room.id}:${advisor.id}`}
-                                    className="flex items-center justify-center overflow-hidden rounded-[4px] bg-surface-secondary p-[1px] text-text-primary"
-                                  >
-                                    {renderAdvisorAvatarPreview(advisor, roomAvatarMembers.length >= 7)}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center rounded-xl bg-surface-secondary text-text-tertiary">
-                                <Users className="h-4 w-4" />
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 min-w-0">
-                              {room.isSystem && (
-                                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
-                                  🎩
-                                </span>
-                              )}
-                              <span className="truncate text-sm font-medium text-text-primary">{room.name}</span>
-                            </div>
-                            <div className="mt-1 text-xs text-text-tertiary">
-                              {room.isSystem ? '系统群聊' : `${memberCount} 位成员`}
-                            </div>
-                          </div>
+            {collabSessions.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border px-4 py-5 text-center text-xs text-text-tertiary">
+                暂无团队
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {collabSessions.map((session) => {
+                  const isSelected = activeSection === 'team-workbench' && selectedCollabSessionId === session.id;
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveSection('team-workbench');
+                        setSelectedCollabSessionId(session.id);
+                      }}
+                      className={clsx(
+                        'w-full rounded-2xl border px-3 py-3 text-left transition-all',
+                        isSelected
+                          ? 'border-accent-primary/30 bg-accent-primary/10 shadow-sm'
+                          : 'border-transparent hover:border-border hover:bg-surface-primary/70',
+                      )}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-border bg-surface-primary text-accent-primary">
+                          <Bot className="h-4 w-4" />
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-text-primary">{session.title}</div>
+                          <div className="truncate text-xs text-text-tertiary">{session.status}</div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </section>
 
@@ -375,17 +355,18 @@ export function Team({ isActive = true, onExecutionStateChange }: TeamProps) {
       </aside>
 
       <div className="flex-1 min-w-0 min-h-0">
-        {mountedSections.includes('group-chat') && (
-          <div className={activeSection === 'group-chat' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <CreativeChat
-              isActive={(isActive && activeSection === 'group-chat') || shouldKeepChatActive}
-              onExecutionStateChange={setIsCreativeChatExecuting}
-              hideRoomList
-              selectedRoomId={selectedRoom?.id || null}
-              onSelectedRoomIdChange={setSelectedRoomId}
-              onRoomsChange={setRooms}
-              createRequestKey={roomCreateRequestKey}
-            />
+        {mountedSections.includes('team-workbench') && (
+          <div className={activeSection === 'team-workbench' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            {selectedCollabSession ? (
+              <TeamWorkbench
+                session={selectedCollabSession}
+                isActive={isActive && activeSection === 'team-workbench'}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
+                请选择或创建团队
+              </div>
+            )}
           </div>
         )}
 
