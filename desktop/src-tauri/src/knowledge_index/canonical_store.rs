@@ -1,7 +1,10 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 use tauri::State;
 
 use crate::{
@@ -494,6 +497,7 @@ fn sync_visual_rows(
     rows: &[CanonicalDocumentRow],
     previous_visual_states: &HashMap<String, PreviousVisualState>,
 ) -> Result<(), String> {
+    let mut physical_units = HashSet::<String>::new();
     let mut unit_stmt = conn
         .prepare(
             r#"
@@ -542,6 +546,14 @@ fn sync_visual_rows(
                 .get("documentId")
                 .and_then(Value::as_str)
                 .unwrap_or(&row.document_id);
+            let physical_key = visual_physical_unit_key(source, row);
+            if !physical_units.insert(physical_key.clone()) {
+                crate::append_debug_trace_global(format!(
+                    "[visual-index] skipped_duplicate_unit physicalKey={}",
+                    physical_key
+                ));
+                continue;
+            }
             let manifest_json =
                 serde_json::to_string(manifest).unwrap_or_else(|_| "{}".to_string());
             let unit_state = visual_unit_index_state(
@@ -602,6 +614,35 @@ fn sync_visual_rows(
         }
     }
     Ok(())
+}
+
+fn visual_physical_unit_key(source: &Value, row: &CanonicalDocumentRow) -> String {
+    let absolute_path = source
+        .get("absolutePath")
+        .and_then(Value::as_str)
+        .unwrap_or(&row.absolute_path);
+    let absolute_path = std::fs::canonicalize(Path::new(absolute_path))
+        .unwrap_or_else(|_| Path::new(absolute_path).to_path_buf())
+        .display()
+        .to_string();
+    let unit_kind = source
+        .get("unitKind")
+        .and_then(Value::as_str)
+        .unwrap_or("image_file");
+    let page_number = source
+        .get("pageNumber")
+        .and_then(Value::as_i64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let content_hash = source
+        .get("contentHash")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let rendered_image_hash = source
+        .get("renderedImageHash")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    format!("{absolute_path}|{unit_kind}|{page_number}|{content_hash}|{rendered_image_hash}")
 }
 
 fn visual_unit_index_state(

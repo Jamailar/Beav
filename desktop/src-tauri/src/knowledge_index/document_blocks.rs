@@ -1201,13 +1201,34 @@ fn row_to_document_block(row: &rusqlite::Row<'_>) -> Result<DocumentBlockRecord,
     })
 }
 
-pub(crate) fn build_blocks_for_source_with_cache_policy(
+pub(crate) fn build_blocks_for_source_with_cache_policy_and_visual_seen(
     state: &State<'_, AppState>,
     source_id: &str,
     source_name: &str,
     root_path: &Path,
     updated_at: &str,
     cache_policy: CanonicalCachePolicy,
+    visual_seen_paths: &mut HashSet<String>,
+) -> Result<BuildSourceBlocksResult, String> {
+    build_blocks_for_source_with_cache_policy_inner(
+        state,
+        source_id,
+        source_name,
+        root_path,
+        updated_at,
+        cache_policy,
+        Some(visual_seen_paths),
+    )
+}
+
+fn build_blocks_for_source_with_cache_policy_inner(
+    state: &State<'_, AppState>,
+    source_id: &str,
+    source_name: &str,
+    root_path: &Path,
+    updated_at: &str,
+    cache_policy: CanonicalCachePolicy,
+    mut visual_seen_paths: Option<&mut HashSet<String>>,
 ) -> Result<BuildSourceBlocksResult, String> {
     let mut blocks = Vec::new();
     let mut canonical_rows = Vec::new();
@@ -1222,6 +1243,7 @@ pub(crate) fn build_blocks_for_source_with_cache_policy(
             cache_policy,
             &mut blocks,
             &mut canonical_rows,
+            visual_seen_paths.as_deref_mut(),
         )?;
         return Ok(BuildSourceBlocksResult {
             blocks,
@@ -1238,6 +1260,7 @@ pub(crate) fn build_blocks_for_source_with_cache_policy(
         cache_policy,
         &mut blocks,
         &mut canonical_rows,
+        visual_seen_paths.as_deref_mut(),
     )?;
     Ok(BuildSourceBlocksResult {
         blocks,
@@ -1255,6 +1278,7 @@ fn collect_blocks_recursive(
     cache_policy: CanonicalCachePolicy,
     blocks: &mut Vec<DocumentBlockRecord>,
     canonical_rows: &mut Vec<CanonicalDocumentRow>,
+    mut visual_seen_paths: Option<&mut HashSet<String>>,
 ) -> Result<(), String> {
     let entries = match fs::read_dir(current) {
         Ok(entries) => entries,
@@ -1274,6 +1298,7 @@ fn collect_blocks_recursive(
                 cache_policy,
                 blocks,
                 canonical_rows,
+                visual_seen_paths.as_deref_mut(),
             )?;
             continue;
         }
@@ -1290,6 +1315,7 @@ fn collect_blocks_recursive(
             cache_policy,
             blocks,
             canonical_rows,
+            visual_seen_paths.as_deref_mut(),
         )?;
     }
     Ok(())
@@ -1305,10 +1331,23 @@ fn build_blocks_for_file(
     cache_policy: CanonicalCachePolicy,
     blocks: &mut Vec<DocumentBlockRecord>,
     canonical_rows: &mut Vec<CanonicalDocumentRow>,
+    mut visual_seen_paths: Option<&mut HashSet<String>>,
 ) -> Result<(), String> {
     let metadata = fs::metadata(file_path).map_err(|error| error.to_string())?;
     if metadata.len() > max_indexed_file_bytes_for_path(file_path) {
         return Ok(());
+    }
+    if let Some(seen_paths) = visual_seen_paths.as_deref_mut() {
+        if is_visual_candidate_path(file_path) {
+            let dedupe_key = visual_candidate_dedupe_key(file_path);
+            if !seen_paths.insert(dedupe_key.clone()) {
+                crate::append_debug_trace_global(format!(
+                    "[visual-index] skipped_duplicate_candidate path={}",
+                    dedupe_key
+                ));
+                return Ok(());
+            }
+        }
     }
     let absolute_path = file_path.display().to_string();
     let fingerprint = fingerprint_file(file_path)?;
@@ -1403,6 +1442,13 @@ fn build_blocks_for_file(
     canonical_rows.push(canonical_row);
     blocks.extend(file_blocks);
     Ok(())
+}
+
+fn visual_candidate_dedupe_key(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
 }
 
 fn load_cached_for_policy(

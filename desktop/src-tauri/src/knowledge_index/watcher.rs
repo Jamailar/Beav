@@ -27,11 +27,6 @@ fn desired_watch_roots(app: &AppHandle) -> Vec<PathBuf> {
             roots.push(root);
         }
     }
-    if let Ok(root) = workspace_root(&state).map(|root| root.join("media")) {
-        if root.exists() {
-            roots.push(root);
-        }
-    }
     let source_roots = with_store(&state, |store| {
         Ok(store
             .document_sources

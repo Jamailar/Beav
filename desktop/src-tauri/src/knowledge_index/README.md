@@ -34,6 +34,8 @@
 - 当前 lexical 主通道使用 SQLite FTS5 `bm25()` 召回与排序，保留 SQLite `LIKE` 兜底；最终目标仍是架构方案中的 `Tantivy + SQLite`
 - 已失效/废止文档需要在结果里显式标记，不能只做隐藏降权
 - 图片和扫描型 PDF 页走 `contentOrigin=visual_llm`，由 visual index model 直接生成结构化 manifest
+- 视觉索引只覆盖知识库内容：知识库笔记图片、YouTube 知识条目缩略图、文档源图片/扫描 PDF、advisor/member knowledge；媒体库资产不进入 `knowledge_index` 的 visual canonical/block/anchor 索引
+- 视觉索引必须按物理文件去重：同一个 absolute path 的图片/扫描 PDF 即使被多个知识入口引用，也只能在一次 rebuild 中解析一次；写入 `knowledge_visual_units` 前还要按 absolute path + unit kind + page + hash 做批内去重
 - 扫描 PDF 先走原生文本抽取；失败或为空时渲染为页图并交给 visual index model，避免把 native PDF 和扫描 PDF 混为一类
 - visual index provider 使用独立 `visual_index_*` 设置；模型不可用时生成 `metadata_only` manifest
 - `visual_index_concurrency` 控制扫描 PDF 页级 visual LLM 调用的分批并发度，默认 1，上限 4

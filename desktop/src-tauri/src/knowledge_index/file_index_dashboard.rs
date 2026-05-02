@@ -318,6 +318,7 @@ fn cached_workspace_visual_unit_count(conn: &Connection) -> Result<i64, String> 
             WHERE kind = 'document-source'
         )
           AND source_id NOT LIKE 'advisor:%'
+          AND source_id NOT LIKE 'media:%'
         "#,
         [],
         |row| row.get(0),
@@ -338,13 +339,11 @@ fn workspace_visual_candidate_count(
     state: &State<'_, AppState>,
     conn: &Connection,
 ) -> Result<i64, String> {
-    let root = workspace_root(state)?;
-    let knowledge_root = root.join("knowledge");
+    let knowledge_root = workspace_root(state)?.join("knowledge");
     let mut total = 0;
     for path in [
         knowledge_root.join("redbook"),
         knowledge_root.join("youtube"),
-        root.join("media"),
     ] {
         total += count_visual_candidates_under(&path);
     }
@@ -561,7 +560,10 @@ fn aggregate_unscoped_source_stats(
 ) -> SourceStats {
     let mut aggregate = SourceStats::default();
     for (source_id, stats) in source_stats {
-        if scoped_source_ids.contains(source_id) || source_id.starts_with("advisor:") {
+        if scoped_source_ids.contains(source_id)
+            || source_id.starts_with("advisor:")
+            || source_id.starts_with("media:")
+        {
             continue;
         }
         aggregate.canonical_documents += stats.canonical_documents;

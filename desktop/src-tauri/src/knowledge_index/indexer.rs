@@ -17,7 +17,7 @@ use crate::{
             replace_anchors_for_source, upsert_anchors_for_documents,
         },
         document_blocks::{
-            block_records_from_document, build_blocks_for_source_with_cache_policy,
+            block_records_from_document, build_blocks_for_source_with_cache_policy_and_visual_seen,
             canonical_needs_visual_backfill_for_config, is_visual_candidate_path, replace_blocks,
             replace_blocks_for_source, resolve_visual_index_config, upsert_blocks_for_documents,
             visual_backfill_candidate_unit_ids, visual_document_blocks_missing,
@@ -27,7 +27,7 @@ use crate::{
         mark_indexed_now,
     },
     now_i64, now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
-    MediaAssetRecord, YoutubeVideoRecord,
+    YoutubeVideoRecord,
 };
 
 type IndexedFileRow = (String, String, i64, i64, String, String);
@@ -209,20 +209,6 @@ fn summarize_document_source(item: DocumentKnowledgeSourceRecord) -> KnowledgeCa
     }
 }
 
-fn media_asset_title(item: &MediaAssetRecord) -> String {
-    item.title
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            item.relative_path
-                .as_ref()
-                .and_then(|value| Path::new(value).file_name())
-                .and_then(|value| value.to_str())
-                .map(ToString::to_string)
-        })
-        .unwrap_or_else(|| item.id.clone())
-}
-
 fn local_visual_path(value: &str) -> Option<PathBuf> {
     crate::resolve_local_path(value)
         .filter(|path| path.exists() && path.is_file() && is_visual_candidate_path(path))
@@ -249,10 +235,6 @@ fn video_visual_paths(video: &YoutubeVideoRecord) -> Vec<PathBuf> {
     local_visual_path(&video.thumbnail_url)
         .into_iter()
         .collect()
-}
-
-fn media_asset_visual_path(asset: &MediaAssetRecord) -> Option<PathBuf> {
-    asset.absolute_path.as_deref().and_then(local_visual_path)
 }
 
 fn file_row_for_path(
@@ -618,7 +600,6 @@ fn visual_candidates_missing_from_index(
     for root in [
         knowledge_root.join("redbook"),
         knowledge_root.join("youtube"),
-        workspace_root(state)?.join("media"),
     ] {
         if visual_candidate_missing_under(&root, indexed_paths)? {
             return Ok(true);
@@ -723,18 +704,20 @@ fn rebuild_catalog_with_cache_policy(
     let mut blocks = Vec::new();
     let mut anchors = Vec::new();
     let mut canonical_rows = Vec::new();
+    let mut visual_seen_paths = HashSet::<String>::new();
 
     for note in crate::load_knowledge_notes_from_fs(&knowledge_root) {
         let note_visual_paths = note_visual_paths(&note);
         let summary = summarize_note(note);
         for path in note_visual_paths {
-            let indexed = build_blocks_for_source_with_cache_policy(
+            let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
                 state,
                 &summary.item_id,
                 &summary.title,
                 &path,
                 &summary.updated_at,
                 cache_policy,
+                &mut visual_seen_paths,
             )?;
             emit_visual_index_progress(app, &indexed.canonical_rows);
             anchors.extend(build_anchors_for_blocks(&indexed.blocks));
@@ -748,13 +731,14 @@ fn rebuild_catalog_with_cache_policy(
         let video_visual_paths = video_visual_paths(&video);
         let summary = summarize_video(video);
         for path in video_visual_paths {
-            let indexed = build_blocks_for_source_with_cache_policy(
+            let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
                 state,
                 &summary.item_id,
                 &summary.title,
                 &path,
                 &summary.updated_at,
                 cache_policy,
+                &mut visual_seen_paths,
             )?;
             emit_visual_index_progress(app, &indexed.canonical_rows);
             anchors.extend(build_anchors_for_blocks(&indexed.blocks));
@@ -767,13 +751,14 @@ fn rebuild_catalog_with_cache_policy(
     for source in crate::load_document_sources_from_fs(&knowledge_root) {
         let root_path = PathBuf::from(&source.root_path);
         if root_path.exists() {
-            let indexed = build_blocks_for_source_with_cache_policy(
+            let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
                 state,
                 &source.id,
                 &source.name,
                 &root_path,
                 &source.updated_at,
                 cache_policy,
+                &mut visual_seen_paths,
             )?;
             emit_visual_index_progress(app, &indexed.canonical_rows);
             anchors.extend(build_anchors_for_blocks(&indexed.blocks));
@@ -790,31 +775,14 @@ fn rebuild_catalog_with_cache_policy(
         if !root_path.exists() {
             continue;
         }
-        let indexed = build_blocks_for_source_with_cache_policy(
+        let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
             state,
             &advisor_source_id(&advisor.id),
             &advisor.name,
             &root_path,
             &now_iso(),
             cache_policy,
-        )?;
-        emit_visual_index_progress(app, &indexed.canonical_rows);
-        anchors.extend(build_anchors_for_blocks(&indexed.blocks));
-        blocks.extend(indexed.blocks);
-        canonical_rows.extend(indexed.canonical_rows);
-    }
-    let media_assets = crate::with_store(state, |store| Ok(store.media_assets.clone()))?;
-    for asset in media_assets {
-        let Some(path) = media_asset_visual_path(&asset) else {
-            continue;
-        };
-        let indexed = build_blocks_for_source_with_cache_policy(
-            state,
-            &format!("media:{}", asset.id),
-            &media_asset_title(&asset),
-            &path,
-            &asset.updated_at,
-            cache_policy,
+            &mut visual_seen_paths,
         )?;
         emit_visual_index_progress(app, &indexed.canonical_rows);
         anchors.extend(build_anchors_for_blocks(&indexed.blocks));
