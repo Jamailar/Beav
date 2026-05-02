@@ -2676,7 +2676,7 @@ export function ToolsSettingsSection({
             return 'wander';
         }
         if (runtimeMode === 'chatroom' || contextType === 'chatroom' || session.id.startsWith('chatroom:')) {
-            return 'chatroom';
+            return 'team';
         }
         if (runtimeMode === 'video-editor') {
             return 'video';
@@ -4071,7 +4071,7 @@ export function ToolsSettingsSection({
                                             className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
                                         >
                                             <option value="diagnostics">diagnostics</option>
-                                            <option value="chatroom">chatroom</option>
+                                            <option value="chatroom">team</option>
                                             <option value="knowledge">knowledge</option>
                                             <option value="advisor-discussion">advisor-discussion</option>
                                             <option value="redclaw">redclaw</option>
@@ -4370,7 +4370,7 @@ export function ToolsSettingsSection({
                                     >
                                         <option value="redclaw">redclaw</option>
                                         <option value="knowledge">knowledge</option>
-                                        <option value="chatroom">chatroom</option>
+                                        <option value="chatroom">team</option>
                                         <option value="advisor-discussion">advisor-discussion</option>
                                         <option value="background-maintenance">background-maintenance</option>
                                         <option value="diagnostics">diagnostics</option>
@@ -4814,7 +4814,7 @@ export function ToolsSettingsSection({
                                         type="text"
                                         value={runtimeSessionQuery}
                                         onChange={(event) => setRuntimeSessionQuery(event.target.value)}
-                                        placeholder="搜索 session / wander / chatroom / video..."
+                                        placeholder="搜索 session / wander / team / video..."
                                         className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
                                     />
                                     {filteredRuntimeSessions.length === 0 ? (

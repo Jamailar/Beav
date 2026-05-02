@@ -5338,7 +5338,7 @@ export function Settings({
                       {showScopedModelOverrides && (
                         <div className="px-3 pb-3 space-y-3 border-t border-border/70">
                           <p className="text-[11px] text-text-tertiary pt-3">
-                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、群聊、知识库、RedClaw。
+                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、Team、知识库、RedClaw。
                           </p>
                           <datalist id="scoped-model-candidates">
                             {allConfiguredModels.map((modelId) => (
@@ -5358,7 +5358,7 @@ export function Settings({
                               />
                             </div>
                             <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">群聊默认模型</label>
+                              <label className="text-[11px] text-text-secondary">Team 默认模型</label>
                               <input
                                 type="text"
                                 list="scoped-model-candidates"
