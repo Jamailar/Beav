@@ -556,6 +556,97 @@ pub fn update_collab_session_status(
     Ok(session.clone())
 }
 
+pub fn set_collab_session_coordinator(
+    store: &mut AppStore,
+    payload: &Value,
+) -> Result<CollabSessionRecord, String> {
+    let session_id =
+        value_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
+    let member_id = value_string(payload, "memberId").ok_or_else(|| "缺少 memberId".to_string())?;
+    validate_member(store, &session_id, &member_id)?;
+    let now = now_i64();
+    let session = store
+        .collab_sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+        .ok_or_else(|| "协作会话不存在".to_string())?;
+    session.coordinator_member_id = Some(member_id);
+    session.updated_at = now;
+    Ok(session.clone())
+}
+
+pub fn ensure_collab_session_coordinator(
+    store: &mut AppStore,
+    session_id: &str,
+) -> Result<(CollabSessionRecord, CollabMemberRecord, bool), String> {
+    validate_session(store, session_id)?;
+
+    if let Some(coordinator_id) = store
+        .collab_sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .and_then(|session| session.coordinator_member_id.clone())
+    {
+        if let Some(member) = store
+            .collab_members
+            .iter()
+            .find(|member| member.session_id == session_id && member.id == coordinator_id)
+            .cloned()
+        {
+            let session = store
+                .collab_sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .cloned()
+                .ok_or_else(|| "协作会话不存在".to_string())?;
+            return Ok((session, member, false));
+        }
+    }
+
+    if let Some(member) = store
+        .collab_members
+        .iter()
+        .find(|member| {
+            member.session_id == session_id
+                && matches!(
+                    member.role_id.trim().to_ascii_lowercase().as_str(),
+                    "leader" | "coordinator" | "director"
+                )
+        })
+        .cloned()
+    {
+        let session = set_collab_session_coordinator(
+            store,
+            &json!({ "sessionId": session_id, "memberId": member.id }),
+        )?;
+        return Ok((session, member, false));
+    }
+
+    let member = add_collab_member(
+        store,
+        &json!({
+            "sessionId": session_id,
+            "displayName": "总监",
+            "roleId": "leader",
+            "sourceKind": "team_coordinator",
+            "backend": "redbox-runtime",
+            "adapterKind": "internal",
+            "status": "idle",
+            "capabilities": ["coordination", "task_dispatch", "progress_reporting", "user_entry"],
+            "metadata": {
+                "systemRole": "team_director",
+                "pinnedFirst": true,
+                "userEntry": true
+            }
+        }),
+    )?;
+    let session = set_collab_session_coordinator(
+        store,
+        &json!({ "sessionId": session_id, "memberId": member.id }),
+    )?;
+    Ok((session, member, true))
+}
+
 pub fn list_collab_members(store: &AppStore, session_id: &str) -> Vec<CollabMemberRecord> {
     let mut members: Vec<CollabMemberRecord> = store
         .collab_members

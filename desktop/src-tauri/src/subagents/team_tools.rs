@@ -3,8 +3,9 @@ use serde_json::{json, Value};
 
 use crate::runtime::{
     add_collab_member, attach_collab_artifact, collab_session_snapshot, create_collab_session,
-    list_collab_members, list_collab_reports, list_collab_sessions, match_collab_members_for_task,
-    raise_collab_blocker, rename_collab_member, shutdown_collab_member,
+    ensure_collab_session_coordinator, list_collab_members, list_collab_reports,
+    list_collab_sessions, match_collab_members_for_task, raise_collab_blocker,
+    rename_collab_member, shutdown_collab_member,
 };
 use crate::subagents::{
     team_mailbox_cleanup, team_mailbox_history, team_mailbox_read, team_mailbox_request_report,
@@ -111,7 +112,11 @@ pub fn execute_team_tool(
     payload: &Value,
 ) -> Result<Value, String> {
     match action {
-        "team.session.create" => Ok(json!(create_collab_session(store, payload)?)),
+        "team.session.create" => {
+            let session = create_collab_session(store, payload)?;
+            let (session, _, _) = ensure_collab_session_coordinator(store, &session.id)?;
+            Ok(json!(session))
+        }
         "team.session.get" => {
             let session_id =
                 payload_string(payload, "sessionId").ok_or_else(|| "缺少 sessionId".to_string())?;
