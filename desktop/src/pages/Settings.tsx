@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -70,6 +70,8 @@ import type {
   DiagnosticsLogStatus,
   DiagnosticsPendingReport,
   NotificationSettingsPayload,
+  ThrivePluginMarketplaceItem,
+  ThrivePluginSummary,
 } from '../types';
 import {
   REDBOX_OFFICIAL_VIDEO_BASE_URL,
@@ -618,7 +620,7 @@ function normalizeCliRuntimeEnvironmentRecord(value: unknown): CliRuntimeEnviron
 }
 
 function runtimePerfContextTypeForMode(mode: RuntimePerfBenchmarkMode): string {
-  if (mode === 'chatroom') return 'chatroom';
+  if (mode === 'team') return 'team';
   if (mode === 'diagnostics') return 'diagnostics';
   return mode;
 }
@@ -685,11 +687,13 @@ export function Settings({
   onOpenRedClawOnboarding,
   redclawOnboardingVersion = 0,
   navigationTarget,
+  onReturn,
 }: {
   isActive?: boolean;
   onOpenRedClawOnboarding?: () => void;
   redclawOnboardingVersion?: number;
   navigationTarget?: SettingsNavigationTarget | null;
+  onReturn?: () => void;
 }) {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -820,7 +824,7 @@ export function Settings({
   const [selectedBackgroundTaskId, setSelectedBackgroundTaskId] = useState('');
   const [selectedBackgroundTaskDetail, setSelectedBackgroundTaskDetail] = useState<BackgroundTaskItem | null>(null);
   const [runtimeDraftInput, setRuntimeDraftInput] = useState('');
-  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
+  const [runtimeDraftMode, setRuntimeDraftMode] = useState<'redclaw' | 'knowledge' | 'team' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>('redclaw');
   const [isRuntimeLoading, setIsRuntimeLoading] = useState(false);
   const [isRuntimeTraceLoading, setIsRuntimeTraceLoading] = useState(false);
   const [isRuntimeSessionLoading, setIsRuntimeSessionLoading] = useState(false);
@@ -1368,19 +1372,12 @@ export function Settings({
   }, []);
 
   // Tools State
-  const [ytdlpStatus, setYtdlpStatus] = useState<{ installed: boolean; version?: string; path?: string } | null>(null);
-  const [isInstallingTool, setIsInstallingTool] = useState(false);
-  const [installProgress, setInstallProgress] = useState(0);
-  const [browserPluginStatus, setBrowserPluginStatus] = useState<{
-    success: boolean;
-    bundled: boolean;
-    exportPath: string;
-    pluginPath?: string;
-    exported: boolean;
-    bundledPath?: string;
-    error?: string;
-  } | null>(null);
-  const [isPreparingBrowserPlugin, setIsPreparingBrowserPlugin] = useState(false);
+  const [thrivePlugins, setThrivePlugins] = useState<ThrivePluginSummary[]>([]);
+  const [thrivePluginMarketplace, setThrivePluginMarketplace] = useState<ThrivePluginMarketplaceItem[]>([]);
+  const [thrivePluginMarketplaceLoading, setThrivePluginMarketplaceLoading] = useState(false);
+  const [thrivePluginsLoading, setThrivePluginsLoading] = useState(false);
+  const [thrivePluginBusyId, setThrivePluginBusyId] = useState('');
+  const [thrivePluginStatusMessage, setThrivePluginStatusMessage] = useState('');
   const [cliRuntimeTools, setCliRuntimeTools] = useState<CliRuntimeToolRecord[]>([]);
   const [cliRuntimeEnvironments, setCliRuntimeEnvironments] = useState<CliRuntimeEnvironmentRecord[]>([]);
   const [cliRuntimeInstallDraft, setCliRuntimeInstallDraft] = useState<{
@@ -3691,15 +3688,6 @@ export function Settings({
     return () => window.clearTimeout(timer);
   }, [expireDeveloperMode, formData.developer_mode_enabled, formData.developer_mode_unlocked_at]);
 
-  const checkTools = useCallback(async () => {
-    try {
-      const status = await window.ipcRenderer.checkYtdlp();
-      setYtdlpStatus(status);
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
   const upsertCliRuntimeInstallQueueItem = useCallback((item: CliRuntimeInstallQueueItem) => {
     setCliRuntimeInstallQueue((prev) => {
       const next = prev.filter((entry) => entry.installId !== item.installId);
@@ -4003,21 +3991,115 @@ export function Settings({
     },
   }), [loadCliRuntimeDashboard, upsertCliRuntimeInstallQueueItem]);
 
-  const loadBrowserPluginStatus = useCallback(async () => {
+  const loadThrivePlugins = useCallback(async () => {
+    setThrivePluginsLoading(true);
     try {
-      const status = await window.ipcRenderer.browserPlugin.getStatus();
-      setBrowserPluginStatus(status);
+      const result = await window.ipcRenderer.plugins.list();
+      setThrivePlugins(Array.isArray(result.plugins) ? result.plugins : []);
+      setThrivePluginStatusMessage(result.success === false && result.error ? result.error : '');
     } catch (error) {
-      console.error('Failed to load browser plugin status', error);
-      setBrowserPluginStatus({
-        success: false,
-        bundled: false,
-        exportPath: '',
-        pluginPath: '',
-        exported: false,
-        bundledPath: '',
-        error: String(error),
+      console.error('Failed to load Thrive plugins', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginsLoading(false);
+    }
+  }, []);
+
+  const loadThrivePluginMarketplace = useCallback(async () => {
+    setThrivePluginMarketplaceLoading(true);
+    try {
+      const result = await window.ipcRenderer.plugins.marketplace();
+      if (result.success === false) {
+        throw new Error(result.error || '插件市场加载失败');
+      }
+      setThrivePluginMarketplace(Array.isArray(result.plugins) ? result.plugins : []);
+      setThrivePluginStatusMessage('');
+    } catch (error) {
+      console.error('Failed to load Thrive plugin marketplace', error);
+      setThrivePluginMarketplace([]);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginMarketplaceLoading(false);
+    }
+  }, []);
+
+  const handleInstallThriveMarketplacePlugin = useCallback(async (plugin: ThrivePluginMarketplaceItem) => {
+    setThrivePluginBusyId(plugin.installedPluginId || plugin.id);
+    setThrivePluginStatusMessage(`正在安装 ${plugin.displayName || plugin.name}`);
+    try {
+      const result = await window.ipcRenderer.plugins.installMarketplace({
+        id: plugin.id,
+        repo: plugin.repo,
+        version: plugin.version || undefined,
+        packageUrl: plugin.packageUrl || undefined,
       });
+      if (result.success === false) {
+        throw new Error(result.error || '插件安装失败');
+      }
+      setThrivePluginStatusMessage(result.plugin ? `已安装 ${result.plugin.displayName}` : '插件已安装');
+      await Promise.all([
+        loadThrivePlugins(),
+        loadThrivePluginMarketplace(),
+      ]);
+    } catch (error) {
+      console.error('Failed to install Thrive marketplace plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePluginMarketplace, loadThrivePlugins]);
+
+  const handleToggleThrivePlugin = useCallback(async (plugin: ThrivePluginSummary) => {
+    setThrivePluginBusyId(plugin.id);
+    setThrivePluginStatusMessage(plugin.enabled ? `正在停用 ${plugin.displayName}` : `正在启用 ${plugin.displayName}`);
+    try {
+      const result = await window.ipcRenderer.plugins.setEnabled({
+        pluginId: plugin.id,
+        enabled: !plugin.enabled,
+      });
+      if (result.success === false) {
+        throw new Error(result.error || '插件状态更新失败');
+      }
+      setThrivePluginStatusMessage(result.plugin ? `${result.plugin.displayName} 已${result.plugin.enabled ? '启用' : '停用'}` : '插件状态已更新');
+      await loadThrivePlugins();
+    } catch (error) {
+      console.error('Failed to toggle Thrive plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePlugins]);
+
+  const handleUninstallThrivePlugin = useCallback(async (plugin: ThrivePluginSummary) => {
+    const confirmed = await appConfirm(`卸载 Thrive 插件“${plugin.displayName}”？\n\n插件缓存会被删除，插件数据目录会保留。`);
+    if (!confirmed) return;
+    setThrivePluginBusyId(plugin.id);
+    setThrivePluginStatusMessage(`正在卸载 ${plugin.displayName}`);
+    try {
+      const result = await window.ipcRenderer.plugins.uninstall({ pluginId: plugin.id });
+      if (result.success === false) {
+        throw new Error(result.error || '插件卸载失败');
+      }
+      setThrivePluginStatusMessage(`${plugin.displayName} 已卸载`);
+      await loadThrivePlugins();
+    } catch (error) {
+      console.error('Failed to uninstall Thrive plugin', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThrivePluginBusyId('');
+    }
+  }, [loadThrivePlugins]);
+
+  const handleOpenThrivePluginDataDir = useCallback(async (pluginId?: string) => {
+    try {
+      const result = await window.ipcRenderer.plugins.openDataDir(pluginId ? { pluginId } : {});
+      if (result.success === false) {
+        throw new Error(result.error || '打开插件数据目录失败');
+      }
+      setThrivePluginStatusMessage(result.path ? `已打开 ${result.path}` : '已打开插件数据目录');
+    } catch (error) {
+      console.error('Failed to open Thrive plugin data dir', error);
+      setThrivePluginStatusMessage(error instanceof Error ? error.message : String(error));
     }
   }, []);
 
@@ -4533,9 +4615,8 @@ export function Settings({
         await loadTeamAdvisors();
       } else if (tab === 'tools') {
         await Promise.all([
-          checkTools(),
           loadCliRuntimeDashboard({ silent: true }),
-          loadBrowserPluginStatus(),
+          loadThrivePlugins(),
           loadMcpRuntimeData(),
         ]);
         if (formData.developer_mode_enabled) {
@@ -4559,7 +4640,6 @@ export function Settings({
   }, [
     OfficialAiPanelComponent,
     aiModelSubTab,
-    checkTools,
     formData.developer_mode_enabled,
     isActive,
     loadRedclawProfileBundle,
@@ -4567,7 +4647,7 @@ export function Settings({
     loadAppVersion,
     loadBackgroundTasks,
     loadBackgroundWorkerPool,
-    loadBrowserPluginStatus,
+    loadThrivePlugins,
     loadFileIndexDashboard,
     loadLoggingStatus,
     loadMcpRuntimeData,
@@ -4581,16 +4661,6 @@ export function Settings({
     loadToolDiagnostics,
     officialAiPanelEnabled,
   ]);
-
-  useEffect(() => {
-    const handleProgress = (_: unknown, progress: number) => {
-      setInstallProgress(progress);
-    };
-    window.ipcRenderer.on('youtube:install-progress', handleProgress);
-    return () => {
-      window.ipcRenderer.off('youtube:install-progress', handleProgress);
-    };
-  }, []);
 
   useEffect(() => {
     if (settingsActivationTimerRef.current != null) {
@@ -4788,73 +4858,6 @@ export function Settings({
     runtimeTasks.length,
     scheduleRemoteTabWarmup,
   ]);
-
-  const handleInstallYtdlp = async () => {
-    setIsInstallingTool(true);
-    setInstallProgress(0);
-    try {
-      const res = await window.ipcRenderer.installYtdlp();
-      if (res.success) {
-        await checkTools();
-        void appAlert('安装成功！');
-      } else {
-        void appAlert('安装失败: ' + res.error);
-      }
-    } catch (e) {
-      void appAlert('安装出错');
-    } finally {
-      setIsInstallingTool(false);
-    }
-  };
-
-  const handleUpdateYtdlp = async () => {
-    setIsInstallingTool(true);
-    try {
-      const res = await window.ipcRenderer.updateYtdlp();
-      if (res.success) {
-        await checkTools();
-        void appAlert('更新成功！');
-      } else {
-        void appAlert('更新失败: ' + res.error);
-      }
-    } catch (e) {
-      void appAlert('更新出错');
-    } finally {
-      setIsInstallingTool(false);
-    }
-  };
-
-  const handlePrepareBrowserPlugin = async () => {
-    setIsPreparingBrowserPlugin(true);
-    try {
-      const result = await window.ipcRenderer.browserPlugin.prepare();
-      if (!result.success) {
-        void appAlert(`插件准备失败：${result.error || '未知错误'}`);
-        return;
-      }
-      await loadBrowserPluginStatus();
-      void appAlert(`插件已同步到最新内置版本。\n\n外层目录：${result.path}\n插件目录：${result.pluginPath || '未返回'}\n\n下一步请打开 Chrome / Edge 扩展管理页，开启开发者模式后，将里面的“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该插件文件夹。`);
-    } catch (error) {
-      console.error('Failed to prepare browser plugin', error);
-      void appAlert(`插件准备失败：${String(error)}`);
-    } finally {
-      setIsPreparingBrowserPlugin(false);
-    }
-  };
-
-  const handleOpenBrowserPluginDir = async () => {
-    try {
-      const result = await window.ipcRenderer.browserPlugin.openDir();
-      if (!result.success) {
-        void appAlert(`打开插件目录失败：${result.error || '未知错误'}`);
-        return;
-      }
-      await loadBrowserPluginStatus();
-    } catch (error) {
-      console.error('Failed to open browser plugin dir', error);
-      void appAlert(`打开插件目录失败：${String(error)}`);
-    }
-  };
 
   const handleOpenKnowledgeApiGuide = async () => {
     try {
@@ -5141,21 +5144,33 @@ export function Settings({
       {/* Sidebar */}
       <div className="w-48 border-r border-border pt-6 pb-4 flex flex-col gap-1 px-3 bg-surface-secondary/20">
         <h1 className="px-3 mb-4 text-xs font-bold text-text-tertiary uppercase tracking-wider">{t('settings.title')}</h1>
-        {tabs.map(tab => (
+        <div className="flex flex-1 flex-col gap-1 min-h-0">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setActiveTab(tab.id);
+              }}
+              className={clsx(
+                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                activeTab === tab.id ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:bg-surface-secondary/50 hover:text-text-primary"
+              )}
+            >
+              <tab.icon className="w-4 h-4" />
+              {t(tab.labelKey)}
+            </button>
+          ))}
+        </div>
+        {onReturn && (
           <button
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id);
-            }}
-            className={clsx(
-              "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-              activeTab === tab.id ? "bg-surface-secondary text-text-primary" : "text-text-secondary hover:bg-surface-secondary/50 hover:text-text-primary"
-            )}
+            type="button"
+            onClick={onReturn}
+            className="mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-secondary/50 hover:text-text-primary"
           >
-            <tab.icon className="w-4 h-4" />
-            {t(tab.labelKey)}
+            <ArrowLeft className="h-4 w-4" />
+            返回
           </button>
-        ))}
+        )}
       </div>
 
       {/* Content */}
@@ -6299,15 +6314,18 @@ export function Settings({
                 handleTestMcpServer={handleTestMcpServer}
                 mcpTestingId={mcpTestingId}
                 mcpInspectingId={mcpInspectingId}
-                ytdlpStatus={ytdlpStatus}
-                handleInstallYtdlp={handleInstallYtdlp}
-                handleUpdateYtdlp={handleUpdateYtdlp}
-                browserPluginStatus={browserPluginStatus}
-                isPreparingBrowserPlugin={isPreparingBrowserPlugin}
-                handlePrepareBrowserPlugin={handlePrepareBrowserPlugin}
-                handleOpenBrowserPluginDir={handleOpenBrowserPluginDir}
-                isInstallingTool={isInstallingTool}
-                installProgress={installProgress}
+                thrivePlugins={thrivePlugins}
+                thrivePluginMarketplace={thrivePluginMarketplace}
+                thrivePluginMarketplaceLoading={thrivePluginMarketplaceLoading}
+                thrivePluginsLoading={thrivePluginsLoading}
+                thrivePluginBusyId={thrivePluginBusyId}
+                thrivePluginStatusMessage={thrivePluginStatusMessage}
+                handleRefreshThrivePlugins={loadThrivePlugins}
+                handleRefreshThrivePluginMarketplace={loadThrivePluginMarketplace}
+                handleInstallThriveMarketplacePlugin={handleInstallThriveMarketplacePlugin}
+                handleToggleThrivePlugin={handleToggleThrivePlugin}
+                handleUninstallThrivePlugin={handleUninstallThrivePlugin}
+                handleOpenThrivePluginDataDir={handleOpenThrivePluginDataDir}
                 showDeveloperDiagnostics={Boolean(formData.developer_mode_enabled)}
                 toolDiagnostics={toolDiagnostics}
                 toolDiagnosticResults={toolDiagnosticResults}

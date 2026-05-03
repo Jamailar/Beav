@@ -414,20 +414,34 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as' || channel === 'file:preview-resolve') {
     return { success: false, error: `RedBox file action failed for "${channel}": ${message}` };
   }
-  if (channel === 'youtube:check-ytdlp') {
-    return { success: false, installed: false, error: `RedBox yt-dlp check failed: ${message}` };
-  }
-  if (channel === 'youtube:install' || channel === 'youtube:update') {
-    return { success: false, error: `RedBox yt-dlp action failed: ${message}` };
-  }
-  if (channel === 'plugin:browser-extension-status') {
+  if (channel === 'plugins:list') {
     return {
       success: true,
-      bundled: false,
-      exported: false,
-      exportPath: '',
-      bundledPath: '',
+      schemaVersion: 1,
+      root: '',
+      plugins: [],
     };
+  }
+  if (channel === 'plugins:marketplace') {
+    return {
+      success: true,
+      registryUrl: '',
+      plugins: [],
+    };
+  }
+  if (
+    channel === 'plugins:install'
+    || channel === 'plugins:install-marketplace'
+    || channel === 'plugins:set-enabled'
+    || channel === 'plugins:uninstall'
+    || channel === 'plugins:open-data-dir'
+    || channel === 'plugins:sync-capabilities'
+    || channel === 'plugins:read-data'
+  ) {
+    return { success: false, error: `Thrive plugin action failed for "${channel}": ${message}` };
+  }
+  if (channel === 'plugins:home') {
+    return { success: true, widgets: [], sidebarSections: [], quickActions: [] };
   }
   if (channel === 'cli-runtime:detect') {
     return {
@@ -1159,10 +1173,20 @@ function createIpcRenderer() {
       cancelRecording: () => invokeChannel('audio:cancel-recording'),
       openMicrophoneSettings: () => invokeChannel('audio:open-microphone-settings'),
     },
-    browserPlugin: {
-      getStatus: () => invokeChannel('plugin:browser-extension-status'),
-      prepare: () => invokeChannel('plugin:prepare-browser-extension'),
-      openDir: () => invokeChannel('plugin:open-browser-extension-dir')
+    plugins: {
+      list: () => invokeChannel('plugins:list'),
+      marketplace: (payload?: { url?: string }) => invokeChannel('plugins:marketplace', payload || {}),
+      install: (payload: { path: string }) => invokeChannel('plugins:install', payload),
+      installMarketplace: (payload: { id?: string; repo: string; version?: string; packageUrl?: string }) =>
+        invokeChannel('plugins:install-marketplace', payload),
+      setEnabled: (payload: { pluginId: string; enabled: boolean }) =>
+        invokeChannel('plugins:set-enabled', payload),
+      uninstall: (payload: { pluginId: string }) => invokeChannel('plugins:uninstall', payload),
+      openDataDir: (payload?: { pluginId?: string }) => invokeChannel('plugins:open-data-dir', payload || {}),
+      syncCapabilities: () => invokeChannel('plugins:sync-capabilities'),
+      readData: (payload: { pluginId: string; source: string; limit?: number; kind?: string; query?: string }) =>
+        invokeChannel('plugins:read-data', payload),
+      home: () => invokeChannel('plugins:home'),
     },
     fetchModels: (config: unknown) => invokeChannel('ai:fetch-models', config),
     aiRoles: {
@@ -1329,9 +1353,6 @@ function createIpcRenderer() {
         ? getCurrentWindow().startDragging()
         : Promise.resolve(),
     },
-    checkYtdlp: () => invokeChannel('youtube:check-ytdlp'),
-    installYtdlp: () => invokeChannel('youtube:install'),
-    updateYtdlp: () => invokeChannel('youtube:update'),
     fetchYoutubeInfo: (channelUrl: string) => invokeChannel('advisors:fetch-youtube-info', { channelUrl }),
     downloadYoutubeSubtitles: (params: Record<string, unknown>) => invokeChannel('advisors:download-youtube-subtitles', params),
     readYoutubeSubtitle: (videoId: string) => invokeChannel('knowledge:read-youtube-subtitle', videoId),

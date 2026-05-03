@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 pub fn mcp_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
+    let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
     let servers = with_store(state, |store| Ok(store.mcp_servers.clone()))?;
     let sessions = state.mcp_manager.sessions()?;
     let items = servers

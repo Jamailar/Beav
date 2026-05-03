@@ -85,6 +85,7 @@ pub fn handle_skills_ai_channel(
     Some((|| -> Result<Value, String> {
         match channel {
             "skills:list" => {
+                let _ = crate::commands::plugin::sync_enabled_thrive_plugin_capabilities(state);
                 let _ = refresh_skill_store_catalog(state);
                 let include_body = payload
                     .get("includeBody")
