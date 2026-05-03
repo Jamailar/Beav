@@ -48,6 +48,47 @@ fn windows_executable_candidates(command: &str) -> Vec<String> {
     items
 }
 
+#[cfg(windows)]
+fn windows_path_exts() -> Vec<String> {
+    std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
+        .split(';')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(|item| item.trim_start_matches('.').to_ascii_lowercase())
+        .collect()
+}
+
+#[cfg(windows)]
+fn windows_discovered_command_name(path: &Path) -> Option<String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())?;
+    if !windows_path_exts().iter().any(|item| item == &extension) {
+        return None;
+    }
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+#[cfg(not(windows))]
+fn discovered_command_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+#[cfg(windows)]
+fn discovered_command_name(path: &Path) -> Option<String> {
+    windows_discovered_command_name(path)
+}
+
 fn current_default_detect_commands() -> Vec<String> {
     default_detect_commands()
 }
@@ -477,21 +518,7 @@ pub fn detect_many(commands: &[String], env: &BTreeMap<String, String>) -> Vec<C
 }
 
 pub fn default_detect_commands() -> Vec<String> {
-    vec![
-        "node".to_string(),
-        "npm".to_string(),
-        "pnpm".to_string(),
-        "python3".to_string(),
-        "python".to_string(),
-        "uv".to_string(),
-        "cargo".to_string(),
-        "go".to_string(),
-        "git".to_string(),
-        "ffmpeg".to_string(),
-        "gh".to_string(),
-        "wrangler".to_string(),
-        "supabase".to_string(),
-    ]
+    Vec::new()
 }
 
 pub fn discover_all_commands(
@@ -518,12 +545,7 @@ pub fn discover_all_commands(
             if !is_executable_file(&path) {
                 continue;
             }
-            let Some(name) = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
+            let Some(name) = discovered_command_name(&path) else {
                 continue;
             };
             if let Some(query) = normalized_query.as_deref() {
@@ -531,14 +553,14 @@ pub fn discover_all_commands(
                     continue;
                 }
             }
-            if !seen.insert(name.to_string()) {
+            if !seen.insert(name.clone()) {
                 continue;
             }
             let resolved_from = path_entry_origin(root, &extra_paths, &[]);
             discovered.push(CliToolRecord {
-                id: normalize_tool_id(name),
-                name: name.to_string(),
-                executable: name.to_string(),
+                id: normalize_tool_id(&name),
+                name: name.clone(),
+                executable: name.clone(),
                 resolved_path: Some(path.to_string_lossy().to_string()),
                 resolved_from: Some(resolved_from),
                 environment_id: None,
@@ -551,7 +573,7 @@ pub fn discover_all_commands(
                 last_checked_at: Some(now_i64()),
                 effective_path_preview: preview_path_entries(&path_entries, 12),
                 searched_path_entries_count: Some(path_entries.len()),
-                is_in_default_detect_catalog: default_catalog.iter().any(|item| item == name),
+                is_in_default_detect_catalog: default_catalog.iter().any(|item| item == &name),
                 metadata: Some(json!({
                     "discoveredBy": "path-enumeration",
                     "versionProbeSucceeded": false,
@@ -597,11 +619,11 @@ mod tests {
     }
 
     #[test]
-    fn detect_tool_marks_default_catalog_membership() {
+    fn detect_tool_does_not_mark_hardcoded_default_catalog_membership() {
         let env = BTreeMap::new();
-        let ready = detect_tool_with_managed_paths("git", &env, None, false);
+        let git = detect_tool_with_managed_paths("git", &env, None, false);
         let unknown = detect_tool_with_managed_paths("lark-cli", &env, None, false);
-        assert!(ready.is_in_default_detect_catalog);
+        assert!(!git.is_in_default_detect_catalog);
         assert!(!unknown.is_in_default_detect_catalog);
     }
 

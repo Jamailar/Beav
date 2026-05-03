@@ -193,6 +193,14 @@ pub fn discover_extra_bin_paths_with_env(env: &BTreeMap<String, String>) -> Vec<
     #[cfg(target_os = "windows")]
     {
         items.push(PathBuf::from(r"C:\Windows\System32"));
+        if let Some(program_data) = env
+            .get("ProgramData")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            items.push(program_data.join("chocolatey").join("bin"));
+            items.push(program_data.join("scoop").join("shims"));
+        }
     }
 
     if let Some(home) = home_dir() {
@@ -202,6 +210,25 @@ pub fn discover_extra_bin_paths_with_env(env: &BTreeMap<String, String>) -> Vec<
         items.push(home.join(".bun").join("bin"));
         items.push(home.join(".deno").join("bin"));
         items.push(home.join("go").join("bin"));
+        #[cfg(target_os = "windows")]
+        {
+            items.push(home.join("scoop").join("shims"));
+            items.push(home.join("AppData").join("Roaming").join("npm"));
+            items.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Microsoft")
+                    .join("WindowsApps"),
+            );
+            items.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Programs")
+                    .join("Git")
+                    .join("cmd"),
+            );
+            items.push(home.join("AppData").join("Local").join("pnpm"));
+        }
         if let Some(nvm_dir) = env
             .get("NVM_BIN")
             .filter(|value| !value.trim().is_empty())
@@ -235,6 +262,26 @@ pub fn discover_extra_bin_paths_with_env(env: &BTreeMap<String, String>) -> Vec<
             items.push(fnm_multishell.join("bin"));
         }
         items.push(home.join(".asdf").join("shims"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = env
+            .get("APPDATA")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            items.push(appdata.join("npm"));
+        }
+        if let Some(local_appdata) = env
+            .get("LOCALAPPDATA")
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+        {
+            items.push(local_appdata.join("Microsoft").join("WindowsApps"));
+            items.push(local_appdata.join("pnpm"));
+            items.push(local_appdata.join("Programs").join("Git").join("cmd"));
+        }
     }
 
     let mut deduped = Vec::<String>::new();
