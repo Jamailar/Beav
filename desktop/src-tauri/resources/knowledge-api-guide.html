@@ -832,8 +832,8 @@
               <div class="eyebrow">RedBox Knowledge Import Guide</div>
               <h1>知识库导入指南</h1>
               <p>
-              RedBox 当前支持两种知识库导入方式：浏览器插件导入，以及本地 HTTP API 导入。
-              浏览器插件适合在网页里直接采集；API 适合你自己的脚本、自动化和第三方应用。下面这份页面只保留当前真实可用的插件能力和接口格式。
+              RedBox 当前保留本地 HTTP API 导入，适合你自己的脚本、自动化和第三方应用接入。
+              下面这份页面只保留当前真实可用的接口格式。
               </p>
             </div>
           <div class="hero-actions">
@@ -848,52 +848,7 @@
           <details class="module">
             <summary class="module-summary">
               <div class="module-title-wrap">
-                <span class="module-kicker">方式 1</span>
-                <h2 class="module-title">插件导入</h2>
-                <p class="module-desc">在浏览器里看到内容时，直接导入到 RedBox 当前活动空间。</p>
-              </div>
-              <div class="module-meta">
-                <span>默认折叠</span>
-                <span class="module-chevron" aria-hidden="true"></span>
-              </div>
-            </summary>
-            <div class="module-body">
-              <div class="micro-note">
-                插件会自动探测本地 Knowledge API，无需手动填地址。当前支持小红书图文 / 视频 / 文章、抖音视频、YouTube 视频、网页链接 / 文章、选中文字，以及网页图片导入素材库。
-              </div>
-              <div class="step-list" id="plugin-install-steps">
-                <div class="step-row">
-                  <span class="step-index">1</span>
-                  <div>打开 RedBox，进入 设置 → 工具，点击“一键准备插件”。</div>
-                </div>
-                <div class="step-row">
-                  <span class="step-index">2</span>
-                  <div>在 Chrome 或 Edge 打开扩展管理页，并开启开发者模式。</div>
-                </div>
-                <div class="step-row">
-                  <span class="step-index">3</span>
-                  <div>把 <code>RedBox Browser Extension</code> 文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该文件夹。</div>
-                </div>
-                <div class="step-row">
-                  <span class="step-index">4</span>
-                  <div>安装完成后，可在插件弹窗或右键菜单里执行“保存当前页面 / 保存选中文字 / 保存图片到素材库”等动作，导入结果会进入当前活动空间。</div>
-                </div>
-              </div>
-              <div class="tag-row" style="margin-top: 14px;">
-                <span class="tag">小红书图文 / 视频 / 文章</span>
-                <span class="tag">抖音视频</span>
-                <span class="tag">YouTube 视频</span>
-                <span class="tag">网页链接 / 文章</span>
-                <span class="tag">选中文字</span>
-                <span class="tag">网页图片 → 素材库</span>
-              </div>
-            </div>
-          </details>
-
-          <details class="module">
-            <summary class="module-summary">
-              <div class="module-title-wrap">
-                <span class="module-kicker">方式 2</span>
+                <span class="module-kicker">导入方式</span>
                 <h2 class="module-title">API 导入</h2>
                 <p class="module-desc">用于脚本、自动化流程或第三方工具接入。</p>
               </div>
@@ -917,7 +872,7 @@
 
               <section class="api-section">
                 <h3>服务入口</h3>
-                <p class="section-desc">浏览器插件会自动探测；你自己接 API 时直接用这个地址。</p>
+                <p class="section-desc">自建脚本、自动化和第三方工具直接使用这个地址。</p>
                   <div class="base-url">
                     <code id="base-url">http://127.0.0.1:31937/api/knowledge</code>
                     <button class="copy-btn" type="button" data-copy-target="base-url">复制地址</button>
@@ -930,8 +885,8 @@
                 <p class="section-desc">这里写的是当前真实实现，不是规划中的占位接口。</p>
                   <div class="hero-meta">
                     <div class="meta-pill">
-                      <span class="label">插件采集</span>
-                      <strong>6 类</strong>
+                      <span class="label">导入方式</span>
+                      <strong>HTTP API</strong>
                     </div>
                     <div class="meta-pill">
                       <span class="label">API Routes</span>
@@ -962,11 +917,11 @@
 
           <section class="api-section">
               <h3>Source 字段</h3>
-              <p class="section-desc">插件会自动补齐；自建调用至少建议传 `sourceLink / sourceUrl` 和 `externalId`。</p>
+              <p class="section-desc">自建调用至少建议传 `sourceLink / sourceUrl` 和 `externalId`。</p>
               <div class="mini-list">
                 <div class="mini-item">
                   <strong>source.appId / source.pluginId</strong>
-                  <p>来源标记。插件当前会自动附带；自建调用可选。</p>
+                  <p>来源标记。自建调用可选。</p>
                 </div>
                 <div class="mini-item">
                   <strong>source.externalId</strong>
@@ -982,7 +937,7 @@
                 </div>
                 <div class="mini-item">
                   <strong>source.capturedAt</strong>
-                  <p>采集时间，可选；插件当前会自动写入。</p>
+                  <p>采集时间，可选。</p>
                 </div>
               </div>
           </section>
@@ -1023,16 +978,6 @@
         updatedAt: '2026-04-21',
         baseUrl: 'http://127.0.0.1:31937/api/knowledge',
         importMethods: {
-          plugin: {
-            title: '插件导入',
-            description: '适合浏览器里直接采集内容，插件会自动探测本地 Knowledge API。',
-            steps: [
-              '在 RedBox 的 设置 → 工具 里点击“一键准备插件”。',
-              '打开 Chrome 或 Edge 的扩展管理页，并开启开发者模式。',
-              '把 `RedBox Browser Extension` 文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该文件夹。',
-              '安装完成后，可在插件弹窗或右键菜单里执行“保存当前页面 / 保存选中文字 / 保存图片到素材库”等动作，导入结果会进入当前活动空间。'
-            ]
-          },
           api: {
             title: '本地 HTTP API 导入',
             description: '适合本地脚本、自动化流程、第三方工具和你自己写的应用接入。'
@@ -1053,7 +998,7 @@
             method: 'GET',
             path: '/health',
             title: '健康检查',
-            description: '返回当前应用状态和现有内容数量。插件启动时会先探测这个接口。',
+            description: '返回当前应用状态和现有内容数量。建议自建调用在提交内容前先探测这个接口。',
             tags: ['无需请求体', '建议启动自检', '只做连通性检查'],
             examples: [
               {
@@ -1078,7 +1023,7 @@
             ],
             notes: [
               '当前健康检查只返回状态和数量，不返回 routes、limits 或 spaceId。',
-              '如果这里返回失败，插件不会继续提交 `/entries` 或 `/media-assets`。'
+              '如果这里返回失败，自建调用不应继续提交 `/entries` 或 `/media-assets`。'
             ]
           },
           {
@@ -1217,7 +1162,7 @@
               }
             ],
             notes: [
-              '当前插件实测使用的 kind：`youtube-video`、`xhs-note`、`xhs-video`、`douyin-video`、`link-article`、`wechat-article`、`webpage`、`text-note`。',
+              '当前建议使用的 kind：`youtube-video`、`xhs-note`、`xhs-video`、`douyin-video`、`link-article`、`wechat-article`、`webpage`、`text-note`。',
               '`youtube-video` 会走 YouTube 专用保存链路，建议总是传 `source.externalId` 和 `content.title`。',
               '除 YouTube 外，其它结构化 entry 会把 `text` / `description` 写为 Markdown；如果提供 `html` 会额外落盘为 `content.html`。',
               '`options` 当前核心只消费 `allowUpdate` 和 `transcribe`；其它兼容字段可传，但不会影响写入结果。'
@@ -1357,15 +1302,15 @@
           '- 默认无需额外 Token，但应用必须正在运行。',
           '- 当前所有写入都会进入活动空间，没有单独的 `spaceId` 写入接口。',
           '- 当前公开的 Knowledge API 路由只有：`GET /health`、`POST /entries`、`POST /media-assets`。',
-          '- 浏览器插件会先调用 `GET /health`，通过后再提交具体导入请求。',
+          '- 建议先调用 `GET /health`，通过后再提交具体导入请求。',
           '',
           '## Source 字段',
           '',
-          '- `source.appId` / `source.pluginId`：请求来源标记；插件会自动附带。',
+          '- `source.appId` / `source.pluginId`：请求来源标记；自建调用可选。',
           '- `source.externalId`：外部平台主键，建议始终传，用于稳定去重和更新。',
           '- `source.sourceDomain`：可不传；如果 `sourceLink` / `sourceUrl` 是合法 URL，会自动推导域名。',
           '- `source.sourceLink` / `source.sourceUrl`：当前优先使用 `sourceLink`，`sourceUrl` 保留兼容。',
-          '- `source.capturedAt`：可选；插件当前会自动附带。',
+          '- `source.capturedAt`：可选。',
           '',
           '## Entry Kinds',
           '',
