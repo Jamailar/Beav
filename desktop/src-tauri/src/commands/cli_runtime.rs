@@ -9,10 +9,10 @@ use crate::cli_runtime::{
     add_installed_tool_to_environment, approve_cli_escalation, build_cli_sandbox_spec,
     build_cli_tool_manifest, build_effective_environment, cancel_cli_execution,
     collect_cli_requested_permissions, create_task_ephemeral_environment,
-    default_cli_execution_mode, default_detect_commands, deny_cli_escalation, detect_tool,
-    detect_tool_with_shell_probe, discover_all_commands, emit_cli_escalation_resolved,
-    emit_cli_execution_status, emit_cli_install_finished, emit_cli_install_started,
-    emit_cli_verification_finished, ensure_app_global_environment, ensure_workspace_environment,
+    default_cli_execution_mode, deny_cli_escalation, detect_tool, detect_tool_with_shell_probe,
+    discover_all_commands, emit_cli_escalation_resolved, emit_cli_execution_status,
+    emit_cli_install_finished, emit_cli_install_started, emit_cli_verification_finished,
+    ensure_app_global_environment, ensure_workspace_environment,
     ensure_workspace_environment_for_active_space, execute_cli_command, find_cli_environment_by_id,
     find_cli_execution_by_id, find_cli_tool_by_command, find_cli_tool_by_id,
     find_cli_tool_manifest_by_tool_id, list_cli_environments, list_cli_tool_records,
@@ -130,12 +130,6 @@ fn to_cli_runtime_ipc_value<T: Serialize>(value: T) -> Result<Value, String> {
 
 fn list_tool_commands(state: &State<'_, AppState>) -> Result<Vec<String>, String> {
     let mut commands = BTreeSet::new();
-    for command in default_detect_commands() {
-        let trimmed = command.trim();
-        if !trimmed.is_empty() {
-            commands.insert(trimmed.to_string());
-        }
-    }
     for environment in list_cli_environments(state)? {
         for tool_id in environment.installed_tool_ids {
             let trimmed = tool_id.trim();
@@ -155,6 +149,74 @@ fn list_tool_commands(state: &State<'_, AppState>) -> Result<Vec<String>, String
         }
     }
     Ok(commands.into_iter().collect())
+}
+
+fn discover_detected_tools(
+    state: &State<'_, AppState>,
+    query: Option<&str>,
+    limit: usize,
+) -> Result<Vec<CliToolRecord>, String> {
+    let host = load_host_env();
+    let limit = limit.clamp(1, 500);
+    let mut discovered = Vec::<CliToolRecord>::new();
+    let mut seen = BTreeSet::<String>::new();
+
+    for environment in list_cli_environments(state)? {
+        let effective = build_effective_environment(&host, Some(&environment), None);
+        for mut tool in discover_all_commands(&effective.env, query, limit) {
+            let key = format!(
+                "{}:{}",
+                tool.executable,
+                tool.resolved_path.clone().unwrap_or_default()
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            tool.environment_id = Some(environment.id.clone());
+            tool.source = tool_source_for_environment(&environment);
+            tool = attach_effective_environment_metadata(tool, &host, &effective);
+            discovered.push(tool);
+            if discovered.len() >= limit {
+                return Ok(discovered);
+            }
+        }
+    }
+
+    let effective = build_effective_environment(&host, None, None);
+    for mut tool in discover_all_commands(&effective.env, query, limit) {
+        let key = format!(
+            "{}:{}",
+            tool.executable,
+            tool.resolved_path.clone().unwrap_or_default()
+        );
+        if !seen.insert(key) {
+            continue;
+        }
+        tool = attach_effective_environment_metadata(tool, &host, &effective);
+        discovered.push(tool);
+        if discovered.len() >= limit {
+            break;
+        }
+    }
+
+    for tool in &mut discovered {
+        if let Some(stored) = find_cli_tool_by_command(state, &tool.executable)? {
+            let manifest = find_cli_tool_manifest_by_tool_id(state, &stored.id)?;
+            let environment = tool.environment_id.as_deref().and_then(|environment_id| {
+                find_cli_environment_by_id(state, environment_id)
+                    .ok()
+                    .flatten()
+            });
+            *tool = merge_detected_tool_with_stored(
+                tool.clone(),
+                Some(&stored),
+                environment.as_ref(),
+                manifest.as_ref(),
+            );
+        }
+    }
+
+    Ok(discovered)
 }
 
 fn tool_source_for_environment(environment: &CliEnvironmentRecord) -> CliToolSource {
@@ -355,73 +417,14 @@ fn detect_registered_tools(
 
 fn discover_tools_value(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let request: CliDiscoverRequest = parse_cli_runtime_payload(payload)?;
-    let host = load_host_env();
     let query = request
         .query
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let limit = request.limit.unwrap_or(100).clamp(1, 500);
-    let mut discovered = Vec::<CliToolRecord>::new();
-    let mut seen = BTreeSet::<String>::new();
-    for environment in list_cli_environments(state)? {
-        let effective = build_effective_environment(&host, Some(&environment), None);
-        for mut tool in discover_all_commands(&effective.env, query, limit) {
-            let key = format!(
-                "{}:{}",
-                tool.executable,
-                tool.resolved_path.clone().unwrap_or_default()
-            );
-            if !seen.insert(key) {
-                continue;
-            }
-            tool.environment_id = Some(environment.id.clone());
-            tool.source = tool_source_for_environment(&environment);
-            tool = attach_effective_environment_metadata(tool, &host, &effective);
-            discovered.push(tool);
-            if discovered.len() >= limit {
-                break;
-            }
-        }
-        if discovered.len() >= limit {
-            break;
-        }
-    }
-    if discovered.len() < limit {
-        let effective = build_effective_environment(&host, None, None);
-        for mut tool in discover_all_commands(&effective.env, query, limit) {
-            let key = format!(
-                "{}:{}",
-                tool.executable,
-                tool.resolved_path.clone().unwrap_or_default()
-            );
-            if !seen.insert(key) {
-                continue;
-            }
-            tool = attach_effective_environment_metadata(tool, &host, &effective);
-            discovered.push(tool);
-            if discovered.len() >= limit {
-                break;
-            }
-        }
-    }
+    let discovered = discover_detected_tools(state, query, limit)?;
     let discovered_len = discovered.len();
-    for tool in &mut discovered {
-        if let Some(stored) = find_cli_tool_by_command(state, &tool.executable)? {
-            let manifest = find_cli_tool_manifest_by_tool_id(state, &stored.id)?;
-            let environment = tool.environment_id.as_deref().and_then(|environment_id| {
-                find_cli_environment_by_id(state, environment_id)
-                    .ok()
-                    .flatten()
-            });
-            *tool = merge_detected_tool_with_stored(
-                tool.clone(),
-                Some(&stored),
-                environment.as_ref(),
-                manifest.as_ref(),
-            );
-        }
-    }
     Ok(json!({
         "success": true,
         "query": query,
@@ -449,6 +452,16 @@ fn inspect_tool_value(
     let requested_command = if requested.starts_with("cli-tool-") {
         find_cli_tool_by_id(state, &requested)?
             .map(|tool| tool.executable)
+            .or_else(|| {
+                discover_detected_tools(state, None, 500)
+                    .ok()
+                    .and_then(|tools| {
+                        tools
+                            .into_iter()
+                            .find(|tool| tool.id == requested)
+                            .map(|tool| tool.executable)
+                    })
+            })
             .or_else(|| {
                 list_tool_commands(state).ok().and_then(|commands| {
                     commands
@@ -983,23 +996,18 @@ pub fn handle_cli_runtime_channel(
             let request =
                 parse_cli_runtime_payload::<crate::cli_runtime::CliDetectRequest>(payload)
                     .unwrap_or_default();
-            let commands = if request.commands.is_empty() {
-                list_tool_commands(state)?
+            let tools = if request.commands.is_empty() {
+                discover_detected_tools(state, None, 500)?
             } else {
-                request.commands
+                detect_registered_tools(state, &request.commands)?
             };
-            let tools = detect_registered_tools(state, &commands)?;
             Ok(json!({
                 "success": true,
                 "tools": tools,
             }))
         })(),
         "cli-runtime:list-tools" => {
-            let commands = match list_tool_commands(state) {
-                Ok(commands) => commands,
-                Err(error) => return Some(Err(error)),
-            };
-            detect_registered_tools(state, &commands).and_then(to_cli_runtime_ipc_value)
+            discover_detected_tools(state, None, 500).and_then(to_cli_runtime_ipc_value)
         }
         "cli-runtime:inspect" => {
             inspect_tool_value(state, payload).map(|value| value.unwrap_or(Value::Null))
