@@ -72,6 +72,93 @@ export interface NotificationPermissionState {
   state: 'granted' | 'denied' | 'prompt' | 'unknown';
 }
 
+export interface ThrivePluginSummary {
+  id: string;
+  name: string;
+  displayName: string;
+  version: string;
+  description?: string | null;
+  enabled: boolean;
+  marketplace: string;
+  installedAt: string;
+  updatedAt: string;
+  root: string;
+  dataDir: string;
+  capabilities: string[];
+  approvalRequired: string[];
+  uiSlots: string[];
+  mcpServersPath?: string | null;
+  skillsPath?: string | null;
+  actionsPath?: string | null;
+  mediaPath?: string | null;
+  homeWidgets?: number;
+  homeQuickActions?: number;
+  error?: string | null;
+}
+
+export interface ThrivePluginMarketplaceItem {
+  id: string;
+  name: string;
+  author: string;
+  description: string;
+  repo: string;
+  version?: string | null;
+  displayName?: string | null;
+  capabilities: string[];
+  packageUrl?: string | null;
+  packageAssetName?: string | null;
+  manifestUrl?: string | null;
+  installed: boolean;
+  installedPluginId?: string | null;
+  error?: string | null;
+}
+
+export interface ThrivePluginMarketplaceResponse {
+  success: boolean;
+  registryUrl: string;
+  plugins: ThrivePluginMarketplaceItem[];
+  error?: string;
+}
+
+export interface ThrivePluginHomeWidget {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  zone?: 'main' | 'sidebar' | string;
+  title: string;
+  subtitle?: string | null;
+  kind: 'metric' | 'list' | 'prompt' | 'action' | string;
+  source?: string | null;
+  label?: string | null;
+  prompt?: string | null;
+  icon?: string | null;
+  tone?: string | null;
+  order?: number;
+  limit?: number;
+  data?: Record<string, unknown> | null;
+}
+
+export interface ThrivePluginHomeAction {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  label: string;
+  prompt?: string | null;
+  target?: 'redclaw' | 'coverStudio' | 'generationStudio' | 'manuscripts' | string | null;
+  mode?: string | null;
+  icon?: string | null;
+  tone?: string | null;
+  order?: number;
+}
+
+export interface ThrivePluginHomeResponse {
+  success: boolean;
+  widgets: ThrivePluginHomeWidget[];
+  sidebarSections: ThrivePluginHomeWidget[];
+  quickActions: ThrivePluginHomeAction[];
+  error?: string;
+}
+
 export interface VideoEditorV2ProjectSummary {
   id: string;
   title: string;
@@ -1465,10 +1552,17 @@ declare global {
       clipboardReadText: () => Promise<string>;
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       openRichpostThemeGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
-      browserPlugin: {
-        getStatus: () => Promise<{ success: boolean; bundled: boolean; exportPath: string; exported: boolean; bundledPath?: string; pluginPath?: string; checkedPaths?: string[]; error?: string }>;
-        prepare: () => Promise<{ success: boolean; path: string; pluginPath?: string; bundledPath?: string; alreadyPrepared?: boolean; error?: string }>;
-        openDir: () => Promise<{ success: boolean; path: string; pluginPath?: string; error?: string }>;
+      plugins: {
+        list: () => Promise<{ success: boolean; schemaVersion: number; root: string; plugins: ThrivePluginSummary[]; error?: string }>;
+        marketplace: (payload?: { url?: string }) => Promise<ThrivePluginMarketplaceResponse>;
+        install: (payload: { path: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        installMarketplace: (payload: { id?: string; repo: string; version?: string; packageUrl?: string }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        setEnabled: (payload: { pluginId: string; enabled: boolean }) => Promise<{ success: boolean; plugin?: ThrivePluginSummary; error?: string }>;
+        uninstall: (payload: { pluginId: string }) => Promise<{ success: boolean; pluginId?: string; error?: string }>;
+        openDataDir: (payload?: { pluginId?: string }) => Promise<{ success: boolean; path?: string; error?: string }>;
+        syncCapabilities: () => Promise<{ success: boolean; pluginIds?: string[]; skills?: number; mcpServers?: number; error?: string }>;
+        readData: (payload: { pluginId: string; source: string; limit?: number; kind?: string; query?: string }) => Promise<{ success: boolean; pluginId?: string; source?: string; data?: Record<string, unknown>; error?: string }>;
+        home: () => Promise<ThrivePluginHomeResponse>;
       };
       fetchModels: (config: { apiKey: string, baseURL: string, presetId?: string, protocol?: 'openai' | 'anthropic' | 'gemini', purpose?: 'chat' | 'image' }) => Promise<Array<{ id: string; capabilities?: Array<'chat' | 'image' | 'video' | 'audio' | 'transcription' | 'embedding'> }>>;
       aiRoles: {
@@ -1596,9 +1690,6 @@ declare global {
       };
 
       // YouTube Import
-      checkYtdlp: () => Promise<{ installed: boolean; version?: string; path?: string }>;
-      installYtdlp: () => Promise<{ success: boolean; error?: string }>;
-      updateYtdlp: () => Promise<{ success: boolean; error?: string }>;
       fetchYoutubeInfo: (channelUrl: string) => Promise<{ success: boolean; data?: any; error?: string }>;
       downloadYoutubeSubtitles: (params: { channelUrl: string; videoCount: number; advisorId: string }) => Promise<{ success: boolean; successCount?: number; failCount?: number; error?: string }>;
       readYoutubeSubtitle: (videoId: string) => Promise<{ success: boolean; subtitleContent?: string; hasSubtitle?: boolean; error?: string }>;

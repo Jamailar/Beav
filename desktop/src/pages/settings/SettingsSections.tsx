@@ -1,8 +1,6 @@
 import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2 } from 'lucide-react';
+import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
-import { APP_BRAND } from '../../config/brand';
-import { applyAppTheme, readCustomThemePreference, readThemeMode, writeCustomThemePreference, type CustomThemePreference } from '../../config/theme';
 import { SUPPORTED_LANGUAGES, useI18n, type AppLanguage } from '../../i18n';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
@@ -13,6 +11,8 @@ import type {
   DiagnosticsPendingReport,
   NotificationPermissionState,
   NotificationSettingsPayload,
+  ThrivePluginMarketplaceItem,
+  ThrivePluginSummary,
 } from '../../types';
 import type {
   AgentTaskSnapshot,
@@ -69,22 +69,6 @@ type SettingsFormData = {
     rerank_model: string;
     rerank_timeout_seconds: string;
 };
-
-type YtdlpStatus = {
-    installed?: boolean;
-    version?: string;
-    path?: string;
-} | null;
-
-type BrowserPluginStatus = {
-    success: boolean;
-    bundled: boolean;
-    exportPath: string;
-    pluginPath?: string;
-    exported: boolean;
-    bundledPath?: string;
-    error?: string;
-} | null;
 
 export type FileIndexLaneStatus = {
     lane: string;
@@ -563,69 +547,6 @@ function FileIndexSettingsPanel({
     );
 }
 
-function ThemeSettingsCard() {
-    const [preference, setPreference] = useState<CustomThemePreference>(() => readCustomThemePreference());
-
-    const commitPreference = (next: CustomThemePreference) => {
-        setPreference(next);
-        writeCustomThemePreference(next);
-        applyAppTheme(readThemeMode());
-    };
-
-    const normalizedAccent = preference.accentHex || readCustomThemePreference().accentHex;
-
-    return (
-        <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                    <h3 className="text-sm font-medium text-text-primary">主题色</h3>
-                    <p className="mt-1 text-xs text-text-tertiary">
-                        默认跟随 {APP_BRAND.displayName}；开启后仅覆盖本机强调色。
-                    </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => commitPreference({ ...preference, enabled: !preference.enabled })}
-                        className={clsx(
-                            'inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors',
-                            preference.enabled
-                                ? 'border-accent-primary bg-accent-muted text-accent-primary'
-                                : 'border-border bg-surface-primary text-text-secondary hover:text-text-primary',
-                        )}
-                    >
-                        {preference.enabled && <Check className="h-3.5 w-3.5" />}
-                        {preference.enabled ? '自定义' : '跟随品牌'}
-                    </button>
-                    {preference.enabled && (
-                        <>
-                            <label
-                                className="h-8 w-8 overflow-hidden rounded-md border border-border bg-surface-primary"
-                                title="选择主题色"
-                            >
-                                <span className="sr-only">选择主题色</span>
-                                <input
-                                    type="color"
-                                    value={normalizedAccent}
-                                    onChange={(event) => commitPreference({ enabled: true, accentHex: event.target.value })}
-                                    className="h-10 w-10 -translate-x-1 -translate-y-1 cursor-pointer border-0 bg-transparent p-0"
-                                />
-                            </label>
-                            <button
-                                type="button"
-                                onClick={() => commitPreference({ enabled: false, accentHex: normalizedAccent })}
-                                className="h-8 rounded-md border border-border px-2.5 text-xs font-medium text-text-secondary hover:bg-surface-secondary hover:text-text-primary"
-                            >
-                                重置
-                            </button>
-                        </>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}
-
 function GeneralSettingsSectionInner({
     appVersion,
     formData,
@@ -686,8 +607,6 @@ function GeneralSettingsSectionInner({
                     </label>
                 </div>
             </div>
-
-            <ThemeSettingsCard />
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between">
@@ -2440,15 +2359,18 @@ interface ToolsSettingsSectionProps {
     handleTestMcpServer: (server: McpServerConfig) => Promise<void>;
     mcpTestingId: string;
     mcpInspectingId: string;
-    ytdlpStatus: YtdlpStatus;
-    handleInstallYtdlp: () => Promise<void>;
-    handleUpdateYtdlp: () => Promise<void>;
-    browserPluginStatus: BrowserPluginStatus;
-    isPreparingBrowserPlugin: boolean;
-    handlePrepareBrowserPlugin: () => Promise<void>;
-    handleOpenBrowserPluginDir: () => Promise<void>;
-    isInstallingTool: boolean;
-    installProgress: number;
+    thrivePlugins: ThrivePluginSummary[];
+    thrivePluginMarketplace: ThrivePluginMarketplaceItem[];
+    thrivePluginMarketplaceLoading: boolean;
+    thrivePluginsLoading: boolean;
+    thrivePluginBusyId: string;
+    thrivePluginStatusMessage: string;
+    handleRefreshThrivePlugins: () => Promise<void>;
+    handleRefreshThrivePluginMarketplace: () => Promise<void>;
+    handleInstallThriveMarketplacePlugin: (plugin: ThrivePluginMarketplaceItem) => Promise<void>;
+    handleToggleThrivePlugin: (plugin: ThrivePluginSummary) => Promise<void>;
+    handleUninstallThrivePlugin: (plugin: ThrivePluginSummary) => Promise<void>;
+    handleOpenThrivePluginDataDir: (pluginId?: string) => Promise<void>;
     showDeveloperDiagnostics: boolean;
     toolDiagnostics: ToolDiagnosticDescriptor[];
     toolDiagnosticResults: Record<string, ToolDiagnosticRunResult | undefined>;
@@ -2526,8 +2448,8 @@ interface ToolsSettingsSectionProps {
     }>;
     runtimeDraftInput: string;
     setRuntimeDraftInput: Dispatch<SetStateAction<string>>;
-    runtimeDraftMode: 'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics';
-    setRuntimeDraftMode: Dispatch<SetStateAction<'redclaw' | 'knowledge' | 'chatroom' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>>;
+    runtimeDraftMode: 'redclaw' | 'knowledge' | 'team' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics';
+    setRuntimeDraftMode: Dispatch<SetStateAction<'redclaw' | 'knowledge' | 'team' | 'advisor-discussion' | 'background-maintenance' | 'diagnostics'>>;
     isRuntimeLoading: boolean;
     isRuntimeTraceLoading: boolean;
     isRuntimeSessionLoading: boolean;
@@ -2587,15 +2509,18 @@ export function ToolsSettingsSection({
     handleTestMcpServer,
     mcpTestingId,
     mcpInspectingId,
-    ytdlpStatus,
-    handleInstallYtdlp,
-    handleUpdateYtdlp,
-    browserPluginStatus,
-    isPreparingBrowserPlugin,
-    handlePrepareBrowserPlugin,
-    handleOpenBrowserPluginDir,
-    isInstallingTool,
-    installProgress,
+    thrivePlugins,
+    thrivePluginMarketplace,
+    thrivePluginMarketplaceLoading,
+    thrivePluginsLoading,
+    thrivePluginBusyId,
+    thrivePluginStatusMessage,
+    handleRefreshThrivePlugins,
+    handleRefreshThrivePluginMarketplace,
+    handleInstallThriveMarketplacePlugin,
+    handleToggleThrivePlugin,
+    handleUninstallThrivePlugin,
+    handleOpenThrivePluginDataDir,
     showDeveloperDiagnostics,
     toolDiagnostics,
     toolDiagnosticResults,
@@ -2657,6 +2582,7 @@ export function ToolsSettingsSection({
     handleCancelBackgroundTask,
 }: ToolsSettingsSectionProps) {
     const [runtimeSessionQuery, setRuntimeSessionQuery] = useState('');
+    const [isThrivePluginMarketplaceOpen, setIsThrivePluginMarketplaceOpen] = useState(false);
     const mcpRuntimeMap = useMemo(
         () =>
             Object.fromEntries(
@@ -2664,6 +2590,11 @@ export function ToolsSettingsSection({
             ) as Record<string, McpSessionState | null>,
         [mcpRuntimeItems],
     );
+
+    const openThrivePluginMarketplace = () => {
+        setIsThrivePluginMarketplaceOpen(true);
+        void handleRefreshThrivePluginMarketplace();
+    };
 
     const runtimeSessionSourceLabel = (session: {
         id: string;
@@ -2675,7 +2606,7 @@ export function ToolsSettingsSection({
         if (runtimeMode === 'wander' || contextType === 'wander' || session.id.startsWith('session_wander_')) {
             return 'wander';
         }
-        if (runtimeMode === 'chatroom' || contextType === 'chatroom' || session.id.startsWith('chatroom:')) {
+        if (runtimeMode === 'team' || runtimeMode === 'chatroom' || contextType === 'team' || contextType === 'chatroom' || session.id.startsWith('chatroom:')) {
             return 'team';
         }
         if (runtimeMode === 'video-editor') {
@@ -3697,113 +3628,211 @@ export function ToolsSettingsSection({
             </div>
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                <div className="flex items-start justify-between gap-3">
-                    <div>
-                        <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                            浏览器采集插件
-                            {browserPluginStatus?.bundled ? (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-500/10 text-green-500 font-medium">已内置</span>
-                            ) : (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-500 font-medium">未发现</span>
-                            )}
-                        </h3>
-                        <p className="text-xs text-text-tertiary mt-1">
-                            安装包内已自带 Chrome / Edge 采集插件。由于浏览器安全限制，无法静默安装；这里提供一键准备和打开目录，降低安装难度。
-                        </p>
-                        <div className="mt-2 text-[10px] text-text-tertiary font-mono space-y-1">
-                            <div>状态: {browserPluginStatus?.bundled ? '内置资源可用' : (browserPluginStatus?.error || '插件资源缺失')}</div>
-                            <div>内置路径: {browserPluginStatus?.bundledPath || '未解析到'}</div>
-                            <div>外层目录: {browserPluginStatus?.exportPath || '尚未生成'}</div>
-                            <div>插件目录: {browserPluginStatus?.pluginPath || '尚未生成'}</div>
-                        </div>
-                        <div className="mt-3 text-[11px] text-text-secondary space-y-1">
-                            <div>1. 点击“一键准备插件”</div>
-                            <div>2. 在 Chrome 或 Edge 打开扩展管理页并开启开发者模式</div>
-                            <div>3. 把“RedBox Browser Extension”文件夹拖进浏览器，或在“加载已解压的扩展程序”里选择该文件夹</div>
-                        </div>
+                <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                        <h3 className="text-sm font-medium text-text-primary">Thrive 插件</h3>
                     </div>
-                    <div className="flex flex-col gap-2 shrink-0">
+                    <div className="flex shrink-0 items-center gap-2">
                         <button
                             type="button"
-                            onClick={() => void handlePrepareBrowserPlugin()}
-                            disabled={isPreparingBrowserPlugin}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-accent-primary text-white text-xs font-medium rounded hover:opacity-90 disabled:opacity-50"
+                            onClick={openThrivePluginMarketplace}
+                            className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary"
                         >
-                            {isPreparingBrowserPlugin ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-                            {isPreparingBrowserPlugin ? '准备中...' : '一键准备插件'}
+                            <Download className="h-3 w-3" />
+                            插件市场
                         </button>
                         <button
                             type="button"
-                            onClick={() => void handleOpenBrowserPluginDir()}
-                            disabled={isPreparingBrowserPlugin}
-                            className="flex items-center gap-2 px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary disabled:opacity-50"
+                            onClick={() => void handleRefreshThrivePlugins()}
+                            disabled={thrivePluginsLoading}
+                            className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
                         >
-                            <FolderOpen className="w-3 h-3" />
-                            打开插件目录
+                            <RefreshCw className={clsx('h-3 w-3', thrivePluginsLoading && 'animate-spin')} />
+                            刷新
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void handleOpenThrivePluginDataDir()}
+                            className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary"
+                        >
+                            <FolderOpen className="h-3 w-3" />
+                            数据
                         </button>
                     </div>
                 </div>
+
+                {thrivePluginStatusMessage ? (
+                    <div className="mt-3 rounded border border-border bg-surface-primary/60 px-3 py-2 text-xs text-text-secondary">
+                        {thrivePluginStatusMessage}
+                    </div>
+                ) : null}
+
+                <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface-primary">
+                    {thrivePluginsLoading && thrivePlugins.length === 0 ? (
+                        <div className="flex items-center gap-2 px-3 py-4 text-xs text-text-tertiary">
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            正在读取插件
+                        </div>
+                    ) : thrivePlugins.length === 0 ? (
+                        <div className="px-3 py-5 text-center text-xs text-text-tertiary">暂无 Thrive 插件</div>
+                    ) : (
+                        <div className="divide-y divide-border">
+                            {thrivePlugins.map((plugin) => {
+                                const busy = thrivePluginBusyId === plugin.id;
+                                return (
+                                    <div key={plugin.id} className="px-3 py-3">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <div className="truncate text-sm font-medium text-text-primary">{plugin.displayName || plugin.name}</div>
+                                                    <span className="rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-tertiary">v{plugin.version}</span>
+                                                    <span className={clsx(
+                                                        'rounded px-1.5 py-0.5 text-[10px] font-medium',
+                                                        plugin.enabled ? 'bg-green-500/10 text-green-500' : 'bg-text-tertiary/10 text-text-tertiary'
+                                                    )}>
+                                                        {plugin.enabled ? '已启用' : '已停用'}
+                                                    </span>
+                                                    {plugin.error ? (
+                                                        <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-500">异常</span>
+                                                    ) : null}
+                                                </div>
+                                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                                    {plugin.capabilities.slice(0, 8).map((capability) => (
+                                                        <span key={capability} className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">
+                                                            {capability}
+                                                        </span>
+                                                    ))}
+                                                    {plugin.capabilities.length > 8 ? (
+                                                        <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">+{plugin.capabilities.length - 8}</span>
+                                                    ) : null}
+                                                </div>
+                                                {plugin.error ? <div className="mt-2 truncate font-mono text-[10px] text-red-500">{plugin.error}</div> : null}
+                                            </div>
+                                            <div className="flex shrink-0 flex-col gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleToggleThrivePlugin(plugin)}
+                                                    disabled={busy}
+                                                    className="rounded border border-border px-2.5 py-1.5 text-xs text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                                >
+                                                    {plugin.enabled ? '停用' : '启用'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleOpenThrivePluginDataDir(plugin.id)}
+                                                    className="rounded border border-border px-2.5 py-1.5 text-xs text-text-primary transition-colors hover:bg-surface-secondary"
+                                                >
+                                                    数据
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleUninstallThrivePlugin(plugin)}
+                                                    disabled={busy}
+                                                    className="rounded border border-red-500/30 px-2.5 py-1.5 text-xs text-red-500 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                                                >
+                                                    卸载
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
             </div>
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
-                <div className="flex items-start justify-between">
-                    <div>
-                        <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
-                            yt-dlp (YouTube 下载器)
-                            {ytdlpStatus?.installed ? (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-green-500/10 text-green-500 font-medium">已安装</span>
-                            ) : (
-                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-500 font-medium">未安装</span>
-                            )}
-                        </h3>
-                        <p className="text-xs text-text-tertiary mt-1">
-                            用于智囊团功能的 YouTube 视频信息获取和字幕下载。
-                        </p>
-                        <div className="mt-2 text-[10px] text-text-tertiary font-mono">
-                            {ytdlpStatus?.version && <div>版本: {ytdlpStatus.version}</div>}
-                            {ytdlpStatus?.path && <div>路径: {ytdlpStatus.path}</div>}
+            {isThrivePluginMarketplaceOpen ? (
+                <div
+                    className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 px-5 py-6"
+                    onMouseDown={() => setIsThrivePluginMarketplaceOpen(false)}
+                >
+                    <div
+                        className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+                            <h3 className="text-sm font-medium text-text-primary">插件市场</h3>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleRefreshThrivePluginMarketplace()}
+                                    disabled={thrivePluginMarketplaceLoading}
+                                    className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                >
+                                    <RefreshCw className={clsx('h-3 w-3', thrivePluginMarketplaceLoading && 'animate-spin')} />
+                                    刷新
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsThrivePluginMarketplaceOpen(false)}
+                                    className="flex h-8 w-8 items-center justify-center rounded border border-border text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                    aria-label="关闭"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                        {!ytdlpStatus?.installed ? (
-                            <button
-                                type="button"
-                                onClick={() => void handleInstallYtdlp()}
-                                disabled={isInstallingTool}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-accent-primary text-white text-xs font-medium rounded hover:opacity-90 disabled:opacity-50"
-                            >
-                                {isInstallingTool ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-                                {isInstallingTool ? '安装中...' : '一键安装'}
-                            </button>
-                        ) : (
-                            <button
-                                type="button"
-                                onClick={() => void handleUpdateYtdlp()}
-                                disabled={isInstallingTool}
-                                className="flex items-center gap-2 px-3 py-1.5 border border-border text-text-primary text-xs font-medium rounded hover:bg-surface-secondary disabled:opacity-50"
-                            >
-                                {isInstallingTool ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                                {isInstallingTool ? '更新中...' : '检查更新'}
-                            </button>
-                        )}
+                        <div className="min-h-0 flex-1 overflow-auto">
+                            {thrivePluginMarketplaceLoading && thrivePluginMarketplace.length === 0 ? (
+                                <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">
+                                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                    正在读取市场
+                                </div>
+                            ) : thrivePluginMarketplace.length === 0 ? (
+                                <div className="px-4 py-8 text-center text-xs text-text-tertiary">市场暂无插件</div>
+                            ) : (
+                                <div className="divide-y divide-border">
+                                    {thrivePluginMarketplace.map((plugin) => {
+                                        const busy = thrivePluginBusyId === (plugin.installedPluginId || plugin.id);
+                                        return (
+                                            <div key={`${plugin.repo}:${plugin.id}`} className="px-4 py-3">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <div className="truncate text-sm font-medium text-text-primary">{plugin.displayName || plugin.name}</div>
+                                                            {plugin.version ? (
+                                                                <span className="rounded bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-tertiary">v{plugin.version}</span>
+                                                            ) : null}
+                                                            {plugin.installed ? (
+                                                                <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">已安装</span>
+                                                            ) : null}
+                                                            {plugin.error ? (
+                                                                <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-500">异常</span>
+                                                            ) : null}
+                                                        </div>
+                                                        <div className="mt-1 truncate text-xs text-text-tertiary">{plugin.description || plugin.repo}</div>
+                                                        <div className="mt-2 flex flex-wrap gap-1.5">
+                                                            <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{plugin.repo}</span>
+                                                            {plugin.capabilities.slice(0, 6).map((capability) => (
+                                                                <span key={capability} className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">
+                                                                    {capability}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                        {plugin.error ? (
+                                                            <div className="mt-2 truncate font-mono text-[10px] text-red-500">{plugin.error}</div>
+                                                        ) : null}
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleInstallThriveMarketplacePlugin(plugin)}
+                                                        disabled={busy || plugin.installed || Boolean(plugin.error && !plugin.manifestUrl)}
+                                                        className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                                    >
+                                                        <Download className="h-3 w-3" />
+                                                        {plugin.installed ? '已安装' : busy ? '安装中' : '安装'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
-
-                {isInstallingTool && installProgress > 0 && (
-                    <div className="mt-4">
-                        <div className="h-1 bg-border rounded-full overflow-hidden">
-                            <div
-                                className="h-full bg-accent-primary transition-all duration-300"
-                                style={{ width: `${installProgress}%` }}
-                            />
-                        </div>
-                        <div className="flex justify-between mt-1">
-                            <span className="text-[10px] text-text-tertiary">下载中...</span>
-                            <span className="text-[10px] text-text-tertiary">{installProgress}%</span>
-                        </div>
-                    </div>
-                )}
-            </div>
+            ) : null}
 
             {showDeveloperDiagnostics && (
                 <div className="space-y-4">
@@ -4071,7 +4100,7 @@ export function ToolsSettingsSection({
                                             className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors disabled:opacity-50"
                                         >
                                             <option value="diagnostics">diagnostics</option>
-                                            <option value="chatroom">team</option>
+                                            <option value="team">team</option>
                                             <option value="knowledge">knowledge</option>
                                             <option value="advisor-discussion">advisor-discussion</option>
                                             <option value="redclaw">redclaw</option>
@@ -4370,7 +4399,7 @@ export function ToolsSettingsSection({
                                     >
                                         <option value="redclaw">redclaw</option>
                                         <option value="knowledge">knowledge</option>
-                                        <option value="chatroom">team</option>
+                                        <option value="team">team</option>
                                         <option value="advisor-discussion">advisor-discussion</option>
                                         <option value="background-maintenance">background-maintenance</option>
                                         <option value="diagnostics">diagnostics</option>

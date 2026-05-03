@@ -4,6 +4,7 @@ import { ApprovalPanel } from './Approval';
 import { CreatorProfilesPanel } from './CreatorProfiles';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
+import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHomeWidget } from '../types';
 
 interface HomeProps {
     isActive?: boolean;
@@ -70,6 +71,8 @@ interface RecentManuscript {
     summary: string;
     previewUrl: string;
 }
+
+type PluginHomeCommand = ThrivePluginHomeAction | ThrivePluginHomeWidget;
 
 const EMPTY_STATS: HomeStats = {
     knowledge: 0,
@@ -257,14 +260,116 @@ function RecentManuscriptCard({
     );
 }
 
+function pluginMetricValue(widget: ThrivePluginHomeWidget): string {
+    const total = widget.data?.total;
+    if (typeof total === 'number') return total.toLocaleString('zh-CN');
+    if (typeof total === 'string' && total.trim()) return total;
+    return '--';
+}
+
+function pluginListItems(widget: ThrivePluginHomeWidget): Array<Record<string, unknown>> {
+    const data = widget.data || {};
+    const rawItems = Array.isArray(data.items)
+        ? data.items
+        : Array.isArray(data.assets)
+            ? data.assets
+            : Array.isArray(data.subjects)
+                ? data.subjects
+                : [];
+    return rawItems.filter((item): item is Record<string, unknown> => item != null && typeof item === 'object').slice(0, 4);
+}
+
+function pluginItemTitle(item: Record<string, unknown>): string {
+    return String(item.title || item.name || item.fileName || item.path || item.id || '未命名').trim();
+}
+
+function pluginToneClass(tone?: string | null): string {
+    if (tone === 'sky') return 'bg-sky-500/10 text-sky-700';
+    if (tone === 'violet') return 'bg-violet-500/10 text-violet-700';
+    if (tone === 'amber') return 'bg-amber-500/10 text-amber-700';
+    if (tone === 'rose') return 'bg-rose-500/10 text-rose-700';
+    return 'bg-emerald-500/10 text-emerald-700';
+}
+
+function PluginHomeWidgetCard({
+    widget,
+    onRun,
+}: {
+    widget: ThrivePluginHomeWidget;
+    onRun: (command: PluginHomeCommand) => void;
+}) {
+    const canRun = Boolean(widget.prompt || widget.kind === 'action');
+    const items = widget.kind === 'list' ? pluginListItems(widget) : [];
+    const failed = widget.data?.success === false;
+
+    return (
+        <button
+            type="button"
+            onClick={() => canRun && onRun(widget)}
+            disabled={!canRun}
+            className="group min-h-[112px] rounded-xl border border-border bg-surface-primary p-4 text-left shadow-sm transition-all enabled:hover:-translate-y-0.5 enabled:hover:border-accent-primary/30 enabled:hover:shadow-md disabled:cursor-default"
+        >
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <div className="truncate text-[13px] font-semibold text-text-primary">{widget.title}</div>
+                    {widget.subtitle && (
+                        <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-text-tertiary">{widget.subtitle}</div>
+                    )}
+                </div>
+                <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${pluginToneClass(widget.tone)}`}>
+                    <Sparkles className="h-4 w-4" strokeWidth={1.8} />
+                </span>
+            </div>
+            {failed ? (
+                <div className="mt-4 line-clamp-2 text-[12px] leading-5 text-red-600">{String(widget.data?.error || '插件数据不可用')}</div>
+            ) : widget.kind === 'metric' ? (
+                <div className="mt-4 text-[28px] font-semibold leading-none tracking-[-0.03em] text-text-primary">{pluginMetricValue(widget)}</div>
+            ) : widget.kind === 'list' ? (
+                <div className="mt-3 space-y-1.5">
+                    {items.length > 0 ? items.map((item, index) => (
+                        <div key={`${widget.id}:${index}`} className="truncate text-[12px] leading-5 text-text-secondary">
+                            {pluginItemTitle(item)}
+                        </div>
+                    )) : (
+                        <div className="text-[12px] leading-5 text-text-tertiary">暂无数据</div>
+                    )}
+                </div>
+            ) : (
+                <div className="mt-4 inline-flex items-center gap-1 text-[12px] font-medium text-text-tertiary group-enabled:group-hover:text-text-primary">
+                    {widget.label || '执行'}
+                    <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.8} />
+                </div>
+            )}
+        </button>
+    );
+}
+
 export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToManuscript, onNavigateToRedClaw }: HomeProps) {
     const [stats, setStats] = useState<HomeStats>(EMPTY_STATS);
     const [recentManuscripts, setRecentManuscripts] = useState<RecentManuscript[]>([]);
+    const [pluginHomeWidgets, setPluginHomeWidgets] = useState<ThrivePluginHomeWidget[]>([]);
+    const [pluginSidebarSections, setPluginSidebarSections] = useState<ThrivePluginHomeWidget[]>([]);
+    const [pluginQuickActions, setPluginQuickActions] = useState<ThrivePluginHomeAction[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [pluginHomeError, setPluginHomeError] = useState('');
     const [approvalOpen, setApprovalOpen] = useState(false);
     const requestIdRef = useRef(0);
     const hasSnapshotRef = useRef(false);
+
+    const loadPluginHome = useCallback(async () => {
+        try {
+            const result = await window.ipcRenderer.plugins.home() as ThrivePluginHomeResponse;
+            if (result?.success === false) throw new Error(result.error || '插件主页加载失败');
+            setPluginHomeWidgets(Array.isArray(result.widgets) ? result.widgets : []);
+            setPluginSidebarSections(Array.isArray(result.sidebarSections) ? result.sidebarSections : []);
+            setPluginQuickActions(Array.isArray(result.quickActions) ? result.quickActions : []);
+            setPluginHomeError('');
+        } catch (loadError) {
+            console.error('Failed to load plugin home:', loadError);
+            setPluginHomeError(loadError instanceof Error ? loadError.message : '插件主页加载失败');
+        }
+    }, []);
 
     const loadStats = useCallback(async () => {
         const requestId = ++requestIdRef.current;
@@ -305,7 +410,8 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
     useEffect(() => {
         if (!isActive) return;
         void loadStats();
-    }, [isActive, loadStats]);
+        void loadPluginHome();
+    }, [isActive, loadPluginHome, loadStats]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -316,13 +422,16 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
             }
         };
         const handleDataChanged = () => void loadStats();
+        const handlePluginsChanged = () => void loadPluginHome();
         window.ipcRenderer.teamRuntime.onEvent(handleRuntimeEvent);
         window.ipcRenderer.on('data:changed', handleDataChanged);
+        window.ipcRenderer.on('plugins:changed', handlePluginsChanged);
         return () => {
             window.ipcRenderer.teamRuntime.offEvent(handleRuntimeEvent);
             window.ipcRenderer.off('data:changed', handleDataChanged);
+            window.ipcRenderer.off('plugins:changed', handlePluginsChanged);
         };
-    }, [isActive, loadStats]);
+    }, [isActive, loadPluginHome, loadStats]);
 
     const tiles = useMemo(() => [
         { key: 'knowledge', label: '知识库', value: stats.knowledge, icon: Archive },
@@ -366,6 +475,24 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
             deliveryMode: 'draft',
         });
     }, [onNavigateToRedClaw]);
+
+    const runPluginHomeCommand = useCallback((command: PluginHomeCommand) => {
+        const prompt = typeof command.prompt === 'string' ? command.prompt.trim() : '';
+        const label = 'label' in command && typeof command.label === 'string'
+            ? command.label
+            : 'title' in command ? command.title : undefined;
+        if (prompt) {
+            sendAiSuggestion(prompt, label || command.pluginName || '插件动作');
+            return;
+        }
+        if ('target' in command) {
+            if (command.target === 'coverStudio') {
+                onNavigateToCoverStudio?.();
+            } else if (command.target === 'generationStudio') {
+                onNavigateToGenerationStudio?.(command.mode === 'video' ? 'video' : 'image');
+            }
+        }
+    }, [onNavigateToCoverStudio, onNavigateToGenerationStudio, sendAiSuggestion]);
 
     return (
         <main className="h-full min-h-0 overflow-y-auto px-6 py-5" aria-label="主页">
@@ -411,6 +538,12 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                             {error}
                         </div>
                     )}
+                    {pluginHomeError && (
+                        <div className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+                            <AlertCircle className="h-4 w-4" />
+                            {pluginHomeError}
+                        </div>
+                    )}
 
                     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <QuickAppButton
@@ -442,6 +575,18 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                             onClick={() => sendAiSuggestion('帮我基于当前内容资产，生成 10 个适合今天推进的选题。', '找灵感')}
                         />
                     </section>
+
+                    {pluginHomeWidgets.length > 0 && (
+                        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                            {pluginHomeWidgets.map((widget) => (
+                                <PluginHomeWidgetCard
+                                    key={widget.id}
+                                    widget={widget}
+                                    onRun={runPluginHomeCommand}
+                                />
+                            ))}
+                        </section>
+                    )}
 
                     <section className="flex min-h-[310px] flex-col gap-3">
                         <div className="flex items-center justify-between gap-3">
@@ -514,7 +659,30 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                                 </button>
                             );
                         })}
+                        {pluginQuickActions.map((action) => (
+                            <button
+                                key={action.id}
+                                type="button"
+                                onClick={() => runPluginHomeCommand(action)}
+                                className="group flex w-full items-center gap-3 px-3 py-3 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            >
+                                <Sparkles className="h-4 w-4 shrink-0 text-text-tertiary group-hover:text-accent-primary" strokeWidth={1.8} />
+                                <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                                <ArrowRight className="h-4 w-4 shrink-0 text-text-tertiary transition-transform group-hover:translate-x-0.5" strokeWidth={1.8} />
+                            </button>
+                        ))}
                     </div>
+                    {pluginSidebarSections.length > 0 && (
+                        <div className="mt-5 space-y-3">
+                            {pluginSidebarSections.map((widget) => (
+                                <PluginHomeWidgetCard
+                                    key={widget.id}
+                                    widget={widget}
+                                    onRun={runPluginHomeCommand}
+                                />
+                            ))}
+                        </div>
+                    )}
                     <button
                         type="button"
                         onClick={() => sendAiSuggestion('我想继续推进内容创作，请先问我 3 个必要问题，然后给出下一步。', 'Ask anything')}
