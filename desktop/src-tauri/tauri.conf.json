@@ -51,8 +51,7 @@
       "resources/knowledge-api-guide.html",
       "resources/richpost-theme-guide.html",
       "../prompts/library",
-      "../builtin-skills",
-      "../../Plugin"
+      "../builtin-skills"
     ],
     "icon": [
       "../branding/variants/redbox/icons/icon.png",
