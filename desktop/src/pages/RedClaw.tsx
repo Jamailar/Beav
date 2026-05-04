@@ -313,7 +313,6 @@ interface RedClawProps {
     welcomeShortcutInputs?: RedClawComposerShortcutInput[];
     onGlobalSidebarContentChange?: (content: ReactNode | null) => void;
     onOpenChatSurface?: () => void;
-    onOpenManuscript?: (filePath: string) => void;
 }
 
 interface RedClawSpaceListPayload {
@@ -618,7 +617,6 @@ export function RedClaw({
     welcomeShortcutInputs,
     onGlobalSidebarContentChange,
     onOpenChatSurface,
-    onOpenManuscript,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -2433,7 +2431,6 @@ export function RedClaw({
                 onSwitchSession={switchHistorySession}
                 onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
                 onRenameSession={renameUnifiedHistorySession}
-                onOpenManuscript={onOpenManuscript}
             />
         );
     }, [
@@ -2444,7 +2441,6 @@ export function RedClaw({
         deleteUnifiedHistorySession,
         historyLoading,
         onGlobalSidebarContentChange,
-        onOpenManuscript,
         renameUnifiedHistorySession,
         selectedRoomId,
         sessionActivityById,

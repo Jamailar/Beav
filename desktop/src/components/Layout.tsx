@@ -1,5 +1,5 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -41,7 +41,6 @@ const NAV_ITEMS: SidebarNavItem[] = [
   { key: 'automation', view: 'automation', labelKey: 'nav.automation', icon: Clock3, primary: true },
   { key: 'home', view: 'home', labelKey: 'nav.home', icon: Home },
   { key: 'wander', view: 'wander', labelKey: 'nav.wander', icon: Dices },
-  { key: 'manuscripts', view: 'manuscripts', labelKey: 'nav.manuscripts', icon: FileEdit },
   // { id: 'archives', label: '档案', icon: Archive },
   // { id: 'skills', label: '技能库', icon: Lightbulb },
 ];
@@ -245,7 +244,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const sidebarResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const globalSearchRequestRef = useRef(0);
-  const isFixedViewportView = currentView === 'manuscripts';
+  const isFixedViewportView = false;
   const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
   const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';

@@ -16,7 +16,6 @@ const HomePage = lazy(async () => ({ default: (await import('./pages/Home')).Hom
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
-const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
 const WanderPage = lazy(async () => ({ default: (await import('./pages/Wander')).Wander }));
 const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw')).RedClaw }));
@@ -26,7 +25,7 @@ const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
 
-export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation';
+export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'team-workbench' | 'members';
 type SettingsNavigationTarget = {
@@ -66,7 +65,6 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'skills',
   'knowledge',
   'settings',
-  'manuscripts',
   'archives',
   'wander',
   'redclaw',
@@ -305,7 +303,6 @@ function App() {
   const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
-  const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['home']));
   const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
@@ -392,12 +389,6 @@ function App() {
       window.ipcRenderer.auth.offStateChanged(handleAuthStateChanged);
     };
   }, [t]);
-
-  useEffect(() => {
-    if (currentView !== 'manuscripts' && immersiveMode) {
-      setImmersiveMode(false);
-    }
-  }, [currentView, immersiveMode]);
 
   useEffect(() => {
     const handleNavigate = (event: Event) => {
@@ -487,18 +478,6 @@ function App() {
 
   const clearRedClawNavigationAction = () => {
     setRedClawNavigationAction(null);
-  };
-
-  // 导航到稿件页面并打开指定文件
-  const navigateToManuscript = (filePath: string) => {
-    uiTraceInteraction('app', 'nav_to_manuscripts', { to: 'manuscripts' });
-    setPendingManuscriptFile(filePath);
-    setCurrentView('manuscripts');
-  };
-
-  // 稿件页面消费后清除
-  const clearPendingManuscriptFile = () => {
-    setPendingManuscriptFile(null);
   };
 
   const navigateToGenerationStudio = (intent: GenerationIntent) => {
@@ -739,7 +718,6 @@ function App() {
                 isActive={currentView === 'home'}
                 onNavigateToCoverStudio={() => setCurrentView('cover-studio')}
                 onNavigateToGenerationStudio={(mode) => navigateToGenerationStudio({ mode, source: 'standalone' })}
-                onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
               />
             </Suspense>
@@ -776,20 +754,6 @@ function App() {
             </Suspense>
           </div>
         )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'manuscripts') && (
-          <div className={currentView === 'manuscripts' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'manuscripts' ? <ViewLoadingFallback /> : null}>
-              <ManuscriptsPage
-                pendingFile={pendingManuscriptFile}
-                onFileConsumed={clearPendingManuscriptFile}
-                onNavigateToRedClaw={navigateToRedClaw}
-                onNavigateToGenerationStudio={navigateToGenerationStudio}
-                isActive={currentView === 'manuscripts'}
-                onImmersiveModeChange={setImmersiveMode}
-              />
-            </Suspense>
-          </div>
-        )}
         {shouldRenderView(mountedViews, currentView, persistentViews, 'archives') && (
           <div className={currentView === 'archives' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'archives' ? <ViewLoadingFallback /> : null}>
@@ -801,7 +765,6 @@ function App() {
           <div className={currentView === 'wander' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'wander' ? <ViewLoadingFallback /> : null}>
               <WanderPage
-                onNavigateToManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
                 onExecutionStateChange={handleWanderExecutionStateChange}
                 onTitleBarContentChange={setWanderTitleBarContent}
@@ -824,7 +787,6 @@ function App() {
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 onGlobalSidebarContentChange={setRedClawGlobalSidebarContent}
                 onOpenChatSurface={() => setCurrentView('redclaw')}
-                onOpenManuscript={navigateToManuscript}
               />
             </Suspense>
           </div>

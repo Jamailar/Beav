@@ -73,23 +73,14 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
       { id: 'draft', label: '查看新功能', icon: 'draft' },
     ],
     shortcuts: [
-      { id: 'manuscripts', label: '去稿件', view: 'manuscripts' },
       { id: 'generation-studio', label: '去创作', view: 'generation-studio' },
       { id: 'redclaw', label: '去 RedClaw', view: 'redclaw' },
     ],
     steps: [
       {
-        id: 'manuscripts',
-        selector: '[data-guide-id="nav-manuscripts"]',
-        title: '1/3 稿件是默认工作台',
-        description: '启动后先回到稿件，继续处理正在生产的内容。',
-        placement: 'right',
-        view: 'manuscripts',
-      },
-      {
         id: 'generation-studio',
         selector: '[data-guide-id="nav-generation-studio"]',
-        title: '2/3 创作页统一处理画面生成',
+        title: '1/2 创作页统一处理画面生成',
         description: '生图、生视频和参考图视频都走创作页。',
         placement: 'right',
         view: 'generation-studio',
@@ -97,7 +88,7 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
       {
         id: 'redclaw',
         selector: '[data-guide-id="nav-redclaw"]',
-        title: '3/3 RedClaw 负责持续执行',
+        title: '2/2 RedClaw 负责持续执行',
         description: '自动执行、工具串联和值守任务继续交给 RedClaw。',
         placement: 'right',
         view: 'redclaw',
