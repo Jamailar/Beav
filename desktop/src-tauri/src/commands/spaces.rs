@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+use std::fs;
 use tauri::{AppHandle, State};
 
 use crate::persistence::{
@@ -33,7 +34,7 @@ pub fn handle_spaces_channel(
 ) -> Option<Result<Value, String>> {
     if !matches!(
         channel,
-        "spaces:list" | "spaces:create" | "spaces:rename" | "spaces:switch"
+        "spaces:list" | "spaces:create" | "spaces:rename" | "spaces:switch" | "spaces:delete"
     ) {
         return None;
     }
@@ -128,6 +129,81 @@ pub fn handle_spaces_channel(
                         emit_space_renamed(app, active_space_id, space_name);
                     }
                 }
+                Ok(result)
+            }
+            "spaces:delete" => {
+                let Some(id) =
+                    payload_value_as_string(payload).or_else(|| payload_string(payload, "id"))
+                else {
+                    return Ok(json!({ "success": false, "error": "缺少空间 id" }));
+                };
+                if id == "default" {
+                    return Ok(json!({ "success": false, "error": "默认空间不能删除" }));
+                }
+
+                let (target_root, deleted_active_space) = with_store(state, |store| {
+                    if !store.spaces.iter().any(|item| item.id == id) {
+                        return Err("空间不存在".to_string());
+                    }
+                    Ok((
+                        active_space_workspace_root_from_store(&store, &id, &state.store_path)?,
+                        store.active_space_id == id,
+                    ))
+                })?;
+
+                if target_root.exists() {
+                    fs::remove_dir_all(&target_root)
+                        .map_err(|error| format!("删除空间目录失败: {error}"))?;
+                }
+
+                let result = with_store_mut(state, |store| {
+                    let Some(index) = store.spaces.iter().position(|item| item.id == id) else {
+                        return Ok(json!({ "success": false, "error": "空间不存在" }));
+                    };
+                    store.spaces.remove(index);
+                    if deleted_active_space {
+                        store.active_space_id = "default".to_string();
+                    }
+                    Ok(json!({
+                        "success": true,
+                        "deletedSpaceId": id,
+                        "activeSpaceId": store.active_space_id,
+                        "deletedActiveSpace": deleted_active_space,
+                    }))
+                })?;
+
+                if deleted_active_space {
+                    if let Some(root) = with_store(state, |store| {
+                        Ok(Some(active_space_workspace_root_from_store(
+                            &store,
+                            &store.active_space_id,
+                            &state.store_path,
+                        )?))
+                    })? {
+                        let snapshot = load_workspace_hydration_snapshot(&root);
+                        let _ = with_store_mut(state, |store| {
+                            apply_workspace_hydration_snapshot(store, snapshot);
+                            Ok(())
+                        });
+                    }
+                }
+
+                if let Some(active_space_id) =
+                    result.get("activeSpaceId").and_then(|value| value.as_str())
+                {
+                    if deleted_active_space {
+                        let settings_snapshot =
+                            with_store(state, |store| Ok(store.settings.clone()))?;
+                        let _ = update_workspace_root_cache(
+                            state,
+                            &settings_snapshot,
+                            active_space_id,
+                        )?;
+                        let _ = ensure_redclaw_space_writing_style_skill(state)?;
+                    }
+                    emit_space_changed(app, active_space_id);
+                }
+
                 Ok(result)
             }
             "spaces:switch" => {

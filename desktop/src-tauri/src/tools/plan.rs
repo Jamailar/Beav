@@ -218,8 +218,8 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .iter()
         .filter_map(|name| descriptor_by_name(name))
         .collect::<Vec<_>>();
-    let app_cli_descriptors = if internal_tool_names.iter().any(|name| name == "app_cli") {
-        action_descriptors_for_tool("app_cli", Some(&runtime_mode), ActionVisibility::Model)
+    let app_cli_descriptors = if internal_tool_names.iter().any(|name| name == "workflow") {
+        action_descriptors_for_tool("workflow", Some(&runtime_mode), ActionVisibility::Model)
     } else {
         Vec::new()
     };
@@ -326,11 +326,11 @@ pub fn visible_tool_names_for_internal_tools(
     let mut names = Vec::new();
     for name in visible_base {
         let required_internal = match *name {
-            "Read" | "List" | "Search" => "redbox_fs",
-            "Write" | "Redbox" => {
+            "Read" | "List" | "Search" => "resource",
+            "Write" | "Operate" => {
                 if internal_tool_names
                     .iter()
-                    .any(|item| item == "app_cli" || item == "redbox_editor")
+                    .any(|item| item == "workflow" || item == "editor")
                 {
                     ""
                 } else {
@@ -431,8 +431,7 @@ fn pinned_direct_app_cli_actions(
             | "shell"
     );
     let media_intent = matches!(task_intent, "image" | "video");
-    if wants_host_cli
-        || (!media_intent && matches!(runtime_mode, "chatroom" | "redclaw" | "knowledge"))
+    if wants_host_cli || (!media_intent && matches!(runtime_mode, "team" | "redclaw" | "knowledge"))
     {
         &[
             "web.fetch",
@@ -524,7 +523,7 @@ fn metadata_string_list(metadata: Option<&Value>, field: &str) -> Vec<String> {
 
 fn normalize_runtime_mode(runtime_mode: &str) -> &str {
     match runtime_mode.trim() {
-        "" | "default" | "chat" => "chatroom",
+        "" | "default" | "chat" | "chatroom" => "team",
         "image_generation" => "image-generation",
         other => other,
     }
@@ -602,7 +601,7 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("image.generate"));
         assert!(plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.direct_app_cli_actions.len() <= DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS);
-        assert!(plan.visible_tools.iter().any(|tool| tool.name == "Redbox"));
+        assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
         assert!(plan.has_deferred_app_cli_action("memory.add"));
     }
 
@@ -615,13 +614,13 @@ mod tests {
 
         assert!(plan.has_direct_app_cli_action("image.generate"));
         assert!(plan.has_direct_app_cli_action("tools.search"));
-        assert!(plan.visible_tools.iter().any(|tool| tool.name == "Redbox"));
+        assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
     }
 
     #[test]
     fn allowed_app_cli_actions_override_default_direct_set() {
         let metadata = json!({
-            "allowedTools": ["redbox_fs", "app_cli"],
+            "allowedTools": ["resource", "workflow"],
             "allowedAppCliActions": [
                 "manuscripts.createProject",
                 "manuscripts.writeCurrent"
@@ -653,7 +652,7 @@ mod tests {
     #[test]
     fn manuscript_editor_keeps_direct_actions_to_bound_write_only() {
         let metadata = json!({
-            "allowedTools": ["app_cli"],
+            "allowedTools": ["workflow"],
             "allowedAppCliActions": ["manuscripts.writeCurrent"]
         });
 
@@ -680,11 +679,11 @@ mod tests {
     #[test]
     fn allowed_tools_constrain_visible_tools() {
         let metadata = json!({
-            "allowedTools": ["redbox_fs"]
+            "allowedTools": ["resource"]
         });
 
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "chatroom",
+            runtime_mode: "team",
             session_metadata: Some(&metadata),
             ..ToolRegistryPlanParams::default()
         });
@@ -736,9 +735,9 @@ mod tests {
     }
 
     #[test]
-    fn chatroom_runtime_pins_web_and_core_cli_runtime_actions() {
+    fn team_runtime_pins_web_and_core_cli_runtime_actions() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "chatroom",
+            runtime_mode: "team",
             ..ToolRegistryPlanParams::default()
         });
 
@@ -752,9 +751,9 @@ mod tests {
     }
 
     #[test]
-    fn chatroom_runtime_pins_mcp_setup_actions() {
+    fn team_runtime_pins_mcp_setup_actions() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "chatroom",
+            runtime_mode: "team",
             ..ToolRegistryPlanParams::default()
         });
 
@@ -799,8 +798,8 @@ mod tests {
             active_skills: Vec::new(),
             allowed_tool_names: vec![
                 "bash".to_string(),
-                "redbox_fs".to_string(),
-                "app_cli".to_string(),
+                "resource".to_string(),
+                "workflow".to_string(),
             ],
             bound_context: None,
             task_intent: Some("image".to_string()),

@@ -63,7 +63,7 @@ impl<'a> InteractiveToolExecutor<'a> {
         prepared: &PreparedToolCall,
     ) -> Option<Result<Value, String>> {
         match prepared.name.as_str() {
-            "app_cli" => Some(self.execute_app_cli(&prepared.arguments)),
+            "workflow" => Some(self.execute_app_cli(&prepared.arguments)),
             "bash" => Some(self.execute_bash(&prepared.arguments)),
             _ => None,
         }

@@ -250,11 +250,11 @@ mod tests {
         );
         let configs = build_subagent_configs(
             &route,
-            "chatroom",
+            "team",
             "task-parent",
             Some("session-parent"),
             Some(&json!({
-                "allowedTools": ["redbox_fs", "redbox_runtime_control"],
+                "allowedTools": ["resource", "runtime_control"],
                 "reasoningEffort": "high"
             })),
             Some(&json!({"modelName": "gpt-main"})),
@@ -269,7 +269,7 @@ mod tests {
             item.fork_overrides
                 .allowed_tools
                 .iter()
-                .all(|tool| tool == "redbox_fs" || tool == "app_cli")
+                .all(|tool| tool == "resource" || tool == "workflow")
         }));
         assert!(configs.iter().all(|item| item.model_config.is_some()));
     }
@@ -299,7 +299,7 @@ mod tests {
             "task-redclaw",
             Some("session-redclaw"),
             Some(&json!({
-                "allowedTools": ["app_cli", "redbox_fs"],
+                "allowedTools": ["workflow", "resource"],
                 "subagentRoles": [
                     "research_agent",
                     "insight_agent",

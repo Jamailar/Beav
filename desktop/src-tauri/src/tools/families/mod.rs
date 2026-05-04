@@ -69,6 +69,14 @@ pub fn default_direct_namespaces(
             cli_runtime::EXECUTION_NAMESPACE,
             "skills",
         ],
+        "team" => vec![
+            "tools",
+            subjects::NAMESPACE,
+            memory::NAMESPACE,
+            "skills",
+            image::NAMESPACE,
+            manuscripts::NAMESPACE,
+        ],
         _ => vec![
             "tools",
             subjects::NAMESPACE,
@@ -165,7 +173,8 @@ fn normalize_runtime_mode(runtime_mode: &str) -> &'static str {
         "audio-editor" => "audio-editor",
         "background-maintenance" => "background-maintenance",
         "diagnostics" => "diagnostics",
-        _ => "chatroom",
+        "" | "default" | "chat" | "chatroom" | "team" => "team",
+        _ => "team",
     }
 }
 

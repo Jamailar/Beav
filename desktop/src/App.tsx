@@ -8,6 +8,7 @@ import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import { NotificationsHost } from './notifications/NotificationsHost';
 import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
 import { RedClawOnboardingFlowHost } from './pages/redclaw/RedClawOnboardingFlowHost';
+import { useI18n } from './i18n';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -17,7 +18,6 @@ const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowle
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
 const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
-const CreatorProfilesPage = lazy(async () => ({ default: (await import('./pages/CreatorProfiles')).CreatorProfiles }));
 const WanderPage = lazy(async () => ({ default: (await import('./pages/Wander')).Wander }));
 const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw')).RedClaw }));
 const MediaLibraryPage = lazy(async () => ({ default: (await import('./pages/MediaLibrary')).MediaLibrary }));
@@ -26,7 +26,7 @@ const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
 
-export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'creator-profiles' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation';
+export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'manuscripts' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'team-workbench' | 'members';
 type SettingsNavigationTarget = {
@@ -68,7 +68,6 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'settings',
   'manuscripts',
   'archives',
-  'creator-profiles',
   'wander',
   'redclaw',
   'media-library',
@@ -79,7 +78,6 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
 ]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 const OFFICIAL_AUTH_NOTICE_ENABLED = false;
-const OFFICIAL_AUTH_NOTICE_TEXT = '当前账号登陆失效，请重新登陆。';
 const OFFICIAL_AUTH_SNAPSHOT_KEYS = [
   'redbox-auth:panel-display',
 ] as const;
@@ -248,10 +246,11 @@ function extractYouTubeCandidateFromClipboard(text: string): YouTubeClipboardCan
 }
 
 function ViewLoadingFallback() {
+  const { t } = useI18n();
   return (
     <div className="h-full min-h-0 flex items-center justify-center text-text-tertiary">
       <Loader2 className="w-4 h-4 animate-spin mr-2" />
-      页面加载中...
+      {t('app.loadingPage')}
     </div>
   );
 }
@@ -297,6 +296,7 @@ function clearStaleOfficialAuthSnapshots(): boolean {
 }
 
 function App() {
+  const { t } = useI18n();
   useOfficialAuthLifecycle();
 
   const [currentView, setCurrentView] = useState<ViewType>('home');
@@ -351,12 +351,12 @@ function App() {
       }
       if (nextStatus === 'reauthRequired') {
         clearStaleOfficialAuthSnapshots();
-        setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+        setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
         return;
       }
       if (nextStatus === 'anonymous') {
         const cleared = clearStaleOfficialAuthSnapshots();
-        setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+        setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
         return;
       }
       if (prevStatus === 'reauthRequired') {
@@ -374,12 +374,12 @@ function App() {
         lastAuthStatusRef.current = nextStatus;
         if (nextStatus === 'reauthRequired') {
           clearStaleOfficialAuthSnapshots();
-          setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+          setGlobalAuthNotice(OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
           return;
         }
         if (nextStatus === 'anonymous') {
           const cleared = clearStaleOfficialAuthSnapshots();
-          setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? OFFICIAL_AUTH_NOTICE_TEXT : null);
+          setGlobalAuthNotice(cleared && OFFICIAL_AUTH_NOTICE_ENABLED ? t('app.authExpired') : null);
           return;
         }
         setGlobalAuthNotice(null);
@@ -391,7 +391,7 @@ function App() {
       mounted = false;
       window.ipcRenderer.auth.offStateChanged(handleAuthStateChanged);
     };
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (currentView !== 'manuscripts' && immersiveMode) {
@@ -543,6 +543,15 @@ function App() {
     setViewPersistent('cover-studio', active);
   }, [setViewPersistent]);
 
+  const returnHomeFromEmbeddedTool = useCallback(() => {
+    setCurrentView('home');
+  }, []);
+
+  const returnFromSettings = useCallback(() => {
+    const previousView = [...viewHistoryRef.current].reverse().find((view) => view !== 'settings') || 'home';
+    setCurrentView(previousView);
+  }, []);
+
   const enqueueYoutubeFromClipboard = useCallback(async (candidate: YouTubeClipboardCandidate) => {
     const payload = {
       videoId: candidate.videoId,
@@ -681,6 +690,7 @@ function App() {
         || startupMigration.status === 'pending'
       ),
   );
+  const effectiveImmersiveMode: ImmersiveMode = currentView === 'subjects' ? 'theme' : immersiveMode;
 
   const handleStartStartupMigration = useCallback(async () => {
     setStartupMigrationBusy(true);
@@ -712,7 +722,8 @@ function App() {
       <Layout
         currentView={currentView}
         onNavigate={setCurrentView}
-        immersiveMode={immersiveMode}
+        immersiveMode={effectiveImmersiveMode}
+        hideGlobalSidebar={currentView === 'settings'}
         globalNotice={globalAuthNotice}
         globalSidebarContent={redClawGlobalSidebarContent}
         renderTitleBarContent={({ currentView }) => {
@@ -760,6 +771,7 @@ function App() {
                 onOpenRedClawOnboarding={openRedClawOnboarding}
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 navigationTarget={settingsNavigationTarget}
+                onReturn={returnFromSettings}
               />
             </Suspense>
           </div>
@@ -782,13 +794,6 @@ function App() {
           <div className={currentView === 'archives' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'archives' ? <ViewLoadingFallback /> : null}>
               <ArchivesPage isActive={currentView === 'archives'} />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'creator-profiles') && (
-          <div className={currentView === 'creator-profiles' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'creator-profiles' ? <ViewLoadingFallback /> : null}>
-              <CreatorProfilesPage isActive={currentView === 'creator-profiles'} />
             </Suspense>
           </div>
         )}
@@ -819,6 +824,7 @@ function App() {
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 onGlobalSidebarContentChange={setRedClawGlobalSidebarContent}
                 onOpenChatSurface={() => setCurrentView('redclaw')}
+                onOpenManuscript={navigateToManuscript}
               />
             </Suspense>
           </div>
@@ -826,7 +832,10 @@ function App() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'subjects') && (
           <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
-              <SubjectsPage isActive={currentView === 'subjects'} />
+              <SubjectsPage
+                isActive={currentView === 'subjects'}
+                onReturnHome={() => setCurrentView('home')}
+              />
             </Suspense>
           </div>
         )}
@@ -846,6 +855,7 @@ function App() {
               <CoverStudioPage
                 isActive={currentView === 'cover-studio' || persistentViews.has('cover-studio')}
                 onExecutionStateChange={handleCoverStudioExecutionStateChange}
+                onReturnHome={returnHomeFromEmbeddedTool}
               />
             </Suspense>
           </div>
@@ -858,6 +868,7 @@ function App() {
                 pendingIntent={pendingGenerationIntent}
                 onIntentConsumed={clearPendingGenerationIntent}
                 onExecutionStateChange={handleGenerationStudioExecutionStateChange}
+                onReturnHome={returnHomeFromEmbeddedTool}
               />
             </Suspense>
           </div>
@@ -878,8 +889,8 @@ function App() {
                 <Link2 className="w-5 h-5" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-base font-semibold text-text-primary">检测到 YouTube 链接</h3>
-                <p className="text-sm text-text-secondary mt-1">确认后将立即在后台采集并保存到知识库（YouTube）。</p>
+                <h3 className="text-base font-semibold text-text-primary">{t('app.youtubeDetected')}</h3>
+                <p className="text-sm text-text-secondary mt-1">{t('app.youtubeCaptureDescription')}</p>
                 <div className="mt-3 rounded-md border border-border bg-surface-secondary px-3 py-2 text-xs text-text-tertiary break-all">
                   {clipboardCandidate.rawUrl}
                 </div>
@@ -903,7 +914,7 @@ function App() {
                 disabled={captureStatus === 'saving'}
                 className="h-9 px-4 rounded-md border border-border text-sm text-text-secondary hover:text-text-primary hover:bg-surface-secondary disabled:opacity-50"
               >
-                取消
+                {t('app.cancel')}
               </button>
               <button
                 onClick={() => void confirmCaptureFromClipboard()}
@@ -911,7 +922,7 @@ function App() {
                 className="h-9 px-4 rounded-md bg-red-600 text-white text-sm hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-2"
               >
                 {captureStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
-                确认采集
+                {t('app.confirmCapture')}
               </button>
             </div>
           </div>

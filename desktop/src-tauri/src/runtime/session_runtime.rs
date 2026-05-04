@@ -1122,7 +1122,7 @@ fn is_internal_runtime_history_user_message(content: &str) -> bool {
         || content.starts_with("系统状态更新：以下技能已激活并写入当前会话：")
         || content.starts_with("系统状态更新：以下技能已激活并加入当前轮上下文：")
         || content.starts_with("当前写稿工程已创建并绑定为 `")
-        || content.starts_with("你刚才发送了空的 `app_cli` 调用")
+        || content.starts_with("你刚才发送了空的 `workflow` 调用")
         || content.starts_with("当前任务是执行型创作任务，不要先输出计划、承诺或阶段说明。")
         || content.starts_with("当前任务还没有完成这些必需动作：")
 }
@@ -1912,7 +1912,7 @@ mod tests {
             parent_runtime_id: None,
             source_task_id: None,
             call_id: "call-1".to_string(),
-            tool_name: "redbox_fs".to_string(),
+            tool_name: "resource".to_string(),
             command: None,
             success: true,
             result_text: Some("ok".to_string()),
@@ -2017,7 +2017,7 @@ mod tests {
             parent_runtime_id: None,
             source_task_id: None,
             call_id: "call-1".to_string(),
-            tool_name: "app_cli".to_string(),
+            tool_name: "workflow".to_string(),
             command: Some("image.generate".to_string()),
             success: true,
             result_text: None,
@@ -2223,7 +2223,7 @@ mod tests {
                     "id": "call-old-1",
                     "type": "function",
                     "function": {
-                        "name": "redbox_fs",
+                        "name": "resource",
                         "arguments": "{\"action\":\"workspace.read\",\"path\":\"knowledge/a.md\"}"
                     }
                 }]
@@ -2232,7 +2232,7 @@ mod tests {
                 "role": "tool",
                 "tool_call_id": "call-old-1",
                 "content": "{\"ok\":true}",
-                "tool_name": "redbox_fs"
+                "tool_name": "resource"
             }),
             json!({
                 "role": "user",
@@ -2244,7 +2244,7 @@ mod tests {
             }),
             json!({
                 "role": "user",
-                "content": "你刚才发送了空的 `app_cli` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `wander/demo.redpost`。下一步先输出完整正文。"
+                "content": "你刚才发送了空的 `workflow` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `wander/demo.redpost`。下一步先输出完整正文。"
             }),
             json!({
                 "role": "assistant",
@@ -2278,7 +2278,7 @@ mod tests {
                 "id": "call-1",
                 "type": "function",
                 "function": {
-                    "name": "app_cli",
+                    "name": "workflow",
                     "arguments": "{\"action\":\"skills.invoke\",\"payload\":{\"name\":\"writing-style\"}}"
                 }
             }]

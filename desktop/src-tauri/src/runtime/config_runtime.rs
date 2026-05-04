@@ -59,7 +59,8 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
         | "tracked-folder" | "obsidian-vault" => "knowledge",
         "advisor-discussion" => "advisor-discussion",
         "background-maintenance" => "background-maintenance",
-        _ => "chatroom",
+        "chatroom" | "chat" | "default" | "team" => "team",
+        _ => "team",
     }
 }
 

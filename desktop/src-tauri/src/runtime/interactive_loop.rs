@@ -117,13 +117,13 @@ mod tests {
     #[test]
     fn canonicalize_value_stabilizes_object_key_order() {
         let left = vec![InteractiveToolOutcomeDigest::new(
-            "app_cli".to_string(),
+            "workflow".to_string(),
             json!({ "payload": { "z": 1, "a": 2 } }),
             true,
             "saved".to_string(),
         )];
         let right = vec![InteractiveToolOutcomeDigest::new(
-            "app_cli".to_string(),
+            "workflow".to_string(),
             json!({ "payload": { "a": 2, "z": 1 } }),
             true,
             "saved".to_string(),

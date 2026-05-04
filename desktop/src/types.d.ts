@@ -1610,6 +1610,7 @@ declare global {
         switch: (spaceId: string) => Promise<unknown>;
         create: (name: string) => Promise<unknown>;
         rename: (payload: { id: string; name: string }) => Promise<unknown>;
+        delete: (spaceId: string) => Promise<unknown>;
       };
       advisors: {
         list: <T = Record<string, unknown>>() => Promise<Array<T>>;

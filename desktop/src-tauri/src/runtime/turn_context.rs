@@ -105,7 +105,7 @@ fn string_field(metadata: &Value, field: &str) -> Option<String> {
 
 fn normalize_runtime_mode(runtime_mode: &str) -> &str {
     match runtime_mode.trim() {
-        "" | "default" | "chat" => "chatroom",
+        "" | "default" | "chat" | "chatroom" => "team",
         "image_generation" => "image-generation",
         other => other,
     }
@@ -125,7 +125,7 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             metadata: Some(json!({
-                "allowedTools": ["redbox_fs", "app_cli"],
+                "allowedTools": ["resource", "workflow"],
                 "contextType": "manuscript",
                 "contextId": "draft-1",
                 "taskIntent": "image"
@@ -143,7 +143,7 @@ mod tests {
 
         assert_eq!(context.runtime_mode, "redclaw");
         assert_eq!(context.task_intent.as_deref(), Some("image"));
-        assert!(context.allowed_tool_names.contains(&"app_cli".to_string()));
+        assert!(context.allowed_tool_names.contains(&"workflow".to_string()));
         assert_eq!(
             context
                 .bound_context

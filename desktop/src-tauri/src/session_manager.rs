@@ -207,6 +207,7 @@ pub(crate) fn delete_session(store: &mut AppStore, session_id: &str) -> bool {
     true
 }
 
+#[cfg(test)]
 pub(crate) fn clear_session_runtime_artifacts(store: &mut AppStore, session_id: &str) -> bool {
     let had_artifacts = store
         .chat_messages

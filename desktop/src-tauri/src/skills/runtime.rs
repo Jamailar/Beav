@@ -139,7 +139,7 @@ mod tests {
                 name: "redclaw-guide".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/redclaw-guide".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [bash, app_cli]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [bash, workflow]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -148,7 +148,7 @@ mod tests {
                 name: "cover-builder".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/cover-builder".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [app_cli]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [workflow]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -157,7 +157,7 @@ mod tests {
                 name: "remotion-best-practices".to_string(),
                 description: "desc".to_string(),
                 location: "redbox://skills/remotion-best-practices".to_string(),
-                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [bash, app_cli, redbox_editor]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [bash, workflow, editor]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -171,12 +171,12 @@ mod tests {
             &skills(),
             "redclaw",
             None,
-            &["bash".to_string(), "app_cli".to_string()],
+            &["bash".to_string(), "workflow".to_string()],
         );
         assert!(state.active_skills.is_empty());
         assert_eq!(
             state.allowed_tools,
-            vec!["bash".to_string(), "app_cli".to_string()]
+            vec!["bash".to_string(), "workflow".to_string()]
         );
     }
 
@@ -187,16 +187,16 @@ mod tests {
             "redclaw",
             Some(&json!({ "activeSkills": ["cover-builder"] })),
             &[
-                "redbox_app_query".to_string(),
-                "redbox_fs".to_string(),
-                "redbox_mcp".to_string(),
-                "redbox_skill".to_string(),
+                "query".to_string(),
+                "resource".to_string(),
+                "mcp".to_string(),
+                "skill".to_string(),
             ],
         );
         assert_eq!(state.active_skills.len(), 1);
-        assert_eq!(state.allowed_tools, vec!["app_cli".to_string()]);
+        assert_eq!(state.allowed_tools, vec!["workflow".to_string()]);
         assert!(state.skills_section.contains(
-            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+            "call `workflow(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
         ));
         assert!(state.skills_section.contains("cover-builder [forked]"));
     }
@@ -208,9 +208,9 @@ mod tests {
             "video-editor",
             None,
             &[
-                "redbox_editor".to_string(),
-                "redbox_fs".to_string(),
-                "redbox_skill".to_string(),
+                "editor".to_string(),
+                "resource".to_string(),
+                "skill".to_string(),
             ],
         );
         assert!(video_state.active_skills.is_empty());
@@ -220,9 +220,9 @@ mod tests {
             "default",
             None,
             &[
-                "redbox_editor".to_string(),
-                "redbox_fs".to_string(),
-                "redbox_skill".to_string(),
+                "editor".to_string(),
+                "resource".to_string(),
+                "skill".to_string(),
             ],
         );
         assert!(default_state.active_skills.is_empty());
@@ -243,9 +243,9 @@ mod tests {
             "redclaw",
             None,
             &[
-                "redbox_app_query".to_string(),
-                "redbox_fs".to_string(),
-                "redbox_mcp".to_string(),
+                "query".to_string(),
+                "resource".to_string(),
+                "mcp".to_string(),
             ],
         );
         assert!(state.skills_section.contains("redclaw-guide: desc"));
@@ -269,10 +269,10 @@ mod tests {
             }],
             "wander",
             None,
-            &["redbox_fs".to_string()],
+            &["resource".to_string()],
         );
         assert!(!state.skills_section.contains(
-            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+            "call `workflow(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
         ));
         assert!(state.skills_section.contains("- writing-style: desc"));
     }
@@ -291,7 +291,7 @@ mod tests {
             }],
             "redclaw",
             Some(&json!({ "activeSkills": ["writing-style"] })),
-            &["redbox_fs".to_string()],
+            &["resource".to_string()],
         );
         assert!(state.active_skills.is_empty());
         assert!(!state.skills_section.contains("writing-style [forked]"));
@@ -304,21 +304,21 @@ mod tests {
                 name: "redbox-image-director".to_string(),
                 description: "image desc".to_string(),
                 location: "redbox://skills/redbox-image-director".to_string(),
-                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
             }],
             "image-generation",
             None,
-            &["app_cli".to_string()],
+            &["workflow".to_string()],
         );
         assert!(state.active_skills.is_empty());
         assert!(state
             .skills_section
             .contains("redbox-image-director: image desc"));
         assert!(state.skills_section.contains(
-            "call `app_cli(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+            "call `workflow(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
         ));
 
         let redclaw_state = build_skill_runtime_state(
@@ -326,14 +326,14 @@ mod tests {
                 name: "redbox-image-director".to_string(),
                 description: "image desc".to_string(),
                 location: "redbox://skills/redbox-image-director".to_string(),
-                body: "---\nallowedRuntimeModes: [chatroom, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
+                body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
             }],
             "redclaw",
             None,
-            &["app_cli".to_string()],
+            &["workflow".to_string()],
         );
         assert!(redclaw_state.active_skills.is_empty());
         assert!(redclaw_state

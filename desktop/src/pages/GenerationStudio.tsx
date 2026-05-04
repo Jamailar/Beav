@@ -2621,7 +2621,6 @@ export function GenerationStudio({
                                                     setAgentPendingMessage(null);
                                                 }
                                             }}
-                                            defaultCollapsed={true}
                                             showClearButton={false}
                                             showWelcomeShortcuts={false}
                                             showComposerShortcuts={false}

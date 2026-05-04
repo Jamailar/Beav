@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn exchange_checkpoint_payload_truncates_preview_and_keeps_runtime_mode() {
-        let payload = exchange_checkpoint_payload(&"a".repeat(120), "chatroom");
+        let payload = exchange_checkpoint_payload(&"a".repeat(120), "team");
         assert_eq!(
             payload
                 .get("responsePreview")
@@ -418,7 +418,7 @@ mod tests {
         );
         assert_eq!(
             payload.get("runtimeMode").and_then(Value::as_str),
-            Some("chatroom")
+            Some("team")
         );
     }
 

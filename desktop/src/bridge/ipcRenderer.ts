@@ -659,6 +659,7 @@ function createIpcRenderer() {
       switch: (spaceId: string) => invokeChannel('spaces:switch', spaceId),
       create: (name: string) => invokeChannel('spaces:create', name),
       rename: (payload: { id: string; name: string }) => invokeChannel('spaces:rename', payload),
+      delete: (spaceId: string) => invokeChannel('spaces:delete', spaceId),
     },
 
     advisors: {

@@ -504,7 +504,7 @@ pub fn handle_system_channel(
                         Ok(store.active_space_id.clone())
                     })?;
                     let _ = update_workspace_root_cache(state, payload, &active_space_id);
-                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                     let _ = app.emit(
                         "settings:updated",
                         json!({

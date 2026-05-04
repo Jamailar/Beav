@@ -4,7 +4,7 @@ use crate::tools::packs::{pack_by_name, tool_names_for_pack};
 
 pub fn normalized_runtime_mode_name(value: &str) -> String {
     match value.trim().to_ascii_lowercase().as_str() {
-        "" | "default" | "chat" => "chatroom".to_string(),
+        "" | "default" | "chat" | "chatroom" => "team".to_string(),
         "image" | "image-gen" | "image_generate" => "image-generation".to_string(),
         "background" => "background-maintenance".to_string(),
         other => other.to_string(),
@@ -83,8 +83,8 @@ mod tests {
             metadata: SkillMetadataRecord {
                 allowed_runtime_modes: vec!["redclaw".to_string()],
                 allowed_tool_pack: Some("knowledge".to_string()),
-                allowed_tools: vec!["redbox_app_query".to_string(), "redbox_fs".to_string()],
-                blocked_tools: vec!["redbox_fs".to_string()],
+                allowed_tools: vec!["query".to_string(), "resource".to_string()],
+                blocked_tools: vec!["resource".to_string()],
                 hook_mode: Some("inline".to_string()),
                 auto_activate: true,
                 activation_scope: None,
@@ -103,13 +103,13 @@ mod tests {
     fn apply_skill_tool_permissions_intersects_pack_and_tool_list() {
         let allowed = apply_skill_tool_permissions(
             &[
-                "redbox_app_query".to_string(),
-                "redbox_fs".to_string(),
-                "redbox_mcp".to_string(),
+                "query".to_string(),
+                "resource".to_string(),
+                "mcp".to_string(),
             ],
             &[test_skill()],
         );
-        assert_eq!(allowed, vec!["app_cli".to_string()]);
+        assert_eq!(allowed, vec!["workflow".to_string()]);
     }
 
     #[test]
@@ -119,11 +119,12 @@ mod tests {
     }
 
     #[test]
-    fn skill_allows_runtime_mode_treats_default_as_chatroom_alias() {
+    fn skill_allows_runtime_mode_treats_default_as_team_alias() {
         let mut skill = test_skill();
-        skill.metadata.allowed_runtime_modes = vec!["chatroom".to_string()];
+        skill.metadata.allowed_runtime_modes = vec!["team".to_string()];
         assert!(skill_allows_runtime_mode(&skill, "default"));
         assert!(skill_allows_runtime_mode(&skill, "chat"));
+        assert!(skill_allows_runtime_mode(&skill, "chatroom"));
     }
 
     #[test]

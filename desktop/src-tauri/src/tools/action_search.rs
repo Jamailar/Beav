@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn search_matches_image_generation_by_prompt_field() {
         let direct = action_descriptors_for_tool(
-            "app_cli",
+            "workflow",
             Some("image-generation"),
             ActionVisibility::Model,
         );
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn search_can_filter_namespace() {
         let direct =
-            action_descriptors_for_tool("app_cli", Some("diagnostics"), ActionVisibility::Model);
+            action_descriptors_for_tool("workflow", Some("diagnostics"), ActionVisibility::Model);
         let results = search_actions(
             &direct,
             &[],

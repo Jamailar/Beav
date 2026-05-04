@@ -1503,7 +1503,7 @@ fn run_animation_director_subagent(
         "intent": "direct_answer",
         "useRealSubagents": true,
         "subagentRoles": ["animation-director"],
-        "allowedTools": ["redbox_fs"],
+        "allowedTools": ["resource"],
         "systemPromptPatch": system_prompt_patch,
     });
     let route =

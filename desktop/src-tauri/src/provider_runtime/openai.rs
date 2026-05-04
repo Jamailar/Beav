@@ -343,9 +343,7 @@ mod tests {
         };
 
         assert!(should_prefer_non_streaming_openai_turn("redclaw", &config));
-        assert!(!should_prefer_non_streaming_openai_turn(
-            "chatroom", &config
-        ));
+        assert!(!should_prefer_non_streaming_openai_turn("team", &config));
     }
 
     #[test]

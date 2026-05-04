@@ -340,7 +340,7 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             metadata: Some(json!({
-                "allowedTools": ["redbox_fs"]
+                "allowedTools": ["resource"]
             })),
         };
 

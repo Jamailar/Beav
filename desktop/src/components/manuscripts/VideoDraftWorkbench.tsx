@@ -6187,7 +6187,6 @@ export function VideoDraftWorkbench({
                 <Suspense fallback={<div className="flex h-full items-center justify-center text-white/45">AI 会话加载中...</div>}>
                   <ChatWorkspace
                     fixedSessionId={editorChatSessionId}
-                    defaultCollapsed={true}
                     showClearButton={true}
                     fixedSessionBannerText=""
                     showWelcomeShortcuts={false}

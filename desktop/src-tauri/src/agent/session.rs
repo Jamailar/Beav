@@ -53,7 +53,7 @@ mod tests {
             SessionAgentTurnKind::ChatSend,
         ));
         assert!(!should_allow_redclaw_onboarding(
-            "chatroom",
+            "team",
             true,
             SessionAgentTurnKind::ChatSend,
         ));

@@ -717,7 +717,6 @@ pub fn run_managed_cli_command<RT: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use std::fs;
     use std::sync::Arc;
     use tauri::test::{mock_builder, mock_context, noop_assets};
@@ -831,7 +830,6 @@ mod tests {
                 chat_runtime_states: Mutex::new(HashMap::new()),
                 editor_runtime_states: Mutex::new(HashMap::new()),
                 active_chat_requests: Mutex::new(HashMap::new()),
-                creative_chat_cancellations: Mutex::new(HashSet::new()),
                 assistant_runtime: Mutex::new(None),
                 assistant_sidecar: Mutex::new(None),
                 redclaw_runtime: Mutex::new(None),

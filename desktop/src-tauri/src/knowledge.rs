@@ -1198,38 +1198,6 @@ fn spawn_note_transcription_processing(
     });
 }
 
-fn transcribe_youtube_audio_fallback(
-    state: &State<'_, AppState>,
-    entry_dir: &Path,
-    video_id: &str,
-    video_url: &str,
-    title: &str,
-) -> Result<String, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let (endpoint, api_key, model_name) = resolve_transcription_settings(&settings_snapshot)
-        .ok_or_else(|| "字幕下载失败，且当前未配置音频转写接口".to_string())?;
-    let audio_prefix = format!("{}-audio", slug_from_relative_path(video_id));
-    let audio_path = crate::desktop_io::download_ytdlp_audio(video_url, entry_dir, &audio_prefix)?;
-    let transcript = run_curl_transcription(
-        &endpoint,
-        api_key.as_deref(),
-        &model_name,
-        &audio_path,
-        "audio/*",
-    )?;
-    let _ = fs::remove_file(&audio_path);
-    let subtitle_file = entry_dir.join("subtitle.txt");
-    fs::write(&subtitle_file, &transcript).map_err(|error| error.to_string())?;
-    append_debug_log_state(
-        state,
-        format!(
-            "[RedBox yt-dlp] audio transcription fallback completed: videoId={} title={}",
-            video_id, title
-        ),
-    );
-    Ok("subtitle.txt".to_string())
-}
-
 fn spawn_youtube_subtitle_processing(
     app: &AppHandle,
     video_id: String,
@@ -1240,92 +1208,24 @@ fn spawn_youtube_subtitle_processing(
     let app_handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
+        let error = "内置 yt-dlp 服务已移除。".to_string();
         append_debug_log_state(
             &state,
             format!(
-                "[RedBox yt-dlp] background processing start: videoId={} title={} url={}",
+                "[RedBox YouTube] background processing skipped: videoId={} title={} url={}",
                 video_id, title, video_url
             ),
         );
-        let file_prefix = slug_from_relative_path(&video_id);
-        let subtitle_result =
-            crate::desktop_io::download_ytdlp_subtitle(&video_url, &entry_dir, &file_prefix);
-        let outcome = match subtitle_result {
-            Ok(path) => {
-                let subtitle_name = path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("subtitle.txt")
-                    .to_string();
-                write_youtube_meta_status(&entry_dir, "completed", true, Some(&subtitle_name), None)
-                    .and_then(|_| {
-                        emit_youtube_processing_event(
-                            &app_handle,
-                            &video_id,
-                            "completed",
-                            true,
-                            None,
-                        )
-                    })
-            }
-            Err(subtitle_error) => {
-                append_debug_log_state(
-                    &state,
-                    format!(
-                        "[RedBox yt-dlp] subtitle download failed: videoId={} error={}",
-                        video_id, subtitle_error
-                    ),
-                );
-                match transcribe_youtube_audio_fallback(
-                    &state, &entry_dir, &video_id, &video_url, &title,
-                ) {
-                    Ok(subtitle_name) => write_youtube_meta_status(
-                        &entry_dir,
-                        "completed",
-                        true,
-                        Some(&subtitle_name),
-                        None,
-                    )
-                    .and_then(|_| {
-                        emit_youtube_processing_event(
-                            &app_handle,
-                            &video_id,
-                            "completed",
-                            true,
-                            None,
-                        )
-                    }),
-                    Err(fallback_error) => {
-                        let final_error = format!(
-                            "字幕下载失败：{}；音频转写回退失败：{}",
-                            subtitle_error, fallback_error
-                        );
-                        write_youtube_meta_status(
-                            &entry_dir,
-                            "failed",
-                            false,
-                            None,
-                            Some(&final_error),
-                        )
-                        .and_then(|_| {
-                            emit_youtube_processing_event(
-                                &app_handle,
-                                &video_id,
-                                "failed",
-                                false,
-                                Some(&final_error),
-                            )
-                        })
-                    }
-                }
-            }
-        };
+        let outcome = write_youtube_meta_status(&entry_dir, "failed", false, None, Some(&error))
+            .and_then(|_| {
+                emit_youtube_processing_event(&app_handle, &video_id, "failed", false, Some(&error))
+            });
 
         if let Err(error) = outcome {
             append_debug_log_state(
                 &state,
                 format!(
-                    "[RedBox yt-dlp] background processing writeback failed: videoId={} error={}",
+                    "[RedBox YouTube] background processing writeback failed: videoId={} error={}",
                     video_id, error
                 ),
             );

@@ -13,6 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
+const YTDLP_DISABLED_MESSAGE: &str = "内置 yt-dlp 服务已移除。";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AdvisorTemplateRecord {
@@ -133,7 +135,7 @@ fn refresh_advisor_videos(
         None => {
             return Ok(json!({
                 "success": false,
-                "error": "未检测到可用的 yt-dlp，请先在设置中完成安装。"
+                "error": YTDLP_DISABLED_MESSAGE
             }));
         }
     };
@@ -384,9 +386,6 @@ pub fn handle_advisor_channel(
             | "advisors:retry-failed"
             | "advisors:update-youtube-settings"
             | "advisors:youtube-runner-run-now"
-            | "youtube:check-ytdlp"
-            | "youtube:install"
-            | "youtube:update"
     ) {
         return None;
     }
@@ -1136,7 +1135,7 @@ pub fn handle_advisor_channel(
                     None => {
                         return Ok(json!({
                             "success": false,
-                            "error": "未检测到可用的 yt-dlp，请先在设置中完成安装。"
+                            "error": YTDLP_DISABLED_MESSAGE
                         }));
                     }
                 };
@@ -1213,7 +1212,7 @@ pub fn handle_advisor_channel(
                             "success": false,
                             "successCount": 0,
                             "failCount": count,
-                            "error": "未检测到可用的 yt-dlp，请先在设置中完成安装。"
+                            "error": YTDLP_DISABLED_MESSAGE
                         }));
                     }
                 };
@@ -1625,73 +1624,6 @@ pub fn handle_advisor_channel(
                     processed += 1;
                 }
                 Ok(json!({ "success": true, "processed": processed }))
-            }
-            "youtube:check-ytdlp" => {
-                let started_at = now_ms();
-                let request_id = format!("youtube:check-ytdlp:{}", started_at);
-                if let Some((path, version)) = detect_ytdlp() {
-                    log_timing_event(
-                        state,
-                        "settings",
-                        &request_id,
-                        "youtube:check-ytdlp",
-                        started_at,
-                        Some("installed=true".to_string()),
-                    );
-                    Ok(json!({ "installed": true, "version": version, "path": path }))
-                } else {
-                    for line in crate::desktop_io::inspect_ytdlp_candidates() {
-                        append_debug_log_state(state, format!("yt-dlp candidate probe: {line}"));
-                    }
-                    log_timing_event(
-                        state,
-                        "settings",
-                        &request_id,
-                        "youtube:check-ytdlp",
-                        started_at,
-                        Some("installed=false".to_string()),
-                    );
-                    Ok(json!({ "installed": false }))
-                }
-            }
-            "youtube:install" => {
-                let _ = app.emit("youtube:install-progress", 10);
-                let result = match ensure_ytdlp_installed(false) {
-                    Ok((path, version)) => {
-                        append_debug_log_state(
-                            state,
-                            format!("yt-dlp install/check succeeded: {path} {version}"),
-                        );
-                        json!({ "success": true, "path": path, "version": version })
-                    }
-                    Err(error) => {
-                        append_debug_log_state(
-                            state,
-                            format!("yt-dlp install/check failed: {error}"),
-                        );
-                        json!({ "success": false, "error": error })
-                    }
-                };
-                let _ = app.emit("youtube:install-progress", 100);
-                Ok(result)
-            }
-            "youtube:update" => {
-                let _ = app.emit("youtube:install-progress", 10);
-                let result = match ensure_ytdlp_installed(true) {
-                    Ok((path, version)) => {
-                        append_debug_log_state(
-                            state,
-                            format!("yt-dlp update succeeded: {path} {version}"),
-                        );
-                        json!({ "success": true, "path": path, "version": version })
-                    }
-                    Err(error) => {
-                        append_debug_log_state(state, format!("yt-dlp update failed: {error}"));
-                        json!({ "success": false, "error": error })
-                    }
-                };
-                let _ = app.emit("youtube:install-progress", 100);
-                Ok(result)
             }
             _ => unreachable!(),
         }

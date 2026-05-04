@@ -196,7 +196,7 @@ fn normalized_structured_arguments(arguments: &Value) -> Value {
 fn action_success_envelope(action: &str, data: Value, compat: Option<Value>) -> Value {
     let mut object = serde_json::Map::new();
     object.insert("ok".to_string(), json!(true));
-    object.insert("tool".to_string(), json!("app_cli"));
+    object.insert("tool".to_string(), json!("workflow"));
     object.insert("action".to_string(), json!(action));
     object.insert("data".to_string(), data);
     if let Some(compat) = compat {
@@ -214,7 +214,7 @@ fn app_cli_error_json(
 ) -> String {
     let mut object = serde_json::Map::new();
     object.insert("ok".to_string(), json!(false));
-    object.insert("tool".to_string(), json!("app_cli"));
+    object.insert("tool".to_string(), json!("workflow"));
     if let Some(action) = action.filter(|item| !item.trim().is_empty()) {
         object.insert("action".to_string(), json!(action));
     }
@@ -228,6 +228,40 @@ fn app_cli_error_json(
     object.insert("error".to_string(), Value::Object(error));
     serde_json::to_string_pretty(&Value::Object(object))
         .unwrap_or_else(|_| format!(r#"{{"ok":false,"error":{{"code":"{code}","message":"{message}","retryable":{retryable}}}}}"#))
+}
+
+fn bool_payload_field(payload: &Value, key: &str) -> bool {
+    payload.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn confirmed_team_plan(payload: &Value) -> bool {
+    if bool_payload_field(payload, "userConfirmedTeamPlan") {
+        return true;
+    }
+    payload
+        .get("metadata")
+        .map(|metadata| bool_payload_field(metadata, "userConfirmedTeamPlan"))
+        .unwrap_or(false)
+}
+
+fn require_confirmed_team_plan(action: &str, payload: &Value) -> Result<(), String> {
+    if confirmed_team_plan(payload) {
+        return Ok(());
+    }
+    Err(app_cli_error_json(
+        Some(action),
+        "TEAM_PLAN_CONFIRMATION_REQUIRED",
+        "创建 team 前必须先向用户列出团队成员和分工，并等待用户明确确认。确认后再调用本动作，并传入 userConfirmedTeamPlan=true。",
+        false,
+        Some(json!({
+            "requiredBeforeAction": [
+                "propose_team_members",
+                "propose_division_of_work",
+                "wait_for_explicit_user_confirmation"
+            ],
+            "confirmationField": "userConfirmedTeamPlan"
+        })),
+    ))
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -418,7 +452,7 @@ impl<'a> AppCliExecutor<'a> {
                 return Err(app_cli_error_json(
                     Some(action),
                     "ACTION_DEFERRED",
-                    "app_cli action is available but not directly exposed in this turn; search actions first.",
+                    "workflow action is available but not directly exposed in this turn; search actions first.",
                     true,
                     Some(json!({
                         "suggestedAction": "tools.search",
@@ -435,7 +469,7 @@ impl<'a> AppCliExecutor<'a> {
         Err(app_cli_error_json(
             Some(action),
             "ACTION_NOT_ALLOWED",
-            "app_cli action is not allowed in this session",
+            "workflow action is not allowed in this session",
             false,
             Some(json!({
                 "allowedActions": allowed_actions,
@@ -494,7 +528,7 @@ impl<'a> AppCliExecutor<'a> {
             return Err(app_cli_error_json(
                 None,
                 "ACTION_REQUIRED",
-                "app_cli requires a structured action",
+                "workflow requires a structured action",
                 false,
                 None,
             ));
@@ -503,7 +537,7 @@ impl<'a> AppCliExecutor<'a> {
             app_cli_error_json(
                 None,
                 "LEGACY_COMMAND_REQUIRED",
-                "compat app_cli call requires a legacy command string",
+                "compat workflow call requires a legacy command string",
                 false,
                 Some(json!({ "compatOnly": true })),
             )
@@ -526,7 +560,7 @@ impl<'a> AppCliExecutor<'a> {
             .as_ref()
             .and_then(|value| value.get("translatedAction"))
             .and_then(Value::as_str)
-            .unwrap_or("app_cli.legacyCommand")
+            .unwrap_or("workflow.legacyCommand")
             .to_string();
         Ok(action_success_envelope(&compat_action, result, compat))
     }
@@ -558,7 +592,7 @@ impl<'a> AppCliExecutor<'a> {
             "skills" => self.handle_skills(&tokens[1..], &payload),
             "mcp" => self.handle_mcp(&tokens[1..], &payload),
             "ai" => self.handle_ai(&tokens[1..], &payload),
-            other => Err(format!("unsupported app_cli namespace: {other}")),
+            other => Err(format!("unsupported workflow namespace: {other}")),
         }
     }
 
@@ -878,7 +912,7 @@ impl<'a> AppCliExecutor<'a> {
                 return Err(app_cli_error_json(
                     Some(action),
                     "UNSUPPORTED_ACTION",
-                    &format!("unsupported structured app_cli action: {other}"),
+                    &format!("unsupported structured workflow action: {other}"),
                     false,
                     None,
                 ))
@@ -1094,6 +1128,15 @@ impl<'a> AppCliExecutor<'a> {
                         .string(&["name"])
                         .or_else(|| args.positionals.get(1).cloned())
                         .ok_or_else(|| "spaces rename requires --name".to_string())?
+                }),
+            ),
+            "delete" => self.call_channel(
+                "spaces:delete",
+                json!({
+                    "id": args
+                        .string(&["id", "space-id"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .ok_or_else(|| "spaces delete requires --id".to_string())?
                 }),
             ),
             "switch" => self.call_channel(
@@ -2027,7 +2070,11 @@ impl<'a> AppCliExecutor<'a> {
                     "list-sessions" | "sessions" => {
                         self.call_channel("team-runtime:list-sessions", json!({}))
                     }
-                    "create-session" => self.call_channel("team-runtime:create-session", merged()),
+                    "create-session" => {
+                        let payload = merged();
+                        require_confirmed_team_plan("team.session.create", &payload)?;
+                        self.call_channel("team-runtime:create-session", payload)
+                    }
                     "get-session" => self.call_channel("team-runtime:get-session", session_payload()),
                     "pause-session" => {
                         self.call_channel("team-runtime:pause-session", session_payload())
@@ -2042,7 +2089,9 @@ impl<'a> AppCliExecutor<'a> {
                         self.call_channel("team-runtime:list-members", session_payload())
                     }
                     "add-member" | "spawn-member" => {
-                        self.call_channel("team-runtime:add-member", merged())
+                        let payload = merged();
+                        require_confirmed_team_plan("team.member.spawn", &payload)?;
+                        self.call_channel("team-runtime:add-member", payload)
                     }
                     "list-tasks" | "tasks" => {
                         self.call_channel("team-runtime:list-tasks", session_payload())
@@ -2970,7 +3019,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             }
             if let Some(tool_call_id) = self.tool_call_id {
                 object.insert("toolCallId".to_string(), json!(tool_call_id));
-                object.insert("toolName".to_string(), json!("app_cli"));
+                object.insert("toolName".to_string(), json!("workflow"));
             }
         }
         match image_generation_delivery_mode(self.session_id, &merged, requested_count) {
@@ -3042,7 +3091,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             self.app,
             Some(session_id),
             &call_id,
-            "app_cli",
+            "workflow",
             json!({
                 "action": "skills.invoke",
                 "payload": { "name": name },
@@ -3070,7 +3119,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     self.app,
                     Some(session_id),
                     &call_id,
-                    "app_cli",
+                    "workflow",
                     true,
                     &output,
                 );
@@ -3087,7 +3136,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     self.app,
                     Some(session_id),
                     &call_id,
-                    "app_cli",
+                    "workflow",
                     false,
                     &failure,
                 );
@@ -3117,7 +3166,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         if trimmed.is_empty() {
             return;
         }
-        emit_runtime_tool_partial(self.app, self.session_id, tool_call_id, "app_cli", trimmed);
+        emit_runtime_tool_partial(self.app, self.session_id, tool_call_id, "workflow", trimmed);
     }
 
     fn resolve_reference_image_inputs(&self, inputs: Vec<String>) -> Vec<String> {
@@ -3197,7 +3246,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             }
             if let Some(tool_call_id) = self.tool_call_id {
                 object.insert("toolCallId".to_string(), json!(tool_call_id));
-                object.insert("toolName".to_string(), json!("app_cli"));
+                object.insert("toolName".to_string(), json!("workflow"));
             }
         }
         if let Some(compiled_prompt) =
@@ -3455,7 +3504,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         ) {
             return result;
         }
-        Err(format!("app_cli channel not handled: {channel}"))
+        Err(format!("workflow channel not handled: {channel}"))
     }
 
     fn bound_writing_session_target(&self) -> Option<BoundWritingSessionTarget> {
@@ -5091,7 +5140,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "help [namespace]",
             "advisors list|get|list-templates|create|update|delete",
             "chat sessions list|get",
-            "spaces list|get|create|rename|switch",
+            "spaces list|get|create|rename|delete|switch",
             "subjects list|get|search|categories list|create|update|delete",
             "manuscripts list|read|write|create|delete|theme apply|preview|create|save|delete|background-upload|previews|layout get|save|preset|render",
             "media list|get|update|bind|delete",
@@ -5121,6 +5170,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "spaces get --id <spaceId>",
             "spaces create --name <name>",
             "spaces rename --id <spaceId> --name <newName>",
+            "spaces delete --id <spaceId>",
             "spaces switch --id <spaceId>",
         ],
         "subjects" => vec![
@@ -5662,7 +5712,7 @@ mod tests {
     #[test]
     fn validate_redclaw_auto_image_plan_execution_rejects_other_runtimes_and_single_images() {
         assert!(validate_redclaw_auto_image_plan_execution(
-            "chatroom",
+            "team",
             &json!({}),
             5,
             IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,

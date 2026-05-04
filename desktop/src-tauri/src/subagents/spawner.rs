@@ -1223,7 +1223,7 @@ mod tests {
         let config = SubAgentConfig {
             role_id: "planner".to_string(),
             fork_overrides: ForkOverrides {
-                allowed_tools: vec!["app_cli".to_string()],
+                allowed_tools: vec!["workflow".to_string()],
                 system_prompt_patch: Some("Never expose this patch in the user task.".to_string()),
                 ..ForkOverrides::default()
             },
@@ -1387,7 +1387,7 @@ mod tests {
         store.runtime_tasks.push(create_runtime_task(
             "manual",
             "pending",
-            "chatroom".to_string(),
+            "team".to_string(),
             Some("session-parent".to_string()),
             Some("draft".to_string()),
             route.clone(),
@@ -1410,7 +1410,7 @@ mod tests {
         .id;
         let config = SubAgentConfig {
             role_id: "planner".to_string(),
-            runtime_mode: "chatroom".to_string(),
+            runtime_mode: "team".to_string(),
             parent_task_id: parent_task_id.clone(),
             parent_session_id: Some("session-parent".to_string()),
             collab_session_id: Some(collab_session_id.clone()),

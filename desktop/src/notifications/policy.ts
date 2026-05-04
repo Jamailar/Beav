@@ -61,7 +61,7 @@ function makeNotificationId(source: string, entityId: string, eventKey: string, 
 
 function summarizeRuntimeMode(runtimeMode: string): string {
   if (runtimeMode === 'redclaw') return 'RedClaw';
-  if (runtimeMode === 'chatroom') return '团队';
+  if (runtimeMode === 'team' || runtimeMode === 'chatroom') return '团队';
   if (runtimeMode === 'knowledge') return '知识库';
   if (runtimeMode === 'diagnostics') return '诊断';
   return runtimeMode || '运行时';

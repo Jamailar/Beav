@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, Plus, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
@@ -12,6 +13,7 @@ import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
 import { isMediaJobTerminal, isMediaJobSuccessful, type MediaJobProjection } from '../features/media-jobs/types';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
+import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import {
     HEARTBEAT_INTERVAL_OPTIONS,
     LONG_TEMPLATES,
@@ -37,7 +39,7 @@ import {
     normalizeClawHubSlug,
     sortContextSessionItems,
 } from './redclaw/helpers';
-import { RedClawHistorySidebarSection, type RedClawHistoryListItem } from './redclaw/RedClawHistoryDrawer';
+import { RedClawHistorySidebarSection, type RedClawHistoryListItem, type RedClawHistorySessionActivity } from './redclaw/RedClawHistoryDrawer';
 import { RedClawFilePreviewPane } from './redclaw/RedClawFilePreviewPane';
 import {
     isRedClawOnboardingCompleted,
@@ -311,6 +313,7 @@ interface RedClawProps {
     welcomeShortcutInputs?: RedClawComposerShortcutInput[];
     onGlobalSidebarContentChange?: (content: ReactNode | null) => void;
     onOpenChatSurface?: () => void;
+    onOpenManuscript?: (filePath: string) => void;
 }
 
 interface RedClawSpaceListPayload {
@@ -615,6 +618,7 @@ export function RedClaw({
     welcomeShortcutInputs,
     onGlobalSidebarContentChange,
     onOpenChatSurface,
+    onOpenManuscript,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -623,6 +627,7 @@ export function RedClaw({
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessionList, setSessionList] = useState<ContextChatSessionListItem[]>([]);
     const [advisorHistorySessions, setAdvisorHistorySessions] = useState<RedClawHistoryListItem[]>([]);
+    const [sessionActivityById, setSessionActivityById] = useState<Record<string, RedClawHistorySessionActivity>>({});
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [activeSpaceName, setActiveSpaceName] = useState<string>('默认空间');
@@ -717,7 +722,9 @@ export function RedClaw({
     const shouldSyncGlobalHistory = Boolean(onGlobalSidebarContentChange);
     const shouldLoadHistory = isActive || shouldSyncGlobalHistory;
     const sessionRequestIdRef = useRef(0);
+    const isActiveRef = useRef(isActive);
     const activeSessionIdRef = useRef<string | null>(null);
+    const activeSpeakerSessionIdRef = useRef<string | null>(null);
     const sessionListRef = useRef<ContextChatSessionListItem[]>([]);
     const runnerStatusRequestIdRef = useRef(0);
     const skillsRequestIdRef = useRef(0);
@@ -728,6 +735,54 @@ export function RedClaw({
     const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
     const consumedNavigationActionNonceRef = useRef<number | null>(null);
     const pendingRoomSelectionRef = useRef<string | null>(null);
+
+    const markSessionRunning = useCallback((sessionId: string | null | undefined) => {
+        const safeSessionId = String(sessionId || '').trim();
+        if (!safeSessionId) return;
+        setSessionActivityById((prev) => (
+            prev[safeSessionId] === 'running' ? prev : { ...prev, [safeSessionId]: 'running' }
+        ));
+    }, []);
+
+    const markSessionComplete = useCallback((sessionId: string | null | undefined) => {
+        const safeSessionId = String(sessionId || '').trim();
+        if (!safeSessionId) return;
+        setSessionActivityById((prev) => {
+            const next = { ...prev };
+            if (isActiveRef.current && activeSpeakerSessionIdRef.current === safeSessionId) {
+                delete next[safeSessionId];
+            } else {
+                next[safeSessionId] = 'unread-complete';
+            }
+            return next;
+        });
+    }, []);
+
+    const clearSessionActivity = useCallback((sessionId: string | null | undefined) => {
+        const safeSessionId = String(sessionId || '').trim();
+        if (!safeSessionId) return;
+        setSessionActivityById((prev) => {
+            if (!prev[safeSessionId]) return prev;
+            const next = { ...prev };
+            delete next[safeSessionId];
+            return next;
+        });
+    }, []);
+
+    const clearRunningSessionActivity = useCallback((sessionId: string | null | undefined) => {
+        const safeSessionId = String(sessionId || '').trim();
+        if (!safeSessionId) return;
+        setSessionActivityById((prev) => {
+            if (prev[safeSessionId] !== 'running') return prev;
+            const next = { ...prev };
+            delete next[safeSessionId];
+            return next;
+        });
+    }, []);
+
+    useEffect(() => {
+        isActiveRef.current = isActive;
+    }, [isActive]);
 
     useEffect(() => {
         activeSessionIdRef.current = activeSessionId;
@@ -799,6 +854,32 @@ export function RedClaw({
     useEffect(() => {
         sessionListRef.current = sessionList;
     }, [sessionList]);
+
+    useEffect(() => {
+        return subscribeRuntimeEventStream({
+            onPhaseStart: ({ sessionId }) => markSessionRunning(sessionId),
+            onResponseDelta: ({ sessionId }) => markSessionRunning(sessionId),
+            onToolRequest: ({ sessionId }) => markSessionRunning(sessionId),
+            onTaskNodeChanged: ({ sessionId, status }) => {
+                if (status === 'running' || status === 'pending') {
+                    markSessionRunning(sessionId);
+                }
+            },
+            onCliInstallStarted: ({ sessionId }) => markSessionRunning(sessionId),
+            onCliExecutionStarted: ({ sessionId }) => markSessionRunning(sessionId),
+            onCliEscalationRequested: ({ sessionId }) => markSessionRunning(sessionId),
+            onChatDone: ({ sessionId, status }) => {
+                if (status === 'completed') {
+                    markSessionComplete(sessionId);
+                } else {
+                    clearRunningSessionActivity(sessionId);
+                }
+            },
+            onChatResponseEnd: ({ sessionId }) => markSessionComplete(sessionId),
+            onChatCancelled: ({ sessionId }) => clearRunningSessionActivity(sessionId),
+            onChatError: ({ sessionId }) => clearRunningSessionActivity(sessionId),
+        });
+    }, [clearRunningSessionActivity, markSessionComplete, markSessionRunning]);
 
     useEffect(() => {
         if (teamRooms.length === 0) {
@@ -889,6 +970,12 @@ export function RedClaw({
     const activeSpeakerSessionId = activeAiSurface === 'advisor' && selectedAdvisorId
         ? advisorSessionIds[selectedAdvisorId] || null
         : activeSessionId;
+    useEffect(() => {
+        activeSpeakerSessionIdRef.current = activeSpeakerSessionId;
+        if (isActive && activeSpeakerSessionId) {
+            clearSessionActivity(activeSpeakerSessionId);
+        }
+    }, [activeSpeakerSessionId, clearSessionActivity, isActive]);
     const activeSpeakerMention = activeAiSurface === 'advisor' && selectedAdvisor ? {
         id: selectedAdvisor.id,
         name: selectedAdvisor.name,
@@ -959,6 +1046,9 @@ export function RedClaw({
 
                 const nextItem = createContextSessionListItem(session);
                 setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
+                sessionListRef.current = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
+                activeSessionIdRef.current = session.id;
+                activeSpeakerSessionIdRef.current = session.id;
                 setActiveSessionId(session.id);
                 hasSessionSnapshotRef.current = true;
                 routedPendingMessageRef.current = pendingMessage;
@@ -1025,6 +1115,9 @@ export function RedClaw({
                     setActiveSpaceId(nextActiveSpaceId);
                     setActiveSpaceName(nextSpaceName);
                     setSessionList([]);
+                    sessionListRef.current = [];
+                    activeSessionIdRef.current = null;
+                    activeSpeakerSessionIdRef.current = null;
                     setActiveSessionId(null);
                 }
                 return;
@@ -1057,6 +1150,9 @@ export function RedClaw({
                 if (!created) {
                     if (!hasSessionSnapshotRef.current) {
                         setSessionList([]);
+                        sessionListRef.current = [];
+                        activeSessionIdRef.current = null;
+                        activeSpeakerSessionIdRef.current = null;
                         setActiveSessionId(null);
                     }
                     return;
@@ -1070,6 +1166,9 @@ export function RedClaw({
             setActiveSpaceId(nextActiveSpaceId);
             setActiveSpaceName(nextSpaceName);
             setSessionList(items);
+            sessionListRef.current = items;
+            activeSessionIdRef.current = nextActiveSessionId;
+            activeSpeakerSessionIdRef.current = nextActiveSessionId;
             setActiveSessionId(nextActiveSessionId);
             hasSessionSnapshotRef.current = true;
             debugUi('sessions:loaded', {
@@ -1082,6 +1181,9 @@ export function RedClaw({
             console.error('Failed to load RedClaw context sessions:', error);
             if (!hasSessionSnapshotRef.current) {
                 setSessionList([]);
+                sessionListRef.current = [];
+                activeSessionIdRef.current = null;
+                activeSpeakerSessionIdRef.current = null;
                 setActiveSessionId(null);
             }
         } finally {
@@ -1372,11 +1474,16 @@ export function RedClaw({
                 throw new Error('create context session timed out');
             }
             const nextItem = createContextSessionListItem(session);
-            setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
-            setActiveSessionId(session.id);
+            flushSync(() => {
+                const nextList = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
+                sessionListRef.current = nextList;
+                setSessionList(nextList);
+                setActiveSessionId(session.id);
+                setActiveAiSurface('redclaw');
+                hasSessionSnapshotRef.current = true;
+            });
             activeSessionIdRef.current = session.id;
-            setActiveAiSurface('redclaw');
-            hasSessionSnapshotRef.current = true;
+            activeSpeakerSessionIdRef.current = session.id;
             debugUi('sessions:create_done', { sessionId: session.id, activeSpaceId: nextActiveSpaceId });
             return session.id;
         } catch (error) {
@@ -1391,6 +1498,8 @@ export function RedClaw({
     const startNewDraftSession = useCallback(() => {
         onOpenChatSurface?.();
         setActiveAiSurface('redclaw');
+        activeSessionIdRef.current = null;
+        activeSpeakerSessionIdRef.current = null;
         setActiveSessionId(null);
         setPreviewTarget(null);
         setChatRefreshKey((value) => value + 1);
@@ -1413,8 +1522,10 @@ export function RedClaw({
     }, [isActive, navigationAction, onNavigationActionConsumed, onOpenChatSurface, startNewDraftSession]);
 
     const switchSession = useCallback((nextSessionId: string) => {
-        if (!nextSessionId || nextSessionId === activeSessionIdRef.current) return;
+        if (!nextSessionId) return;
         setActiveAiSurface('redclaw');
+        activeSessionIdRef.current = nextSessionId;
+        activeSpeakerSessionIdRef.current = nextSessionId;
         setActiveSessionId(nextSessionId);
         debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
     }, [activeSpaceId, debugUi]);
@@ -1477,6 +1588,7 @@ export function RedClaw({
     const switchHistorySession = useCallback((session: RedClawHistoryListItem) => {
         if (!session?.id) return;
         onOpenChatSurface?.();
+        clearSessionActivity(session.id);
         if (session.surface === 'advisor' && session.advisorId) {
             setSelectedAdvisorId(session.advisorId);
             setAdvisorSessionIds((prev) => ({ ...prev, [session.advisorId!]: session.id }));
@@ -1489,7 +1601,7 @@ export function RedClaw({
             return;
         }
         switchSession(session.id);
-    }, [onOpenChatSurface, switchSession]);
+    }, [clearSessionActivity, onOpenChatSurface, switchSession]);
 
     const createAdvisorSession = useCallback(async (advisor: AdvisorProfile): Promise<string | null> => {
         setSpeakerSessionLoading(true);
@@ -1707,6 +1819,7 @@ export function RedClaw({
                 localStorage.removeItem(redClawLastSessionStorageKey(nextActiveSpaceId));
             }
             const remaining = sessionListRef.current.filter((item) => item.id !== targetSessionId);
+            sessionListRef.current = remaining;
             setSessionList(remaining);
 
             if (activeSessionIdRef.current !== targetSessionId) {
@@ -1714,6 +1827,8 @@ export function RedClaw({
             }
 
             if (remaining.length > 0) {
+                activeSessionIdRef.current = remaining[0].id;
+                activeSpeakerSessionIdRef.current = remaining[0].id;
                 setActiveSessionId(remaining[0].id);
                 return;
             }
@@ -1733,7 +1848,10 @@ export function RedClaw({
                 throw new Error('create context session timed out');
             }
             const nextItem = createContextSessionListItem(created);
+            sessionListRef.current = [nextItem];
             setSessionList([nextItem]);
+            activeSessionIdRef.current = created.id;
+            activeSpeakerSessionIdRef.current = created.id;
             setActiveSessionId(created.id);
         } catch (error) {
             console.error('Failed to delete RedClaw session:', error);
@@ -2308,12 +2426,14 @@ export function RedClaw({
                 teamRooms={teamRooms}
                 activeRoomId={selectedRoomId}
                 activeSurface={activeAiSurface}
+                sessionActivityById={sessionActivityById}
                 onCreateRoom={createRoomFromRedClaw}
                 onSwitchRoom={switchRoom}
                 onDeleteRoom={(room) => void deleteRoomFromRedClaw(room)}
                 onSwitchSession={switchHistorySession}
                 onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
                 onRenameSession={renameUnifiedHistorySession}
+                onOpenManuscript={onOpenManuscript}
             />
         );
     }, [
@@ -2324,8 +2444,10 @@ export function RedClaw({
         deleteUnifiedHistorySession,
         historyLoading,
         onGlobalSidebarContentChange,
+        onOpenManuscript,
         renameUnifiedHistorySession,
         selectedRoomId,
+        sessionActivityById,
         switchHistorySession,
         switchRoom,
         teamRooms,
@@ -2413,13 +2535,12 @@ export function RedClaw({
                                     <Chat
                                         isActive={isActive}
                                         onExecutionStateChange={setIsRedClawChatExecuting}
-                                        key={`redclaw:${activeAiSurface}:${activeSpeakerSessionId || 'pending'}:${chatRefreshKey}`}
+                                        key={`redclaw:${activeAiSurface}:${activeAiSurface === 'advisor' ? selectedAdvisorId || 'advisor' : 'redclaw'}:${chatRefreshKey}`}
                                         fixedSessionId={activeSpeakerSessionId}
                                         fixedSessionDraft={!activeSpeakerSessionId}
                                         onEnsureSessionForSend={ensureActiveSpeakerSessionForSend}
                                         pendingMessage={activeAiSurface === 'redclaw' ? resolvedPendingMessage : null}
                                         onMessageConsumed={onPendingMessageConsumed}
-                                        defaultCollapsed={true}
                                         showClearButton={false}
                                         fixedSessionBannerText=""
                                         showWelcomeShortcuts={true}

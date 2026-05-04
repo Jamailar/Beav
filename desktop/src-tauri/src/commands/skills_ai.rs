@@ -111,7 +111,7 @@ pub fn handle_skills_ai_channel(
                     changed
                 };
                 if changed {
-                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 }
                 Ok(list)
             }
@@ -193,7 +193,7 @@ pub fn handle_skills_ai_channel(
                 };
                 write_skill_record_to_path(&created, &path)?;
                 let _ = refresh_skill_store_catalog(state);
-                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 Ok(json!({
                     "success": true,
                     "location": created.location,
@@ -220,7 +220,7 @@ pub fn handle_skills_ai_channel(
                 };
                 write_skill_record_to_path(&skill, &path)?;
                 let _ = refresh_skill_store_catalog(state);
-                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 Ok(json!({ "success": true, "path": path.display().to_string() }))
             }
             "skills:disable" | "skills:enable" => {
@@ -234,7 +234,7 @@ pub fn handle_skills_ai_channel(
                     Ok(json!({ "success": true }))
                 })
                 .map(|value| {
-                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                     value
                 })
             }
@@ -249,7 +249,7 @@ pub fn handle_skills_ai_channel(
                 };
                 write_skill_record_to_path(&created, &path)?;
                 let _ = refresh_skill_store_catalog(state);
-                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                 Ok(json!({
                     "success": true,
                     "displayName": slug,

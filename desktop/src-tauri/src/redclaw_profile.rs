@@ -65,7 +65,9 @@ fn build_default_agent_profile_doc() -> String {
         "- 先执行再解释，优先给出可落地动作。",
         "- 先判断工作形态：默认由 RedClaw 自己直接完成；只有任务明显需要研究、选题、文案、媒体、发布、质检等多角色接力时，才自动激活临时团队。",
         "- 问候、确认、状态查询、简单改写、简单标题/标签/封面文案、小段创作、单一文件微调，都不要组队，直接在当前对话中完成。",
-        "- 用户明确要求端到端、多交付物、素材/知识检索、配图/视频、发布包、合规复核、复盘学习或多 Agent 协作时，再由 RedClaw 自己决定团队成员和任务分配。",
+        "- 用户明确要求端到端、多交付物、素材/知识检索、配图/视频、发布包、合规复核、复盘学习或多 Agent 协作时，先提出 team 成员和分工方案，等待用户明确确认后，才能创建 team/session 或添加 team 成员。",
+        "- 创建 team/session 时必须使用 `team.session.create`；不要把团队创建误当成 RedClaw 定时任务或 task draft。",
+        "- 用户确认 team 方案后，调用 team 创建/成员添加动作时必须携带 `userConfirmedTeamPlan=true`。",
         "- 涉及本应用能力时优先调用 redbox_* 工具。",
         "- 文件操作严格限制在 currentSpaceRoot。",
         "- 对文件数量/列表/状态类事实，必须先工具验证。",
@@ -80,6 +82,22 @@ fn build_default_agent_profile_doc() -> String {
         "目标 -> 选题 -> 文案 -> 配图 -> 发布计划 -> 数据复盘 -> 下一轮假设",
     ]
     .join("\n")
+}
+
+fn runtime_team_confirmation_rules() -> &'static str {
+    "## Team 创建硬规则\n- 创建 team/session 前必须先向用户列出 team 成员和分工方案，并等待用户明确确认。\n- 未确认前只能提案和询问，不得调用 team.session.create、team.member.spawn 或 redclaw:orchestration-create-run。\n- 用户确认后，调用 team 创建或添加成员动作时必须传入 userConfirmedTeamPlan=true。\n- 创建团队必须使用 team.session.create；不要把团队创建误当成 RedClaw 定时任务、task draft 或 redclaw.task.preview。"
+}
+
+fn agent_profile_with_runtime_rules(agent: String) -> String {
+    if agent.contains("Team 创建硬规则") || agent.contains("userConfirmedTeamPlan") {
+        return agent;
+    }
+    let trimmed = agent.trim_end();
+    if trimmed.is_empty() {
+        runtime_team_confirmation_rules().to_string()
+    } else {
+        format!("{trimmed}\n\n{}", runtime_team_confirmation_rules())
+    }
 }
 
 fn build_default_soul_profile_doc() -> String {
@@ -191,7 +209,7 @@ fn build_default_space_writing_style_skill_doc() -> String {
     [
         "---",
         "description: 当前空间的默认写作风格指导模板，后续会被风格初始化结果覆盖或细化。",
-        "allowedRuntimeModes: [wander, redclaw, chatroom]",
+        "allowedRuntimeModes: [wander, redclaw, team]",
         "hookMode: inline",
         "autoActivate: false",
         "activationScope: turn",
@@ -664,7 +682,7 @@ fn build_space_writing_style_skill(
     let mut lines = vec![
         "---".to_string(),
         "description: 当前空间自动生成的写作风格指导，覆盖选题 framing、标题、正文、改写、润色与 CTA 表达。".to_string(),
-        "allowedRuntimeModes: [wander, redclaw, chatroom]".to_string(),
+        "allowedRuntimeModes: [wander, redclaw, team]".to_string(),
         "hookMode: inline".to_string(),
         "autoActivate: false".to_string(),
         "activationScope: turn".to_string(),
@@ -1116,7 +1134,7 @@ pub(crate) fn ensure_redclaw_space_writing_style_skill(
     }
     write_skill_record_to_path(&skill_record, &skill_path)?;
     let _ = refresh_skill_store_catalog(state);
-    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
     Ok(true)
 }
 
@@ -1400,7 +1418,7 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
         .ok_or_else(|| "无法解析当前空间 writing-style 技能路径".to_string())?;
     write_skill_record_to_path(&skill_record, &skill_path)?;
     let _ = refresh_skill_store_catalog(state);
-    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "chatroom"]);
+    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
     let _ = fs::remove_file(profile_root.join("BOOTSTRAP.md"));
 
     let mut onboarding = load_redclaw_onboarding_state(state)?;
@@ -1765,7 +1783,9 @@ pub(crate) fn load_redclaw_profile_prompt_bundle(
 
     Ok(RedclawProfilePromptBundle {
         profile_root: profile_root.clone(),
-        agent: read_text_if_exists(&profile_root.join("Agent.md")),
+        agent: agent_profile_with_runtime_rules(read_text_if_exists(
+            &profile_root.join("Agent.md"),
+        )),
         soul: read_text_if_exists(&profile_root.join("Soul.md")),
         identity: read_text_if_exists(&profile_root.join("identity.md")),
         user: read_text_if_exists(&profile_root.join("user.md")),

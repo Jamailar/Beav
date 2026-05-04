@@ -22,7 +22,7 @@ CLI runtime host control plane 的基础模块目录。
 ## 当前边界
 
 - 当前已覆盖基础域模型、探测、环境存储、resolver、执行、install/verify 路由与最小事件接线
-- `app_cli(action="cli_runtime.*")` 已作为 canonical runtime surface 暴露给 diagnostics / redclaw runtime
+- `workflow(action="cli_runtime.*")` 已作为 canonical runtime surface 暴露给 diagnostics / redclaw runtime
 - 已拆出 installer backend、sandbox spec 和 terminal transport 抽象，并在 macOS 上接入 `sandbox-exec` 作为受控执行 backend
 - Settings 已提供 CLI Runtime install composer 与 recent install queue
 - 视频 `ffmpeg` / `remotion` 执行路径已经迁移到 CLI runtime

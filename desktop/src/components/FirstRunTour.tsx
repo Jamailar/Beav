@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, FileEdit, FolderOpen, Sparkles } from 'lucide-react';
+import { Bot, FileEdit, FolderOpen, Sparkles, X } from 'lucide-react';
 import tippy, { type Instance } from 'tippy.js';
 import type { ViewType } from '../App';
 import {
@@ -106,6 +106,19 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
     finishTour();
     onNavigate(view);
   }, [finishTour, onNavigate]);
+
+  const primaryShortcut = announcement?.shortcuts?.[0] || null;
+  const handlePrimaryAction = useCallback(() => {
+    if (primaryShortcut) {
+      handleShortcutNavigate(primaryShortcut.view);
+      return;
+    }
+    if (steps.length > 0) {
+      startTour();
+      return;
+    }
+    finishTour();
+  }, [finishTour, handleShortcutNavigate, primaryShortcut, startTour, steps.length]);
 
   useEffect(() => {
     if (!initialized) return;
@@ -265,47 +278,30 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
     <div className="redbox-tour-overlay" role="dialog" aria-modal="true" aria-label="RedBox 更新提示">
       <div className="redbox-tour-backdrop" onClick={finishTour} />
       <div className="redbox-tour-panel">
+        <button
+          type="button"
+          className="redbox-tour-panel-close"
+          onClick={finishTour}
+          aria-label="关闭更新提示"
+          title="关闭"
+        >
+          <X className="h-4 w-4" strokeWidth={1.8} />
+        </button>
         <div className="redbox-tour-hero" aria-hidden="true">
-          <div className="redbox-tour-hero-orbit redbox-tour-hero-orbit--one" />
-          <div className="redbox-tour-hero-orbit redbox-tour-hero-orbit--two" />
-          <div className="redbox-tour-hero-grid redbox-tour-hero-grid--compact">
-            {announcement.hero.map((feature) => {
+          <div className="redbox-tour-hero-blob redbox-tour-hero-blob--one" />
+          <div className="redbox-tour-hero-blob redbox-tour-hero-blob--two" />
+          <div className="redbox-tour-hero-pill">
+            {announcement.hero.slice(0, 1).map((feature) => {
               const Icon = HERO_ICON_MAP[feature.icon];
-              return (
-                <div key={feature.id} className="redbox-tour-hero-card redbox-tour-hero-card--compact">
-                  <Icon className="h-4 w-4" strokeWidth={1.75} />
-                  <span>{feature.label}</span>
-                </div>
-              );
+              return <Icon key={feature.id} className="h-4 w-4" strokeWidth={1.75} />;
             })}
+            <span>{announcement.hero[0]?.label || announcement.badge}</span>
           </div>
         </div>
 
         <div className="redbox-tour-panel-body">
-          <div className="redbox-tour-panel-kicker">{announcement.badge}</div>
           <h2 className="redbox-tour-panel-title">{announcement.title}</h2>
           <p className="redbox-tour-panel-desc">{announcement.summary}</p>
-
-          <ul className="redbox-tour-highlight-list">
-            {announcement.highlights.map((item) => (
-              <li key={item} className="redbox-tour-highlight-item">{item}</li>
-            ))}
-          </ul>
-
-          {announcement.shortcuts && announcement.shortcuts.length > 0 && (
-            <div className="redbox-tour-shortcuts">
-              {announcement.shortcuts.map((shortcut) => (
-                <button
-                  key={shortcut.id}
-                  type="button"
-                  onClick={() => handleShortcutNavigate(shortcut.view)}
-                  className="redbox-tour-shortcut-btn"
-                >
-                  {shortcut.label}
-                </button>
-              ))}
-            </div>
-          )}
 
           <div className="redbox-tour-panel-actions">
             <button
@@ -313,17 +309,15 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
               onClick={finishTour}
               className="redbox-tour-panel-btn redbox-tour-panel-btn-ghost"
             >
-              知道了
+              稍后
             </button>
-            {steps.length > 0 && (
-              <button
-                type="button"
-                onClick={startTour}
-                className="redbox-tour-panel-btn redbox-tour-panel-btn-primary"
-              >
-                查看引导
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handlePrimaryAction}
+              className="redbox-tour-panel-btn redbox-tour-panel-btn-primary"
+            >
+              开始使用
+            </button>
           </div>
         </div>
       </div>

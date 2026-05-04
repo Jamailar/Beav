@@ -7,13 +7,19 @@ pub struct NormalizedToolCall {
 
 pub fn canonical_tool_name(name: &str) -> &str {
     match name.trim() {
-        "Read" | "List" | "Search" => "redbox_fs",
-        "Write" | "Redbox" => "app_cli",
-        "app_cli"
+        "Read" | "List" | "Search" => "resource",
+        "Write" | "Operate" | "Redbox" => "workflow",
+        "workflow"
+        | "app_cli"
+        | "query"
         | "redbox_app_query"
+        | "profile_doc"
         | "redbox_profile_doc"
+        | "mcp"
         | "redbox_mcp"
+        | "skill"
         | "redbox_skill"
+        | "runtime_control"
         | "redbox_runtime_control"
         | "redbox_list_spaces"
         | "redbox_list_advisors"
@@ -24,16 +30,17 @@ pub fn canonical_tool_name(name: &str) -> &str {
         | "redbox_get_settings_summary"
         | "redbox_list_redclaw_projects"
         | "redclaw_update_profile_doc"
-        | "redclaw_update_creator_profile" => "app_cli",
+        | "redclaw_update_creator_profile" => "workflow",
         "bash" | "Bash" => "bash",
-        "redbox_fs"
+        "resource"
+        | "redbox_fs"
         | "redbox_list_directory"
         | "redbox_read_path"
         | "knowledge_search"
         | "knowledge_glob"
         | "knowledge_grep"
-        | "knowledge_read" => "redbox_fs",
-        "redbox_editor" => "redbox_editor",
+        | "knowledge_read" => "resource",
+        "editor" | "redbox_editor" => "editor",
         other => other,
     }
 }
@@ -44,8 +51,8 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "List" => normalize_list_call(arguments),
         "Search" => normalize_search_call(arguments),
         "Write" => normalize_write_call(arguments),
-        "Redbox" => normalize_redbox_call(arguments),
-        "app_cli" => normalize_app_cli_call(arguments),
+        "Operate" | "Redbox" => normalize_redbox_call(arguments),
+        "workflow" | "app_cli" => normalize_app_cli_call(arguments),
         "bash" | "Bash" => passthrough("bash", arguments),
         "redbox_list_spaces" => app_query("spaces.list", arguments),
         "redbox_list_advisors" => app_query("advisors.list", arguments),
@@ -62,13 +69,13 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "knowledge_read" => knowledge_fs_call("read", arguments),
         "redclaw_update_profile_doc" => profile_update(arguments),
         "redclaw_update_creator_profile" => creator_profile_update(arguments),
-        "redbox_mcp" => mcp_to_app_cli(arguments),
-        "redbox_skill" => skill_to_app_cli(arguments),
-        "redbox_runtime_control" => runtime_to_app_cli(arguments),
-        "redbox_app_query" => app_query_direct(arguments),
-        "redbox_fs" => normalize_redbox_fs_call(arguments),
-        "redbox_profile_doc" => profile_doc_to_app_cli(arguments),
-        "redbox_editor" => normalize_redbox_editor_call(arguments),
+        "mcp" | "redbox_mcp" => mcp_to_app_cli(arguments),
+        "skill" | "redbox_skill" => skill_to_app_cli(arguments),
+        "runtime_control" | "redbox_runtime_control" => runtime_to_app_cli(arguments),
+        "query" | "redbox_app_query" => app_query_direct(arguments),
+        "resource" | "redbox_fs" => normalize_redbox_fs_call(arguments),
+        "profile_doc" | "redbox_profile_doc" => profile_doc_to_app_cli(arguments),
+        "editor" | "redbox_editor" => normalize_redbox_editor_call(arguments),
         _ => NormalizedToolCall {
             name: "",
             arguments: json!({}),
@@ -112,7 +119,7 @@ fn compat_metadata_value(
 fn normalize_app_cli_call(arguments: &Value) -> NormalizedToolCall {
     let Some(object) = arguments.as_object() else {
         return NormalizedToolCall {
-            name: "app_cli",
+            name: "workflow",
             arguments: json!({}),
         };
     };
@@ -122,13 +129,13 @@ fn normalize_app_cli_call(arguments: &Value) -> NormalizedToolCall {
         normalized.insert("action".to_string(), json!(normalized_action.clone()));
         if normalized_action != action.trim() {
             if let Some(metadata) =
-                compat_metadata_value(Some("app_cli"), None, Some(&normalized_action))
+                compat_metadata_value(Some("workflow"), None, Some(&normalized_action))
             {
                 normalized.insert("__compat".to_string(), metadata);
             }
         }
         return NormalizedToolCall {
-            name: "app_cli",
+            name: "workflow",
             arguments: Value::Object(normalized),
         };
     }
@@ -140,11 +147,11 @@ fn normalize_app_cli_call(arguments: &Value) -> NormalizedToolCall {
     let payload = object.get("payload").cloned().unwrap_or_else(|| json!({}));
     if command.is_empty() {
         let mut normalized = object.clone();
-        if let Some(metadata) = compat_metadata_value(Some("app_cli"), Some(""), None) {
+        if let Some(metadata) = compat_metadata_value(Some("workflow"), Some(""), None) {
             normalized.insert("__compat".to_string(), metadata);
         }
         return NormalizedToolCall {
-            name: "app_cli",
+            name: "workflow",
             arguments: Value::Object(normalized),
         };
     }
@@ -153,7 +160,7 @@ fn normalize_app_cli_call(arguments: &Value) -> NormalizedToolCall {
 
 fn normalize_redbox_editor_call(arguments: &Value) -> NormalizedToolCall {
     let Some(object) = arguments.as_object() else {
-        return passthrough("redbox_editor", arguments);
+        return passthrough("editor", arguments);
     };
     let mut normalized = flatten_payload_fields(object);
     let Some(action) = normalized
@@ -162,30 +169,28 @@ fn normalize_redbox_editor_call(arguments: &Value) -> NormalizedToolCall {
         .map(ToString::to_string)
     else {
         return NormalizedToolCall {
-            name: "redbox_editor",
+            name: "editor",
             arguments: Value::Object(normalized),
         };
     };
     let normalized_action = normalize_action_token(&action);
     normalized.insert("action".to_string(), json!(normalized_action.clone()));
     if normalized_action != action.trim() {
-        if let Some(metadata) = compat_metadata_value(
-            Some("redbox_editor"),
-            Some(&action),
-            Some(&normalized_action),
-        ) {
+        if let Some(metadata) =
+            compat_metadata_value(Some("editor"), Some(&action), Some(&normalized_action))
+        {
             normalized.insert("__compat".to_string(), metadata);
         }
     }
     NormalizedToolCall {
-        name: "redbox_editor",
+        name: "editor",
         arguments: Value::Object(normalized),
     }
 }
 
 fn normalize_redbox_fs_call(arguments: &Value) -> NormalizedToolCall {
     let Some(object) = arguments.as_object() else {
-        return passthrough("redbox_fs", arguments);
+        return passthrough("resource", arguments);
     };
     let mut normalized = flatten_payload_fields(object);
     let action = normalized
@@ -218,13 +223,13 @@ fn normalize_redbox_fs_call(arguments: &Value) -> NormalizedToolCall {
     }
     if canonical_action != action && !action.is_empty() {
         if let Some(metadata) =
-            compat_metadata_value(Some("redbox_fs"), Some(&action), Some(&canonical_action))
+            compat_metadata_value(Some("resource"), Some(&action), Some(&canonical_action))
         {
             normalized.insert("__compat".to_string(), metadata);
         }
     }
     NormalizedToolCall {
-        name: "redbox_fs",
+        name: "resource",
         arguments: Value::Object(normalized),
     }
 }
@@ -396,7 +401,7 @@ fn normalize_write_call(arguments: &Value) -> NormalizedToolCall {
             );
             copy_universal(&mut payload, &object, "source");
             NormalizedToolCall {
-                name: "redbox_editor",
+                name: "editor",
                 arguments: Value::Object(with_action_payload(
                     action,
                     payload,
@@ -465,7 +470,7 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 return app_cli_action_call(
                     action,
                     Value::Object(input),
-                    Some("Redbox"),
+                    Some("Operate"),
                     Some(&format!("cli_runtime.{operation}")),
                 );
             }
@@ -476,13 +481,13 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("manuscript" | "manuscripts", "list") => app_cli_action_call(
             "manuscripts.list",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("manuscript.list"),
         ),
         ("manuscript" | "manuscripts", "create") => app_cli_action_call(
             "manuscripts.createProject",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("manuscript.create"),
         ),
         ("manuscript" | "manuscripts", "get") => {
@@ -498,14 +503,14 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             app_cli_action_call(
                 action,
                 Value::Object(map),
-                Some("Redbox"),
+                Some("Operate"),
                 Some("manuscript.get"),
             )
         }
         ("manuscript" | "manuscripts", "update" | "run" | "write") => app_cli_action_call(
             "manuscripts.writeCurrent",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("manuscript.update"),
         ),
         ("profile" | "profiles", "list" | "get") => {
@@ -517,14 +522,14 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 app_cli_action_call(
                     "redclaw.profile.read",
                     Value::Object(map),
-                    Some("Redbox"),
+                    Some("Operate"),
                     Some("profile.get"),
                 )
             } else {
                 app_cli_action_call(
                     "redclaw.profile.bundle",
                     payload,
-                    Some("Redbox"),
+                    Some("Operate"),
                     Some("profile.list"),
                 )
             }
@@ -532,20 +537,20 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("profile" | "profiles", "update") => app_cli_action_call(
             "redclaw.profile.update",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("profile.update"),
         ),
         ("memory", "list") => {
-            app_cli_action_call("memory.list", payload, Some("Redbox"), Some("memory.list"))
+            app_cli_action_call("memory.list", payload, Some("Operate"), Some("memory.list"))
         }
         ("memory", "search" | "get") => app_cli_action_call(
             "memory.search",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("memory.search"),
         ),
         ("memory", "create" | "update") => {
-            app_cli_action_call("memory.add", payload, Some("Redbox"), Some("memory.add"))
+            app_cli_action_call("memory.add", payload, Some("Operate"), Some("memory.add"))
         }
         ("web", "get" | "read" | "fetch") => {
             let mut map = payload.as_object().cloned().unwrap_or_default();
@@ -555,102 +560,69 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             app_cli_action_call(
                 "web.fetch",
                 Value::Object(map),
-                Some("Redbox"),
+                Some("Operate"),
                 Some("web.fetch"),
             )
         }
         ("subject" | "subjects", "search" | "list") => app_cli_action_call(
             "subjects.search",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("subject.search"),
         ),
         ("subject" | "subjects", "get") => {
             let payload = normalize_id_payload(payload, "id");
-            app_cli_action_call("subjects.get", payload, Some("Redbox"), Some("subject.get"))
+            app_cli_action_call(
+                "subjects.get",
+                payload,
+                Some("Operate"),
+                Some("subject.get"),
+            )
         }
         ("image", "generate" | "create" | "run") => app_cli_action_call(
             "image.generate",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("image.generate"),
         ),
         ("video", "generate" | "run") => app_cli_action_call(
             "video.generate",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("video.generate"),
         ),
         ("video", "create") => app_cli_action_call(
             "video.projectCreate",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("video.projectCreate"),
         ),
-        ("task" | "redclaw.task", "list") => app_cli_action_call(
-            "redclaw.task.list",
-            payload,
-            Some("Redbox"),
-            Some("task.list"),
-        ),
-        ("task" | "redclaw.task", "get") => app_cli_action_call(
-            "redclaw.task.stats",
-            payload,
-            Some("Redbox"),
-            Some("task.get"),
-        ),
-        ("task" | "redclaw.task", "create") => {
-            let action = if payload.get("previewToken").is_some() {
-                "redclaw.task.create"
-            } else {
-                "redclaw.task.preview"
-            };
-            app_cli_action_call(action, payload, Some("Redbox"), Some("task.create"))
-        }
-        ("task" | "redclaw.task", "confirm") => app_cli_action_call(
-            "redclaw.task.confirm",
-            payload,
-            Some("Redbox"),
-            Some("task.confirm"),
-        ),
-        ("task" | "redclaw.task", "update") => app_cli_action_call(
-            "redclaw.task.update",
-            payload,
-            Some("Redbox"),
-            Some("task.update"),
-        ),
-        ("task" | "redclaw.task", "delete" | "cancel") => app_cli_action_call(
-            "redclaw.task.cancel",
-            payload,
-            Some("Redbox"),
-            Some("task.cancel"),
-        ),
         ("skill" | "skills", "list") => {
-            app_cli_action_call("skills.list", payload, Some("Redbox"), Some("skill.list"))
+            app_cli_action_call("skills.list", payload, Some("Operate"), Some("skill.list"))
         }
         ("skill" | "skills", "run" | "create" | "confirm") => app_cli_action_call(
             "skills.invoke",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("skill.invoke"),
         ),
         ("mcp", "list") => {
-            app_cli_action_call("mcp.list", payload, Some("Redbox"), Some("mcp.list"))
+            app_cli_action_call("mcp.list", payload, Some("Operate"), Some("mcp.list"))
         }
         ("mcp", "get") => app_cli_action_call(
             "mcp.sessions",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("mcp.sessions"),
         ),
         ("mcp", "verify") => {
-            app_cli_action_call("mcp.test", payload, Some("Redbox"), Some("mcp.test"))
+            app_cli_action_call("mcp.test", payload, Some("Operate"), Some("mcp.test"))
         }
         ("mcp", "install" | "create" | "update") => {
-            app_cli_action_call("mcp.save", payload, Some("Redbox"), Some("mcp.save"))
+            app_cli_action_call("mcp.save", payload, Some("Operate"), Some("mcp.save"))
         }
         ("mcp", "run" | "call") => {
-            app_cli_action_call("mcp.call", payload, Some("Redbox"), Some("mcp.call"))
+            app_cli_action_call("mcp.call", payload, Some("Operate"), Some("mcp.call"))
         }
         ("editor", "run" | "update" | "generate" | "export") => {
             normalize_redbox_editor_operation(&operation, payload)
@@ -658,49 +630,49 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("runtime", "get" | "list") => app_cli_action_call(
             "runtime.query",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("runtime.query"),
         ),
         ("runtime", "create") => app_cli_action_call(
             "runtime.tasks.create",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("runtime.create"),
         ),
         ("runtime", "resume") => app_cli_action_call(
             "runtime.tasks.resume",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("runtime.resume"),
         ),
         ("runtime", "cancel") => app_cli_action_call(
             "runtime.tasks.cancel",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("runtime.cancel"),
         ),
         ("cli_runtime", "list") => app_cli_action_call(
             "cli_runtime.environment.list",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("cli_runtime.list"),
         ),
         ("cli_runtime", "detect") => app_cli_action_call(
             "cli_runtime.detect",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("cli_runtime.detect"),
         ),
         ("cli_runtime", "discover" | "search") => app_cli_action_call(
             "cli_runtime.discover",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("cli_runtime.discover"),
         ),
         ("cli_runtime", "inspect") => app_cli_action_call(
             "cli_runtime.inspect",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("cli_runtime.inspect"),
         ),
         ("cli_runtime", "get" | "poll" | "snapshot") => {
@@ -714,14 +686,14 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 app_cli_action_call(
                     "cli_runtime.execution.get",
                     payload,
-                    Some("Redbox"),
+                    Some("Operate"),
                     Some("cli_runtime.get"),
                 )
             } else {
                 app_cli_action_call(
                     "cli_runtime.inspect",
                     payload,
-                    Some("Redbox"),
+                    Some("Operate"),
                     Some("cli_runtime.get"),
                 )
             }
@@ -729,19 +701,19 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("cli_runtime", "diagnose") => app_cli_action_call(
             "cli_runtime.diagnose",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("cli_runtime.diagnose"),
         ),
         ("cli_runtime", "install") => app_cli_action_call(
             "cli_runtime.install",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("cli_runtime.install"),
         ),
         ("cli_runtime", "run") => app_cli_action_call(
             "cli_runtime.execute",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("cli_runtime.run"),
         ),
         ("cli_runtime", "verify") => {
@@ -749,14 +721,14 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 app_cli_action_call(
                     "cli_runtime.verify",
                     payload,
-                    Some("Redbox"),
+                    Some("Operate"),
                     Some("cli_runtime.verify"),
                 )
             } else {
                 app_cli_action_call(
                     "cli_runtime.diagnose",
                     payload,
-                    Some("Redbox"),
+                    Some("Operate"),
                     Some("cli_runtime.verify"),
                 )
             }
@@ -764,13 +736,13 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("tool" | "tools", "search" | "list" | "get") => app_cli_action_call(
             "tools.search",
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("tools.search"),
         ),
         _ => app_cli_legacy_command_call(
             "help",
             json!({ "resource": resource, "operation": operation, "input": payload }),
-            Some("Redbox"),
+            Some("Operate"),
             Some("unknown"),
         ),
     }
@@ -795,11 +767,11 @@ fn normalize_redbox_editor_operation(operation: &str, payload: Value) -> Normali
     };
     let payload = payload.as_object().cloned().unwrap_or_default();
     NormalizedToolCall {
-        name: "redbox_editor",
+        name: "editor",
         arguments: Value::Object(with_action_payload(
             action,
             payload,
-            Some("Redbox"),
+            Some("Operate"),
             Some("editor.run"),
         )),
     }
@@ -890,7 +862,7 @@ fn universal_fs_call(
         payload.insert("__compat".to_string(), metadata);
     }
     NormalizedToolCall {
-        name: "redbox_fs",
+        name: "resource",
         arguments: Value::Object(payload),
     }
 }
@@ -906,7 +878,7 @@ fn universal_editor_call(
         copy_universal(&mut payload, source, key);
     }
     NormalizedToolCall {
-        name: "redbox_editor",
+        name: "editor",
         arguments: Value::Object(with_action_payload(
             action,
             payload,
@@ -1027,7 +999,7 @@ fn app_query(operation: &'static str, arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "query");
     copy_if_present(&mut payload, arguments, "status");
     copy_if_present(&mut payload, arguments, "limit");
-    app_cli_action_or_legacy_call("redbox_app_query", operation, Value::Object(payload))
+    app_cli_action_or_legacy_call("query", operation, Value::Object(payload))
 }
 
 fn app_query_direct(arguments: &Value) -> NormalizedToolCall {
@@ -1039,7 +1011,7 @@ fn app_query_direct(arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "query");
     copy_if_present(&mut payload, arguments, "status");
     copy_if_present(&mut payload, arguments, "limit");
-    app_cli_action_or_legacy_call("redbox_app_query", operation, Value::Object(payload))
+    app_cli_action_or_legacy_call("query", operation, Value::Object(payload))
 }
 
 fn fs_call(action: &'static str, arguments: &Value) -> NormalizedToolCall {
@@ -1049,7 +1021,7 @@ fn fs_call(action: &'static str, arguments: &Value) -> NormalizedToolCall {
     copy_if_present(&mut payload, arguments, "limit");
     copy_if_present(&mut payload, arguments, "maxChars");
     NormalizedToolCall {
-        name: "redbox_fs",
+        name: "resource",
         arguments: Value::Object(payload),
     }
 }
@@ -1071,7 +1043,7 @@ fn knowledge_fs_call(action: &'static str, arguments: &Value) -> NormalizedToolC
     copy_if_present(&mut payload, arguments, "maxChars");
     copy_if_present(&mut payload, arguments, "snippetChars");
     NormalizedToolCall {
-        name: "redbox_fs",
+        name: "resource",
         arguments: Value::Object(payload),
     }
 }
@@ -1121,13 +1093,13 @@ fn profile_doc_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         Some(translated) => app_cli_action_call(
             translated,
             Value::Object(payload),
-            Some("redbox_profile_doc"),
+            Some("profile_doc"),
             Some(action),
         ),
         None => app_cli_legacy_command_call(
             "help redclaw",
             Value::Object(payload),
-            Some("redbox_profile_doc"),
+            Some("profile_doc"),
             Some(action),
         ),
     }
@@ -1155,16 +1127,13 @@ fn mcp_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         _ => None,
     };
     match translated_action {
-        Some(translated) => app_cli_action_call(
-            translated,
-            arguments.clone(),
-            Some("redbox_mcp"),
-            Some(action),
-        ),
+        Some(translated) => {
+            app_cli_action_call(translated, arguments.clone(), Some("mcp"), Some(action))
+        }
         None => app_cli_legacy_command_call(
             &format!("mcp {}", action.replace('_', "-")),
             arguments.clone(),
-            Some("redbox_mcp"),
+            Some("mcp"),
             Some(action),
         ),
     }
@@ -1181,16 +1150,13 @@ fn skill_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         _ => None,
     };
     match translated_action {
-        Some(translated) => app_cli_action_call(
-            translated,
-            arguments.clone(),
-            Some("redbox_skill"),
-            Some(action),
-        ),
+        Some(translated) => {
+            app_cli_action_call(translated, arguments.clone(), Some("skill"), Some(action))
+        }
         None => app_cli_legacy_command_call(
             &legacy_skill_command(action),
             arguments.clone(),
-            Some("redbox_skill"),
+            Some("skill"),
             Some(action),
         ),
     }
@@ -1216,13 +1182,13 @@ fn runtime_to_app_cli(arguments: &Value) -> NormalizedToolCall {
         Some(translated) => app_cli_action_call(
             translated,
             arguments.clone(),
-            Some("redbox_runtime_control"),
+            Some("runtime_control"),
             Some(action),
         ),
         None => app_cli_legacy_command_call(
             &legacy_runtime_command(action),
             arguments.clone(),
-            Some("redbox_runtime_control"),
+            Some("runtime_control"),
             Some(action),
         ),
     }
@@ -1278,7 +1244,7 @@ fn app_cli_action_call(
         arguments.insert("__compat".to_string(), metadata);
     }
     NormalizedToolCall {
-        name: "app_cli",
+        name: "workflow",
         arguments: Value::Object(arguments),
     }
 }
@@ -1298,7 +1264,7 @@ fn app_cli_legacy_command_call(
         arguments.insert("__compat".to_string(), metadata);
     }
     NormalizedToolCall {
-        name: "app_cli",
+        name: "workflow",
         arguments: Value::Object(arguments),
     }
 }
@@ -1407,11 +1373,11 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         Some(action) => app_cli_action_call(
             action,
             Value::Object(translated_payload),
-            Some("app_cli"),
+            Some("workflow"),
             Some(command),
         ),
         None => {
-            app_cli_legacy_command_call(command, payload.clone(), Some("app_cli"), Some(command))
+            app_cli_legacy_command_call(command, payload.clone(), Some("workflow"), Some(command))
         }
     }
 }
@@ -1483,10 +1449,9 @@ mod tests {
 
     #[test]
     fn normalizes_runtime_control_to_app_cli() {
-        let normalized =
-            normalize_tool_call("redbox_runtime_control", &json!({ "action": "tasks_list" }));
+        let normalized = normalize_tool_call("runtime_control", &json!({ "action": "tasks_list" }));
 
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("runtime.tasks.list"))
@@ -1496,11 +1461,11 @@ mod tests {
     #[test]
     fn normalizes_profile_doc_to_app_cli() {
         let normalized = normalize_tool_call(
-            "redbox_profile_doc",
+            "profile_doc",
             &json!({ "action": "read", "docType": "user" }),
         );
 
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("redclaw.profile.read"))
@@ -1518,11 +1483,11 @@ mod tests {
     #[test]
     fn normalizes_mcp_to_app_cli() {
         let normalized = normalize_tool_call(
-            "redbox_mcp",
+            "mcp",
             &json!({ "action": "oauth_status", "serverId": "server-1" }),
         );
 
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("mcp.oauthStatus"))
@@ -1532,7 +1497,7 @@ mod tests {
     #[test]
     fn translates_legacy_app_cli_command_into_structured_action() {
         let normalized = normalize_tool_call(
-            "app_cli",
+            "workflow",
             &json!({ "command": "memory search --query creator" }),
         );
 
@@ -1558,7 +1523,7 @@ mod tests {
 
     #[test]
     fn normalizes_editor_legacy_action_names() {
-        let normalized = normalize_tool_call("redbox_editor", &json!({ "action": "project-read" }));
+        let normalized = normalize_tool_call("editor", &json!({ "action": "project-read" }));
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("project_read"))
@@ -1569,7 +1534,7 @@ mod tests {
     #[test]
     fn flattens_editor_payload_fields_for_structured_schema_calls() {
         let normalized = normalize_tool_call(
-            "redbox_editor",
+            "editor",
             &json!({
                 "action": "script_update",
                 "payload": { "content": "updated script" }
@@ -1584,7 +1549,7 @@ mod tests {
     #[test]
     fn normalizes_redbox_fs_legacy_scope_action_pairs() {
         let normalized = normalize_tool_call(
-            "redbox_fs",
+            "resource",
             &json!({ "scope": "knowledge", "action": "read", "path": "notes/demo.md" }),
         );
         assert_eq!(
@@ -1601,7 +1566,7 @@ mod tests {
     #[test]
     fn flattens_redbox_fs_payload_fields_for_structured_schema_calls() {
         let normalized = normalize_tool_call(
-            "redbox_fs",
+            "resource",
             &json!({
                 "action": "workspace.search",
                 "payload": { "query": "creator", "path": "docs" }
@@ -1617,7 +1582,7 @@ mod tests {
             "Read",
             &json!({ "path": "knowledge://notes/demo.md", "limit": 40 }),
         );
-        assert_eq!(normalized.name, "redbox_fs");
+        assert_eq!(normalized.name, "resource");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("knowledge.read"))
@@ -1631,7 +1596,7 @@ mod tests {
     #[test]
     fn normalizes_universal_read_current_manuscript_to_app_cli_action() {
         let normalized = normalize_tool_call("Read", &json!({ "path": "manuscripts://current" }));
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("manuscripts.readCurrent"))
@@ -1647,7 +1612,7 @@ mod tests {
                 "limit": 8000
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("web.fetch"))
@@ -1671,7 +1636,7 @@ mod tests {
     #[test]
     fn normalizes_universal_read_web_url_to_web_fetch() {
         let normalized = normalize_tool_call("Read", &json!({ "path": "web://example.com/a" }));
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("web.fetch"))
@@ -1691,7 +1656,7 @@ mod tests {
             "Search",
             &json!({ "path": "web://", "query": "oh-my-codex" }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(normalized.arguments.get("command"), Some(&json!("help")));
         assert_eq!(
             normalized
@@ -1708,7 +1673,7 @@ mod tests {
             "Write",
             &json!({ "path": "manuscripts://current", "content": "body" }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("manuscripts.writeCurrent"))
@@ -1725,14 +1690,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_image_generate_to_app_cli_action() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "image",
                 "operation": "generate",
                 "input": { "prompt": "cover" }
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("image.generate"))
@@ -1749,14 +1714,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_tools_search_to_app_cli_action() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "tools",
                 "operation": "search",
                 "input": { "query": "mcp" }
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("tools.search"))
@@ -1771,9 +1736,35 @@ mod tests {
     }
 
     #[test]
+    fn redbox_task_legacy_resource_is_not_mapped() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "task",
+                "operation": "create",
+                "input": {
+                    "name": "视频制作团队",
+                    "goal": "短视频从脚本、分镜到剪辑的协作团队"
+                }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(normalized.arguments.get("action"), None);
+        assert_eq!(normalized.arguments.get("command"), Some(&json!("help")));
+        assert_eq!(
+            normalized
+                .arguments
+                .get("__compat")
+                .and_then(|value| value.get("legacyCommand")),
+            Some(&json!("unknown"))
+        );
+    }
+
+    #[test]
     fn normalizes_redbox_cli_runtime_get_execution_id_to_execution_get() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "cli_runtime",
                 "operation": "get",
@@ -1781,7 +1772,7 @@ mod tests {
             }),
         );
 
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("cli_runtime.execution.get"))
@@ -1798,14 +1789,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_web_get_to_web_fetch() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "web",
                 "operation": "get",
                 "input": { "url": "https://example.com" }
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("web.fetch"))
@@ -1822,14 +1813,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_video_create_to_project_create_action() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "video",
                 "operation": "create",
                 "input": { "explicitProjectWorkflow": true, "title": "Launch" }
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("video.projectCreate"))
@@ -1846,14 +1837,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_cli_runtime_inspect_to_structured_action() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "cli_runtime",
                 "operation": "inspect",
                 "input": { "command": "lark-cli" }
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("cli_runtime.inspect"))
@@ -1870,7 +1861,7 @@ mod tests {
     #[test]
     fn normalizes_redbox_cli_runtime_run_with_nested_action_to_that_action() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "cli_runtime",
                 "operation": "run",
@@ -1880,7 +1871,7 @@ mod tests {
                 }
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("cli_runtime.inspect"))
@@ -1904,7 +1895,7 @@ mod tests {
     #[test]
     fn normalizes_redbox_cli_runtime_run_with_argv_to_execute() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "cli_runtime",
                 "operation": "run",
@@ -1913,7 +1904,7 @@ mod tests {
                 }
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("cli_runtime.execute"))
@@ -1930,14 +1921,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_cli_runtime_id_inspect_to_command_alias() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "cli_runtime",
                 "operation": "inspect",
                 "id": "lark-cli"
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("cli_runtime.inspect"))
@@ -1954,14 +1945,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_cli_runtime_verify_without_execution_to_diagnose() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "cli_runtime",
                 "operation": "verify",
                 "id": "lark-cli"
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("cli_runtime.diagnose"))
@@ -1978,14 +1969,14 @@ mod tests {
     #[test]
     fn normalizes_redbox_cli_runtime_get_execution_snapshot() {
         let normalized = normalize_tool_call(
-            "Redbox",
+            "Operate",
             &json!({
                 "resource": "cli_runtime",
                 "operation": "get",
                 "id": "cli-exec-123"
             }),
         );
-        assert_eq!(normalized.name, "app_cli");
+        assert_eq!(normalized.name, "workflow");
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("cli_runtime.execution.get"))

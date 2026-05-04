@@ -72,7 +72,7 @@ impl ProviderProfile {
     ) -> bool {
         if matches!(
             runtime_mode,
-            "chatroom" | "image-generation" | "redclaw" | "wander"
+            "team" | "chatroom" | "image-generation" | "redclaw" | "wander"
         ) {
             return true;
         }
