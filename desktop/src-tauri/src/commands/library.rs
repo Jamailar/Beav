@@ -1390,6 +1390,60 @@ pub fn handle_library_channel(
                         (manuscript_path.as_deref(), role.as_deref())
                     {
                         let full_path = resolve_manuscript_path(state, file_path)?;
+                        if is_thrive_package_path(&full_path) && matches!(role, "cover" | "image") {
+                            let asset_id = payload_string(payload, "assetId").unwrap_or_default();
+                            let mut bindings = read_thrive_json_entry_or(
+                                &full_path,
+                                "bindings.json",
+                                json!({
+                                    "media": [],
+                                    "targets": [],
+                                    "publishedPosts": [],
+                                    "sources": [],
+                                    "inspirations": []
+                                }),
+                            );
+                            if !bindings.is_object() {
+                                bindings = json!({
+                                    "media": [],
+                                    "targets": [],
+                                    "publishedPosts": [],
+                                    "sources": [],
+                                    "inspirations": []
+                                });
+                            }
+                            let object = bindings.as_object_mut().expect("bindings object");
+                            let media = object
+                                .entry("media".to_string())
+                                .or_insert_with(|| json!([]));
+                            if !media.is_array() {
+                                *media = json!([]);
+                            }
+                            let media_items = media.as_array_mut().expect("media array");
+                            let binding_role = if role == "cover" { "cover" } else { "gallery" };
+                            if let Some(item) = media_items.iter_mut().find(|item| {
+                                item.get("id").and_then(Value::as_str) == Some(asset_id.as_str())
+                            }) {
+                                if let Some(item_object) = item.as_object_mut() {
+                                    item_object.insert("role".to_string(), json!(binding_role));
+                                    item_object
+                                        .insert("source".to_string(), json!("media-library"));
+                                }
+                            } else {
+                                media_items.push(json!({
+                                    "id": asset_id,
+                                    "role": binding_role,
+                                    "source": "media-library",
+                                    "order": media_items.len()
+                                }));
+                            }
+                            write_thrive_json_entry(&full_path, "bindings.json", &bindings)?;
+                            return Ok(json!({
+                                "success": true,
+                                "asset": result.get("asset").cloned().unwrap_or(Value::Null),
+                                "state": get_manuscript_package_state(&full_path)?
+                            }));
+                        }
                         if full_path.is_dir()
                             && is_manuscript_package_name(
                                 full_path

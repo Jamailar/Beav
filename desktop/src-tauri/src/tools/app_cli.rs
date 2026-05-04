@@ -5130,7 +5130,7 @@ fn help_response(namespace: Option<&str>) -> Value {
         "manuscripts" => vec![
             "manuscripts list",
             "manuscripts read --path <relativePath>",
-            "manuscripts create-project --title <title> [--kind redpost|redarticle] [--parent <folder>]",
+            "manuscripts create-project --title <title> [--kind post|redarticle] [--parent <folder>]",
             "manuscripts write-current [payload.content]",
             "manuscripts write --path <relativePath> [payload.content]",
             "manuscripts create --path <relativePath>",
@@ -5316,12 +5316,12 @@ mod tests {
     #[test]
     fn normalize_authoring_target_subdir_prefixes_wander_folder() {
         assert_eq!(
-            normalize_authoring_target_subdir("第一篇稿子.redpost", Some("wander")),
-            "wander/第一篇稿子.redpost"
+            normalize_authoring_target_subdir("第一篇稿子.thrive", Some("wander")),
+            "wander/第一篇稿子.thrive"
         );
         assert_eq!(
-            normalize_authoring_target_subdir("wander/第一篇稿子.redpost", Some("wander")),
-            "wander/第一篇稿子.redpost"
+            normalize_authoring_target_subdir("wander/第一篇稿子.thrive", Some("wander")),
+            "wander/第一篇稿子.thrive"
         );
     }
 
@@ -5333,7 +5333,7 @@ mod tests {
                 "redpost-123",
                 AuthoringProjectKind::Redpost,
             ),
-            "wander/redpost-123.redpost"
+            "wander/redpost-123.thrive"
         );
         assert_eq!(
             build_authoring_project_relative_path(
