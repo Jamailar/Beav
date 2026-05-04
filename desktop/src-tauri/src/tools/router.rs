@@ -118,7 +118,7 @@ impl ToolRouter {
                     format!("MCP tool `{name}` is available but not directly exposed in this turn"),
                     true,
                     Some(json!({
-                        "suggestedAction": "tools.search",
+                        "suggestedAction": "tool_search",
                         "queryHint": format!("{} {}", tool.server_name, tool.description.clone().unwrap_or_default()),
                         "deferredMcpNamespaces": self.plan.mcp_tool_namespaces,
                     })),
@@ -179,7 +179,7 @@ impl ToolRouter {
                     ),
                     true,
                     Some(json!({
-                        "suggestedAction": "tools.search",
+                        "suggestedAction": "tool_search",
                         "queryHint": format!("{} {}", tool.server_name, tool.description.clone().unwrap_or_default()),
                         "deferredMcpNamespaces": self.plan.mcp_tool_namespaces,
                     })),
@@ -272,7 +272,7 @@ impl ToolRouter {
                     format!("action `{action}` is available but not directly exposed in this turn"),
                     true,
                     Some(json!({
-                        "suggestedAction": "tools.search",
+                        "suggestedAction": "tool_search",
                         "queryHint": format!("{} {}", deferred.namespace, deferred.description),
                         "deferredNamespaces": self.plan.deferred_action_namespaces,
                     })),
@@ -400,7 +400,7 @@ mod tests {
             .expect_err("deferred action should fail");
 
         assert!(error.contains("ACTION_DEFERRED"));
-        assert!(error.contains("tools.search"));
+        assert!(error.contains("tool_search"));
     }
 
     #[test]
@@ -460,7 +460,7 @@ mod tests {
             .expect_err("deferred mcp tool should fail");
 
         assert!(error.contains("TOOL_DEFERRED"));
-        assert!(error.contains("tools.search"));
+        assert!(error.contains("tool_search"));
     }
 
     #[test]

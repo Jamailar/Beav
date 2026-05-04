@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CreditCard, Gem, QrCode, RefreshCw, Smartphone, UserRound } from 'lucide-react';
+import { CreditCard, Gem, Globe2, QrCode, RefreshCw, Smartphone, UserRound } from 'lucide-react';
 import clsx from 'clsx';
 import QRCode from 'qrcode';
 import type { OfficialAiPanelProps } from './index';
@@ -19,6 +19,9 @@ interface RedboxAuthSession {
   user: Record<string, unknown> | null;
   createdAt: number;
   updatedAt: number;
+  realm?: 'cn' | 'global';
+  realmLabel?: string;
+  baseUrl?: string;
 }
 
 interface RedboxWechatInfo {
@@ -41,6 +44,18 @@ interface RedboxCallRecordItem {
 
 interface ModelsResponseItem {
   id: string;
+}
+
+interface OfficialRealmConfig {
+  id: 'cn' | 'global';
+  label: string;
+  active?: boolean;
+}
+
+interface OfficialAuthConfig {
+  success: boolean;
+  activeRealm?: 'cn' | 'global';
+  realms?: OfficialRealmConfig[];
 }
 
 const PANEL_DISPLAY_SNAPSHOT_KEY = 'redbox-auth:panel-display';
@@ -230,6 +245,11 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
   const [wechatLoginUrl, setWechatLoginUrl] = useState('');
   const [wechatStatusText, setWechatStatusText] = useState<WechatStatus>('idle');
   const [wechatExpiresAt, setWechatExpiresAt] = useState<number>(0);
+  const [activeRealm, setActiveRealm] = useState<'cn' | 'global'>('cn');
+  const [realms, setRealms] = useState<OfficialRealmConfig[]>([
+    { id: 'cn', label: '中国大陆账号', active: true },
+    { id: 'global', label: '海外账号' },
+  ]);
   const pollTimerRef = useRef<number | null>(null);
   const pollRunTokenRef = useRef(0);
   const pollRequestInFlightRef = useRef(false);
@@ -267,6 +287,54 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
       ...options,
     });
   }, [onReloadSettings]);
+
+  const refreshRealmConfig = useCallback(async () => {
+    const result = await timedInvoke<OfficialAuthConfig>('redbox-auth:get-config');
+    if (!result?.success) return;
+    const nextActiveRealm = result.activeRealm === 'global' ? 'global' : 'cn';
+    setActiveRealm(nextActiveRealm);
+    if (Array.isArray(result.realms) && result.realms.length > 0) {
+      setRealms(result.realms.filter((item): item is OfficialRealmConfig => item?.id === 'cn' || item?.id === 'global'));
+    }
+  }, []);
+
+  const switchRealm = useCallback(async (realm: 'cn' | 'global') => {
+    if (realm === activeRealm || session) return;
+    setAuthBusy(true);
+    setPanelNotice('idle', '');
+    try {
+      const result = await timedInvoke<OfficialAuthConfig & { error?: string }>('redbox-auth:set-realm', { realm });
+      if (!result?.success) {
+        throw new Error(result?.error || '切换账号区失败');
+      }
+      stopWechatPolling();
+      setWechatQrUrl('');
+      setWechatLoginUrl('');
+      setWechatStatusText('idle');
+      setWechatExpiresAt(0);
+      const nextActiveRealm = result.activeRealm === 'global' ? 'global' : 'cn';
+      setActiveRealm(nextActiveRealm);
+      if (Array.isArray(result.realms) && result.realms.length > 0) {
+        setRealms(result.realms.filter((item): item is OfficialRealmConfig => item?.id === 'cn' || item?.id === 'global'));
+      }
+      requestSettingsRefresh();
+    } catch (error) {
+      setPanelNotice('error', error instanceof Error ? error.message : '切换账号区失败');
+    } finally {
+      setAuthBusy(false);
+    }
+  }, [activeRealm, requestSettingsRefresh, session, setPanelNotice, stopWechatPolling]);
+
+  useEffect(() => {
+    void refreshRealmConfig();
+  }, [refreshRealmConfig]);
+
+  useEffect(() => {
+    const sessionRealm = session?.realm === 'global' ? 'global' : session?.realm === 'cn' ? 'cn' : null;
+    if (sessionRealm && sessionRealm !== activeRealm) {
+      setActiveRealm(sessionRealm);
+    }
+  }, [activeRealm, session]);
 
   useEffect(() => {
     const nextSessionSignature = JSON.stringify(summarizeSessionForTrace(session));
@@ -769,6 +837,28 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
         ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-lg border border-border bg-surface-primary p-3 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+                <Globe2 className="w-3.5 h-3.5" />
+                账号区
+              </div>
+              <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/30 p-1">
+                {realms.map((realm) => (
+                  <button
+                    key={realm.id}
+                    type="button"
+                    onClick={() => void switchRealm(realm.id)}
+                    disabled={authControlsDisabled || Boolean(session)}
+                    className={clsx(
+                      'px-2.5 py-1 text-[11px] rounded-full transition-colors disabled:opacity-50',
+                      activeRealm === realm.id ? 'bg-surface-primary border border-border text-text-primary' : 'text-text-secondary',
+                    )}
+                  >
+                    {realm.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/30 p-1">
               <button
                 type="button"

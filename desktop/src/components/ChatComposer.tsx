@@ -692,6 +692,41 @@ function ComposerCompactAttachmentTray({
   );
 }
 
+function ComposerAttachmentPlaceholder({
+  darkEmbedded,
+  variant,
+  disabled,
+  onClick,
+}: {
+  darkEmbedded: boolean;
+  variant: ChatComposerVariant;
+  disabled: boolean;
+  onClick: () => void | Promise<void>;
+}) {
+  const frameClass = variant === 'empty' ? 'h-[88px] w-[64px]' : 'h-[68px] w-[50px]';
+  const iconClass = variant === 'empty' ? 'h-7 w-7' : 'h-5 w-5';
+  return (
+    <button
+      type="button"
+      onClick={() => void onClick()}
+      disabled={disabled}
+      className={clsx(
+        'group/upload relative shrink-0 rotate-[-7deg] rounded-[6px] border border-dashed transition-all duration-200',
+        'flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-45',
+        frameClass,
+        darkEmbedded
+          ? 'border-white/12 bg-white/[0.035] text-white/44 hover:border-white/22 hover:bg-white/[0.06] hover:text-white/68'
+          : 'border-[#d8d8d4] bg-[#f4f4f1] text-[#9aa1a8] hover:border-[#c9c9c2] hover:bg-[#f8f8f5] hover:text-[#7d878f]',
+        !disabled && 'hover:rotate-[-5deg]',
+      )}
+      title="添加文件"
+      aria-label="添加文件"
+    >
+      <Plus className={clsx(iconClass, 'transition-transform duration-200 group-hover/upload:scale-105')} strokeWidth={1.8} />
+    </button>
+  );
+}
+
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
   theme = 'default',
   variant = 'main',
@@ -1042,10 +1077,24 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const compactAttachmentMode = attachmentPreviewMode === 'compact-status';
   const resolvedAttachmentStatus: ChatComposerAttachmentStatus | null = attachmentStatus
     || (attachment ? 'uploaded' : null);
+  const showCompactAttachmentTray = compactAttachmentMode && (Boolean(attachment) || resolvedAttachmentStatus === 'uploading');
+  const showInlineAttachmentPlaceholder = showAttachmentButton && !attachment;
+  const inlineAttachmentPlaceholder = showInlineAttachmentPlaceholder ? (
+    <ComposerAttachmentPlaceholder
+      darkEmbedded={darkEmbedded}
+      variant={variant}
+      disabled={disabled || isBusy || attachmentBusy}
+      onClick={() => onPickAttachment?.()}
+    />
+  ) : null;
   const textareaClass = attachment
     ? variant === 'empty'
       ? 'mt-3 w-full bg-transparent pr-1 pb-1 text-[16px] focus:outline-none resize-none min-h-[64px] max-h-[220px] overflow-y-auto'
       : 'mt-2.5 w-full bg-transparent pr-1 pb-1 text-[14px] focus:outline-none resize-none min-h-[52px] max-h-[180px] overflow-y-auto'
+    : showInlineAttachmentPlaceholder
+      ? variant === 'empty'
+        ? 'w-full bg-transparent px-2 py-0.5 text-[16px] focus:outline-none resize-none min-h-[72px] max-h-[96px] overflow-y-auto'
+        : 'w-full bg-transparent px-2 py-0.5 text-[14px] focus:outline-none resize-none min-h-[56px] max-h-[160px] overflow-y-auto'
     : variant === 'empty'
       ? 'w-full bg-transparent px-4 py-3 text-[16px] focus:outline-none resize-none min-h-[100px] overflow-y-auto'
       : 'w-full bg-transparent px-3.5 py-2.5 text-[14px] focus:outline-none resize-none min-h-[72px] max-h-[280px] overflow-y-auto';
@@ -1277,7 +1326,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             })}
           </div>
         ) : null}
-        {compactAttachmentMode ? (
+        {showCompactAttachmentTray ? (
           <>
             <ComposerCompactAttachmentTray
               attachment={attachment}
@@ -1298,11 +1347,21 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               {textarea}
             </ComposerAttachmentPreview>
           </div>
+        ) : showInlineAttachmentPlaceholder ? (
+          <div className={clsx(
+            'flex items-start gap-5',
+            variant === 'empty' ? 'px-8 pt-5 pb-0' : 'px-4 pt-3 pb-0',
+          )}>
+            {inlineAttachmentPlaceholder}
+            <div className="min-w-0 flex-1">
+              {textarea}
+            </div>
+          </div>
         ) : textarea}
 
         <div className={clsx('flex items-center gap-2', variant === 'empty' ? 'px-2 pb-1' : 'px-1.5 pb-0.5')}>
           <div className="flex shrink-0 items-center gap-1">
-            {showAttachmentButton ? (
+            {showAttachmentButton && !showInlineAttachmentPlaceholder ? (
               <button
                 type="button"
                 onClick={() => void onPickAttachment?.()}

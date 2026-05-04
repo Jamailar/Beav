@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn qwen_profiles_disable_thinking_for_required_tool_choice() {
         let profile =
-            provider_profile_from_parts("openai", "https://api.ziz.hk/redbox/v1", "qwen3.5-plus");
+            provider_profile_from_parts("openai", "https://api.ziz.hk/thrive/v1", "qwen3.5-plus");
         assert_eq!(profile.provider_family, ProviderFamily::OpenAiCompat);
         assert!(
             profile
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn qwen_required_tool_choice_turn_policy_disables_thinking() {
         let profile =
-            provider_profile_from_parts("openai", "https://api.ziz.hk/redbox/v1", "qwen3.5-plus");
+            provider_profile_from_parts("openai", "https://api.ziz.hk/thrive/v1", "qwen3.5-plus");
         let policy = profile.turn_policy("redclaw", InteractiveToolChoice::Required, false);
         assert!(policy.disable_thinking);
     }
@@ -246,7 +246,7 @@ mod tests {
     fn deepseek_uses_thinking_object_disable_parameter() {
         let profile = provider_profile_from_parts(
             "openai",
-            "https://api.ziz.hk/redbox/v1",
+            "https://api.ziz.hk/thrive/v1",
             "deepseek-v4-pro",
         );
         let mut body = json!({ "model": "deepseek-v4-pro" });

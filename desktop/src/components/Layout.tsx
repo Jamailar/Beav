@@ -21,6 +21,7 @@ interface LayoutProps {
   hideGlobalSidebar?: boolean;
   globalNotice?: string | null;
   globalSidebarContent?: ReactNode;
+  activeModalView?: ViewType;
   renderTitleBarContent?: (context: { currentView: ViewType }) => ReactNode;
 }
 
@@ -211,7 +212,7 @@ function AppTitleBar({
   );
 }
 
-export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, renderTitleBarContent }: LayoutProps) {
+export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent }: LayoutProps) {
   const { t } = useI18n();
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
@@ -694,7 +695,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const renderSidebarNavItem = (item: SidebarNavItem) => {
     const { key, view, labelKey, icon: Icon, primary } = item;
     const label = t(labelKey);
-    const isActive = !item.redclawAction && currentView === view && !item.settingsTab;
+    const isActive = !item.redclawAction && (currentView === view || activeModalView === view) && !item.settingsTab;
     return (
       <button
         key={key}

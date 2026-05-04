@@ -15,18 +15,17 @@ use crate::helpers::{
     AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
-use crate::mcp::tool_inventory::search_mcp_tools;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{resolve_session_file_reference_inputs, McpServerRecord, SkillRecord};
 use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
-use crate::tools::action_search::{search_actions, ActionSearchParams};
 use crate::tools::plan::{
     build_tool_registry_plan_for_session, build_tool_registry_plan_for_session_with_mcp,
 };
 use crate::tools::registry::normalized_allowed_app_cli_actions;
+use crate::tools::tool_search::tool_search_payload;
 use crate::{
     join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
     workspace_root, AppState,
@@ -455,7 +454,7 @@ impl<'a> AppCliExecutor<'a> {
                     "workflow action is available but not directly exposed in this turn; search actions first.",
                     true,
                     Some(json!({
-                        "suggestedAction": "tools.search",
+                        "suggestedAction": "tool_search",
                         "queryHint": format!("{} {}", deferred.namespace, deferred.description),
                         "deferredNamespaces": plan.deferred_action_namespaces,
                     })),
@@ -924,19 +923,6 @@ impl<'a> AppCliExecutor<'a> {
     }
 
     fn handle_tools_search(&self, payload: &Value) -> Result<Value, String> {
-        let query = payload_string(payload, "query")
-            .or_else(|| payload_string(payload, "q"))
-            .unwrap_or_default();
-        let namespace = payload_string(payload, "namespace")
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let limit = payload_field(payload, "limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(12)
-            .clamp(1, 50) as usize;
-        let include_direct = payload_field(payload, "includeDirect")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
         let mcp_inventory = self.state.mcp_manager.list_all_tools(&mcp_servers).ok();
         let plan = with_store(self.state, |store| {
@@ -947,48 +933,7 @@ impl<'a> AppCliExecutor<'a> {
                 mcp_inventory.as_ref(),
             ))
         })?;
-        let results = search_actions(
-            &plan.direct_app_cli_actions,
-            &plan.deferred_app_cli_actions,
-            ActionSearchParams {
-                query: &query,
-                namespace: namespace.as_deref(),
-                limit,
-                include_direct,
-            },
-        );
-        let mcp_results = search_mcp_tools(
-            &plan.direct_mcp_tools,
-            &plan.deferred_mcp_tools,
-            &query,
-            limit,
-            include_direct,
-        )
-        .into_iter()
-        .map(|entry| serde_json::to_value(entry).unwrap_or_else(|_| json!({})))
-        .collect::<Vec<_>>();
-        let (direct_actions, deferred_actions): (Vec<_>, Vec<_>) = results
-            .into_iter()
-            .map(|entry| serde_json::to_value(entry).unwrap_or_else(|_| json!({})))
-            .partition(|entry| {
-                entry
-                    .get("availableThisTurn")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            });
-        Ok(json!({
-            "success": true,
-            "runtimeMode": plan.runtime_mode,
-            "query": query,
-            "namespace": namespace,
-            "limit": limit,
-            "deferredNamespaces": plan.deferred_action_namespaces,
-            "deferredActions": deferred_actions,
-            "directActions": direct_actions,
-            "mcpTools": mcp_results,
-            "deferredMcpNamespaces": plan.mcp_tool_namespaces,
-            "routerPlan": plan.fingerprint,
-        }))
+        Ok(tool_search_payload(&plan, payload))
     }
 
     fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {

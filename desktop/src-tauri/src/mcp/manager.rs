@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::config::{
     effective_server_config, effective_server_records, mcp_tool_allowed, mcp_tool_timeout_ms,
@@ -34,7 +34,17 @@ pub struct McpProbeResult {
 #[derive(Default)]
 pub struct McpManager {
     sessions: Mutex<HashMap<String, Arc<Mutex<McpSession>>>>,
+    tool_inventory_cache: Mutex<Option<McpToolInventoryCacheEntry>>,
 }
+
+#[derive(Debug, Clone)]
+struct McpToolInventoryCacheEntry {
+    server_fingerprint: String,
+    snapshot: McpToolInventorySnapshot,
+    cached_at: Instant,
+}
+
+const MCP_TOOL_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(30);
 
 impl McpManager {
     pub fn list_tools(&self, server: &McpServerRecord) -> Result<McpInvocationResult, String> {
@@ -42,6 +52,55 @@ impl McpManager {
     }
 
     pub fn list_all_tools(
+        &self,
+        servers: &[McpServerRecord],
+    ) -> Result<McpToolInventorySnapshot, String> {
+        let cache_key = effective_servers_fingerprint(servers);
+        if let Some(snapshot) = self.cached_tool_inventory(&cache_key)? {
+            return Ok(snapshot);
+        }
+        let snapshot = self.list_all_tools_uncached(servers)?;
+        let mut cache = self
+            .tool_inventory_cache
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *cache = Some(McpToolInventoryCacheEntry {
+            server_fingerprint: cache_key,
+            snapshot: snapshot.clone(),
+            cached_at: Instant::now(),
+        });
+        Ok(snapshot)
+    }
+
+    fn cached_tool_inventory(
+        &self,
+        server_fingerprint: &str,
+    ) -> Result<Option<McpToolInventorySnapshot>, String> {
+        let cache = self
+            .tool_inventory_cache
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let Some(entry) = cache.as_ref() else {
+            return Ok(None);
+        };
+        if entry.server_fingerprint == server_fingerprint
+            && entry.cached_at.elapsed() <= MCP_TOOL_INVENTORY_CACHE_TTL
+        {
+            return Ok(Some(entry.snapshot.clone()));
+        }
+        Ok(None)
+    }
+
+    fn clear_tool_inventory_cache(&self) -> Result<(), String> {
+        let mut cache = self
+            .tool_inventory_cache
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *cache = None;
+        Ok(())
+    }
+
+    fn list_all_tools_uncached(
         &self,
         servers: &[McpServerRecord],
     ) -> Result<McpToolInventorySnapshot, String> {
@@ -247,6 +306,7 @@ impl McpManager {
     }
 
     pub fn sync_servers(&self, servers: &[McpServerRecord]) -> Result<(), String> {
+        self.clear_tool_inventory_cache()?;
         let active_keys = servers
             .iter()
             .filter(|server| server.enabled)
@@ -258,6 +318,7 @@ impl McpManager {
     }
 
     pub fn disconnect_server(&self, server: &McpServerRecord) -> Result<bool, String> {
+        self.clear_tool_inventory_cache()?;
         let key = session_key(server);
         let removed = self
             .sessions
@@ -269,6 +330,7 @@ impl McpManager {
     }
 
     pub fn disconnect_all(&self) -> Result<usize, String> {
+        self.clear_tool_inventory_cache()?;
         let mut sessions = self.sessions.lock().map_err(|error| error.to_string())?;
         let count = sessions.len();
         sessions.clear();
@@ -332,6 +394,23 @@ fn server_fingerprint(server: &McpServerRecord) -> String {
         "url": server.url.clone(),
     }))
     .unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn effective_servers_fingerprint(servers: &[McpServerRecord]) -> String {
+    let mut rows = effective_server_records(servers)
+        .into_iter()
+        .map(|server| {
+            let fingerprint = server_fingerprint(&server);
+            serde_json::json!({
+                "id": server.id,
+                "name": server.name,
+                "fingerprint": fingerprint,
+                "oauth": server.oauth,
+            })
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    serde_json::to_string(&rows).unwrap_or_else(|_| "unknown".to_string())
 }
 
 #[cfg(test)]

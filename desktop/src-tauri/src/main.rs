@@ -1205,7 +1205,7 @@ fn ensure_workspace_dirs(root: &Path) -> Result<(), String> {
         root.join("redclaw"),
         root.join("redclaw").join("profile"),
         root.join("memory"),
-        root.join("subjects"),
+        root.join("assets"),
         root.join("chatrooms"),
         root.join("remotion-elements"),
     ] {
@@ -1585,7 +1585,7 @@ mod tests {
     fn subjects_workspace_roundtrip_persists_catalog_categories_and_assets() {
         let root =
             std::env::temp_dir().join(format!("redbox-subjects-roundtrip-{}", crate::now_ms()));
-        let subjects_root = root.join("subjects");
+        let subjects_root = root.join("assets");
         let category = SubjectCategory {
             id: "category-test".to_string(),
             name: "测试分类".to_string(),
@@ -1594,7 +1594,7 @@ mod tests {
         };
         let input = SubjectMutationInput {
             id: Some("subject-test".to_string()),
-            name: "测试主体".to_string(),
+            name: "测试资产".to_string(),
             category_id: Some(category.id.clone()),
             description: Some("描述".to_string()),
             tags: Some(vec!["标签".to_string()]),
@@ -1625,7 +1625,7 @@ mod tests {
         assert_eq!(categories.len(), 1);
         assert_eq!(categories[0].name, "测试分类");
         assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].name, "测试主体");
+        assert_eq!(subjects[0].name, "测试资产");
         assert_eq!(subjects[0].category_id.as_deref(), Some("category-test"));
         assert_eq!(subjects[0].image_paths.len(), 1);
         assert!(subjects_root
@@ -1637,7 +1637,7 @@ mod tests {
         assert!(subjects[0].voice_preview_url.is_some());
 
         let updated = SubjectRecord {
-            name: "更新主体".to_string(),
+            name: "更新资产".to_string(),
             image_paths: Vec::new(),
             absolute_image_paths: Vec::new(),
             preview_urls: Vec::new(),
@@ -1651,7 +1651,7 @@ mod tests {
             .expect("persist updated subjects workspace");
         let subjects = crate::workspace_loaders::load_subjects_from_fs(&subjects_root);
         assert_eq!(subjects.len(), 1);
-        assert_eq!(subjects[0].name, "更新主体");
+        assert_eq!(subjects[0].name, "更新资产");
         assert!(subjects[0].image_paths.is_empty());
 
         persist_subjects_workspace(&subjects_root, &[], &[])
@@ -1667,7 +1667,7 @@ mod tests {
     #[test]
     fn subjects_workspace_bench_persists_and_loads_large_catalog() {
         let root = std::env::temp_dir().join(format!("redbox-subjects-bench-{}", crate::now_ms()));
-        let subjects_root = root.join("subjects");
+        let subjects_root = root.join("assets");
         let categories = (0..25)
             .map(|index| SubjectCategory {
                 id: format!("category-{index}"),
@@ -1680,9 +1680,9 @@ mod tests {
             .map(|index| {
                 let record = SubjectRecord {
                     id: format!("subject-{index}"),
-                    name: format!("主体 {index}"),
+                    name: format!("资产 {index}"),
                     category_id: Some(format!("category-{}", index % categories.len())),
-                    description: Some(format!("主体描述 {index}")),
+                    description: Some(format!("资产描述 {index}")),
                     tags: vec!["bench".to_string(), format!("tag-{}", index % 10)],
                     attributes: vec![SubjectAttribute {
                         key: "序号".to_string(),
@@ -3240,6 +3240,25 @@ fn execute_interactive_tool_call(
                 });
         }
         if let Some(result) = tool_executor.dispatch_mcp_resource_tool(&prepared) {
+            return result
+                .map(|value| {
+                    ensure_structured_tool_success(
+                        &name,
+                        action.as_deref(),
+                        value,
+                        Some(&tool_plan_fingerprint),
+                    )
+                })
+                .map_err(|error| {
+                    ensure_structured_tool_error(
+                        &name,
+                        action.as_deref(),
+                        &error,
+                        Some(&tool_plan_fingerprint),
+                    )
+                });
+        }
+        if let Some(result) = tool_executor.dispatch_tool_search(&prepared) {
             return result
                 .map(|value| {
                     ensure_structured_tool_success(
@@ -8677,7 +8696,23 @@ fn file_url_to_local_path(parsed: &url::Url) -> Option<PathBuf> {
 }
 
 fn subjects_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
-    let root = workspace_root(state)?.join("subjects");
+    let workspace = workspace_root(state)?;
+    let root = workspace.join("assets");
+    let legacy_root = workspace.join("subjects");
+    let root_has_catalog = root.join("catalog.json").exists();
+    let legacy_has_catalog = legacy_root.join("catalog.json").exists();
+    if !root_has_catalog && legacy_has_catalog && root.exists() {
+        let is_empty = fs::read_dir(&root)
+            .map_err(|error| error.to_string())?
+            .next()
+            .is_none();
+        if is_empty {
+            fs::remove_dir(&root).map_err(|error| error.to_string())?;
+        }
+    }
+    if !root.exists() && legacy_root.exists() {
+        fs::rename(&legacy_root, &root).map_err(|error| error.to_string())?;
+    }
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
 }
@@ -8750,20 +8785,20 @@ fn materialize_subject_data_url(
     let data = data_url
         .trim()
         .strip_prefix("data:")
-        .ok_or_else(|| "主体素材 data URL 无效".to_string())?;
+        .ok_or_else(|| "资产素材 data URL 无效".to_string())?;
     let (meta, encoded) = data
         .split_once(',')
-        .ok_or_else(|| "主体素材 data URL 无效".to_string())?;
+        .ok_or_else(|| "资产素材 data URL 无效".to_string())?;
     if !meta
         .split(';')
         .any(|part| part.trim().eq_ignore_ascii_case("base64"))
     {
-        return Err("主体素材 data URL 必须是 base64".to_string());
+        return Err("资产素材 data URL 必须是 base64".to_string());
     }
     let bytes = decode_base64_bytes(encoded)?;
     fs::create_dir_all(subject_dir).map_err(|error| error.to_string())?;
     let relative_path = safe_subject_relative_path(file_name)
-        .ok_or_else(|| format!("主体素材文件名无效: {file_name}"))?;
+        .ok_or_else(|| format!("资产素材文件名无效: {file_name}"))?;
     fs::write(subject_dir.join(&relative_path), bytes).map_err(|error| error.to_string())?;
     Ok(relative_path)
 }
@@ -8773,7 +8808,7 @@ fn materialize_subject_image_paths(
     images: &[SubjectMediaInput],
 ) -> Result<Vec<String>, String> {
     if images.len() > 5 {
-        return Err("主体最多只能保存 5 张图片".to_string());
+        return Err("资产最多只能保存 5 张图片".to_string());
     }
     let mut paths = Vec::new();
     for (index, image) in images.iter().enumerate() {
@@ -9059,7 +9094,7 @@ fn handle_subject_category_delete(
         .iter()
         .any(|subject| subject.category_id.as_deref() == Some(id.as_str()))
     {
-        return Ok(json!({ "success": false, "error": "仍有主体使用该分类，无法删除" }));
+        return Ok(json!({ "success": false, "error": "仍有资产使用该分类，无法删除" }));
     }
     let before = categories.len();
     categories.retain(|item| item.id != id);
@@ -9077,9 +9112,9 @@ fn handle_subject_category_delete(
 fn handle_subject_create(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
     persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectMutationInput =
-        serde_json::from_value(payload).map_err(|error| format!("主体参数无效: {error}"))?;
+        serde_json::from_value(payload).map_err(|error| format!("资产参数无效: {error}"))?;
     if input.name.trim().is_empty() {
-        return Ok(json!({ "success": false, "error": "主体名称不能为空" }));
+        return Ok(json!({ "success": false, "error": "资产名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
     let (categories, mut subjects) = with_store(state, |store| {
@@ -9087,7 +9122,7 @@ fn handle_subject_create(payload: Value, state: &State<'_, AppState>) -> Result<
     })?;
     if let Some(id) = input.id.as_deref() {
         if subjects.iter().any(|item| item.id == id) {
-            return Ok(json!({ "success": false, "error": "主体已存在" }));
+            return Ok(json!({ "success": false, "error": "资产已存在" }));
         }
     }
     if let Some(category_id) = input
@@ -9112,12 +9147,12 @@ fn handle_subject_create(payload: Value, state: &State<'_, AppState>) -> Result<
 fn handle_subject_update(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
     persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectMutationInput =
-        serde_json::from_value(payload).map_err(|error| format!("主体参数无效: {error}"))?;
+        serde_json::from_value(payload).map_err(|error| format!("资产参数无效: {error}"))?;
     let Some(id) = input.id.clone() else {
-        return Ok(json!({ "success": false, "error": "缺少主体 id" }));
+        return Ok(json!({ "success": false, "error": "缺少资产 id" }));
     };
     if input.name.trim().is_empty() {
-        return Ok(json!({ "success": false, "error": "主体名称不能为空" }));
+        return Ok(json!({ "success": false, "error": "资产名称不能为空" }));
     }
     let subjects_root = subjects_root(state)?;
     let (categories, mut subjects) = with_store(state, |store| {
@@ -9133,7 +9168,7 @@ fn handle_subject_update(payload: Value, state: &State<'_, AppState>) -> Result<
         }
     }
     let Some(index) = subjects.iter().position(|item| item.id == id) else {
-        return Ok(json!({ "success": false, "error": "主体不存在" }));
+        return Ok(json!({ "success": false, "error": "资产不存在" }));
     };
     let existing = subjects.get(index).cloned();
     let record = build_subject_record_for_workspace(&subjects_root, input, existing)?;
@@ -9149,7 +9184,7 @@ fn handle_subject_update(payload: Value, state: &State<'_, AppState>) -> Result<
 fn handle_subject_delete(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
     persistence::ensure_store_hydrated_for_subjects(state)?;
     let Some(id) = payload_string(&payload, "id") else {
-        return Ok(json!({ "success": false, "error": "缺少主体 id" }));
+        return Ok(json!({ "success": false, "error": "缺少资产 id" }));
     };
     let subjects_root = subjects_root(state)?;
     let (categories, mut subjects) = with_store(state, |store| {
@@ -9158,7 +9193,7 @@ fn handle_subject_delete(payload: Value, state: &State<'_, AppState>) -> Result<
     let before = subjects.len();
     subjects.retain(|item| item.id != id);
     if subjects.len() == before {
-        return Ok(json!({ "success": false, "error": "主体不存在" }));
+        return Ok(json!({ "success": false, "error": "资产不存在" }));
     }
     persist_subjects_workspace(&subjects_root, &categories, &subjects)?;
     let subject_dir = subjects_root.join(&id);

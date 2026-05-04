@@ -13,6 +13,7 @@ use crate::runtime::{
 };
 use crate::tools::plan::build_tool_registry_plan_for_session_with_mcp;
 use crate::tools::router::{McpResourcePreparedCall, PreparedToolCall, ToolRouter};
+use crate::tools::tool_search::tool_search_payload;
 use crate::{append_session_transcript, AppState};
 
 pub struct InteractiveToolExecutor<'a> {
@@ -67,6 +68,28 @@ impl<'a> InteractiveToolExecutor<'a> {
             "bash" => Some(self.execute_bash(&prepared.arguments)),
             _ => None,
         }
+    }
+
+    pub fn dispatch_tool_search(
+        &self,
+        prepared: &PreparedToolCall,
+    ) -> Option<Result<Value, String>> {
+        if prepared.name != "tool_search" {
+            return None;
+        }
+        Some((|| {
+            let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
+            let mcp_inventory = self.state.mcp_manager.list_all_tools(&mcp_servers).ok();
+            let plan = with_store(self.state, |store| {
+                Ok(build_tool_registry_plan_for_session_with_mcp(
+                    &store,
+                    self.runtime_mode,
+                    self.session_id,
+                    mcp_inventory.as_ref(),
+                ))
+            })?;
+            Ok(tool_search_payload(&plan, &prepared.arguments))
+        })())
     }
 
     pub fn dispatch_mcp_tool(&self, prepared: &PreparedToolCall) -> Option<Result<Value, String>> {

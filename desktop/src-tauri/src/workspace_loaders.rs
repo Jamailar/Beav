@@ -1879,7 +1879,7 @@ mod tests {
             }),
         );
 
-        let subjects_root = root.join("subjects");
+        let subjects_root = root.join("assets");
         let subject_dir = subjects_root.join("subject-1");
         let portrait = subject_dir.join("portrait.png");
         let voice = subject_dir.join("voice.wav");

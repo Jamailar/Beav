@@ -291,7 +291,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                     workspace_root_value.clone() + "/manuscripts",
                 ),
                 ("media_path", workspace_root_value.clone() + "/media"),
-                ("subjects_path", workspace_root_value.clone() + "/subjects"),
+                ("subjects_path", workspace_root_value.clone() + "/assets"),
                 ("redclaw_path", workspace_root_value.clone() + "/redclaw"),
                 (
                     "redclaw_profile_path",
@@ -761,9 +761,9 @@ fn subagent_role_overlay_section(metadata: Option<&Value>) -> String {
 
 fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &str) -> String {
     let subjects_root = if workspace_root_value.trim().is_empty() {
-        "subjects".to_string()
+        "assets".to_string()
     } else {
-        format!("{workspace_root_value}/subjects")
+        format!("{workspace_root_value}/assets")
     };
 
     let _ = ensure_store_hydrated_for_subjects(state);
@@ -773,8 +773,8 @@ fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &st
         Ok(snapshot) => snapshot,
         Err(error) => {
             return [
-                format!("Subjects root: {subjects_root}"),
-                format!("读取主体索引失败: {error}"),
+                format!("Assets root: {subjects_root}"),
+                format!("读取资产索引失败: {error}"),
             ]
             .join("\n");
         }
@@ -782,9 +782,9 @@ fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &st
 
     if subjects.is_empty() {
         let lines = vec![
-            "当前空间还没有注册主体。".to_string(),
-            format!("Subjects root: {subjects_root}"),
-            "如果用户提到具体人物、商品、场景，仍应优先查询主体库；若结果为空，再明确说明未找到。"
+            "当前空间还没有注册资产。".to_string(),
+            format!("Assets root: {subjects_root}"),
+            "如果用户提到具体人物、商品、场景，仍应优先查询资产库；若结果为空，再明确说明未找到。"
                 .to_string(),
         ];
         return lines.join("\n");
@@ -853,8 +853,8 @@ fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &st
         .join("\n");
 
     [
-        "These subject names have reference materials in the current space.",
-        "When the user mentions one of these names or a close combination of them, inspect the subject library before answering.",
+        "These asset names have reference materials in the current space.",
+        "When the user mentions one of these names or a close combination of them, inspect the asset library before answering.",
         "<available_subjects>",
         &subject_nodes,
         "</available_subjects>",

@@ -214,7 +214,7 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .unwrap_or_else(|| base_tool_names_for_metadata(&runtime_mode, params.session_metadata));
     let visible_tool_names =
         visible_tool_names_for_internal_tools(&runtime_mode, &internal_tool_names);
-    let visible_tools = visible_tool_names
+    let mut visible_tools = visible_tool_names
         .iter()
         .filter_map(|name| descriptor_by_name(name))
         .collect::<Vec<_>>();
@@ -249,6 +249,15 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .into_iter()
         .collect::<Vec<_>>();
     let mcp_exposure = build_mcp_tool_exposure(params.mcp_inventory, params.session_metadata);
+    let can_discover_deferred_app_actions = !deferred_app_cli_actions.is_empty()
+        && visible_tools.iter().any(|tool| tool.name == "Operate");
+    if (can_discover_deferred_app_actions || !mcp_exposure.deferred_tools.is_empty())
+        && !visible_tools.iter().any(|tool| tool.name == "tool_search")
+    {
+        if let Some(tool) = descriptor_by_name("tool_search") {
+            visible_tools.push(tool);
+        }
+    }
     let fingerprint = plan_fingerprint(
         &runtime_mode,
         params.session_id,
@@ -602,6 +611,10 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.direct_app_cli_actions.len() <= DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS);
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
+        assert!(plan
+            .visible_tools
+            .iter()
+            .any(|tool| tool.name == "tool_search"));
         assert!(plan.has_deferred_app_cli_action("memory.add"));
     }
 
@@ -615,6 +628,10 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("image.generate"));
         assert!(plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
+        assert!(plan
+            .visible_tools
+            .iter()
+            .any(|tool| tool.name == "tool_search"));
     }
 
     #[test]

@@ -11,6 +11,7 @@ import {
     CalendarClock,
     Check,
     ChevronDown,
+    Clapperboard,
     Grid2X2,
     ImagePlus,
     List,
@@ -89,6 +90,8 @@ interface SubjectDraft {
 
 type CategoryDialogMode = 'create' | 'rename';
 type SubjectViewMode = 'grid' | 'list';
+type AssetLibraryTab = 'assets' | 'media';
+type MediaAssetSource = 'generated' | 'planned' | 'imported';
 type SubjectCategoryTab = {
     id: string;
     label: string;
@@ -96,10 +99,35 @@ type SubjectCategoryTab = {
     disabled?: boolean;
 };
 
+interface MediaAsset {
+    id: string;
+    source?: MediaAssetSource | string;
+    projectId?: string;
+    title?: string;
+    prompt?: string;
+    model?: string;
+    aspectRatio?: string;
+    size?: string;
+    quality?: string;
+    mimeType?: string;
+    relativePath?: string;
+    boundManuscriptPath?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    absolutePath?: string;
+    previewUrl?: string;
+    exists?: boolean;
+}
+
 const UNCATEGORIZED_FILTER = '__uncategorized__';
 const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。';
 const SUBJECT_VOICE_RECORDING_SECONDS = 6;
+const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
+    generated: '已生成',
+    planned: '计划项',
+    imported: '导入',
+};
 
 const categoryIconForName = (name: string) => {
     const normalized = name.trim();
@@ -168,9 +196,46 @@ function normalizeAttributes(attributes: SubjectAttribute[]): SubjectAttribute[]
         .filter((item) => item.key || item.value);
 }
 
-export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean; onReturnHome?: () => void }) {
+function normalizeMediaSource(source: unknown): MediaAssetSource {
+    const normalized = String(source || '').trim().toLowerCase();
+    if (normalized === 'generated' || normalized === 'planned' || normalized === 'imported') return normalized;
+    return 'imported';
+}
+
+function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
+    return {
+        ...asset,
+        source: normalizeMediaSource(asset.source),
+        exists: asset.exists !== false,
+    };
+}
+
+function isVideoAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath'>): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('video/')) return true;
+    return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
+}
+
+function formatAssetDate(value?: string): string {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleDateString();
+}
+
+interface SubjectsProps {
+    isActive?: boolean;
+    onReturnHome?: () => void;
+    onClose?: () => void;
+    variant?: 'page' | 'modal';
+}
+
+export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'page' }: SubjectsProps) {
+    const isModalVariant = variant === 'modal';
     const [categories, setCategories] = useState<SubjectCategory[]>([]);
     const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
+    const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
+    const [libraryTab, setLibraryTab] = useState<AssetLibraryTab>('assets');
     const [loading, setLoading] = useState(true);
     const [working, setWorking] = useState(false);
     const [error, setError] = useState('');
@@ -220,22 +285,32 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
         }
         setError('');
         try {
-            const [categoriesResult, subjectsResult] = await uiMeasure('subjects', 'load_data', async () => (
+            const [categoriesResult, subjectsResult, mediaResult] = await uiMeasure('subjects', 'load_data', async () => (
                 Promise.all([
                     window.ipcRenderer.subjects.categories.list(),
                     window.ipcRenderer.subjects.list({ limit: 500 }),
+                    isModalVariant
+                        ? window.ipcRenderer.invoke('media:list', { limit: 500 }) as Promise<{ success?: boolean; error?: string; assets?: MediaAsset[] }>
+                        : Promise.resolve({ success: true, assets: [] }),
                 ])
             ), { requestId });
             if (!categoriesResult?.success) {
                 throw new Error(categoriesResult?.error || '加载分类失败');
             }
             if (!subjectsResult?.success) {
-                throw new Error(subjectsResult?.error || '加载主体失败');
+                throw new Error(subjectsResult?.error || '加载资产失败');
             }
             if (requestId !== loadDataRequestRef.current) return;
             const nextCategories = Array.isArray(categoriesResult.categories) ? categoriesResult.categories : [];
             setCategories(nextCategories);
             setSubjects(Array.isArray(subjectsResult.subjects) ? subjectsResult.subjects : []);
+            setMediaAssets(
+                Array.isArray(mediaResult?.assets)
+                    ? mediaResult.assets.map(normalizeMediaAsset).sort((a, b) => (
+                        new Date(b.createdAt || b.updatedAt || 0).getTime() - new Date(a.createdAt || a.updatedAt || 0).getTime()
+                    ))
+                    : []
+            );
             hasLoadedSnapshotRef.current = true;
             if (!hasEnsuredDefaultCategoriesRef.current) {
                 const existingNames = new Set(nextCategories.map((item) => item.name.trim()));
@@ -253,17 +328,18 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
         } catch (e) {
             if (requestId !== loadDataRequestRef.current) return;
             console.error('Failed to load subjects:', e);
-            setError(e instanceof Error ? e.message : '加载主体库失败');
+            setError(e instanceof Error ? e.message : '加载资产库失败');
             if (!hasLoadedSnapshotRef.current) {
                 setCategories([]);
                 setSubjects([]);
+                setMediaAssets([]);
             }
         } finally {
             if (requestId === loadDataRequestRef.current) {
                 setLoading(false);
             }
         }
-    }, []);
+    }, [isModalVariant]);
 
     useEffect(() => {
         if (!isActive) return;
@@ -288,6 +364,22 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
             return haystack.includes(keyword);
         });
     }, [categoryFilter, categoryNameMap, query, subjects]);
+
+    const filteredMediaAssets = useMemo(() => {
+        const keyword = query.trim().toLowerCase();
+        if (!keyword) return mediaAssets;
+        return mediaAssets.filter((asset) => {
+            const haystack = [
+                asset.title || '',
+                asset.prompt || '',
+                asset.projectId || '',
+                asset.boundManuscriptPath || '',
+                asset.relativePath || '',
+                asset.id,
+            ].join('\n').toLowerCase();
+            return haystack.includes(keyword);
+        });
+    }, [mediaAssets, query]);
 
     const categoryStats = useMemo(() => {
         const stats = new Map<string, number>();
@@ -402,7 +494,7 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
         const nextFiles = Array.from(files || []);
         if (!nextFiles.length) return;
         if (draft.images.length + nextFiles.length > 5) {
-            void appAlert('主体最多只能保存 5 张图片');
+            void appAlert('资产最多只能保存 5 张图片');
             return;
         }
         const nextImages = await Promise.all(nextFiles.map(async (file) => ({
@@ -604,7 +696,7 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
     }, [categories, categoryDialogMode, categoryDialogName, categoryDialogTargetId, loadData, resetCategoryDialog]);
 
     const handleDeleteCategory = useCallback(async (category: SubjectCategory) => {
-        if (!(await appConfirm(`删除分类“${category.name}”？如果仍有主体使用该分类，将会被拒绝。`, { title: '删除分类', confirmLabel: '删除', tone: 'danger' }))) return;
+        if (!(await appConfirm(`删除分类“${category.name}”？如果仍有资产使用该分类，将会被拒绝。`, { title: '删除分类', confirmLabel: '删除', tone: 'danger' }))) return;
         const result = await window.ipcRenderer.subjects.categories.delete({ id: category.id });
         if (!result?.success) {
             void appAlert(result?.error || '删除分类失败');
@@ -621,7 +713,7 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
 
     const handleSave = useCallback(async () => {
         if (!draft.name.trim()) {
-            setError('主体名称是必填项');
+            setError('资产名称是必填项');
             return;
         }
         setWorking(true);
@@ -657,13 +749,13 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
                 ? await window.ipcRenderer.subjects.update(payload)
                 : await window.ipcRenderer.subjects.create(payload);
             if (!result?.success) {
-                throw new Error(result?.error || '保存主体失败');
+                throw new Error(result?.error || '保存资产失败');
             }
             await loadData();
             closeModal();
         } catch (e) {
             console.error('Failed to save subject:', e);
-            setError(e instanceof Error ? e.message : '保存主体失败');
+            setError(e instanceof Error ? e.message : '保存资产失败');
         } finally {
             setWorking(false);
         }
@@ -671,18 +763,18 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
 
     const handleDeleteSubject = useCallback(async () => {
         if (!draft.id) return;
-        if (!(await appConfirm(`删除主体“${draft.name || draft.id}”？`, { title: '删除主体', confirmLabel: '删除', tone: 'danger' }))) return;
+        if (!(await appConfirm(`删除资产“${draft.name || draft.id}”？`, { title: '删除资产', confirmLabel: '删除', tone: 'danger' }))) return;
         setWorking(true);
         try {
             const result = await window.ipcRenderer.subjects.delete({ id: draft.id });
             if (!result?.success) {
-                throw new Error(result?.error || '删除主体失败');
+                throw new Error(result?.error || '删除资产失败');
             }
             await loadData();
             closeModal();
         } catch (e) {
             console.error('Failed to delete subject:', e);
-            setError(e instanceof Error ? e.message : '删除主体失败');
+            setError(e instanceof Error ? e.message : '删除资产失败');
         } finally {
             setWorking(false);
         }
@@ -727,12 +819,14 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
     ], [categories]);
     const selectedDraftCategory = draftCategoryOptions.find((item) => item.id === draft.categoryId) || draftCategoryOptions[0];
     const SelectedDraftCategoryIcon = selectedDraftCategory.icon;
+    const activeLibraryTab = isModalVariant ? libraryTab : 'assets';
+    const showAssetControls = activeLibraryTab === 'assets';
 
     return (
-        <div className="h-full flex flex-col">
-            <div className="px-8 pt-6 pb-4">
+        <div className="flex h-full min-h-0 flex-col bg-white">
+            <div className={clsx(isModalVariant ? 'px-5 pt-4 pb-3' : 'px-8 pt-6 pb-4')}>
                 <div className="flex items-center gap-3">
-                    {onReturnHome && (
+                    {!isModalVariant && onReturnHome && (
                         <button
                             type="button"
                             onClick={onReturnHome}
@@ -743,15 +837,20 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
                             <ArrowLeft className="h-4 w-4" />
                         </button>
                     )}
-                    <h1 className="text-[26px] leading-none font-semibold tracking-[0.01em] text-slate-900">资产库</h1>
-                    <button
-                        onClick={openCreateModal}
-                        className="inline-flex h-10 items-center gap-2 rounded-xl bg-black px-4 text-sm font-semibold text-white shadow-[0_8px_24px_rgba(0,0,0,0.14)] transition hover:bg-black/88"
-                    >
-                        <Upload className="h-4 w-4" />
-                        新增
-                        <ChevronDown className="h-3.5 w-3.5 opacity-80" />
-                    </button>
+                    <h1 className={clsx('leading-none font-semibold tracking-[0.01em] text-slate-900', isModalVariant ? 'text-[20px]' : 'text-[26px]')}>资产库</h1>
+                    {showAssetControls && (
+                        <button
+                            onClick={openCreateModal}
+                            className={clsx(
+                                'inline-flex items-center gap-2 rounded-xl bg-black text-sm font-semibold text-white shadow-[0_8px_24px_rgba(0,0,0,0.14)] transition hover:bg-black/88',
+                                isModalVariant ? 'h-9 px-3' : 'h-10 px-4'
+                            )}
+                        >
+                            <Upload className="h-4 w-4" />
+                            新增
+                            <ChevronDown className="h-3.5 w-3.5 opacity-80" />
+                        </button>
+                    )}
 
                     <div className="ml-auto flex items-center gap-3">
                         <button
@@ -787,11 +886,63 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
                                 <List className="h-4 w-4" />
                             </button>
                         </div>
+                        {!showAssetControls && (
+                            <button
+                                type="button"
+                                onClick={() => setFilterOpen((value) => !value)}
+                                className={clsx(
+                                    'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-slate-800 transition',
+                                    filterOpen || query ? 'bg-slate-200' : 'bg-slate-100 hover:bg-slate-200'
+                                )}
+                            >
+                                <SlidersHorizontal className="h-4 w-4" />
+                                筛选
+                            </button>
+                        )}
+                        {isModalVariant && onClose && (
+                            <button
+                                type="button"
+                                onClick={onClose}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 transition hover:bg-slate-100 hover:text-slate-950"
+                                aria-label="关闭资产库"
+                                title="关闭"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
 
-            <div className="mx-8 flex min-h-[48px] items-end border-b border-slate-200">
+            {isModalVariant && (
+                <div className="mx-5 flex items-center gap-1 border-b border-slate-200 pb-2">
+                    {([
+                        { id: 'assets' as const, label: '资产', icon: Package, count: subjects.length },
+                        { id: 'media' as const, label: '媒体', icon: Clapperboard, count: mediaAssets.length },
+                    ]).map((item) => {
+                        const Icon = item.icon;
+                        const active = activeLibraryTab === item.id;
+                        return (
+                            <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => setLibraryTab(item.id)}
+                                className={clsx(
+                                    'inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition',
+                                    active ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+                                )}
+                            >
+                                <Icon className="h-3.5 w-3.5" />
+                                {item.label}
+                                <span className={clsx('text-[10px]', active ? 'text-white/70' : 'text-slate-400')}>{item.count}</span>
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
+            {showAssetControls && (
+            <div className={clsx('flex min-h-[48px] items-end border-b border-slate-200', isModalVariant ? 'mx-5' : 'mx-8')}>
                 <div className="flex min-w-0 flex-1 items-end gap-6 overflow-x-auto no-scrollbar">
                     {categoryTabs.map((item) => {
                         const active = categoryFilter === item.id;
@@ -845,38 +996,126 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
                     </button>
                 </div>
             </div>
+            )}
 
             {filterOpen && (
-                <div className="mx-8 border-b border-slate-200 py-3">
+                <div className={clsx('border-b border-slate-200 py-3', isModalVariant ? 'mx-5' : 'mx-8')}>
                     <div className="relative max-w-[420px]">
                         <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                         <input
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
-                            placeholder="搜索名称、标签、属性、描述"
+                            placeholder={activeLibraryTab === 'media' ? '搜索媒体标题、项目、稿件、路径' : '搜索名称、标签、属性、描述'}
                             className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
                         />
                     </div>
                 </div>
             )}
 
-            <div className="flex-1 overflow-auto px-8 py-5">
+            <div className={clsx('min-h-0 flex-1 overflow-auto py-5', isModalVariant ? 'px-5' : 'px-8')}>
                 {error && !isModalOpen && (
                     <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                         {error}
                     </div>
                 )}
 
-                {loading && subjects.length === 0 && categories.length === 0 ? (
+                {activeLibraryTab === 'media' ? (
+                    loading && mediaAssets.length === 0 ? (
+                        <div className="text-sm text-slate-500">媒体加载中...</div>
+                    ) : filteredMediaAssets.length === 0 ? (
+                        <div className={clsx('flex flex-col items-center justify-center text-center text-slate-500', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
+                            <Clapperboard className="mb-4 h-12 w-12 stroke-[1.8]" />
+                            <div className="text-sm font-medium">暂无媒体</div>
+                        </div>
+                    ) : viewMode === 'grid' ? (
+                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+                            {filteredMediaAssets.map((asset) => {
+                                const previewUrl = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+                                const source = normalizeMediaSource(asset.source);
+                                return (
+                                    <button
+                                        key={asset.id}
+                                        type="button"
+                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                        className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
+                                    >
+                                        <div className="aspect-[4/5] overflow-hidden bg-surface-secondary/50">
+                                            {previewUrl && asset.exists ? (
+                                                isVideoAsset(asset) ? (
+                                                    <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
+                                                ) : (
+                                                    <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                )
+                                            ) : (
+                                                <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                                    <Clapperboard className="h-6 w-6" />
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="space-y-1.5 p-2.5">
+                                            <div className="truncate text-xs font-semibold text-text-primary">{asset.title || asset.id}</div>
+                                            <div className="truncate text-[11px] text-text-tertiary">
+                                                {asset.projectId || '未设置项目ID'}
+                                            </div>
+                                            <div className="flex items-center justify-between gap-2 text-[10px] text-text-tertiary">
+                                                <span>{MEDIA_SOURCE_LABEL[source]}</span>
+                                                <span>{asset.aspectRatio || asset.size || (isVideoAsset(asset) ? '视频' : '图片')}</span>
+                                            </div>
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
+                            {filteredMediaAssets.map((asset) => {
+                                const previewUrl = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+                                const source = normalizeMediaSource(asset.source);
+                                return (
+                                    <button
+                                        key={asset.id}
+                                        type="button"
+                                        onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
+                                        className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-slate-50"
+                                    >
+                                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                                            {previewUrl && asset.exists ? (
+                                                isVideoAsset(asset) ? (
+                                                    <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
+                                                ) : (
+                                                    <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
+                                                )
+                                            ) : (
+                                                <div className="flex h-full w-full items-center justify-center text-slate-400">
+                                                    <Clapperboard className="h-5 w-5" />
+                                                </div>
+                                            )}
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="truncate text-xs font-semibold text-slate-900">{asset.title || asset.id}</div>
+                                            <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                                                {MEDIA_SOURCE_LABEL[source]} · {asset.projectId || '未设置项目ID'}
+                                                {asset.boundManuscriptPath ? ` · ${asset.boundManuscriptPath}` : ''}
+                                            </div>
+                                        </div>
+                                        <div className="hidden text-xs text-slate-400 md:block">
+                                            {formatAssetDate(asset.updatedAt || asset.createdAt)}
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )
+                ) : loading && subjects.length === 0 && categories.length === 0 ? (
                     <div className="text-sm text-slate-500">资产库加载中...</div>
                 ) : filteredSubjects.length === 0 ? (
-                    <div className="flex min-h-[54vh] flex-col items-center justify-center text-center text-slate-500">
+                    <div className={clsx('flex flex-col items-center justify-center text-center text-slate-500', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
                         <CalendarClock className="mb-4 h-12 w-12 stroke-[1.8]" />
                         <div className="text-sm font-medium">暂无数据，尝试刷新</div>
                         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-xs text-slate-500">已加载全部</div>
                     </div>
                 ) : viewMode === 'grid' ? (
-                    <div className="grid grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8 gap-2.5">
+                    <div className={clsx('grid gap-2.5', isModalVariant ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6' : 'grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8')}>
                         {filteredSubjects.map((subject) => (
                             <div
                                 key={subject.id}
@@ -1383,8 +1622,8 @@ export function Subjects({ isActive = true, onReturnHome }: { isActive?: boolean
                             </div>
                             <div className="mt-1 text-xs leading-5 text-text-tertiary">
                                 {categoryDialogMode === 'create'
-                                    ? '输入分类名称后即可在主体库中直接使用。'
-                                    : '更新分类名称后，已关联的主体会自动沿用该分类。'}
+                                    ? '输入分类名称后即可在资产库中直接使用。'
+                                    : '更新分类名称后，已关联的资产会自动沿用该分类。'}
                             </div>
                         </div>
                         <div className="px-5 py-4 space-y-3">

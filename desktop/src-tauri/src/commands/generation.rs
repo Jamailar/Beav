@@ -7,7 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
-const REDBOX_OFFICIAL_VIDEO_ENDPOINT: &str = "https://api.ziz.hk/redbox/v1";
+fn is_redbox_official_video_endpoint(endpoint: &str) -> bool {
+    let normalized = normalize_base_url(endpoint).to_lowercase();
+    (normalized.contains("api.ziz.hk") || normalized.contains("api.thrivingos.com"))
+        && normalized.contains("/thrive/v1")
+}
 const MAX_IMAGE_BATCH_ITEMS: usize = 6;
 const IMAGE_BATCH_PARALLELISM: usize = 4;
 
@@ -997,7 +1001,7 @@ pub fn handle_generation_channel(
                 let generation_mode = payload_field(payload, "generationMode")
                     .and_then(|value| value.as_str())
                     .unwrap_or("text-to-video");
-                let effective_video_model = if endpoint.trim() == REDBOX_OFFICIAL_VIDEO_ENDPOINT {
+                let effective_video_model = if is_redbox_official_video_endpoint(&endpoint) {
                     official_video_model_for_mode(generation_mode, default_model)
                 } else {
                     model.clone().unwrap_or_else(|| {

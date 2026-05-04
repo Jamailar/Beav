@@ -681,7 +681,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
 
             {approvalOpen && (
                 <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/30 px-4 py-5">
-                    <div className="flex h-full max-h-[860px] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl">
+                    <div className="flex h-full max-h-[760px] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl">
                         <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
                             <div className="text-[14px] font-semibold text-text-primary">审批</div>
                             <button

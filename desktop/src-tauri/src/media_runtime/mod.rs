@@ -2896,7 +2896,7 @@ async fn run_video_submit_worker(
             .and_then(Value::as_str)
             .unwrap_or("text-to-video");
         let effective_model = loaded.job.provider_model.clone().unwrap_or_else(|| {
-            if endpoint.trim() == "https://api.ziz.hk/redbox/v1" {
+            if crate::media_generation::is_redbox_compatible_endpoint(&endpoint) {
                 if generation_mode == "reference-guided" {
                     "wan2.7-r2v-video".to_string()
                 } else if matches!(generation_mode, "first-last-frame" | "continuation") {
