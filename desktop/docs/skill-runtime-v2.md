@@ -170,12 +170,12 @@ skill 运行时不只影响 prompt，还会同步影响：
 
 ## 工具引用规则
 
-- `allowedTools` 只写 canonical top-level tool：`bash`、`redbox_fs`、`app_cli`、`redbox_editor`。
+- `allowedTools` 只写 canonical top-level tool：`bash`、`resource`、`workflow`、`editor`。
 - skill 正文、`activationHint`、`contextNote`、prompt prefix/suffix 中，默认只写 canonical 调用形式：
-  - `app_cli(action="...", payload={ ... })`
-  - `redbox_fs(action="workspace.read" | "knowledge.search", payload={ ... })`
-  - `redbox_editor(action="...", payload={ ... })`
-- 不要在新 skill 里写 `app_cli(command="...")`、`knowledge_read`、`knowledge_grep`、`redbox_runtime_control` 这类 legacy 调用。
+  - `workflow(action="...", payload={ ... })`
+  - `resource(action="workspace.read" | "knowledge.search", payload={ ... })`
+  - `editor(action="...", payload={ ... })`
+- 不要在新 skill 里写 `workflow(command="...")`、`knowledge_read`、`knowledge_grep`、`runtime_control` 这类 legacy 调用。
 - 如果 runtime 仍需要兼容旧写法，应由 `tools/compat.rs` 负责翻译；skill 本身不负责教授兼容语法。
 - 选择工具时，优先挑最小 action，不要把多步任务塞进一个模糊 action 描述里。
 

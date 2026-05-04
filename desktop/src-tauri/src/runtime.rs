@@ -393,7 +393,7 @@ mod tests {
         );
         assert_eq!(
             resolve_runtime_mode_from_context_type(Some("unknown")),
-            "chatroom"
+            "team"
         );
     }
 

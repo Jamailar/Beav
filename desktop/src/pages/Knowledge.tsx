@@ -1710,7 +1710,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     ), [selectedTypeFilter, typeFilters]);
 
     const topControls = useMemo(() => (
-        <div className="flex w-full min-w-0 items-center justify-end gap-2 pr-2" data-no-window-drag>
+        <div className="flex min-w-0 shrink-0 items-center justify-end gap-2" data-no-window-drag>
             <div className="flex min-w-0 shrink items-center justify-end gap-1.5">
                     <div className="relative w-[148px]">
                         <ArrowDownUp className="pointer-events-none absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-text-tertiary" />
@@ -1821,11 +1821,11 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
     useEffect(() => {
         if (!onTitleBarContentChange) return;
-        onTitleBarContentChange(isActive && !isEmbedded ? topControls : null);
+        onTitleBarContentChange(null);
         return () => {
             onTitleBarContentChange(null);
         };
-    }, [isActive, isEmbedded, onTitleBarContentChange, topControls]);
+    }, [onTitleBarContentChange]);
 
     // Embedded View Renders
     if (isEmbedded && selectedNote) {
@@ -2061,8 +2061,11 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                 )}
             >
                 <div className={clsx('flex flex-col', isEmbedded ? 'gap-2' : 'gap-3.5')}>
-                    <div className="flex items-center gap-3 py-1">
-                        {typeFilterControls}
+                    <div className="flex items-center justify-between gap-3 py-1">
+                        <div className="min-w-0 flex-1">
+                            {typeFilterControls}
+                        </div>
+                        {!isEmbedded && topControls}
                     </div>
 
                     {!isEmbedded && allTags.length > 0 && (

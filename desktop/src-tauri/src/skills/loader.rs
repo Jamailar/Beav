@@ -503,10 +503,10 @@ mod tests {
     #[test]
     fn split_skill_body_extracts_frontmatter_metadata() {
         let (metadata, body) = split_skill_body(
-            "---\nallowedRuntimeModes: [redclaw, knowledge]\nallowedTools: [redbox_fs, redbox_mcp]\nautoActivate: true\nactivationScope: turn\nhookMode: forked\nmaxPromptChars: 1200\n---\n# Skill\n\nBody",
+            "---\nallowedRuntimeModes: [redclaw, knowledge]\nallowedTools: [resource, mcp]\nautoActivate: true\nactivationScope: turn\nhookMode: forked\nmaxPromptChars: 1200\n---\n# Skill\n\nBody",
         );
         assert_eq!(metadata.allowed_runtime_modes, vec!["redclaw", "knowledge"]);
-        assert_eq!(metadata.allowed_tools, vec!["redbox_fs", "redbox_mcp"]);
+        assert_eq!(metadata.allowed_tools, vec!["resource", "mcp"]);
         assert!(metadata.auto_activate);
         assert_eq!(metadata.activation_scope.as_deref(), Some("turn"));
         assert_eq!(metadata.hook_mode.as_deref(), Some("forked"));

@@ -789,7 +789,7 @@ fn build_legacy_wander_prompt(
         "",
         "工具调用要求（默认不要触发）：",
         "1) 先用预读 bundle 判断，不要为了证明你看过素材而重复读取；",
-        "2) 只有当预读 bundle 明显不足以确定选题时，才允许额外调用 redbox_fs 补读 1-2 个文件；",
+        "2) 只有当预读 bundle 明显不足以确定选题时，才允许额外调用 resource 补读 1-2 个文件；",
         "3) 不要再做目录侦察式探索，不要为单条素材反复 list/read 多个文件。",
         "",
         &output_requirement,
@@ -1367,9 +1367,9 @@ fn synthetic_chatroom_session_items(store: &AppStore) -> Vec<Value> {
                 .unwrap_or_else(|| room.created_at.clone());
             Some(json!({
                 "id": session_id,
-                "runtimeMode": "chatroom",
+                "runtimeMode": "team",
                 "contextBinding": {
-                    "contextType": "chatroom",
+                    "contextType": "team",
                     "contextId": room.id,
                     "isContextBound": true,
                 },
@@ -2454,7 +2454,7 @@ pub fn handle_chat_sessions_wander_channel(
                     metadata.insert("contextType".to_string(), json!("wander"));
                     metadata.insert("contextContent".to_string(), json!(items_text));
                     metadata.insert("isContextBound".to_string(), json!(true));
-                    metadata.insert("allowedTools".to_string(), json!(["redbox_fs"]));
+                    metadata.insert("allowedTools".to_string(), json!(["resource"]));
                     metadata.insert(
                         "wanderMaterialBundleChars".to_string(),
                         json!(material_bundle.chars().count()),

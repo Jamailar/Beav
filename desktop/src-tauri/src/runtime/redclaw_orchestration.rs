@@ -378,7 +378,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "research.collect_recent_references".to_string(),
                 "research.extract_claims".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            allowed_tools: vec!["workflow".to_string(), "resource".to_string()],
             readable_memory_scopes: vec!["knowledge".to_string(), "creator".to_string()],
             output_schema: "ResearchBrief".to_string(),
         },
@@ -394,7 +394,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "insight.topic_cluster".to_string(),
                 "insight.brief_from_references".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),
@@ -415,7 +415,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "xhs.search_keyword_plan".to_string(),
                 "insight.idea_score".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),
@@ -435,7 +435,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "xhs.note_architecture".to_string(),
                 "xhs.carousel_page_plan".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),
@@ -456,7 +456,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "script.xiaohongshu_note".to_string(),
                 "script.hook_variants".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            allowed_tools: vec!["workflow".to_string(), "resource".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),
@@ -477,7 +477,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "script.xiaohongshu_note".to_string(),
                 "script.hook_variants".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            allowed_tools: vec!["workflow".to_string(), "resource".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),
@@ -497,7 +497,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "storyboard.scene_breakdown".to_string(),
                 "storyboard.shot_list".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec!["project".to_string(), "asset".to_string()],
             output_schema: "Storyboard".to_string(),
         },
@@ -514,7 +514,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "xhs.cover_direction".to_string(),
                 "image.prompt_pack".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),
@@ -534,7 +534,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "media.asset_match".to_string(),
                 "media.rough_cut_plan".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            allowed_tools: vec!["workflow".to_string(), "resource".to_string()],
             readable_memory_scopes: vec![
                 "asset".to_string(),
                 "project".to_string(),
@@ -555,7 +555,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "image.asset_match".to_string(),
                 "xhs.image_manifest".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            allowed_tools: vec!["workflow".to_string(), "resource".to_string()],
             readable_memory_scopes: vec![
                 "asset".to_string(),
                 "project".to_string(),
@@ -575,7 +575,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "xhs.carousel_layout".to_string(),
                 "xhs.cover_text_safety".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string(), "redbox_fs".to_string()],
+            allowed_tools: vec!["workflow".to_string(), "resource".to_string()],
             readable_memory_scopes: vec![
                 "project".to_string(),
                 "platform".to_string(),
@@ -595,7 +595,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "editor.fact_check".to_string(),
                 "editor.voice_consistency".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "project".to_string(),
@@ -616,7 +616,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "publish.cover_copy".to_string(),
                 "publish.platform_package".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),
@@ -636,7 +636,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "xhs.compliance_check".to_string(),
                 "editor.fact_check".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "platform".to_string(),
                 "project".to_string(),
@@ -656,7 +656,7 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
                 "review.run_quality_review".to_string(),
                 "review.learning_candidate_extract".to_string(),
             ],
-            allowed_tools: vec!["app_cli".to_string()],
+            allowed_tools: vec!["workflow".to_string()],
             readable_memory_scopes: vec![
                 "creator".to_string(),
                 "platform".to_string(),

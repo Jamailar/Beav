@@ -54,17 +54,17 @@ const APP_CLI_DESCRIPTION: &str =
 const REDBOX_EDITOR_DESCRIPTION: &str =
     "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg/remotion actions.";
 const READ_DESCRIPTION: &str =
-    "Read one local, web URL, or RedBox virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion. Do not use bash/curl for web pages.";
+    "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion. Do not use bash/curl for web pages.";
 const LIST_DESCRIPTION: &str =
-    "List a directory or RedBox collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, subjects:// for subjects, or media:// for media.";
+    "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, subjects:// for subjects, or media:// for media.";
 const SEARCH_DESCRIPTION: &str =
-    "Search files or RedBox collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and subjects:// for subject library lookup. This is not a web search tool.";
+    "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and subjects:// for subject library lookup. This is not a web search tool.";
 const WRITE_DESCRIPTION: &str =
-    "Write content to a RedBox virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
+    "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
 const REDBOX_DESCRIPTION: &str =
-    "Run product-level RedBox operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
+    "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
-    "chatroom",
+    "team",
     "default",
     "image-generation",
     "knowledge",
@@ -77,7 +77,7 @@ const ALL_APP_RUNTIME_MODES: &[&str] = &[
 const ALL_EDITOR_RUNTIME_MODES: &[&str] = &["video-editor", "audio-editor", "diagnostics"];
 const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
     "wander",
-    "chatroom",
+    "team",
     "image-generation",
     "knowledge",
     "redclaw",
@@ -86,14 +86,14 @@ const ALL_FILE_SYSTEM_RUNTIME_MODES: &[&str] = &[
     "diagnostics",
 ];
 const REDCLAW_RUNTIME_MODES: &[&str] = &[
-    "chatroom",
+    "team",
     "default",
     "image-generation",
     "knowledge",
     "redclaw",
 ];
 const MANUSCRIPT_AUTHORING_RUNTIME_MODES: &[&str] = &[
-    "chatroom",
+    "team",
     "default",
     "image-generation",
     "knowledge",
@@ -770,9 +770,16 @@ fn team_session_create_input_schema() -> Value {
                 "metadata",
                 json!({ "type": "object", "additionalProperties": true }),
             ),
+            (
+                "userConfirmedTeamPlan",
+                json!({
+                    "type": "boolean",
+                    "description": "Must be true only after the user has explicitly confirmed the proposed team members and division of work in this conversation."
+                }),
+            ),
         ],
-        &["objective"],
-        Some("Create a Workboard collaboration project for internal runtime agents."),
+        &["objective", "userConfirmedTeamPlan"],
+        Some("Create a Workboard collaboration project for internal runtime agents. Before calling this, propose the team members and division of work to the user and wait for explicit confirmation."),
     )
 }
 
@@ -808,9 +815,16 @@ fn team_member_spawn_input_schema() -> Value {
                 "metadata",
                 json!({ "type": "object", "additionalProperties": true }),
             ),
+            (
+                "userConfirmedTeamPlan",
+                json!({
+                    "type": "boolean",
+                    "description": "Must be true only after the user has explicitly confirmed this member and its responsibility."
+                }),
+            ),
         ],
-        &["sessionId", "displayName"],
-        Some("Create one internal runtime team member. Do not create external ACP/CLI members."),
+        &["sessionId", "displayName", "userConfirmedTeamPlan"],
+        Some("Create one internal runtime team member. Do not create external ACP/CLI members. Before spawning members, the user must have confirmed the member list and responsibilities."),
     )
 }
 
@@ -1412,7 +1426,7 @@ fn mcp_save_input_schema() -> Value {
                         "type": "object",
                         "additionalProperties": true
                     },
-                    "description": "Complete MCP server records to save as the active RedBox MCP configuration."
+                    "description": "Complete MCP server records to save as the active MCP configuration."
                 }),
             ),
         ],
@@ -1441,10 +1455,7 @@ fn mcp_call_input_schema() -> Value {
                     "additionalProperties": true,
                 }),
             ),
-            (
-                "sessionId",
-                string_schema("Optional RedBox runtime session id."),
-            ),
+            ("sessionId", string_schema("Optional runtime session id.")),
         ],
         &["method"],
         None,
@@ -1904,7 +1915,7 @@ fn redbox_resource_schema_for_actions(descriptors: &[ActionDescriptor]) -> Value
     json!({
         "type": "string",
         "enum": resources,
-        "description": "Product resource family. Prefer Read/List/Search/Write for simple resource access; use Redbox for product operations with side effects or workflow semantics."
+        "description": "Product resource family. Prefer Read/List/Search/Write for simple resource access; use Operate for product operations with side effects or workflow semantics."
     })
 }
 
@@ -1917,7 +1928,7 @@ fn redbox_operation_schema_for_actions(descriptors: &[ActionDescriptor]) -> Valu
     json!({
         "type": "string",
         "enum": operations,
-        "description": "Generic operation for the selected resource. The host maps this stable verb to the existing RedBox action contract."
+        "description": "Generic operation for the selected resource. The host maps this stable verb to the existing action contract."
     })
 }
 
@@ -2040,7 +2051,7 @@ fn redbox_tool_schema(descriptors: Option<&[ActionDescriptor]>) -> Value {
     json!({
         "type": "function",
         "function": {
-            "name": "Redbox",
+            "name": "Operate",
             "description": REDBOX_DESCRIPTION,
             "parameters": {
                 "type": "object",
@@ -2106,7 +2117,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "tools.search",
         namespace: "tools",
-        description: "Search deferred app_cli actions available to the current session.",
+        description: "Search deferred workflow actions available to the current session.",
         input_schema: tools_search_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -2513,7 +2524,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "team.session.create",
         namespace: "team.session",
-        description: "Create a Workboard collaboration project for internal runtime agents when the user asks for team collaboration, multi-role execution, or ongoing progress reporting.",
+        description: "Create a Workboard collaboration project for internal runtime agents when the user asks for team collaboration, multi-role execution, or ongoing progress reporting. Never call this before the user explicitly confirms the proposed team members and division of work.",
         input_schema: team_session_create_input_schema,
         output_schema: runtime_output_schema,
         mutating: true,
@@ -2546,7 +2557,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "team.member.spawn",
         namespace: "team.member",
-        description: "Create one internal runtime team member role inside a Workboard collaboration project. Never use this for external ACP/CLI agents.",
+        description: "Create one internal runtime team member role inside a Workboard collaboration project. Never use this for external ACP/CLI agents. Only call after the user has confirmed this member and responsibility.",
         input_schema: team_member_spawn_input_schema,
         output_schema: runtime_output_schema,
         mutating: true,
@@ -2854,7 +2865,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "mcp.importLocal",
         namespace: "mcp",
-        description: "Import locally discovered MCP server configs into RedBox and sync the MCP manager.",
+        description: "Import locally discovered MCP server configs and sync the MCP manager.",
         input_schema: mcp_list_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -3223,9 +3234,8 @@ const REDBOX_EDITOR_ACTIONS: &[ActionDescriptor] = &[
 ];
 
 fn normalized_runtime_mode(runtime_mode: Option<&str>) -> &str {
-    match runtime_mode.unwrap_or("chatroom").trim() {
-        "" => "chatroom",
-        "default" => "chatroom",
+    match runtime_mode.unwrap_or("team").trim() {
+        "" | "default" | "chat" | "chatroom" => "team",
         other => other,
     }
 }
@@ -3240,8 +3250,8 @@ fn action_visible_in_runtime(
     }
     let normalized = normalized_runtime_mode(runtime_mode);
     descriptor.runtime_modes.iter().any(|item| {
-        let candidate = if *item == "default" {
-            "chatroom"
+        let candidate = if *item == "default" || *item == "chatroom" {
+            "team"
         } else {
             *item
         };
@@ -3324,9 +3334,9 @@ pub fn action_descriptors_for_tool(
     visibility: ActionVisibility,
 ) -> Vec<ActionDescriptor> {
     let source = match tool_name {
-        "app_cli" => APP_CLI_ACTIONS,
-        "redbox_fs" => REDBOX_FS_ACTIONS,
-        "redbox_editor" => REDBOX_EDITOR_ACTIONS,
+        "workflow" => APP_CLI_ACTIONS,
+        "resource" => REDBOX_FS_ACTIONS,
+        "editor" => REDBOX_EDITOR_ACTIONS,
         _ => &[],
     };
     source
@@ -3360,9 +3370,9 @@ pub fn action_descriptor_by_name(
     visibility: Option<ActionVisibility>,
 ) -> Option<ActionDescriptor> {
     let source = match tool_name {
-        "app_cli" => APP_CLI_ACTIONS,
-        "redbox_fs" => REDBOX_FS_ACTIONS,
-        "redbox_editor" => REDBOX_EDITOR_ACTIONS,
+        "workflow" => APP_CLI_ACTIONS,
+        "resource" => REDBOX_FS_ACTIONS,
+        "editor" => REDBOX_EDITOR_ACTIONS,
         _ => return None,
     };
     source.iter().copied().find(|descriptor| {
@@ -3407,16 +3417,16 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             concurrency_safe: false,
             output_budget_chars: 16_000,
         }),
-        "Redbox" => Some(ToolDescriptor {
-            name: "Redbox",
+        "Operate" => Some(ToolDescriptor {
+            name: "Operate",
             description: REDBOX_DESCRIPTION,
             kind: ToolKind::AppCli,
             requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 20_000,
         }),
-        "app_cli" => Some(ToolDescriptor {
-            name: "app_cli",
+        "workflow" => Some(ToolDescriptor {
+            name: "workflow",
             description: APP_CLI_DESCRIPTION,
             kind: ToolKind::AppCli,
             requires_approval: false,
@@ -3425,22 +3435,22 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "bash" => Some(ToolDescriptor {
             name: "bash",
-            description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for real host CLI execution, PATH checks, curl, which, type, command -v, node, npm, pnpm, or tool-specific CLIs; use app_cli(action=\"cli_runtime.inspect\"|\"cli_runtime.diagnose\"|\"cli_runtime.execute\") instead.",
+            description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for real host CLI execution, PATH checks, curl, which, type, command -v, node, npm, pnpm, or tool-specific CLIs; use workflow(action=\"cli_runtime.inspect\"|\"cli_runtime.diagnose\"|\"cli_runtime.execute\") instead.",
             kind: ToolKind::Bash,
             requires_approval: false,
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
-        "redbox_app_query" => Some(ToolDescriptor {
-            name: "redbox_app_query",
-            description: "Legacy compatibility alias for app queries. Prefer app_cli commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
+        "query" => Some(ToolDescriptor {
+            name: "query",
+            description: "Legacy compatibility alias for app queries. Prefer workflow commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
             kind: ToolKind::AppQuery,
             requires_approval: false,
             concurrency_safe: true,
             output_budget_chars: 12_000,
         }),
-        "redbox_fs" => Some(ToolDescriptor {
-            name: "redbox_fs",
+        "resource" => Some(ToolDescriptor {
+            name: "resource",
             description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
@@ -3449,7 +3459,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_glob" => Some(ToolDescriptor {
             name: "knowledge_glob",
-            description: "Legacy compatibility alias for advisor/member knowledge listing. Prefer redbox_fs(scope=knowledge, action=list).",
+            description: "Legacy compatibility alias for advisor/member knowledge listing. Prefer resource(scope=knowledge, action=list).",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -3457,7 +3467,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_grep" => Some(ToolDescriptor {
             name: "knowledge_grep",
-            description: "Legacy compatibility alias for advisor/member knowledge search. Prefer redbox_fs(scope=knowledge, action=search).",
+            description: "Legacy compatibility alias for advisor/member knowledge search. Prefer resource(scope=knowledge, action=search).",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -3465,46 +3475,46 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_read" => Some(ToolDescriptor {
             name: "knowledge_read",
-            description: "Legacy compatibility alias for advisor/member knowledge read. Prefer redbox_fs(scope=knowledge, action=read).",
+            description: "Legacy compatibility alias for advisor/member knowledge read. Prefer resource(scope=knowledge, action=read).",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
-        "redbox_profile_doc" => Some(ToolDescriptor {
-            name: "redbox_profile_doc",
-            description: "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer app_cli redclaw profile-bundle/profile-read/profile-update commands.",
+        "profile_doc" => Some(ToolDescriptor {
+            name: "profile_doc",
+            description: "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer workflow redclaw profile-bundle/profile-read/profile-update commands.",
             kind: ToolKind::ProfileDoc,
             requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 16_000,
         }),
-        "redbox_mcp" => Some(ToolDescriptor {
-            name: "redbox_mcp",
-            description: "Legacy compatibility alias for MCP management. Prefer app_cli mcp list/save/call/list-tools/list-resources/disconnect commands.",
+        "mcp" => Some(ToolDescriptor {
+            name: "mcp",
+            description: "Legacy compatibility alias for MCP management. Prefer workflow mcp list/save/call/list-tools/list-resources/disconnect commands.",
             kind: ToolKind::Mcp,
             requires_approval: false,
             concurrency_safe: true,
             output_budget_chars: 20_000,
         }),
-        "redbox_skill" => Some(ToolDescriptor {
-            name: "redbox_skill",
-            description: "Legacy compatibility alias for skill runtime and AI-role management. Prefer app_cli skills ... and ai ... commands.",
+        "skill" => Some(ToolDescriptor {
+            name: "skill",
+            description: "Legacy compatibility alias for skill runtime and AI-role management. Prefer workflow skills ... and ai ... commands.",
             kind: ToolKind::Skill,
             requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 12_000,
         }),
-        "redbox_runtime_control" => Some(ToolDescriptor {
-            name: "redbox_runtime_control",
-            description: "Legacy compatibility alias for runtime/session/task/background control. Prefer app_cli runtime ... commands.",
+        "runtime_control" => Some(ToolDescriptor {
+            name: "runtime_control",
+            description: "Legacy compatibility alias for runtime/session/task/background control. Prefer workflow runtime ... commands.",
             kind: ToolKind::RuntimeControl,
             requires_approval: false,
             concurrency_safe: false,
             output_budget_chars: 20_000,
         }),
-        "redbox_editor" => Some(ToolDescriptor {
-            name: "redbox_editor",
+        "editor" => Some(ToolDescriptor {
+            name: "editor",
             description: REDBOX_EDITOR_DESCRIPTION,
             kind: ToolKind::Editor,
             requires_approval: false,
@@ -3588,11 +3598,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "Redbox" => Some(redbox_tool_schema(None)),
-        "app_cli" => Some(build_action_tool_schema(
-            "app_cli",
+        "Operate" => Some(redbox_tool_schema(None)),
+        "workflow" => Some(build_action_tool_schema(
+            "workflow",
             APP_CLI_DESCRIPTION,
-            &action_descriptors_for_tool("app_cli", runtime_mode, ActionVisibility::Model),
+            &action_descriptors_for_tool("workflow", runtime_mode, ActionVisibility::Model),
         )),
         "bash" => Some(json!({
             "type": "function",
@@ -3611,11 +3621,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_app_query" => Some(json!({
+        "query" => Some(json!({
             "type": "function",
             "function": {
-                "name": "redbox_app_query",
-                "description": "Legacy compatibility alias for app queries. Prefer app_cli commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
+                "name": "query",
+                "description": "Legacy compatibility alias for app queries. Prefer workflow commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3642,16 +3652,16 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_fs" => Some(build_action_tool_schema(
-            "redbox_fs",
+        "resource" => Some(build_action_tool_schema(
+            "resource",
             "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
-            &action_descriptors_for_tool("redbox_fs", runtime_mode, ActionVisibility::Model),
+            &action_descriptors_for_tool("resource", runtime_mode, ActionVisibility::Model),
         )),
         "knowledge_glob" => Some(json!({
             "type": "function",
             "function": {
                 "name": "knowledge_glob",
-                "description": "Legacy compatibility alias for advisor/member knowledge listing. Prefer redbox_fs(scope=knowledge, action=list).",
+                "description": "Legacy compatibility alias for advisor/member knowledge listing. Prefer resource(scope=knowledge, action=list).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3667,7 +3677,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "knowledge_grep",
-                "description": "Legacy compatibility alias for advisor/member knowledge search. Prefer redbox_fs(scope=knowledge, action=search).",
+                "description": "Legacy compatibility alias for advisor/member knowledge search. Prefer resource(scope=knowledge, action=search).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3686,7 +3696,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "knowledge_read",
-                "description": "Legacy compatibility alias for advisor/member knowledge read. Prefer redbox_fs(scope=knowledge, action=read).",
+                "description": "Legacy compatibility alias for advisor/member knowledge read. Prefer resource(scope=knowledge, action=read).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3701,11 +3711,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_profile_doc" => Some(json!({
+        "profile_doc" => Some(json!({
             "type": "function",
             "function": {
-                "name": "redbox_profile_doc",
-                "description": "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer app_cli redclaw profile-bundle/profile-read/profile-update commands.",
+                "name": "profile_doc",
+                "description": "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer workflow redclaw profile-bundle/profile-read/profile-update commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3719,11 +3729,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_mcp" => Some(json!({
+        "mcp" => Some(json!({
             "type": "function",
             "function": {
-                "name": "redbox_mcp",
-                "description": "Legacy compatibility alias for MCP management. Prefer app_cli mcp list/save/call/list-tools/list-resources/disconnect commands.",
+                "name": "mcp",
+                "description": "Legacy compatibility alias for MCP management. Prefer workflow mcp list/save/call/list-tools/list-resources/disconnect commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3757,11 +3767,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_skill" => Some(json!({
+        "skill" => Some(json!({
             "type": "function",
             "function": {
-                "name": "redbox_skill",
-                "description": "Legacy compatibility alias for skill runtime and AI-role management. Prefer app_cli skills ... and ai ... commands.",
+                "name": "skill",
+                "description": "Legacy compatibility alias for skill runtime and AI-role management. Prefer workflow skills ... and ai ... commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3784,11 +3794,11 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_runtime_control" => Some(json!({
+        "runtime_control" => Some(json!({
             "type": "function",
             "function": {
-                "name": "redbox_runtime_control",
-                "description": "Legacy compatibility alias for runtime/session/task/background control. Prefer app_cli runtime ... commands.",
+                "name": "runtime_control",
+                "description": "Legacy compatibility alias for runtime/session/task/background control. Prefer workflow runtime ... commands.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3830,10 +3840,10 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                 }
             }
         })),
-        "redbox_editor" => Some(build_action_tool_schema(
-            "redbox_editor",
+        "editor" => Some(build_action_tool_schema(
+            "editor",
             REDBOX_EDITOR_DESCRIPTION,
-            &action_descriptors_for_tool("redbox_editor", runtime_mode, ActionVisibility::Model),
+            &action_descriptors_for_tool("editor", runtime_mode, ActionVisibility::Model),
         )),
         _ => None,
     }
@@ -3844,22 +3854,22 @@ pub fn schema_for_tool_from_action_descriptors(
     descriptors: &[ActionDescriptor],
 ) -> Option<Value> {
     match name {
-        "app_cli" => Some(build_action_tool_schema(
-            "app_cli",
+        "workflow" => Some(build_action_tool_schema(
+            "workflow",
             APP_CLI_DESCRIPTION,
             descriptors,
         )),
-        "redbox_fs" => Some(build_action_tool_schema(
-            "redbox_fs",
+        "resource" => Some(build_action_tool_schema(
+            "resource",
             "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             descriptors,
         )),
-        "redbox_editor" => Some(build_action_tool_schema(
-            "redbox_editor",
+        "editor" => Some(build_action_tool_schema(
+            "editor",
             REDBOX_EDITOR_DESCRIPTION,
             descriptors,
         )),
-        "Redbox" => Some(redbox_tool_schema(Some(descriptors))),
+        "Operate" => Some(redbox_tool_schema(Some(descriptors))),
         _ => None,
     }
 }
@@ -3875,8 +3885,8 @@ mod tests {
 
     #[test]
     fn app_cli_schema_supports_structured_action_field() {
-        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
-            .expect("app_cli schema should exist");
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("redclaw"))
+            .expect("workflow schema should exist");
         let parameters = &schema["function"]["parameters"];
         assert_eq!(parameters["type"].as_str(), Some("object"));
         assert_eq!(
@@ -3888,7 +3898,7 @@ mod tests {
 
     #[test]
     fn app_cli_schema_filters_actions_by_runtime_mode() {
-        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("diagnostics"))
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("diagnostics"))
             .expect("diagnostics schema should exist");
         let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
@@ -3908,9 +3918,9 @@ mod tests {
     }
 
     #[test]
-    fn chatroom_schema_exposes_mcp_setup_actions() {
-        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("chatroom"))
-            .expect("chatroom schema should exist");
+    fn team_schema_exposes_mcp_setup_actions() {
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("team"))
+            .expect("team schema should exist");
         let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
             .expect("action enum")
@@ -3936,7 +3946,7 @@ mod tests {
 
     #[test]
     fn image_generation_schema_exposes_media_generation_actions() {
-        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("image-generation"))
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("image-generation"))
             .expect("image-generation schema should exist");
         let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
@@ -3952,7 +3962,7 @@ mod tests {
 
     #[test]
     fn redclaw_schema_hides_internal_runtime_task_actions() {
-        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("redclaw"))
             .expect("redclaw schema should exist");
         let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
@@ -3969,7 +3979,7 @@ mod tests {
 
     #[test]
     fn redbox_editor_schema_hides_compat_only_actions() {
-        let schema = schema_for_tool_for_runtime_mode("redbox_editor", Some("video-editor"))
+        let schema = schema_for_tool_for_runtime_mode("editor", Some("video-editor"))
             .expect("editor schema should exist");
         let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
@@ -3985,8 +3995,8 @@ mod tests {
 
     #[test]
     fn redbox_fs_schema_uses_explicit_action_variants() {
-        let schema = schema_for_tool_for_runtime_mode("redbox_fs", Some("chatroom"))
-            .expect("redbox_fs schema should exist");
+        let schema = schema_for_tool_for_runtime_mode("resource", Some("team"))
+            .expect("resource schema should exist");
         let actions = schema["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
             .expect("action enum")
@@ -4006,10 +4016,10 @@ mod tests {
         for (tool_name, runtime_mode) in [
             ("Read", Some("redclaw")),
             ("Search", Some("redclaw")),
-            ("Redbox", Some("redclaw")),
-            ("app_cli", Some("redclaw")),
-            ("redbox_fs", Some("wander")),
-            ("redbox_editor", Some("video-editor")),
+            ("Operate", Some("redclaw")),
+            ("workflow", Some("redclaw")),
+            ("resource", Some("wander")),
+            ("editor", Some("video-editor")),
         ] {
             let schema = schema_for_tool_for_runtime_mode(tool_name, runtime_mode)
                 .unwrap_or_else(|| panic!("schema should exist for {tool_name}"));
@@ -4034,8 +4044,8 @@ mod tests {
             .unwrap_or_default()
             .contains("Resource path"));
 
-        let redbox = schema_for_tool_for_runtime_mode("Redbox", Some("redclaw"))
-            .expect("Redbox schema should exist");
+        let redbox = schema_for_tool_for_runtime_mode("Operate", Some("redclaw"))
+            .expect("Operate schema should exist");
         assert_eq!(
             redbox.pointer("/function/parameters/properties/resource/enum/0"),
             Some(&json!("manuscript"))
@@ -4049,22 +4059,22 @@ mod tests {
     #[test]
     fn tool_action_family_summary_lists_namespaces() {
         let summary =
-            tool_action_family_summary("app_cli", Some("redclaw")).expect("summary should exist");
+            tool_action_family_summary("workflow", Some("redclaw")).expect("summary should exist");
         assert!(summary.contains("memory"));
         assert!(summary.contains("manuscripts"));
         assert!(summary.contains("team.session"));
         assert!(summary.contains("team.member"));
         assert!(summary.contains("team.task"));
-        let fs_summary = tool_action_family_summary("redbox_fs", Some("chatroom"))
-            .expect("summary should exist");
+        let fs_summary =
+            tool_action_family_summary("resource", Some("team")).expect("summary should exist");
         assert!(fs_summary.contains("workspace"));
         assert!(fs_summary.contains("knowledge"));
     }
 
     #[test]
     fn app_cli_schema_exposes_team_coordinator_actions() {
-        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
-            .expect("app_cli schema should exist");
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("redclaw"))
+            .expect("workflow schema should exist");
         let actions = schema
             .pointer("/function/parameters/properties/action/enum")
             .and_then(Value::as_array)
@@ -4088,8 +4098,8 @@ mod tests {
 
     #[test]
     fn redclaw_schema_exposes_web_fetch_and_core_cli_runtime_actions() {
-        let schema = schema_for_tool_for_runtime_mode("app_cli", Some("redclaw"))
-            .expect("app_cli schema should exist");
+        let schema = schema_for_tool_for_runtime_mode("workflow", Some("redclaw"))
+            .expect("workflow schema should exist");
         let actions = schema
             .pointer("/function/parameters/properties/action/enum")
             .and_then(Value::as_array)
@@ -4116,7 +4126,7 @@ mod tests {
     #[test]
     fn action_descriptor_lookup_exposes_output_schema() {
         let descriptor = action_descriptor_by_name(
-            "app_cli",
+            "workflow",
             "manuscripts.writeCurrent",
             Some(ActionVisibility::Model),
         )

@@ -40,6 +40,22 @@ use redclaw_task_control::{
     handle_task_list, handle_task_preview, handle_task_stats, handle_task_update,
 };
 
+fn payload_bool(payload: &Value, key: &str) -> bool {
+    payload.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn require_confirmed_redclaw_team_plan(payload: &Value) -> Result<(), String> {
+    if payload_bool(payload, "userConfirmedTeamPlan")
+        || payload
+            .get("metadata")
+            .map(|metadata| payload_bool(metadata, "userConfirmedTeamPlan"))
+            .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    Err("创建 team 前必须先向用户列出团队成员和分工，并等待用户明确确认。确认后再传入 userConfirmedTeamPlan=true。".to_string())
+}
+
 pub(crate) fn redclaw_runner_status_value(state: &State<'_, AppState>) -> Result<Value, String> {
     let _ = ensure_store_hydrated_for_redclaw(state);
     with_store(state, |store| Ok(redclaw_state_value(&store.redclaw_state)))
@@ -101,7 +117,6 @@ pub fn handle_redclaw_channel(
         }),
         "redclaw:orchestration-plan" => plan_redclaw_orchestration(payload).map(|plan| json!(plan)),
         "redclaw:orchestration-registry" => Ok(redclaw_orchestration_registry_value()),
-        "redclaw:orchestration-create-team" => create_redclaw_orchestration_team(state, payload),
         "redclaw:orchestration-create-run" => create_redclaw_orchestration_run(state, payload),
         "redclaw:learning-candidate-update" => update_redclaw_learning_candidate(state, payload),
         "redclaw:project-section-update" => update_redclaw_project_section(state, payload),
@@ -2139,23 +2154,6 @@ fn redclaw_agent_display_name(agent_id: &RedclawAgentId) -> &'static str {
     }
 }
 
-fn create_redclaw_orchestration_team(
-    state: &State<'_, AppState>,
-    payload: &Value,
-) -> Result<Value, String> {
-    let plan = plan_redclaw_orchestration(payload)?;
-    with_store_mut(state, |store| {
-        let (session_id, snapshot) = create_redclaw_team_records(store, &plan, None)?;
-        Ok(json!({
-            "success": true,
-            "runId": plan.run_id,
-            "sessionId": session_id,
-            "graph": plan.graph,
-            "snapshot": snapshot
-        }))
-    })
-}
-
 fn redclaw_plan_role_ids(plan: &RedclawOrchestrationPlan) -> Vec<String> {
     let mut roles = Vec::new();
     for node in &plan.graph.nodes {
@@ -2277,6 +2275,7 @@ fn create_redclaw_orchestration_run(
     state: &State<'_, AppState>,
     payload: &Value,
 ) -> Result<Value, String> {
+    require_confirmed_redclaw_team_plan(payload)?;
     let plan = plan_redclaw_orchestration(payload)?;
     let owner_session_id = payload_string(payload, "sessionId");
     let project_id = payload_string(payload, "projectId")

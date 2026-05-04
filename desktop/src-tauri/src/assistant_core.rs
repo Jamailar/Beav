@@ -166,6 +166,11 @@ fn is_accounts_api_path(path: &str) -> bool {
     normalized == "/api/accounts" || normalized.starts_with("/api/accounts/")
 }
 
+fn is_browser_ipc_path(path: &str) -> bool {
+    let normalized = normalize_request_path(path);
+    normalized == "/api/ipc" || normalized.starts_with("/api/ipc/")
+}
+
 fn extract_bearer_or_token(headers: &HashMap<String, String>) -> String {
     let auth = headers
         .get("authorization")
@@ -741,6 +746,82 @@ fn handle_accounts_http_request(
     crate::accounts::handle_accounts_http_request(&state, method, path, body)
 }
 
+fn handle_browser_ipc_http_request(
+    app: &AppHandle,
+    method: &str,
+    path: &str,
+    headers: &HashMap<String, String>,
+    body: &str,
+) -> Result<(u16, &'static str, Value), String> {
+    let normalized_path = normalize_request_path(path);
+    if method == "OPTIONS" {
+        return Ok((204, "No Content", json!({})));
+    }
+    if method == "GET" && normalized_path == "/api/ipc/health" {
+        return Ok((200, "OK", json!({ "success": true })));
+    }
+    if method != "POST" || normalized_path != "/api/ipc/invoke" {
+        return Ok((
+            404,
+            "Not Found",
+            json!({
+                "success": false,
+                "error": "Browser IPC route not found",
+                "path": normalized_path,
+            }),
+        ));
+    }
+    if !is_allowed_browser_ipc_origin(headers) {
+        return Ok((
+            403,
+            "Forbidden",
+            json!({
+                "success": false,
+                "error": "Browser IPC only accepts same-device localhost pages",
+            }),
+        ));
+    }
+
+    let request = serde_json::from_str::<Value>(body)
+        .map_err(|error| format!("browser IPC request 无法解析: {error}"))?;
+    let channel = request
+        .get("channel")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "browser IPC request 缺少 channel".to_string())?;
+    let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+    let state = app.state::<AppState>();
+    let value = crate::handle_channel(app, channel, payload, &state)?;
+    Ok((200, "OK", value))
+}
+
+fn is_allowed_browser_ipc_origin(headers: &HashMap<String, String>) -> bool {
+    let candidate = headers
+        .get("origin")
+        .or_else(|| headers.get("referer"))
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim();
+    if candidate.is_empty() || candidate.eq_ignore_ascii_case("null") {
+        return true;
+    }
+    let Ok(parsed) = url::Url::parse(candidate) else {
+        return false;
+    };
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return false;
+    }
+    matches!(
+        parsed
+            .host_str()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    )
+}
+
 pub(crate) fn execute_assistant_message(
     app: &AppHandle,
     route_kind: &str,
@@ -850,6 +931,32 @@ pub(crate) fn run_assistant_listener(
                     .unwrap_or_else(|_| AssistantStateRecord::default());
                     let (raw_headers, body) = parse_http_request_parts(&request);
                     let (method, _path, headers) = parse_http_request_meta(&raw_headers);
+                    if is_browser_ipc_path(&path) {
+                        let response = match handle_browser_ipc_http_request(
+                            &app, &method, &path, &headers, &body,
+                        ) {
+                            Ok((status, status_text, body)) => {
+                                if status == 204 {
+                                    http_empty_response(&mut stream, status, status_text)
+                                } else {
+                                    http_json_response(&mut stream, status, status_text, body)
+                                }
+                            }
+                            Err(error) => http_json_response(
+                                &mut stream,
+                                400,
+                                "Bad Request",
+                                json!({ "success": false, "error": error }),
+                            ),
+                        };
+                        if let Err(error) = response {
+                            emit_assistant_log(
+                                &app,
+                                &format!("assistant daemon browser IPC response failed: {}", error),
+                            );
+                        }
+                        continue;
+                    }
                     if is_accounts_api_path(&path) {
                         emit_assistant_log(
                             &app,
@@ -1135,6 +1242,21 @@ mod tests {
             "/api/knowledge/custom/entries",
             &state
         ));
+    }
+
+    #[test]
+    fn browser_ipc_origin_allows_localhost_only() {
+        let mut headers = HashMap::new();
+        assert!(is_allowed_browser_ipc_origin(&headers));
+
+        headers.insert("origin".to_string(), "http://localhost:1420".to_string());
+        assert!(is_allowed_browser_ipc_origin(&headers));
+
+        headers.insert("origin".to_string(), "http://127.0.0.1:1420".to_string());
+        assert!(is_allowed_browser_ipc_origin(&headers));
+
+        headers.insert("origin".to_string(), "https://example.com".to_string());
+        assert!(!is_allowed_browser_ipc_origin(&headers));
     }
 
     #[test]

@@ -1755,16 +1755,18 @@ mod tests {
 
     #[test]
     fn interactive_tool_panic_message_keeps_string_payload() {
-        let message =
-            interactive_tool_panic_message("app_cli", Box::new("memory list exploded".to_string()));
-        assert!(message.contains("app_cli"));
+        let message = interactive_tool_panic_message(
+            "workflow",
+            Box::new("memory list exploded".to_string()),
+        );
+        assert!(message.contains("workflow"));
         assert!(message.contains("memory list exploded"));
     }
 
     #[test]
     fn interactive_tool_panic_message_handles_unknown_payload() {
-        let message = interactive_tool_panic_message("app_cli", Box::new(42usize));
-        assert_eq!(message, "工具 app_cli 执行时发生 panic");
+        let message = interactive_tool_panic_message("workflow", Box::new(42usize));
+        assert_eq!(message, "工具 workflow 执行时发生 panic");
     }
 
     #[test]
@@ -1806,7 +1808,7 @@ mod tests {
         interactive_execution_progress_observe_success(
             &mut progress,
             &contract,
-            "redbox_fs",
+            "resource",
             &json!({
                 "action": "knowledge.read",
                 "path": "knowledge/demo/content.md"
@@ -1833,7 +1835,7 @@ mod tests {
             "platform": "xiaohongshu",
             "taskType": "direct_write",
             "formatTarget": "markdown",
-            "allowedTools": ["redbox_fs", "app_cli"],
+            "allowedTools": ["resource", "workflow"],
             "allowedAppCliActions": ["manuscripts.writeCurrent", "skills.invoke"],
             "saveSubdir": "wander",
             "sourceMode": "knowledge",
@@ -1878,10 +1880,10 @@ mod tests {
     fn message_is_successful_manuscript_write_tool_result_matches_structured_result() {
         assert!(message_is_successful_manuscript_write_tool_result(&json!({
             "role": "tool",
-            "tool_name": "app_cli",
+            "tool_name": "workflow",
             "content": r#"{
                 "ok": true,
-                "tool": "app_cli",
+                "tool": "workflow",
                 "action": "manuscripts.writeCurrent",
                 "data": {
                     "projectPath": "wander/demo.redpost"
@@ -1891,10 +1893,10 @@ mod tests {
         assert!(!message_is_successful_manuscript_write_tool_result(
             &json!({
                 "role": "tool",
-                "tool_name": "app_cli",
+                "tool_name": "workflow",
                 "content": r#"{
                 "ok": true,
-                "tool": "app_cli",
+                "tool": "workflow",
                 "action": "manuscripts.createProject"
             }"#
             })
@@ -2017,7 +2019,7 @@ mod tests {
                     "id": "call-1",
                     "type": "function",
                     "function": {
-                        "name": "redbox_fs",
+                        "name": "resource",
                         "arguments": "{}"
                     }
                 }]
@@ -2025,7 +2027,7 @@ mod tests {
             json!({
                 "role": "tool",
                 "tool_call_id": "call-1",
-                "tool_name": "redbox_fs",
+                "tool_name": "resource",
                 "content": "{\"ok\":true}"
             }),
         ];
@@ -2038,7 +2040,7 @@ mod tests {
         let messages = vec![json!({
             "role": "tool",
             "tool_call_id": "call-orphan",
-            "tool_name": "redbox_fs",
+            "tool_name": "resource",
             "content": "{\"ok\":true}"
         })];
 
@@ -2050,7 +2052,7 @@ mod tests {
     #[test]
     fn interactive_skill_activations_keep_turn_scope_out_of_session_copy() {
         let activations = interactive_skill_activations(
-            "app_cli",
+            "workflow",
             &json!({
                 "data": {
                     "description": "writing helper",
@@ -2075,7 +2077,7 @@ mod tests {
     #[test]
     fn interactive_skill_activations_preserve_session_scope_copy() {
         let activations = interactive_skill_activations(
-            "app_cli",
+            "workflow",
             &json!({
                 "data": {
                     "description": "theme editor",
@@ -2475,10 +2477,6 @@ fn resolve_transcription_settings(settings: &Value) -> Option<(String, Option<St
 
 fn detect_ytdlp() -> Option<(String, String)> {
     desktop_io::detect_ytdlp()
-}
-
-fn ensure_ytdlp_installed(update: bool) -> Result<(String, String), String> {
-    desktop_io::ensure_ytdlp_installed(update)
 }
 
 fn fetch_ytdlp_channel_info(channel_url: &str, limit: i64) -> Result<Value, String> {
@@ -3285,7 +3283,7 @@ fn execute_interactive_tool_call(
         };
 
         let raw_result = match name.as_str() {
-            "redbox_editor" => {
+            "editor" => {
                 let action = payload_string(arguments, "action").unwrap_or_default();
                 let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
                 let is_video_package = get_package_kind_from_file_name(&file_path) == Some("video");
@@ -4057,10 +4055,10 @@ fn execute_interactive_tool_call(
                         ensure_script_confirmed("export")?;
                         editor_tool_payload(file_path, arguments, &[])
                     }),
-                    _ => Err(format!("unsupported redbox_editor action: {action}")),
+                    _ => Err(format!("unsupported editor action: {action}")),
                 }
             }
-            "redbox_fs" => {
+            "resource" => {
                 let normalized_arguments = normalized_structured_payload_arguments(arguments);
                 let action = payload_string(&normalized_arguments, "action").unwrap_or_default();
                 let raw_path = payload_string(&normalized_arguments, "path").unwrap_or_default();
@@ -4116,7 +4114,7 @@ fn execute_interactive_tool_call(
                     "workspace.list" | "list" => {
                         if raw_path.trim().is_empty() {
                             return Err(
-                                "path is required for redbox_fs(action=workspace.list)".to_string()
+                                "path is required for resource(action=workspace.list)".to_string()
                             );
                         }
                         let limit = parse_usize_arg(&normalized_arguments, "limit", 20, 50);
@@ -4135,7 +4133,7 @@ fn execute_interactive_tool_call(
                     "workspace.read" | "read" => {
                         if raw_path.trim().is_empty() {
                             return Err(
-                                "path is required for redbox_fs(action=workspace.read)".to_string()
+                                "path is required for resource(action=workspace.read)".to_string()
                             );
                         }
                         let max_chars =
@@ -4287,7 +4285,7 @@ contentPath: {content_path}\n\
 规则：当前会话只服务这个稿件；需要写入时只使用 `Write(path=\"manuscripts://current\", content=\"完整改稿正文\")`，不要创建新稿件，也不要扫描其他稿件来猜当前目标。工具成功后只是生成编辑器待审改稿提案，仍需用户在编辑器中接受。\n"
         );
     }
-    if runtime_mode == "chatroom" {
+    if matches!(runtime_mode, "team" | "chatroom") {
         let workspace_mode =
             payload_string(&metadata, "associatedPackageWorkspaceMode").unwrap_or_default();
         let package_kind = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
@@ -4475,7 +4473,7 @@ assets: {assets_path}\n\
 - `editor.project.json` 与 `timeline.otio.json` 在视频稿件里只作为 legacy 兼容输入，不再是新的写入目标；音频稿件仍可继续使用旧编辑路径。\n\
 - `track-ui.json` / `scene-ui.json` 不是视频 AI 工作流的主真相，不要把它们误当成正文内容。\n\
 \n\
-工具规则：使用 `redbox_editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、改动画、做剪辑或导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；只有用户明确确认后，才能调用 `script_confirm`。视频稿件确认后，先用 `project_read` 读取最新 `videoProject`，再用 `ffmpeg_edit` 产出基础视频到 `baseMedia.outputPath`，然后再用 `remotion_read` / `remotion_generate` / `remotion_save` 叠加标题、字幕和图形动画，最后才 `export`。不要再使用 `timeline_read`、`track_add`、`clip_*`、`marker_*`、`undo`、`redo` 这些旧时间轴动作编辑视频。Remotion 在当前宿主里默认是一个主 scene 加若干 overlay/entity 的结构：优先在主 scene 内继续叠加动画，而不是机械拆分多个 scene。生成动画后，默认目标是让编辑器直接预览基础视频与 Remotion 叠层，不要把“立即导出成视频”当作默认下一步。修改脚本、基础剪辑或 Remotion 动画后，最终回答要简要说明改动与脚本确认状态。",
+工具规则：使用 `editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、改动画、做剪辑或导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；只有用户明确确认后，才能调用 `script_confirm`。视频稿件确认后，先用 `project_read` 读取最新 `videoProject`，再用 `ffmpeg_edit` 产出基础视频到 `baseMedia.outputPath`，然后再用 `remotion_read` / `remotion_generate` / `remotion_save` 叠加标题、字幕和图形动画，最后才 `export`。不要再使用 `timeline_read`、`track_add`、`clip_*`、`marker_*`、`undo`、`redo` 这些旧时间轴动作编辑视频。Remotion 在当前宿主里默认是一个主 scene 加若干 overlay/entity 的结构：优先在主 scene 内继续叠加动画，而不是机械拆分多个 scene。生成动画后，默认目标是让编辑器直接预览基础视频与 Remotion 叠层，不要把“立即导出成视频”当作默认下一步。修改脚本、基础剪辑或 Remotion 动画后，最终回答要简要说明改动与脚本确认状态。",
         package_root.display(),
         serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
         serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),
@@ -4743,7 +4741,7 @@ fn interactive_attachment_tool_read_note(
         interactive_attachment_string_field(attachment, "workspaceRelativePath")
     {
         return Some(format!(
-            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`。如果任务依赖它的真实内容，先调用 `redbox_fs(action=\"workspace.read\", path=\"{relative_path}\")` 或相关 workspace 工具读取，再基于读取结果回答。不要假装已经看过文件内容。"
+            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`。如果任务依赖它的真实内容，先调用 `resource(action=\"workspace.read\", path=\"{relative_path}\")` 或相关 workspace 工具读取，再基于读取结果回答。不要假装已经看过文件内容。"
         ));
     }
     interactive_attachment_string_field(attachment, "absolutePath").map(|absolute_path| {
@@ -5487,7 +5485,7 @@ fn interactive_skill_activations(
     tool_name: &str,
     result: &Value,
 ) -> Vec<InteractiveSkillActivation> {
-    if tool_name != "app_cli" {
+    if tool_name != "workflow" {
         return Vec::new();
     }
     let data = tool_result_data(result);
@@ -5790,7 +5788,7 @@ fn message_is_successful_manuscript_write_tool_result(message: &Value) -> bool {
     if message.get("role").and_then(Value::as_str) != Some("tool") {
         return false;
     }
-    if message.get("tool_name").and_then(Value::as_str) != Some("app_cli") {
+    if message.get("tool_name").and_then(Value::as_str) != Some("workflow") {
         return false;
     }
     let Some(content) = message.get("content").and_then(Value::as_str) else {
@@ -5911,7 +5909,7 @@ fn interactive_execution_progress_observe_success(
     result: &Value,
 ) {
     match tool_name {
-        "redbox_fs" => {
+        "resource" => {
             let action = tool_action_name(arguments)
                 .unwrap_or_default()
                 .to_ascii_lowercase();
@@ -5927,7 +5925,7 @@ fn interactive_execution_progress_observe_success(
                 progress.profile_read_completed = true;
             }
         }
-        "app_cli" => {
+        "workflow" => {
             let command = payload_string(arguments, "command")
                 .unwrap_or_default()
                 .trim()
@@ -6017,7 +6015,7 @@ fn interactive_authoring_continuation_instruction(
     arguments: &Value,
     result: &Value,
 ) -> Option<String> {
-    if tool_name != "app_cli" {
+    if tool_name != "workflow" {
         return None;
     }
     let command = payload_string(arguments, "command")
@@ -6038,7 +6036,7 @@ fn interactive_authoring_continuation_instruction(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.project_path.as_str());
     Some(format!(
-        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
+        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `workflow(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
     ))
 }
 
@@ -6048,7 +6046,7 @@ fn interactive_authoring_error_correction_instruction(
     tool_name: &str,
     error: &str,
 ) -> Option<String> {
-    if tool_name != "app_cli" {
+    if tool_name != "workflow" {
         return None;
     }
     let error_code = structured_tool_error_code(error);
@@ -6060,7 +6058,7 @@ fn interactive_authoring_error_correction_instruction(
     }
     let target = interactive_authoring_session_target(state, session_id)?;
     Some(format!(
-        "你刚才发送了空的 `app_cli` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `app_cli(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容；不要再次发送空的 app_cli，也不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
+        "你刚才发送了空的 `workflow` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `workflow(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容；不要再次发送空的 workflow，也不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
         target.project_path
     ))
 }
@@ -6079,7 +6077,7 @@ fn auto_save_interactive_authoring_content(
         runtime_mode,
         session_id,
         None,
-        "app_cli",
+        "workflow",
         &json!({
             "action": "manuscripts.writeCurrent",
             "payload": {
@@ -6169,7 +6167,7 @@ fn generated_media_kind_from_tool_result(
     tool_arguments: &Value,
     result_value: &Value,
 ) -> Option<&'static str> {
-    if tool_name != "app_cli" {
+    if tool_name != "workflow" {
         return None;
     }
 
@@ -8066,7 +8064,7 @@ fn run_openai_interactive_chat_runtime(
                 &execution_progress,
             );
             if is_wander && !wander_saw_tool_call && tool_turn < INTERACTIVE_MAX_TOOL_TURNS {
-                let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 redbox_fs 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
+                let correction = "你上一轮没有完成任何有效文件读取。现在必须先调用 resource 读取给定素材路径中的真实文件，再输出最终 JSON。禁止继续给出泛化标题或空泛方向。";
                 append_internal_runtime_user_message(
                     &mut prompt_messages,
                     &mut canonical_messages,
@@ -9407,56 +9405,11 @@ fn run_official_auth_bootstrap_once(app: AppHandle) {
     }
 }
 
-fn run_ytdlp_auto_update_once(app: AppHandle) {
-    let state = app.state::<AppState>();
-    if !desktop_io::should_auto_update_ytdlp(&state.store_path) {
-        return;
-    }
-    let outcome = match desktop_io::detect_ytdlp() {
-        Some((path, version)) => match desktop_io::ensure_ytdlp_installed(true) {
-            Ok((updated_path, updated_version)) => {
-                let _ = app.emit(
-                    "youtube:ytdlp-auto-update",
-                    json!({
-                        "success": true,
-                        "previousPath": path,
-                        "previousVersion": version,
-                        "path": updated_path,
-                        "version": updated_version
-                    }),
-                );
-                format!("updated:{updated_path}:{updated_version}")
-            }
-            Err(error) => {
-                eprintln!("[RedBox yt-dlp auto update] {error}");
-                let _ = app.emit(
-                    "youtube:ytdlp-auto-update",
-                    json!({
-                        "success": false,
-                        "path": path,
-                        "version": version,
-                        "error": error
-                    }),
-                );
-                format!("error:{error}")
-            }
-        },
-        None => "skipped:not-installed".to_string(),
-    };
-    desktop_io::record_ytdlp_update_check(&state.store_path, &outcome);
-}
-
 fn run_startup_background_housekeeping(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let bootstrap_app = app.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
             run_official_auth_bootstrap_once(bootstrap_app);
-        })
-        .await;
-
-        let ytdlp_app = app.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || {
-            run_ytdlp_auto_update_once(ytdlp_app);
         })
         .await;
 
@@ -9661,9 +9614,7 @@ fn main() {
                     None,
                 );
             }
-            if let Err(error) =
-                refresh_runtime_warm_state(&state, &["wander", "redclaw", "chatroom"])
-            {
+            if let Err(error) = refresh_runtime_warm_state(&state, &["wander", "redclaw", "team"]) {
                 logging::emit_legacy_line(
                     logging::event::LogSource::Host,
                     logging::event::LogLevel::Warn,

@@ -18,8 +18,9 @@ use crate::{
         },
         document_blocks::{
             block_records_from_document, build_blocks_for_source_with_cache_policy_and_visual_seen,
-            canonical_needs_visual_backfill_for_config, is_visual_candidate_path, replace_blocks,
-            replace_blocks_for_source, resolve_visual_index_config, upsert_blocks_for_documents,
+            canonical_needs_visual_backfill_for_config, is_visual_candidate_path,
+            rebuild_search_index_from_blocks, replace_blocks, replace_blocks_for_source,
+            resolve_visual_index_config, upsert_blocks_for_documents,
             visual_backfill_candidate_unit_ids, visual_document_blocks_missing,
             visual_document_ids_missing_blocks, CanonicalCachePolicy,
         },
@@ -229,10 +230,15 @@ fn note_visual_paths(note: &KnowledgeNoteRecord) -> Vec<PathBuf> {
 }
 
 fn video_visual_paths(video: &YoutubeVideoRecord) -> Vec<PathBuf> {
-    if video.thumbnail_url.trim().is_empty() {
-        return Vec::new();
+    if let Some(path) = local_visual_path(&video.thumbnail_url) {
+        return vec![path];
     }
-    local_visual_path(&video.thumbnail_url)
+    video
+        .folder_path
+        .as_deref()
+        .map(PathBuf::from)
+        .map(|folder| folder.join("thumbnail.jpg"))
+        .filter(|path| path.is_file())
         .into_iter()
         .collect()
 }
@@ -424,11 +430,191 @@ pub(crate) fn backfill_incomplete_visual_index(
     if !visual_maintenance_needed(state)? {
         return Ok(());
     }
-    rebuild_catalog_with_cache_policy(
-        app,
-        state,
-        CanonicalCachePolicy::RefreshIncompleteVisualIndex,
-    )
+    backfill_visual_index_incrementally(app, state)
+}
+
+fn backfill_visual_index_incrementally(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    let knowledge_root = workspace_root(state)?.join("knowledge");
+    let cache_policy = CanonicalCachePolicy::RefreshIncompleteVisualIndex;
+    let mut visual_seen_paths = HashSet::<String>::new();
+    let mut touched_blocks = 0usize;
+    let mut processed_units = 0usize;
+    let total_units = visual_backfill_progress_units(state, &knowledge_root)?;
+
+    for note in crate::load_knowledge_notes_from_fs(&knowledge_root) {
+        let note_paths = note_visual_paths(&note);
+        let summary = summarize_note(note);
+        for path in note_paths {
+            let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
+                state,
+                &summary.item_id,
+                &summary.title,
+                &path,
+                &summary.updated_at,
+                cache_policy,
+                &mut visual_seen_paths,
+            )?;
+            touched_blocks += indexed.blocks.len();
+            emit_visual_index_progress(app, &indexed.canonical_rows);
+            processed_units += 1;
+            update_rebuild_progress(state, processed_units, total_units)?;
+        }
+    }
+    for video in crate::load_youtube_videos_from_fs(&knowledge_root) {
+        let video_paths = video_visual_paths(&video);
+        let summary = summarize_video(video);
+        for path in video_paths {
+            let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
+                state,
+                &summary.item_id,
+                &summary.title,
+                &path,
+                &summary.updated_at,
+                cache_policy,
+                &mut visual_seen_paths,
+            )?;
+            touched_blocks += indexed.blocks.len();
+            emit_visual_index_progress(app, &indexed.canonical_rows);
+            processed_units += 1;
+            update_rebuild_progress(state, processed_units, total_units)?;
+        }
+    }
+    for source in crate::load_document_sources_from_fs(&knowledge_root) {
+        let root_path = PathBuf::from(&source.root_path);
+        if !root_path.exists() {
+            continue;
+        }
+        let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
+            state,
+            &source.id,
+            &source.name,
+            &root_path,
+            &source.updated_at,
+            cache_policy,
+            &mut visual_seen_paths,
+        )?;
+        touched_blocks += indexed.blocks.len();
+        emit_visual_index_progress(app, &indexed.canonical_rows);
+        processed_units += 1;
+        update_rebuild_progress(state, processed_units, total_units)?;
+    }
+    let advisors = crate::with_store(state, |store| Ok(store.advisors.clone()))?;
+    for advisor in advisors {
+        let root_path = crate::advisor_knowledge_dir(state, &advisor.id)?;
+        if !root_path.exists() {
+            continue;
+        }
+        let indexed = build_blocks_for_source_with_cache_policy_and_visual_seen(
+            state,
+            &advisor_source_id(&advisor.id),
+            &advisor.name,
+            &root_path,
+            &now_iso(),
+            cache_policy,
+            &mut visual_seen_paths,
+        )?;
+        touched_blocks += indexed.blocks.len();
+        emit_visual_index_progress(app, &indexed.canonical_rows);
+        processed_units += 1;
+        update_rebuild_progress(state, processed_units, total_units)?;
+    }
+
+    if touched_blocks > 0 {
+        rebuild_search_index_from_blocks(state)?;
+        mark_indexed_now(state)?;
+        let _ = app.emit("knowledge:catalog-updated", Value::String(now_iso()));
+        let _ = app.emit("knowledge:changed", serde_json::json!({ "at": now_iso() }));
+    }
+    Ok(())
+}
+
+fn visual_backfill_progress_units(
+    state: &State<'_, AppState>,
+    knowledge_root: &Path,
+) -> Result<usize, String> {
+    let note_units = crate::load_knowledge_notes_from_fs(knowledge_root)
+        .iter()
+        .map(note_visual_paths)
+        .map(|paths| paths.len())
+        .sum::<usize>();
+    let video_units = crate::load_youtube_videos_from_fs(knowledge_root)
+        .iter()
+        .map(video_visual_paths)
+        .map(|paths| paths.len())
+        .sum::<usize>();
+    let document_units = crate::load_document_sources_from_fs(knowledge_root)
+        .iter()
+        .filter(|source| PathBuf::from(&source.root_path).exists())
+        .count();
+    let advisor_ids = crate::with_store(state, |store| {
+        Ok(store
+            .advisors
+            .iter()
+            .map(|advisor| advisor.id.clone())
+            .collect::<Vec<_>>())
+    })?;
+    let advisor_units = advisor_ids
+        .iter()
+        .filter(|advisor_id| {
+            crate::advisor_knowledge_dir(state, advisor_id)
+                .map(|path| path.exists())
+                .unwrap_or(false)
+        })
+        .count();
+    Ok(note_units + video_units + document_units + advisor_units)
+}
+
+fn update_rebuild_progress(
+    state: &State<'_, AppState>,
+    processed_units: usize,
+    total_units: usize,
+) -> Result<(), String> {
+    if total_units == 0 {
+        return Ok(());
+    }
+    let progress = 0.05 + 0.9 * (processed_units.min(total_units) as f64 / total_units as f64);
+    let mut runtime = state
+        .knowledge_index_state
+        .lock()
+        .map_err(|_| "knowledge index state lock 已损坏".to_string())?;
+    runtime.rebuild_progress = Some(progress.clamp(0.05, 0.95));
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn youtube_visual_paths_falls_back_to_local_thumbnail() {
+        let root = std::env::temp_dir().join(format!("redbox-youtube-thumbnail-{}", now_i64()));
+        std::fs::create_dir_all(&root).expect("fixture directory should be created");
+        let thumbnail = root.join("thumbnail.jpg");
+        std::fs::write(&thumbnail, b"jpg").expect("thumbnail fixture should be written");
+
+        let video = YoutubeVideoRecord {
+            id: "youtube_test".to_string(),
+            video_id: "test".to_string(),
+            video_url: "https://youtube.com/watch?v=test".to_string(),
+            title: "Test".to_string(),
+            original_title: None,
+            description: String::new(),
+            summary: None,
+            thumbnail_url: "https://i.ytimg.com/vi/test/maxresdefault.jpg".to_string(),
+            has_subtitle: false,
+            subtitle_content: None,
+            subtitle_error: None,
+            status: None,
+            created_at: "2026-05-03T00:00:00Z".to_string(),
+            folder_path: Some(root.display().to_string()),
+        };
+
+        assert_eq!(video_visual_paths(&video), vec![thumbnail]);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 fn repair_visual_blocks_from_canonical(

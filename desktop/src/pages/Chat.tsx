@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { flushSync } from 'react-dom';
-import { Trash2, Plus, MessageSquare, X, PanelLeftClose, PanelLeft, Sparkles, Edit } from 'lucide-react';
+import { Trash2, Sparkles } from 'lucide-react';
 import { clsx } from 'clsx';
 import { supportsAttachmentKindDirectInput } from '../../shared/modelCapabilities';
 import {
@@ -37,15 +37,8 @@ import { useAudioRecording } from '../features/audio-input/useAudioRecording';
 import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
 import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
-import { appConfirm } from '../utils/appDialogs';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
-
-interface Session {
-  id: string;
-  title: string;
-  updatedAt: string;
-}
 
 interface AdvisorMentionRecord {
   id: string;
@@ -229,11 +222,8 @@ interface SelectionMenu {
 interface ChatProps {
   isActive?: boolean;
   onExecutionStateChange?: (active: boolean) => void;
-  defaultCollapsed?: boolean;
   pendingMessage?: PendingChatMessage | null;
   onMessageConsumed?: () => void;
-  navigationAction?: { action: 'new'; nonce: number } | null;
-  onNavigationActionConsumed?: () => void;
   fixedSessionId?: string | null;
   fixedSessionDraft?: boolean;
   onEnsureSessionForSend?: () => Promise<string | null>;
@@ -653,9 +643,6 @@ export function Chat({
   onExecutionStateChange,
   pendingMessage,
   onMessageConsumed,
-  navigationAction,
-  onNavigationActionConsumed,
-  defaultCollapsed = true,
   fixedSessionId,
   fixedSessionDraft = false,
   onEnsureSessionForSend,
@@ -703,7 +690,6 @@ export function Chat({
   onSessionActivity,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
-  const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => fixedSessionId ?? null);
   const [messages, setMessages] = useState<Message[]>(() => (
     readFixedSessionWarmSnapshot(fixedSessionId)?.messages || []
@@ -712,14 +698,6 @@ export function Chat({
   const [isProcessing, setIsProcessing] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ToolConfirmRequest | null>(null);
   const [cliEscalationRequest, setCliEscalationRequest] = useState<CliEscalationRequestModel | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    const saved = localStorage.getItem("chat:sidebarCollapsed");
-    return saved ? JSON.parse(saved) : defaultCollapsed;
-  });
-
-  useEffect(() => {
-    localStorage.setItem("chat:sidebarCollapsed", JSON.stringify(sidebarCollapsed));
-  }, [sidebarCollapsed]);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu>({ visible: false, x: 0, y: 0, text: '' });
   const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(() => (
@@ -769,7 +747,8 @@ export function Chat({
   const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStreamChunkRef = useRef<{ content: string; at: number }>({ content: '', at: 0 });
   const localMessageMutationRef = useRef(0);
-  const sessionsRequestIdRef = useRef(0);
+  const skipNextFixedSessionLoadRef = useRef<string | null>(null);
+  const handledFixedSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
   const isActiveRef = useRef(isActive);
   const coldRecoveryPendingRef = useRef(true);
   const streamStatsRef = useRef<{ startedAt: number; chunks: number; chars: number } | null>(null);
@@ -1216,33 +1195,13 @@ export function Chat({
     void loadContextUsage(currentSessionId);
   }, [fixedSessionId, currentSessionId, isActive, messages.length, isProcessing, loadContextUsage]);
 
-  // Load sessions on mount
   useEffect(() => {
     if (!isActive) return;
 
-    // Handle fixed session (File-Bound Mode)
     if (fixedSessionId) {
-       setSidebarCollapsed(true);
-       selectSession(fixedSessionId);
-       return;
+      selectSession(fixedSessionId);
     }
-
-    if (fixedSessionMode) {
-      setSidebarCollapsed(true);
-      return;
-    }
-
-    // 只有没有 pendingMessage 时才自动选择会话
-    if (!pendingMessage) {
-      loadSessions();
-    } else {
-      // 有 pendingMessage 时只加载列表，不选择
-      window.ipcRenderer.chat.getSessions().then((list: Session[]) => {
-        debugUi('load_sessions:pending_message_done', { count: Array.isArray(list) ? list.length : 0 });
-        setSessions(list);
-      }).catch(console.error);
-    }
-  }, [fixedSessionId, fixedSessionMode, isActive]);
+  }, [fixedSessionId, isActive]);
 
   const dispatchChatSend = useCallback((payload: {
     sessionId?: string;
@@ -1354,8 +1313,7 @@ export function Chat({
             : 'AI 脑爆';
           const session = await window.ipcRenderer.chat.createSession(sessionTitle);
 
-          // 更新会话列表并选中新会话
-          setSessions(prev => [session, ...prev]);
+          currentSessionIdRef.current = session.id;
           setCurrentSessionId(session.id);
           sessionId = session.id;
 
@@ -1455,30 +1413,6 @@ export function Chat({
 
     sendPendingMessage();
   }, [isActive, pendingMessage, isProcessing, onMessageConsumed, fixedSessionId, currentSessionId, buildPendingAssistantTimeline, dispatchChatSend, ensureChatModelConfig, notifySessionActivity, setPendingAttachment]);
-
-  const loadSessions = async () => {
-    if (!isActiveRef.current) return;
-    const requestId = ++sessionsRequestIdRef.current;
-    try {
-      const list = await uiMeasure('chat', 'load_sessions', async () => (
-        window.ipcRenderer.chat.getSessions()
-      ));
-      if (requestId !== sessionsRequestIdRef.current) {
-        return;
-      }
-      const normalizedList = Array.isArray(list) ? list : [];
-      setSessions(normalizedList);
-      if (
-        normalizedList.length > 0
-        && !currentSessionIdRef.current
-        && !loadAttachmentDraft('chat', '__new__')
-      ) {
-        void selectSession(normalizedList[0].id);
-      }
-    } catch (error) {
-      console.error('Failed to load sessions:', error);
-    }
-  };
 
   const selectSession = async (sessionId: string) => {
     if (!isActiveRef.current) return;
@@ -1637,28 +1571,17 @@ export function Chat({
     }
   };
 
-  const createNewSession = useCallback(async () => {
-    try {
-      const session = await window.ipcRenderer.chat.createSession('New Chat');
-      setSessions(prev => [session, ...prev]);
-      setCurrentSessionId(session.id);
-      setErrorNotice(null);
-      setMessages([]);
-    } catch (error) {
-      console.error('Failed to create session:', error);
-    }
-  }, []);
-
-  const handledNavigationActionNonceRef = useRef<number | null>(null);
-
   useEffect(() => {
-    if (!isActive || navigationAction?.action !== 'new') return;
-    if (handledNavigationActionNonceRef.current === navigationAction.nonce) return;
-    handledNavigationActionNonceRef.current = navigationAction.nonce;
-    void createNewSession().finally(() => {
-      onNavigationActionConsumed?.();
-    });
-  }, [createNewSession, isActive, navigationAction, onNavigationActionConsumed]);
+    if (!isActive || !fixedSessionId) return;
+    if (handledFixedSessionIdRef.current === fixedSessionId) return;
+    handledFixedSessionIdRef.current = fixedSessionId;
+    if (skipNextFixedSessionLoadRef.current === fixedSessionId) {
+      skipNextFixedSessionLoadRef.current = null;
+      debugUi('fixed_session:skip_initial_load_after_send', { sessionId: fixedSessionId });
+      return;
+    }
+    void selectSession(fixedSessionId);
+  }, [debugUi, fixedSessionId, isActive]);
 
   const clearSession = async () => {
     if (!currentSessionId) return;
@@ -1676,29 +1599,6 @@ export function Chat({
       setMessages([]);
     } catch (error) {
       console.error('Failed to clear session:', error);
-    }
-  };
-
-  const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // 防止触发选择会话
-    if (!(await appConfirm('确定要删除这个对话吗？', { title: '删除对话', confirmLabel: '删除', tone: 'danger' }))) return;
-
-    try {
-      await window.ipcRenderer.chat.deleteSession(sessionId);
-      setSessions(prev => prev.filter(s => s.id !== sessionId));
-
-      // 如果删除的是当前会话，切换到其他会话或清空
-      if (currentSessionId === sessionId) {
-        const remaining = sessions.filter(s => s.id !== sessionId);
-        if (remaining.length > 0) {
-          selectSession(remaining[0].id);
-        } else {
-          setCurrentSessionId(null);
-          setMessages([]);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to delete session:', error);
     }
   };
 
@@ -2777,9 +2677,7 @@ export function Chat({
 
     const handleSessionTitleUpdated = (_: unknown, { sessionId, title }: { sessionId: string; title: string }) => {
       if (!isActiveRef.current) return;
-      setSessions(prev => prev.map(s =>
-        s.id === sessionId ? { ...s, title } : s
-      ));
+      debugUi('session_title_updated:ignored_in_embedded_chat', { sessionId, title });
     };
 
     const handlePlanUpdated = (_: unknown, { steps }: { steps: any[] }) => {
@@ -3173,6 +3071,7 @@ export function Chat({
         return;
       }
       currentSessionIdRef.current = targetSessionId;
+      skipNextFixedSessionLoadRef.current = targetSessionId;
       setCurrentSessionId(targetSessionId);
     }
     const processingStartedAt = Date.now();
@@ -3624,80 +3523,8 @@ export function Chat({
 
   return (
     <div className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}>
-      {/* Sidebar - Session List (可折叠) - Only show if not fixed session */}
-      {!fixedSessionMode && (
-        <div className={clsx(
-          "bg-surface-secondary border-r border-border flex flex-col transition-all duration-300",
-          sidebarCollapsed ? "w-0 overflow-hidden" : "w-64"
-        )}>
-          <div className="p-4 border-b border-border flex items-center gap-2">
-            <button
-              onClick={createNewSession}
-              className="flex-1 flex items-center justify-center gap-2 bg-accent-primary text-white py-2 rounded-lg hover:bg-accent-primary/90 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              新对话
-            </button>
-            <button
-              onClick={() => setSidebarCollapsed(true)}
-              className="p-2 text-text-tertiary hover:text-text-primary hover:bg-surface-tertiary rounded-lg transition-colors"
-              title="收起侧边栏"
-            >
-              <PanelLeftClose className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {sessions.map(session => (
-              <div
-                key={session.id}
-                className={clsx(
-                  "group w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 cursor-pointer",
-                  currentSessionId === session.id
-                    ? "bg-surface-tertiary text-text-primary font-medium"
-                    : "text-text-secondary hover:bg-surface-tertiary/50"
-                )}
-                onClick={() => selectSession(session.id)}
-              >
-                <MessageSquare className="w-4 h-4 shrink-0 opacity-70" />
-                <span className="truncate flex-1">{session.title || 'Untitled Chat'}</span>
-                <button
-                  onClick={(e) => deleteSession(session.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
-                  title="删除对话"
-                >
-                  <X className="w-3 h-3 text-red-500" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Main Chat Area */}
       <div className="flex-1 min-w-0 flex flex-col h-full relative overflow-hidden">
-        {/* Header - Sidebar Controls - Hide if fixed session */}
-        {!fixedSessionMode && (
-          <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="p-2 text-text-tertiary hover:text-text-primary transition-colors bg-surface-primary/80 backdrop-blur rounded-full shadow-sm border border-border"
-              title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-            >
-              <PanelLeft className="w-4 h-4" />
-            </button>
-
-            {sidebarCollapsed && (
-              <button
-                onClick={createNewSession}
-                className="p-2 text-text-tertiary hover:text-text-primary transition-colors bg-surface-primary/80 backdrop-blur rounded-full shadow-sm border border-border"
-                title="新对话"
-              >
-                <Edit className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        )}
-
         {/* Linked Session Indicator */}
         {fixedSessionId && currentSessionId && fixedSessionBannerText && fixedSessionContextIndicatorMode === 'top' && (
           <div className="absolute top-0 left-0 right-0 z-10 flex flex-col items-center gap-1 pointer-events-none">

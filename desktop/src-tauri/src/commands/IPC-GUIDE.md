@@ -111,6 +111,7 @@
 高优先级 page-facing 命令包括：
 
 - `spaces:list`
+- `spaces:delete`
 - `skills:list`
 - `knowledge:list`
 - `knowledge:list-youtube`
@@ -239,6 +240,7 @@ knowledge: {
 例如：
 
 - `spaces:list` -> `{ activeSpaceId, spaces }`
+- `spaces:delete` -> `{ success, deletedSpaceId, activeSpaceId, deletedActiveSpace }`
 - `knowledge:list` -> `[]`
 - `redclaw:runner-status` -> `null` 或稳定 status object
 

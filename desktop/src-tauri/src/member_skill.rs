@@ -625,7 +625,7 @@ pub(crate) fn evaluate_member_skill(
     } else {
         score += 20_i64.saturating_sub((missing_count + invalid_json_count) as i64 * 5);
     }
-    if allowed_tools.contains("redbox_fs") {
+    if allowed_tools.contains("resource") {
         score += 15;
     }
     if heuristic_count >= 2 {
@@ -858,7 +858,7 @@ fn validate_member_skill_dir(path: &Path) -> Value {
         .unwrap_or_default();
     let tool_policy_valid = canonical_allowed_tools
         .iter()
-        .any(|item| item == "redbox_fs");
+        .any(|item| item == "resource");
     let valid = missing_files.is_empty()
         && invalid_json.is_empty()
         && invalid_heuristics.is_empty()
@@ -1143,14 +1143,14 @@ fn build_member_skill_artifacts(
             "maxInlineEvidenceChars": 6000,
             "policy": "Prefer advisor-bound knowledge evidence before generic workspace knowledge.",
             "toolCallHint": {
-                "tool": "redbox_fs",
+                "tool": "resource",
                 "scope": "knowledge",
                 "advisorId": advisor.id
             }
         }))
         .unwrap_or_else(|_| "{}".to_string()),
         tool_policy_json: serde_json::to_string_pretty(&json!({
-            "allowedTools": ["redbox_fs"],
+            "allowedTools": ["resource"],
             "allowedKnowledgeActions": ["list", "search", "read"],
             "approval": {
                 "readOnlyKnowledge": "auto",
@@ -1340,8 +1340,8 @@ fn render_member_skill_body(
         r#"---
 name: {skill_name}
 description: 正鹅成员「{advisor_name}」的蒸馏技能。激活后必须按该成员身份、语气、知识边界和证据偏好发言。
-allowedRuntimeModes: [chatroom, advisor-discussion, wander, redclaw]
-allowedTools: [redbox_fs]
+allowedRuntimeModes: [team, advisor-discussion, wander, redclaw]
+allowedTools: [resource]
 autoActivate: false
 activationScope: session
 hookMode: inline

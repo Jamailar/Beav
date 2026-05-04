@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Users, Plus, Pencil, Trash2, Upload, FolderOpen, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Download, MoreHorizontal, History, Loader2 } from 'lucide-react';
+import { Users, Plus, Pencil, Trash2, Upload, FolderOpen, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, MoreHorizontal, History, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
@@ -412,7 +412,7 @@ export function Advisors({
 
     const handleCreate = (mode: AdvisorCreateMode = 'manual') => {
         setEditingAdvisor(null);
-        setPendingCreateMode(mode);
+        setPendingCreateMode(mode === 'youtube' ? 'manual' : mode);
         setIsModalOpen(true);
     };
 
@@ -822,7 +822,6 @@ export function Advisors({
                                     key={advisorSessionId}
                                     isActive={isActive}
                                     fixedSessionId={advisorSessionId}
-                                    defaultCollapsed={true}
                                     fixedSessionBannerText=""
                                     fixedSessionContextIndicatorMode="none"
                                     welcomeTitle={`和 ${selectedAdvisor.name} 聊聊`}
@@ -1875,7 +1874,9 @@ export function AdvisorModal({
     ) => Promise<void>;
     onClose: () => void;
 }) {
-    const [mode, setMode] = useState<AdvisorCreateMode>(advisor ? 'manual' : (defaultMode || 'manual'));
+    const [mode, setMode] = useState<AdvisorCreateMode>(
+        advisor ? 'manual' : defaultMode === 'youtube' ? 'manual' : (defaultMode || 'manual')
+    );
     const [name, setName] = useState(advisor?.name || '');
     const [avatar, setAvatar] = useState(advisor?.avatar || AVATAR_OPTIONS[0]);
     const [personality, setPersonality] = useState(advisor?.personality || '');
@@ -1886,11 +1887,6 @@ export function AdvisorModal({
     const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
     const [templateLoadError, setTemplateLoadError] = useState('');
     const [pendingKnowledgeFiles, setPendingKnowledgeFiles] = useState<PendingKnowledgeFile[]>([]);
-
-    // yt-dlp 状态检查
-    const [ytdlpStatus, setYtdlpStatus] = useState<{ installed: boolean; version?: string } | null>(null);
-    const [isCheckingYtdlp, setIsCheckingYtdlp] = useState(false);
-    const [isInstallingYtdlp, setIsInstallingYtdlp] = useState(false);
 
     // YouTube specific
     const [youtubeUrl, setYoutubeUrl] = useState('');
@@ -1926,47 +1922,11 @@ export function AdvisorModal({
         }
     }, []);
 
-    // 切换到 YouTube 模式时检查 yt-dlp
-    useEffect(() => {
-        if (mode === 'youtube' && ytdlpStatus === null) {
-            checkYtdlpStatus();
-        }
-    }, [mode]);
-
     useEffect(() => {
         if (mode !== 'template') return;
         if (templates.length > 0 || isLoadingTemplates) return;
         void loadTemplates();
     }, [mode, templates.length, isLoadingTemplates, loadTemplates]);
-
-    const checkYtdlpStatus = async () => {
-        setIsCheckingYtdlp(true);
-        try {
-            const status = await window.ipcRenderer.checkYtdlp();
-            setYtdlpStatus(status);
-        } catch (e) {
-            console.error('Failed to check yt-dlp:', e);
-            setYtdlpStatus({ installed: false });
-        } finally {
-            setIsCheckingYtdlp(false);
-        }
-    };
-
-    const handleInstallYtdlp = async () => {
-        setIsInstallingYtdlp(true);
-        try {
-            const result = await window.ipcRenderer.installYtdlp();
-            if (result.success) {
-                await checkYtdlpStatus();
-            } else {
-                void appAlert('安装失败: ' + (result.error || '未知错误'));
-            }
-        } catch (e) {
-            void appAlert('安装出错，请稍后重试');
-        } finally {
-            setIsInstallingYtdlp(false);
-        }
-    };
 
     useEffect(() => {
         const handleProgress = (_: unknown, msg: string) => setFetchMsg(msg);
@@ -1995,7 +1955,7 @@ export function AdvisorModal({
             }
         } catch (e) {
             console.error(e);
-            void appAlert('获取失败，请检查 ytdlp 是否安装以及网络连接');
+            void appAlert('YouTube 导入已停用');
         } finally {
             setIsLoadingInfo(false);
         }
@@ -2215,118 +2175,11 @@ export function AdvisorModal({
                             >
                                 从模板创建
                             </button>
-                            <button
-                                onClick={() => setMode('youtube')}
-                                className={clsx(
-                                    "flex-1 text-xs font-medium py-1.5 rounded-md transition-all",
-                                    mode === 'youtube' ? "bg-surface-primary shadow-sm text-text-primary" : "text-text-tertiary hover:text-text-secondary"
-                                )}
-                            >
-                                从YouTube导入
-                            </button>
                         </div>
                     </div>
                 )}
 
                 <div className="px-6 py-4 space-y-4 overflow-auto flex-1">
-                    {mode === 'youtube' && (
-                        <div className="bg-surface-secondary/30 p-4 rounded-lg border border-border space-y-3">
-                            {/* yt-dlp 状态检查 */}
-                            {isCheckingYtdlp ? (
-                                <div className="flex items-center gap-2 text-xs text-text-tertiary p-3 bg-surface-primary rounded-lg border border-border">
-                                    <RefreshCw className="w-4 h-4 animate-spin" />
-                                    检查 yt-dlp 安装状态...
-                                </div>
-                            ) : ytdlpStatus && !ytdlpStatus.installed ? (
-                                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                                    <div className="flex items-start gap-3">
-                                        <div className="p-2 bg-amber-100 rounded-full shrink-0">
-                                            <AlertCircle className="w-5 h-5 text-amber-600" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <h4 className="text-sm font-medium text-amber-800">需要安装 yt-dlp</h4>
-                                            <p className="text-xs text-amber-700 mt-1">
-                                                从 YouTube 导入智囊团需要 yt-dlp 工具来获取频道信息和下载字幕。
-                                            </p>
-                                            <button
-                                                onClick={handleInstallYtdlp}
-                                                disabled={isInstallingYtdlp}
-                                                className="mt-3 flex items-center gap-2 px-4 py-2 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700 disabled:opacity-50"
-                                            >
-                                                {isInstallingYtdlp ? (
-                                                    <>
-                                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                                                        安装中...
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Download className="w-3.5 h-3.5" />
-                                                        一键安装 yt-dlp
-                                                    </>
-                                                )}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            ) : ytdlpStatus?.installed ? (
-                                /* yt-dlp 已安装，显示正常的 YouTube 导入界面 */
-                                <>
-                                    <div>
-                                        <label className="block text-xs font-medium text-text-secondary mb-1.5">YouTube 频道链接</label>
-                                        <div className="flex gap-2">
-                                            <input
-                                                type="text"
-                                                value={youtubeUrl}
-                                                onChange={(e) => setYoutubeUrl(e.target.value)}
-                                                placeholder="https://www.youtube.com/@channel"
-                                                className="flex-1 bg-surface-primary border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary"
-                                            />
-                                            <button
-                                                onClick={handleFetchYoutube}
-                                                disabled={isLoadingInfo || !youtubeUrl}
-                                                className="px-3 py-2 bg-accent-primary/10 text-accent-primary text-xs font-medium rounded-lg hover:bg-accent-primary/20 disabled:opacity-50 min-w-[80px]"
-                                            >
-                                                {isLoadingInfo ? (
-                                                    <div className="flex items-center gap-1">
-                                                        <RefreshCw className="w-3 h-3 animate-spin" />
-                                                        <span>{fetchMsg || '获取中...'}</span>
-                                                    </div>
-                                                ) : '获取信息'}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {youtubeInfo && (
-                                        <div className="flex items-start gap-3 bg-surface-primary p-3 rounded-lg border border-border">
-                                            <img src={resolveAssetUrl(youtubeInfo.avatarUrl)} alt="" className="w-10 h-10 rounded-full object-cover shrink-0" />
-                                            <div className="min-w-0">
-                                                <div className="text-sm font-medium text-text-primary">{youtubeInfo.channelName}</div>
-                                                <div className="text-xs text-text-tertiary line-clamp-2">{youtubeInfo.channelDescription}</div>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    <div>
-                                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                                            下载最近视频字幕作为知识库: <span className="text-accent-primary">{subtitleCount}</span> 个
-                                        </label>
-                                        <input
-                                            type="range"
-                                            min="0"
-                                            max="50"
-                                            value={subtitleCount}
-                                            onChange={(e) => setSubtitleCount(parseInt(e.target.value))}
-                                            className="w-full h-1 bg-border rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-accent-primary [&::-webkit-slider-thumb]:rounded-full"
-                                        />
-                                        <p className="text-[10px] text-text-tertiary mt-1">
-                                            {subtitleCount === 0 ? '不下载字幕' : `将自动下载最近发布的 ${subtitleCount} 个视频字幕文件 (.vtt -> .txt)`}
-                                        </p>
-                                    </div>
-                                </>
-                            ) : null}
-                        </div>
-                    )}
-
                     {mode === 'template' && (
                         <div className="bg-surface-secondary/30 p-4 rounded-lg border border-border space-y-3">
                             <div className="flex items-center justify-between gap-3">

@@ -63,7 +63,7 @@ pub fn resolve_skill_set(
     let hooks = build_skill_hook_output(&active_skills);
     let can_invoke_skill = base_tools
         .iter()
-        .any(|item| item == "redbox_skill" || item == "app_cli");
+        .any(|item| item == "skill" || item == "workflow");
     ResolvedSkillSet {
         catalog,
         visible_skills,
@@ -109,7 +109,7 @@ mod tests {
                     }]
                 }
             })),
-            &["app_cli".to_string()],
+            &["workflow".to_string()],
         );
         assert_eq!(resolved.active_skills.len(), 1);
         assert_eq!(resolved.visible_skills.len(), 1);
@@ -123,7 +123,7 @@ mod tests {
             Some(&serde_json::json!({
                 "activeSkills": ["writing-style"]
             })),
-            &["app_cli".to_string()],
+            &["workflow".to_string()],
         );
         assert!(resolved.active_skills.is_empty());
     }
@@ -136,7 +136,7 @@ mod tests {
             Some(&serde_json::json!({
                 "activeSkills": ["cover-builder"]
             })),
-            &["app_cli".to_string()],
+            &["workflow".to_string()],
         );
         assert_eq!(resolved.active_skills.len(), 1);
         assert_eq!(resolved.active_skills[0].name, "cover-builder");
@@ -148,7 +148,7 @@ mod tests {
             &[skill("writing-style", "[redclaw, wander]", true)],
             "redclaw",
             None,
-            &["app_cli".to_string()],
+            &["workflow".to_string()],
         );
         assert!(resolved.active_skills.is_empty());
     }

@@ -219,12 +219,12 @@ mod tests {
         let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
         assert!(
             profile
-                .turn_policy("chatroom", InteractiveToolChoice::Auto, false)
+                .turn_policy("team", InteractiveToolChoice::Auto, false)
                 .allow_text_fallback
         );
         assert!(
             !profile
-                .turn_policy("chatroom", InteractiveToolChoice::Auto, true)
+                .turn_policy("team", InteractiveToolChoice::Auto, true)
                 .allow_text_fallback
         );
         assert!(
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn agent_runtimes_disable_internal_thinking_by_default() {
         let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
-        for runtime_mode in ["chatroom", "image-generation", "redclaw", "wander"] {
+        for runtime_mode in ["team", "image-generation", "redclaw", "wander"] {
             assert!(
                 profile
                     .turn_policy(runtime_mode, InteractiveToolChoice::Auto, false)

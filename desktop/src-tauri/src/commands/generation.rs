@@ -740,7 +740,7 @@ fn runtime_tool_log_context_from_payload(payload: &Value) -> RuntimeToolLogConte
             payload_string(payload, "toolCallId")
                 .or_else(|| payload_string(payload, "tool_call_id")),
         ),
-        tool_name: payload_string(payload, "toolName").unwrap_or_else(|| "app_cli".to_string()),
+        tool_name: payload_string(payload, "toolName").unwrap_or_else(|| "workflow".to_string()),
     }
 }
 

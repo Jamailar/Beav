@@ -349,6 +349,25 @@ pub(crate) fn upsert_blocks_for_documents(
     state: &State<'_, AppState>,
     blocks: &[DocumentBlockRecord],
 ) -> Result<(), String> {
+    upsert_blocks_for_documents_inner(state, blocks, true)
+}
+
+pub(crate) fn upsert_blocks_for_documents_without_search_rebuild(
+    state: &State<'_, AppState>,
+    blocks: &[DocumentBlockRecord],
+) -> Result<(), String> {
+    upsert_blocks_for_documents_inner(state, blocks, false)
+}
+
+pub(crate) fn rebuild_search_index_from_blocks(state: &State<'_, AppState>) -> Result<(), String> {
+    rebuild_tantivy_from_db(state)
+}
+
+fn upsert_blocks_for_documents_inner(
+    state: &State<'_, AppState>,
+    blocks: &[DocumentBlockRecord],
+    rebuild_search: bool,
+) -> Result<(), String> {
     if blocks.is_empty() {
         return Ok(());
     }
@@ -464,7 +483,10 @@ pub(crate) fn upsert_blocks_for_documents(
         }
     }
     tx.commit().map_err(|error| error.to_string())?;
-    rebuild_tantivy_from_db(state)
+    if rebuild_search {
+        rebuild_tantivy_from_db(state)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn delete_blocks_for_source(
@@ -1425,7 +1447,7 @@ fn build_blocks_for_file(
     let file_blocks = block_records_from_document(&canonical, source_name, root_path, updated_at)?;
     if has_visual_manifest {
         canonical_store::upsert_documents(state, std::slice::from_ref(&canonical_row))?;
-        upsert_blocks_for_documents(state, &file_blocks)?;
+        upsert_blocks_for_documents_without_search_rebuild(state, &file_blocks)?;
         let file_anchors =
             crate::knowledge_index::citation_anchors::build_anchors_for_blocks(&file_blocks);
         crate::knowledge_index::citation_anchors::upsert_anchors_for_documents(

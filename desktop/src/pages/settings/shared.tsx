@@ -258,7 +258,7 @@ export interface RuntimeToolResultItem {
 export type RuntimePerfBenchmarkMode =
   | 'redclaw'
   | 'knowledge'
-  | 'chatroom'
+  | 'team'
   | 'advisor-discussion'
   | 'background-maintenance'
   | 'diagnostics';

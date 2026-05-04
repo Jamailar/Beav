@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolPack {
     Wander,
-    Chatroom,
+    Team,
     ManuscriptEditor,
     ImageGeneration,
     Knowledge,
@@ -15,7 +15,7 @@ pub fn pack_by_name(name: &str) -> Option<ToolPack> {
     match name.trim().to_lowercase().as_str() {
         "wander" => Some(ToolPack::Wander),
         "manuscript-editor" | "manuscript_editor" => Some(ToolPack::ManuscriptEditor),
-        "chatroom" | "default" => Some(ToolPack::Chatroom),
+        "team" | "chatroom" | "default" | "chat" => Some(ToolPack::Team),
         "image-generation" | "image_generation" => Some(ToolPack::ImageGeneration),
         "knowledge" => Some(ToolPack::Knowledge),
         "redclaw" => Some(ToolPack::Redclaw),
@@ -36,27 +36,28 @@ pub fn pack_for_runtime_mode(runtime_mode: &str) -> ToolPack {
         "video-editor" | "audio-editor" => ToolPack::Editor,
         "background-maintenance" => ToolPack::BackgroundMaintenance,
         "diagnostics" => ToolPack::Diagnostics,
-        _ => ToolPack::Chatroom,
+        "team" | "chatroom" | "default" | "chat" => ToolPack::Team,
+        _ => ToolPack::Team,
     }
 }
 
 pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
-        ToolPack::Wander => &["redbox_fs"],
-        ToolPack::ManuscriptEditor => &["app_cli"],
-        ToolPack::Chatroom => &["bash", "redbox_fs", "app_cli"],
-        ToolPack::ImageGeneration => &["bash", "redbox_fs", "app_cli"],
-        ToolPack::Knowledge => &["bash", "redbox_fs", "app_cli"],
+        ToolPack::Wander => &["resource"],
+        ToolPack::ManuscriptEditor => &["workflow"],
+        ToolPack::Team => &["bash", "resource", "workflow"],
+        ToolPack::ImageGeneration => &["bash", "resource", "workflow"],
+        ToolPack::Knowledge => &["bash", "resource", "workflow"],
         ToolPack::Redclaw => {
             if cfg!(target_os = "windows") {
-                &["redbox_fs", "app_cli"]
+                &["resource", "workflow"]
             } else {
-                &["bash", "redbox_fs", "app_cli"]
+                &["bash", "resource", "workflow"]
             }
         }
-        ToolPack::BackgroundMaintenance => &["bash", "app_cli"],
-        ToolPack::Editor => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
-        ToolPack::Diagnostics => &["bash", "redbox_fs", "app_cli", "redbox_editor"],
+        ToolPack::BackgroundMaintenance => &["bash", "workflow"],
+        ToolPack::Editor => &["bash", "resource", "workflow", "editor"],
+        ToolPack::Diagnostics => &["bash", "resource", "workflow", "editor"],
     }
 }
 
@@ -64,19 +65,19 @@ pub fn visible_tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["Read", "List", "Search"],
         ToolPack::ManuscriptEditor => &["Write"],
-        ToolPack::Chatroom => &["Read", "List", "Search", "Write", "Redbox", "bash"],
-        ToolPack::ImageGeneration => &["Read", "List", "Search", "Redbox", "bash"],
-        ToolPack::Knowledge => &["Read", "List", "Search", "Redbox", "bash"],
+        ToolPack::Team => &["Read", "List", "Search", "Write", "Operate", "bash"],
+        ToolPack::ImageGeneration => &["Read", "List", "Search", "Operate", "bash"],
+        ToolPack::Knowledge => &["Read", "List", "Search", "Operate", "bash"],
         ToolPack::Redclaw => {
             if cfg!(target_os = "windows") {
-                &["Read", "List", "Search", "Write", "Redbox"]
+                &["Read", "List", "Search", "Write", "Operate"]
             } else {
-                &["Read", "List", "Search", "Write", "Redbox", "bash"]
+                &["Read", "List", "Search", "Write", "Operate", "bash"]
             }
         }
-        ToolPack::BackgroundMaintenance => &["Read", "List", "Search", "Redbox", "bash"],
-        ToolPack::Editor => &["Read", "List", "Search", "Write", "Redbox", "bash"],
-        ToolPack::Diagnostics => &["Read", "List", "Search", "Write", "Redbox", "bash"],
+        ToolPack::BackgroundMaintenance => &["Read", "List", "Search", "Operate", "bash"],
+        ToolPack::Editor => &["Read", "List", "Search", "Write", "Operate", "bash"],
+        ToolPack::Diagnostics => &["Read", "List", "Search", "Write", "Operate", "bash"],
     }
 }
 
@@ -95,19 +96,19 @@ mod tests {
     #[test]
     fn video_editor_runtime_includes_editor_tool_pack() {
         let tools = tool_names_for_runtime_mode("video-editor");
-        assert!(tools.contains(&"redbox_editor"));
+        assert!(tools.contains(&"editor"));
     }
 
     #[test]
     fn audio_editor_runtime_includes_editor_tool_pack() {
         let tools = tool_names_for_runtime_mode("audio-editor");
-        assert!(tools.contains(&"redbox_editor"));
+        assert!(tools.contains(&"editor"));
     }
 
     #[test]
     fn manuscript_editor_runtime_only_exposes_bound_write() {
         let tools = tool_names_for_runtime_mode("manuscript-editor");
-        assert_eq!(tools, &["app_cli"]);
+        assert_eq!(tools, &["workflow"]);
         let visible = visible_tool_names_for_runtime_mode("manuscript-editor");
         assert_eq!(visible, &["Write"]);
     }
@@ -115,23 +116,23 @@ mod tests {
     #[test]
     fn image_generation_runtime_includes_generation_tools() {
         let tools = tool_names_for_runtime_mode("image-generation");
-        assert!(tools.contains(&"app_cli"));
-        assert!(tools.contains(&"redbox_fs"));
+        assert!(tools.contains(&"workflow"));
+        assert!(tools.contains(&"resource"));
         assert!(tools.contains(&"bash"));
     }
 
     #[test]
     fn wander_runtime_includes_structured_file_tool() {
         let tools = tool_names_for_runtime_mode("wander");
-        assert!(tools.contains(&"redbox_fs"));
+        assert!(tools.contains(&"resource"));
         assert!(!tools.contains(&"bash"));
     }
 
     #[test]
     fn redclaw_runtime_includes_structured_file_tool() {
         let tools = tool_names_for_runtime_mode("redclaw");
-        assert!(tools.contains(&"redbox_fs"));
-        assert!(tools.contains(&"app_cli"));
+        assert!(tools.contains(&"resource"));
+        assert!(tools.contains(&"workflow"));
         if cfg!(target_os = "windows") {
             assert!(!tools.contains(&"bash"));
         } else {
@@ -145,8 +146,8 @@ mod tests {
         assert!(tools.contains(&"Read"));
         assert!(tools.contains(&"List"));
         assert!(tools.contains(&"Search"));
-        assert!(tools.contains(&"Redbox"));
-        assert!(!tools.contains(&"app_cli"));
-        assert!(!tools.contains(&"redbox_fs"));
+        assert!(tools.contains(&"Operate"));
+        assert!(!tools.contains(&"workflow"));
+        assert!(!tools.contains(&"resource"));
     }
 }

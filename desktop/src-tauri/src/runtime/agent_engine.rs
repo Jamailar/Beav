@@ -111,7 +111,7 @@ pub fn runtime_default_intent(runtime_mode: &str, metadata: Option<&Value>) -> S
     match runtime_mode {
         "background-maintenance" => "automation".to_string(),
         "knowledge" => "knowledge_retrieval".to_string(),
-        "chatroom" | "advisor-discussion" => "discussion".to_string(),
+        "team" | "chatroom" | "advisor-discussion" => "discussion".to_string(),
         _ => {
             if metadata.and_then(|m| m.get("longCycleTaskId")).is_some()
                 || metadata.and_then(|m| m.get("longCycleRound")).is_some()
@@ -140,7 +140,7 @@ pub fn runtime_default_role(runtime_mode: &str, intent: &str, metadata: Option<&
     }
     match runtime_mode {
         "knowledge" => "researcher".to_string(),
-        "chatroom" => "ops-coordinator".to_string(),
+        "team" | "chatroom" => "ops-coordinator".to_string(),
         "advisor-discussion" => "researcher".to_string(),
         "background-maintenance" => "ops-coordinator".to_string(),
         _ => match intent {

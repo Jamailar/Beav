@@ -538,7 +538,7 @@ scope: repository
 - AI endpoint / model 配置
 - MCP 服务器发现、导入、本地配置、OAuth 状态、连接测试
 - 插件准备、插件目录打开、知识库 API 指南
-- `yt-dlp` 安装/更新/检测
+- YouTube/yt-dlp 内置下载服务移除，不再安装、更新或探测第三方二进制
 - runtime 诊断、工具诊断、会话和任务追踪
 - 官方账号登录、模型列表、积分 / 面板数据
 - 守护进程配置与控制

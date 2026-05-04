@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn emits_live_events_for_runtime_mode_skips_wander_only() {
-        assert!(emits_live_events_for_runtime_mode("chatroom"));
+        assert!(emits_live_events_for_runtime_mode("team"));
         assert!(emits_live_events_for_runtime_mode("redclaw"));
         assert!(!emits_live_events_for_runtime_mode("wander"));
     }

@@ -1,5 +1,5 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, FileEdit, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -8,7 +8,7 @@ import { NotificationCenterDrawer } from './NotificationCenterDrawer';
 import { APP_BRAND } from '../config/brand';
 import { applyAppTheme, CUSTOM_THEME_CHANGED_EVENT, readThemeMode, THEME_MODE_STORAGE_KEY, type ThemeMode } from '../config/theme';
 import { useI18n, type I18nKey } from '../i18n';
-import { appAlert } from '../utils/appDialogs';
+import { appAlert, appConfirm } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 import { uiMeasure } from '../utils/uiDebug';
@@ -18,6 +18,7 @@ interface LayoutProps {
   currentView: ViewType;
   onNavigate: (view: ViewType) => void;
   immersiveMode?: ImmersiveMode;
+  hideGlobalSidebar?: boolean;
   globalNotice?: string | null;
   globalSidebarContent?: ReactNode;
   renderTitleBarContent?: (context: { currentView: ViewType }) => ReactNode;
@@ -211,7 +212,7 @@ function AppTitleBar({
   );
 }
 
-export function Layout({ children, currentView, onNavigate, immersiveMode = false, globalNotice = null, globalSidebarContent, renderTitleBarContent }: LayoutProps) {
+export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, renderTitleBarContent }: LayoutProps) {
   const { t } = useI18n();
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
@@ -229,6 +230,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [spaceDialogName, setSpaceDialogName] = useState('');
   const [spaceDialogTargetId, setSpaceDialogTargetId] = useState<string | null>(null);
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
+  const [deletingSpaceId, setDeletingSpaceId] = useState<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
@@ -491,6 +493,40 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     setIsSpaceDialogOpen(true);
   }, []);
 
+  const handleDeleteSpace = useCallback(async (space: WorkspaceSpace) => {
+    if (!space.id || space.id === 'default' || deletingSpaceId) return;
+    const confirmed = await appConfirm(t('layout.deleteSpaceConfirm', { name: space.name || space.id }), {
+      title: t('layout.deleteSpace'),
+      confirmLabel: t('layout.deleteSpace'),
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+
+    setDeletingSpaceId(space.id);
+    try {
+      const result = await window.ipcRenderer.spaces.delete(space.id) as {
+        success?: boolean;
+        activeSpaceId?: string;
+        deletedActiveSpace?: boolean;
+        error?: string;
+      } | null;
+      if (!result?.success) {
+        void appAlert(result?.error || t('layout.deleteSpaceFailed'));
+        return;
+      }
+      setIsSpaceMenuOpen(false);
+      await loadSpaces();
+      if (result.deletedActiveSpace) {
+        window.location.reload();
+      }
+    } catch (error) {
+      console.error('Failed to delete space:', error);
+      void appAlert(t('layout.deleteSpaceFailedRetry'));
+    } finally {
+      setDeletingSpaceId(null);
+    }
+  }, [deletingSpaceId, loadSpaces, t]);
+
   const closeSpaceDialog = useCallback(() => {
     if (isSpaceDialogSubmitting) return;
     setIsSpaceDialogOpen(false);
@@ -740,7 +776,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       )}
 
       {/* Sidebar */}
-      {!immersiveMode && (
+      {!immersiveMode && !hideGlobalSidebar && (
         <aside
           className={clsx(
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
@@ -762,95 +798,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
           )}
 
           {/* Footer */}
-          <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-3 flex flex-col items-center gap-2.5' : 'px-4 py-3 space-y-2.5')}>
-            {!sidebarVisualCollapsed && (
-              <div className="space-y-1.5">
-                <div
-                  className="max-h-4 text-[10px] tracking-[0.04em] text-text-tertiary overflow-hidden whitespace-nowrap opacity-100 translate-y-0"
-                >
-                  {t('layout.space')}
-                </div>
-                <div ref={spaceMenuRef} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setIsSpaceMenuOpen((prev) => !prev)}
-                    disabled={isSwitchingSpace}
-                    className="w-full h-8 px-2.5 text-[12px] flex items-center justify-between rounded-lg border border-border bg-surface-primary text-text-primary disabled:opacity-50"
-                  >
-                    <span className="truncate">{activeSpaceName}</span>
-                    <ChevronDown className={clsx('w-[13px] h-[13px] text-text-tertiary transition-transform', isSpaceMenuOpen && 'rotate-180')} strokeWidth={1.75} />
-                  </button>
-
-                  {isSpaceMenuOpen && (
-                    <div
-                      className="absolute left-0 right-0 bottom-full mb-1.5 rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden"
-                    >
-                      <div className="max-h-44 overflow-y-auto">
-                        {spaces.length === 0 ? (
-                          <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
-                            {t('layout.noSpace')}
-                          </div>
-                        ) : (
-                          spaces.map((space) => {
-                            const isActive = space.id === activeSpaceId;
-                            const showEdit = hoveredSpaceId === space.id;
-                            return (
-                              <div
-                                key={space.id}
-                                className={clsx(
-                                  'h-9 px-2.5 flex items-center gap-1.5',
-                                  isActive ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary'
-                                )}
-                                onMouseEnter={() => setHoveredSpaceId(space.id)}
-                                onMouseLeave={() => setHoveredSpaceId((prev) => (prev === space.id ? null : prev))}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    void handleSwitchSpace(space.id);
-                                  }}
-                                  className={clsx('flex-1 text-left text-[12px] truncate', isActive ? 'text-accent-primary' : 'text-text-primary')}
-                                >
-                                  {space.name}
-                                </button>
-                                <button
-                                  type="button"
-                                  onMouseDown={(event) => {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    openRenameSpaceDialog(space);
-                                  }}
-                                  className={clsx(
-                                    'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
-                                    showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
-                                  )}
-                                  title={t('layout.renameSpace')}
-                                >
-                                  <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                                </button>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onMouseDown={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          openCreateSpaceDialog();
-                        }}
-                        className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
-                      >
-                        <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                        {t('layout.createSpace')}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+          <div className={clsx('border-t border-border', sidebarVisualCollapsed ? 'px-2 py-2 flex flex-col items-center gap-2' : 'px-4 py-2 space-y-2')}>
             {sidebarVisualCollapsed && (
               <button
                 type="button"
@@ -859,25 +807,23 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 title={t('nav.settings')}
                 aria-label={t('nav.settings')}
               >
-                <SettingsIcon className="w-[14px] h-[14px]" strokeWidth={1.75} />
+                <SettingsIcon className="w-[17px] h-[17px]" strokeWidth={1.75} />
               </button>
             )}
             <div
               className={clsx(
-                'flex items-center justify-center gap-2 text-[11px] text-text-tertiary/90 overflow-hidden whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
-                usesMacOverlayTitleBar
-                  ? 'max-h-4 opacity-100 translate-y-0'
-                  : sidebarVisualCollapsed ? 'max-h-0 opacity-0 translate-y-1' : 'max-h-4 opacity-100 translate-y-0'
+                'flex items-center gap-2 text-[11px] text-text-tertiary/90 whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
+                sidebarVisualCollapsed ? 'max-h-0 overflow-hidden opacity-0 translate-y-1' : 'max-h-8 overflow-visible opacity-100 translate-y-0 justify-start'
               )}
             >
               <button
                 type="button"
                 onClick={() => onNavigate('settings')}
-                className="h-5 w-5 rounded-md text-text-tertiary hover:text-text-primary transition-colors inline-flex items-center justify-center shrink-0"
+                className="h-8 w-8 rounded-md text-text-tertiary hover:text-text-primary hover:bg-surface-primary transition-colors inline-flex items-center justify-center shrink-0"
                 title={t('nav.settings')}
                 aria-label={t('nav.settings')}
               >
-                <SettingsIcon className="w-[11px] h-[11px]" strokeWidth={1.75} />
+                <SettingsIcon className="w-[19px] h-[19px]" strokeWidth={1.75} />
               </button>
               {!usesMacOverlayTitleBar && (
                 <>
@@ -909,6 +855,105 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                 </>
               )}
               <span>{appVersion ? `v${appVersion}` : 'v--'}</span>
+              <div ref={spaceMenuRef} className="relative min-w-0">
+                <button
+                  type="button"
+                  onClick={() => setIsSpaceMenuOpen((prev) => !prev)}
+                  disabled={isSwitchingSpace}
+                  className="h-7 w-[118px] px-2.5 text-[12px] flex items-center justify-between gap-1 rounded-lg border border-border bg-surface-primary text-text-primary disabled:opacity-50"
+                >
+                  <span className="min-w-0 truncate">{activeSpaceName}</span>
+                  <ChevronDown className={clsx('w-[13px] h-[13px] shrink-0 text-text-tertiary transition-transform', isSpaceMenuOpen && 'rotate-180')} strokeWidth={1.75} />
+                </button>
+
+                {isSpaceMenuOpen && (
+                  <div
+                    className="absolute right-0 bottom-full mb-1.5 w-[172px] rounded-lg border border-border bg-surface-primary shadow-lg z-50 overflow-hidden"
+                  >
+                    <div className="max-h-44 overflow-y-auto">
+                      {spaces.length === 0 ? (
+                        <div className="h-9 px-2.5 text-[12px] text-text-tertiary flex items-center">
+                          {t('layout.noSpace')}
+                        </div>
+                      ) : (
+                        spaces.map((space) => {
+                          const isActive = space.id === activeSpaceId;
+                          const showEdit = hoveredSpaceId === space.id;
+                          const canDelete = space.id !== 'default';
+                          const isDeleting = deletingSpaceId === space.id;
+                          return (
+                            <div
+                              key={space.id}
+                              className={clsx(
+                                'h-9 px-2.5 flex items-center gap-1.5',
+                                isActive ? 'bg-accent-primary/10' : 'hover:bg-surface-secondary'
+                              )}
+                              onMouseEnter={() => setHoveredSpaceId(space.id)}
+                              onMouseLeave={() => setHoveredSpaceId((prev) => (prev === space.id ? null : prev))}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void handleSwitchSpace(space.id);
+                                }}
+                                className={clsx('flex-1 text-left text-[12px] truncate', isActive ? 'text-accent-primary' : 'text-text-primary')}
+                              >
+                                {space.name}
+                              </button>
+                              <button
+                                type="button"
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  openRenameSpaceDialog(space);
+                                }}
+                                className={clsx(
+                                  'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-primary transition-opacity',
+                                  showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                                )}
+                                title={t('layout.renameSpace')}
+                              >
+                                <Pencil className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                              </button>
+                              {canDelete && (
+                                <button
+                                  type="button"
+                                  disabled={isDeleting}
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void handleDeleteSpace(space);
+                                  }}
+                                  className={clsx(
+                                    'w-5 h-5 inline-flex items-center justify-center rounded-md text-text-secondary hover:text-red-500 hover:bg-surface-primary disabled:opacity-50 transition-opacity',
+                                    showEdit ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                                  )}
+                                  title={t('layout.deleteSpace')}
+                                >
+                                  <Trash2 className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openCreateSpaceDialog();
+                      }}
+                      className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
+                    >
+                      <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
+                      {t('layout.createSpace')}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

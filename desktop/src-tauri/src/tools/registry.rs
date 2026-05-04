@@ -14,7 +14,7 @@ use crate::AppStore;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {
-        crate::tools::catalog::ToolKind::AppCli => "app_cli",
+        crate::tools::catalog::ToolKind::AppCli => "workflow",
         crate::tools::catalog::ToolKind::Bash => "bash",
         crate::tools::catalog::ToolKind::AppQuery => "app_query",
         crate::tools::catalog::ToolKind::FileSystem => "file_system",
@@ -144,8 +144,8 @@ pub fn openai_schemas_for_session(
         .visible_tools
         .iter()
         .filter_map(|tool| {
-            if tool.name == "Redbox" && !plan.direct_app_cli_actions.is_empty() {
-                schema_for_tool_from_action_descriptors("Redbox", &plan.direct_app_cli_actions)
+            if tool.name == "Operate" && !plan.direct_app_cli_actions.is_empty() {
+                schema_for_tool_from_action_descriptors("Operate", &plan.direct_app_cli_actions)
             } else {
                 schema_for_tool_for_runtime_mode(tool.name, Some(&plan.runtime_mode))
             }
@@ -170,8 +170,8 @@ pub fn openai_schemas_for_session_with_mcp(
         .visible_tools
         .iter()
         .filter_map(|tool| {
-            if tool.name == "Redbox" && !plan.direct_app_cli_actions.is_empty() {
-                schema_for_tool_from_action_descriptors("Redbox", &plan.direct_app_cli_actions)
+            if tool.name == "Operate" && !plan.direct_app_cli_actions.is_empty() {
+                schema_for_tool_from_action_descriptors("Operate", &plan.direct_app_cli_actions)
             } else {
                 schema_for_tool_for_runtime_mode(tool.name, Some(&plan.runtime_mode))
             }
@@ -339,12 +339,12 @@ pub fn prompt_tool_lines_for_session(
 }
 
 fn capability_summary_for_plan_tool(tool_name: &str, plan: &ToolRegistryPlan) -> Option<String> {
-    if tool_name == "Redbox" && !plan.direct_app_cli_actions.is_empty() {
+    if tool_name == "Operate" && !plan.direct_app_cli_actions.is_empty() {
         let mut summary = tool_action_family_summary_for_descriptors(&plan.direct_app_cli_actions)?;
         if !plan.deferred_action_namespaces.is_empty() {
             summary.push_str(" | deferred=");
             summary.push_str(&plan.deferred_action_namespaces.join(","));
-            summary.push_str(" | discover=Redbox(resource=tools, operation=search)");
+            summary.push_str(" | discover=Operate(resource=tools, operation=search)");
         }
         return Some(summary);
     }
@@ -431,7 +431,7 @@ fn normalize_mcp_input_schema(schema: &Value) -> Value {
 }
 
 pub fn diagnostics_tool_items() -> Vec<Value> {
-    ["bash", "redbox_fs", "app_cli", "redbox_editor"]
+    ["bash", "resource", "workflow", "editor"]
         .iter()
         .filter_map(|name| descriptor_by_name(name))
         .map(|tool| {
@@ -467,12 +467,12 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             metadata: Some(json!({
-                "allowedTools": ["redbox_fs", "redbox_runtime_control", "not_real"]
+                "allowedTools": ["resource", "runtime_control", "not_real"]
             })),
         });
 
-        let names = tool_names_for_session(&store, "chatroom", Some("session-1"));
-        assert_eq!(names, vec!["redbox_fs".to_string(), "app_cli".to_string()]);
+        let names = tool_names_for_session(&store, "team", Some("session-1"));
+        assert_eq!(names, vec!["resource".to_string(), "workflow".to_string()]);
     }
 
     #[test]
@@ -484,7 +484,7 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             metadata: Some(json!({
-                "allowedTools": ["redbox_fs", "app_cli"],
+                "allowedTools": ["resource", "workflow"],
                 "allowedAppCliActions": [
                     "manuscripts.createProject",
                     "manuscripts.writeCurrent"
@@ -502,14 +502,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(names.contains(&"Read".to_string()));
         assert!(names.contains(&"Write".to_string()));
-        assert!(names.contains(&"Redbox".to_string()));
-        assert!(!names.contains(&"app_cli".to_string()));
-        assert!(!names.contains(&"redbox_fs".to_string()));
+        assert!(names.contains(&"Operate".to_string()));
+        assert!(!names.contains(&"workflow".to_string()));
+        assert!(!names.contains(&"resource".to_string()));
         let redbox = schemas
             .as_array()
             .expect("schemas")
             .iter()
-            .find(|item| item.pointer("/function/name").and_then(Value::as_str) == Some("Redbox"))
+            .find(|item| item.pointer("/function/name").and_then(Value::as_str) == Some("Operate"))
             .expect("redbox schema");
         let resources = redbox
             .pointer("/function/parameters/properties/resource/enum")
@@ -545,7 +545,7 @@ mod tests {
             .as_array()
             .expect("schemas")
             .iter()
-            .find(|item| item.pointer("/function/name").and_then(Value::as_str) == Some("Redbox"))
+            .find(|item| item.pointer("/function/name").and_then(Value::as_str) == Some("Operate"))
             .expect("redbox schema");
         let resources = redbox
             .pointer("/function/parameters/properties/resource/enum")
@@ -590,8 +590,7 @@ mod tests {
             fingerprint: "mcp-a".to_string(),
         };
 
-        let schemas =
-            openai_schemas_for_session_with_mcp(&store, "chatroom", None, Some(&inventory));
+        let schemas = openai_schemas_for_session_with_mcp(&store, "team", None, Some(&inventory));
         let names = schemas
             .as_array()
             .expect("schemas")

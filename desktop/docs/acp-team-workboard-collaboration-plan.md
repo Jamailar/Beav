@@ -27,7 +27,7 @@ Sections 2-12 preserve the design research and architecture decision record. Sec
 
 RedConvert 需要把当前“内部有 subagent / runtime task / Workboard，但用户看不清每个成员在做什么”的能力，升级成一个可见、可控、可恢复的团队协作系统。
 
-目标不是做一个群聊外壳，而是让团队成员真正各自工作：
+目标不是做一个聊天外壳，而是让团队成员真正各自工作：
 
 - 每个成员有独立身份、职责、会话上下文、任务队列和状态。
 - 成员可以接收任务、执行工作、定期汇报进度、提交结果和阻塞原因。
@@ -263,7 +263,7 @@ RedConvert already has several foundations:
 - `desktop/src-tauri/src/runtime/approval_runtime.rs`: approval state.
 - `desktop/src-tauri/src/mcp/*`: MCP runtime.
 - `desktop/src-tauri/src/cli_runtime/*`: CLI tool control plane and environment handling.
-- `desktop/src/pages/Team.tsx`: current creative advisors / group chat surface.
+- `desktop/src/pages/Team.tsx`: current creative advisors / team surface.
 - `desktop/src/pages/Workboard.tsx`: current RedClaw task center.
 - `desktop/src/runtime/runtimeEventStream.ts`: unified runtime event stream.
 
@@ -357,7 +357,7 @@ CollabArtifact
 
 ### 5.4 TeamGroupChat Runtime V2 Addendum
 
-This addendum refines team mode around the product direction discussed on 2026-04-26: group chat is the collaboration room, not the worker loop. Members do work in their own background runtimes, then report into the group only when useful.
+This addendum refines team mode around the product direction discussed on 2026-04-26: the team surface is for coordination, not the worker loop. Members do work in their own background runtimes, then report into the team only when useful.
 
 #### 5.4.1 Runtime-Owned Team Room
 
@@ -370,7 +370,7 @@ The RedConvert runtime owns all team execution. The app does not need tmux or a 
 - concurrent child runtimes
 - persistence and event projection
 
-The group chat should be persisted as a `CollabSession` communication surface. Deleting an unneeded group chat deletes or archives that collaboration container according to product policy, but it must not be treated as an execution process.
+The team workspace should be persisted as a `CollabSession` communication surface. Deleting an unneeded team workspace deletes or archives that collaboration container according to product policy, but it must not be treated as an execution process.
 
 #### 5.4.2 Speaker And Executor Separation
 
@@ -420,7 +420,7 @@ Every member should maintain a durable member-level plan:
     {
       "reason": "progress_report",
       "priority": 40,
-      "summary": "可直接发送给群聊的简短进度"
+      "summary": "可直接发送给团队的简短进度"
     }
   ]
 }
@@ -430,7 +430,7 @@ This plan is the bridge between executor and speaker. Executors update it after 
 
 #### 5.4.4 Executor Lifecycle And Capacity
 
-A member may work across multiple group chats and multiple tasks. The runtime should enforce:
+A member may work across multiple team workspaces and multiple tasks. The runtime should enforce:
 
 - one executor thread per independent active task by default
 - `maxConcurrentExecutorsPerMember = 5`

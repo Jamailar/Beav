@@ -1003,8 +1003,7 @@ mod tests {
             .iter_mut()
             .find(|item| item.name == "image-prompt-optimizer")
             .expect("image-prompt-optimizer builtin should exist");
-        skill.body =
-            "---\nallowedRuntimeModes: [chatroom, image-generation]\n---\n# stale".to_string();
+        skill.body = "---\nallowedRuntimeModes: [team, image-generation]\n---\n# stale".to_string();
         skill.disabled = Some(true);
 
         ensure_builtin_skills_present(&mut store);
@@ -1016,7 +1015,7 @@ mod tests {
             .expect("refreshed image-prompt-optimizer should exist");
         assert!(refreshed
             .body
-            .contains("allowedRuntimeModes: [chatroom, redclaw, image-generation]"));
+            .contains("allowedRuntimeModes: [team, redclaw, image-generation]"));
         assert_eq!(refreshed.disabled, Some(true));
         assert_eq!(refreshed.source_scope.as_deref(), Some("builtin"));
         assert_eq!(refreshed.is_builtin, Some(true));

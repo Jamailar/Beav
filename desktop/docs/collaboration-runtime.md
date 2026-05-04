@@ -71,7 +71,7 @@ UI 看板应使用 stale-while-revalidate：先展示最近 snapshot，再监听
 
 ## AI Coordinator Entry
 
-主 AI 不需要模拟点击 UI。正常对话 runtime 会通过 `app_cli(action, payload)` 获得模型可见的 team actions：
+主 AI 不需要模拟点击 UI。正常对话 runtime 会通过 `workflow(action, payload)` 获得模型可见的 team actions：
 
 - `team.session.create`: 创建协作项目。
 - `team.member.spawn`: 创建内部 runtime 成员。

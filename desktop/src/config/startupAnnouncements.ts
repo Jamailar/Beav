@@ -42,17 +42,15 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
     id: 'release-1.10.3-runtime-collaboration',
     version: '1.10.3',
     badge: 'v1.10.3 更新',
-    title: '工具运行时和协作工作台更稳了',
-    summary: '这次主要增强 MCP / 工具路由、协作工作台和成员技能，把长任务执行、团队分工和过程回放整理得更清楚。',
+    title: 'RedBox 更新了',
+    summary: '自动化、审批和全局聊天记录现在更集中。',
     highlights: [
       'MCP 工具目录、执行计划和权限边界更清晰。',
       '协作工作台支持任务评论、执行报告保留和成员能力匹配。',
       '聊天过程展示更紧凑，自动更新、知识库和插件采集也做了稳定性修复。',
     ],
     hero: [
-      { id: 'knowledge', label: '工具运行时', icon: 'knowledge' },
-      { id: 'automation', label: '协作工作台', icon: 'automation' },
-      { id: 'draft', label: '过程回放', icon: 'draft' },
+      { id: 'automation', label: '打开自动化工作台', icon: 'automation' },
     ],
     shortcuts: [
       { id: 'automation', label: '去自动化', view: 'automation' },
@@ -64,17 +62,15 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
     id: 'release-1.9.4-product-workflow',
     version: '1.9.4',
     badge: 'v1.9.4 新功能',
-    title: '启动弹窗现在可以按版本独立管理',
-    summary: '这次更新把首个弹窗改成了版本化内容位。每个版本都能有自己的标题、摘要、按钮和可选引导。',
+    title: 'RedBox 有新功能',
+    summary: '更新提醒更轻，入口更清楚。',
     highlights: [
       '默认只展示简短摘要，不再堆很多说明文字。',
       '需要时可以给当前版本挂 3 个以内的快捷入口按钮。',
       '如果某个版本需要讲解导航，再单独配置引导步骤。',
     ],
     hero: [
-      { id: 'draft', label: '版本弹窗', icon: 'draft' },
-      { id: 'generate', label: '快捷入口', icon: 'generate' },
-      { id: 'automation', label: '可选引导', icon: 'automation' },
+      { id: 'draft', label: '查看新功能', icon: 'draft' },
     ],
     shortcuts: [
       { id: 'manuscripts', label: '去稿件', view: 'manuscripts' },

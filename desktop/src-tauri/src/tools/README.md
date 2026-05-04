@@ -5,7 +5,7 @@
 ## 职责
 
 - `catalog.rs`：工具 descriptor 与 OpenAI schema 定义（kind / approval / concurrency / budget）。
-- `compat.rs`：模型可见工具和历史工具名兼容层，统一映射到内部 `redbox_*` 工具入口。
+- `compat.rs`：模型可见工具和历史工具名兼容层，统一映射到内部 canonical 工具入口。
   - 兼容层应优先继续收敛到 canonical tools，而不是给 legacy tool 保持完整独立语义面。
 - `packs.rs`：`runtimeMode -> tool pack` 映射，区分模型可见工具集合和内部执行工具集合。
 - `registry.rs`：按 mode 提供模型可见工具列表、schema 列表和提示词可读描述。
@@ -20,46 +20,46 @@
   - `List`
   - `Search`
   - `Write`
-  - `Redbox`
+  - `Operate`
   - `bash`
 - 内部执行工具继续收敛到：
   - `bash`
-  - `redbox_fs`
-  - `app_cli`
-  - `redbox_editor`（仅编辑器 runtime）
+  - `resource`
+  - `workflow`
+  - `editor`（仅编辑器 runtime）
 - 兼容层保留：
-  - `redbox_app_query`
-  - `redbox_profile_doc`
-  - `redbox_mcp`
-  - `redbox_skill`
-  - `redbox_runtime_control`
+  - `query`
+  - `profile_doc`
+  - `mcp`
+  - `skill`
+  - `runtime_control`
 
 ## 治理规则
 
 - 顶层模型工具优先保持为少量通用入口，不按主题、模板、稿件、profile、MCP、skill、runtime 等领域继续拆新的模型可见工具。
 - 如果能力只是作用域不同、文件不同、业务子域不同，优先用虚拟路径表达，例如 `workspace://`、`knowledge://`、`manuscripts://`、`profiles://`、`editor://current/script`。
-- 文件和知识读取优先通过 `Read` / `List` / `Search`，内部再映射到 `redbox_fs`；不要继续保留或新增大量 `*_glob` / `*_grep` / `*_read` 一类模型可见工具。
-- 宿主业务能力优先通过 `Redbox(resource, operation, input)`，内部再映射到 `app_cli`；不要把查询、profile、MCP、skill、runtime control 再拆成独立产品级工具面。
-- 编辑器原生协议优先通过 `Read` / `Write` / `Redbox(resource="editor", ...)`，内部再映射到 `redbox_editor`。编辑器内部可以有动作分组，但不要把 UI 面板或模板类型直接映射成新的模型可见工具。
+- 文件和知识读取优先通过 `Read` / `List` / `Search`，内部再映射到 `resource`；不要继续保留或新增大量 `*_glob` / `*_grep` / `*_read` 一类模型可见工具。
+- 宿主业务能力优先通过 `Operate(resource, operation, input)`，内部再映射到 `workflow`；不要把查询、profile、MCP、skill、runtime control 再拆成独立产品级工具面。
+- 编辑器原生协议优先通过 `Read` / `Write` / `Operate(resource="editor", ...)`，内部再映射到 `editor`。编辑器内部可以有动作分组，但不要把 UI 面板或模板类型直接映射成新的模型可见工具。
 - compatibility alias 只用于迁移，不是长期治理边界。新 prompt、skill、pack、runtime metadata 一律使用 canonical tool names。
-- 任何新模型可见工具都必须先回答一个问题：`Read`、`List`、`Search`、`Write`、`Redbox`、`bash` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。
+- 任何新模型可见工具都必须先回答一个问题：`Read`、`List`、`Search`、`Write`、`Operate`、`bash` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。
 
 ## 当前 Canonical 规则
 
-- 模型可见 tool 固定为：`Read`、`List`、`Search`、`Write`、`Redbox`、`bash`。
-- 内部 canonical tool 固定为：`bash`、`redbox_fs`、`app_cli`、`redbox_editor`。
-- LLM 优先选择熟悉的通用原语；业务动作只通过 `Redbox(resource, operation, input)` 暴露。
+- 模型可见 tool 固定为：`Read`、`List`、`Search`、`Write`、`Operate`、`bash`。
+- 内部 canonical tool 固定为：`bash`、`resource`、`workflow`、`editor`。
+- LLM 优先选择熟悉的通用原语；业务动作只通过 `Operate(resource, operation, input)` 暴露。
 - 新能力优先新增内部 canonical action 或虚拟路径 resolver，不再新增 legacy tool alias。
-- prompt / skill / runtime metadata 只允许引用模型可见工具名；不要再写 `app_cli(command="...")`、`app_cli(action="...")`、`redbox_fs(action="...")`、`knowledge_read`、`knowledge_grep`、`redbox_runtime_control` 这类历史语法。
+- prompt 优先引用模型可见工具名；runtime metadata 的 `allowedTools` 只写内部 canonical 名。不要再写 `workflow(command="...")`、`knowledge_read`、`knowledge_grep`、`runtime_control` 这类历史语法。
 
 ## Action Contract
 
 - 每个 action 必须单一职责，名字直接表达一个结构化能力。
 - schema-first：action 必须有明确输入 schema 和输出 schema。
 - `Read` / `List` / `Search` / `Write` 使用虚拟路径协议。
-- `Redbox` 使用 `resource + operation + id? + input?` 协议。
-- `Redbox(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
-- `app_cli` / `redbox_fs` / `redbox_editor` 作为内部执行层，仍一律优先走 `action + payload` 协议。
+- `Operate` 使用 `resource + operation + id? + input?` 协议。
+- `Operate(resource="image", operation="generate")` 的比例、尺寸、质量必须放在 `input.aspectRatio` / `input.size` / `input.quality`，不要只写进自然语言 prompt。支持的 `aspectRatio` 为 `1:1`、`3:4`、`4:3`、`9:16`、`16:9`。
+- `workflow` / `resource` / `editor` 作为内部执行层，仍一律优先走 `action + payload` 协议。
 - 虚拟路径示例：
   - `workspace://README.md`
   - `knowledge://api-guidelines.md`
@@ -67,7 +67,7 @@
   - `profiles://creator_profile`
   - `editor://current/script`
   - `editor://current/remotion`
-- `redbox_fs` 的 canonical action 固定为：
+- `resource` 的 canonical action 固定为：
   - `workspace.list`
   - `workspace.read`
   - `workspace.search`
@@ -77,7 +77,7 @@
   - `knowledge.search`
 - `knowledge.attach` 只负责把知识库里的图片 / 音频 / 视频文件登记为下一轮模型输入附件；是否真正直传由 runtime 按当前 provider / model 能力判断，不支持时必须降级为文字说明。
 - `knowledge.search` 在 indexed knowledge scope 下应返回结构化 `queryProfile` / `queryPlan` / `evidencePack`；这不仅包括 document source，也包括 advisor/member knowledge。
-- `redbox_editor` 的运行时 schema 走 `action + payload`；兼容层可以把旧的扁平字段整理成 canonical 形态，但新资产不要再依赖旧写法。
+- `editor` 的运行时 schema 走 `action + payload`；兼容层可以把旧的扁平字段整理成 canonical 形态，但新资产不要再依赖旧写法。
 
 ## 输出与兼容
 

@@ -32,8 +32,8 @@ cd src-tauri && cargo fmt --check && cargo check
   - `cd src-tauri && cargo test subagent_spawn_creates_child_task_and_session_links`
   - `cd src-tauri && cargo test app_cli_schema_exposes_team_coordinator_actions`
   - 打开 Workboard 的 Collaboration 模式，验证 session 切换、member roster、Kanban、report request、内部成员创建、智能分配、阻塞上报、产物附加、完成声明和 stale-while-revalidate
-  - 在主 AI 对话中要求“创建一个协作项目，包含 2 个内部成员和任务看板”，验证 AI 使用 `app_cli(action="team.session.create"|"team.member.spawn"|"team.member.match"|"team.task.create")`
-  - 通过 `app_cli(action="runtime.team.mcp-contract")` 或 `runtime team mcp-contract` 验证 `redbox-team` MCP 工具合同
+  - 在主 AI 对话中要求“创建一个协作项目，包含 2 个内部成员和任务看板”，验证 AI 使用 `workflow(action="team.session.create"|"team.member.spawn"|"team.member.match"|"team.task.create")`
+  - 通过 `workflow(action="runtime.team.mcp-contract")` 或 `runtime team mcp-contract` 验证 team MCP 工具合同
 - workspace / persistence：
   - 验证当前窗口立即可见
   - 验证重启后可恢复

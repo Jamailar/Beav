@@ -186,7 +186,7 @@ impl ToolRouter {
                 )
                 .to_json_string(Some(normalized_name), None));
         }
-        if normalized_name == "app_cli" {
+        if normalized_name == "workflow" {
             self.ensure_app_cli_action_allowed(&normalized_call.arguments)?;
         }
         Ok(PreparedToolCall {
@@ -211,7 +211,7 @@ impl ToolRouter {
         if !descriptor_allows {
             return false;
         }
-        if prepared.name != "app_cli" {
+        if prepared.name != "workflow" {
             return descriptor_allows;
         }
         let Some(action) = payload_string(&prepared.arguments, "action") else {
@@ -277,7 +277,7 @@ impl ToolRouter {
                         "deferredNamespaces": self.plan.deferred_action_namespaces,
                     })),
                 )
-                .to_json_string(Some("app_cli"), Some(&action)));
+                .to_json_string(Some("workflow"), Some(&action)));
         }
         Err(self
             .error(
@@ -294,7 +294,7 @@ impl ToolRouter {
                         .collect::<Vec<_>>(),
                 })),
             )
-            .to_json_string(Some("app_cli"), Some(&action)))
+            .to_json_string(Some("workflow"), Some(&action)))
     }
 
     fn is_allowed_tool_name(&self, name: &str) -> bool {
@@ -369,7 +369,7 @@ mod tests {
         let router = ToolRouter::new(plan);
         let prepared = router
             .prepare(
-                "Redbox",
+                "Operate",
                 &json!({
                     "resource": "image",
                     "operation": "generate",
@@ -378,7 +378,7 @@ mod tests {
             )
             .expect("prepare");
 
-        assert_eq!(prepared.name, "app_cli");
+        assert_eq!(prepared.name, "workflow");
         assert_eq!(
             prepared.arguments.get("action"),
             Some(&json!("image.generate"))
@@ -394,7 +394,7 @@ mod tests {
         let router = ToolRouter::new(plan);
         let error = router
             .prepare(
-                "app_cli",
+                "workflow",
                 &json!({ "action": "manuscripts.createProject", "payload": {} }),
             )
             .expect_err("deferred action should fail");
@@ -416,7 +416,7 @@ mod tests {
             fingerprint: "mcp-a".to_string(),
         };
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "chatroom",
+            runtime_mode: "team",
             mcp_inventory: Some(&inventory),
             ..ToolRegistryPlanParams::default()
         });
@@ -450,7 +450,7 @@ mod tests {
             fingerprint: "mcp-a".to_string(),
         };
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "chatroom",
+            runtime_mode: "team",
             mcp_inventory: Some(&inventory),
             ..ToolRegistryPlanParams::default()
         });
@@ -476,7 +476,7 @@ mod tests {
             fingerprint: "mcp-a".to_string(),
         };
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "chatroom",
+            runtime_mode: "team",
             mcp_inventory: Some(&inventory),
             ..ToolRegistryPlanParams::default()
         });
