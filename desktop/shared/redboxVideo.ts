@@ -4,7 +4,7 @@ export type RedBoxOfficialVideoMode =
   | 'first-last-frame'
   | 'continuation';
 
-export const REDBOX_OFFICIAL_VIDEO_BASE_URL = 'https://api.ziz.hk/redbox/v1';
+export const REDBOX_OFFICIAL_VIDEO_BASE_URL = 'https://api.ziz.hk/thrive/v1';
 
 export const REDBOX_OFFICIAL_VIDEO_MODELS = {
   'text-to-video': 'wan2.7-t2v-video',

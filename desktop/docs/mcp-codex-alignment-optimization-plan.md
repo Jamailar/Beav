@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-26
+last_updated: 2026-05-04
 owner: codex
 scope:
   - desktop/src-tauri/src/mcp
@@ -60,6 +60,8 @@ Completed implementation:
 - Added Settings controls for MCP required/enabled/policy/tool timeout/allowlist/denylist/per-tool policy JSON.
 - Added local stdio fixture coverage for direct `tools/call`; current verification exercises the same manager path used by the agent runtime.
 - Added tests for naming, inventory, exposure, routing, schema generation, resources, per-tool config policy, and manager direct `tools/call`.
+- 2026-05-04 update: MCP deferred discovery now flows through first-class `tool_search`, while `tools.search` remains a compatibility action.
+- 2026-05-04 update: `McpManager.list_all_tools` uses a short fingerprinted inventory cache and clears it on MCP server sync/disconnect to avoid repeated full inventory probes during one runtime turn.
 
 ## 1. Goal
 

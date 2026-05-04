@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-26
+last_updated: 2026-05-04
 owner: codex
 scope:
   - desktop/src-tauri/src/tools
@@ -73,6 +73,12 @@ success_metrics:
 - prompt 工具摘要会明确提示 deferred actions 通过 `Redbox(resource=tools, operation=search)` 发现。
 
 本计划约定“不做 UI 改造”，且后续也不应新增用户可见的 ToolRegistryPlan / ToolRouter 诊断面板。当前底层已经输出 checkpoint / log / schema；出现问题时通过本地日志、session checkpoint 和 tool result metadata 复盘。
+
+2026-05-04 Codex 对齐补强：
+
+- `tool_search` 已从 `workflow(action="tools.search")` 兼容 action 提升为一等模型工具；常规 runtime 在存在 deferred app action 或 deferred MCP tool 时才暴露它。
+- 旧 `tools.search` action 保留为兼容入口，内部复用同一套搜索实现；ToolRouter 的 deferred 错误现在建议模型调用 `tool_search`。
+- `manuscript-editor` 保持极小工具面，只暴露绑定稿件 `Write`，不会因为 deferred workflow action 自动增加搜索工具。
 
 ## 2. Current Problem
 

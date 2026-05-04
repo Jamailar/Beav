@@ -336,7 +336,7 @@ mod tests {
     fn redclaw_qwen_turns_prefer_non_streaming() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
-            base_url: "https://api.ziz.hk/redbox/v1".to_string(),
+            base_url: "https://api.ziz.hk/thrive/v1".to_string(),
             api_key: Some("rbx-live-1".to_string()),
             model_name: "qwen3.5-plus".to_string(),
             reasoning_effort: None,

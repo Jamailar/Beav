@@ -8,8 +8,11 @@ use crate::{
     payload_field, payload_string, run_curl_json, run_curl_json_response,
 };
 
-pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = "https://api.ziz.hk/redbox/v1";
-const REDBOX_APP_SLUG: &str = "redbox";
+pub(crate) const REDBOX_OFFICIAL_CN_BASE_URL: &str = "https://api.ziz.hk/thrive/v1";
+pub(crate) const REDBOX_OFFICIAL_GLOBAL_BASE_URL: &str = "https://api.thrivingos.com/thrive/v1";
+pub(crate) const REDBOX_OFFICIAL_BASE_URL: &str = REDBOX_OFFICIAL_CN_BASE_URL;
+pub(crate) const REDBOX_OFFICIAL_DEFAULT_REALM: &str = "cn";
+const REDBOX_APP_SLUG: &str = "thrive";
 pub(crate) const REDBOX_AUTH_SESSION_UPDATED_EVENT: &str = "redbox-auth:session-updated";
 pub(crate) const REDBOX_AUTH_DATA_UPDATED_EVENT: &str = "redbox-auth:data-updated";
 const OFFICIAL_HTTP_TIMEOUT_SECONDS: u64 = 15;
@@ -517,6 +520,70 @@ pub(crate) fn official_settings_session(settings: &Value) -> Option<Value> {
         .filter(|value| value.is_object())
 }
 
+pub(crate) fn official_realm_from_settings(settings: &Value) -> String {
+    if let Some(realm) = payload_string(settings, "redbox_official_realm") {
+        let normalized = normalize_official_realm(&realm);
+        if !normalized.is_empty() {
+            return normalized;
+        }
+    }
+    if let Some(base_url) = payload_string(settings, "redbox_official_base_url") {
+        let normalized = base_url.to_lowercase();
+        if normalized.contains("thrivingos.com") {
+            return "global".to_string();
+        }
+    }
+    REDBOX_OFFICIAL_DEFAULT_REALM.to_string()
+}
+
+pub(crate) fn normalize_official_realm(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "cn" | "china" | "mainland" | "zh-cn" | "中国大陆" | "大陆" => "cn".to_string(),
+        "global" | "intl" | "international" | "overseas" | "non-cn" | "海外" | "国际" => {
+            "global".to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+pub(crate) fn official_base_url_for_realm(realm: &str) -> &'static str {
+    match normalize_official_realm(realm).as_str() {
+        "global" => REDBOX_OFFICIAL_GLOBAL_BASE_URL,
+        _ => REDBOX_OFFICIAL_CN_BASE_URL,
+    }
+}
+
+pub(crate) fn official_realm_label(realm: &str) -> &'static str {
+    match normalize_official_realm(realm).as_str() {
+        "global" => "海外账号",
+        _ => "中国大陆账号",
+    }
+}
+
+pub(crate) fn official_realms_payload(active_realm: &str) -> Value {
+    json!([
+        {
+            "id": "cn",
+            "label": official_realm_label("cn"),
+            "baseUrl": REDBOX_OFFICIAL_CN_BASE_URL,
+            "active": normalize_official_realm(active_realm) != "global",
+        },
+        {
+            "id": "global",
+            "label": official_realm_label("global"),
+            "baseUrl": REDBOX_OFFICIAL_GLOBAL_BASE_URL,
+            "active": normalize_official_realm(active_realm) == "global",
+        }
+    ])
+}
+
+fn official_settings_sessions(settings: &Value) -> serde_json::Map<String, Value> {
+    payload_string(settings, "redbox_auth_sessions_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
 pub(crate) fn official_settings_models(settings: &Value) -> Vec<Value> {
     payload_string(settings, "redbox_official_models_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
@@ -535,6 +602,8 @@ pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
             for suffix in [
                 format!("/{REDBOX_APP_SLUG}/v1"),
                 format!("/{REDBOX_APP_SLUG}"),
+                "/redbox/v1".to_string(),
+                "/redbox".to_string(),
                 "/api/v1".to_string(),
                 "/v1".to_string(),
             ] {
@@ -559,6 +628,8 @@ pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
         for suffix in [
             format!("/{REDBOX_APP_SLUG}/v1"),
             format!("/{REDBOX_APP_SLUG}"),
+            "/redbox/v1".to_string(),
+            "/redbox".to_string(),
             "/api/v1".to_string(),
             "/v1".to_string(),
         ] {
@@ -572,7 +643,9 @@ pub(crate) fn official_base_url_from_settings(settings: &Value) -> String {
 
     let configured = payload_string(settings, "redbox_official_base_url")
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string());
+        .unwrap_or_else(|| {
+            official_base_url_for_realm(&official_realm_from_settings(settings)).to_string()
+        });
     format!(
         "{}/{REDBOX_APP_SLUG}/v1",
         normalize_gateway_root(&configured)
@@ -1070,10 +1143,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
                 json!(next_model_name_redclaw),
             );
         }
-        object.insert(
-            "video_endpoint".to_string(),
-            json!(REDBOX_OFFICIAL_BASE_URL),
-        );
+        object.insert("video_endpoint".to_string(), json!(official_base_url));
         object.insert("video_api_key".to_string(), json!(official_video_api_key));
         object.insert("video_model".to_string(), json!("wan2.7-t2v-video"));
         object.insert(
@@ -1257,20 +1327,39 @@ pub(crate) fn official_settings_wechat_login(settings: &Value) -> Option<Value> 
 }
 
 pub(crate) fn upsert_official_settings_session(settings: &mut Value, session: Option<&Value>) {
+    let active_realm = official_realm_from_settings(settings);
+    let active_base_url = official_base_url_from_settings(settings);
+    let mut sessions = official_settings_sessions(settings);
     if let Some(object) = settings.as_object_mut() {
         match session {
             Some(session_value) => {
+                let mut session_value = session_value.clone();
+                if let Some(session_object) = session_value.as_object_mut() {
+                    session_object.insert("realm".to_string(), json!(active_realm.clone()));
+                    session_object.insert(
+                        "realmLabel".to_string(),
+                        json!(official_realm_label(&active_realm)),
+                    );
+                    session_object.insert("baseUrl".to_string(), json!(active_base_url.clone()));
+                }
+                sessions.insert(active_realm.clone(), session_value.clone());
                 object.insert(
                     "redbox_auth_session_json".to_string(),
                     json!(
-                        serde_json::to_string(session_value).unwrap_or_else(|_| "{}".to_string())
+                        serde_json::to_string(&session_value).unwrap_or_else(|_| "{}".to_string())
                     ),
                 );
             }
             None => {
+                sessions.remove(&active_realm);
                 object.insert("redbox_auth_session_json".to_string(), json!(""));
             }
         }
+        object.insert(
+            "redbox_auth_sessions_json".to_string(),
+            json!(serde_json::to_string(&Value::Object(sessions))
+                .unwrap_or_else(|_| "{}".to_string())),
+        );
     }
 }
 

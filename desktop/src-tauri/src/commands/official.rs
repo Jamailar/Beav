@@ -7,22 +7,26 @@ use crate::{
     append_debug_trace_state, auth, create_official_payment_form, emit_redbox_auth_data_updated,
     emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
     normalize_base_url, normalize_official_auth_session, now_iso, now_ms,
-    official_account_summary_local, official_ai_api_key_from_settings,
+    official_account_summary_local, official_ai_api_key_from_settings, official_base_url_for_realm,
     official_base_url_from_settings, official_fallback_products, official_points_snapshot,
-    official_response_items, official_settings_api_keys, official_settings_call_records_list,
-    official_settings_models, official_settings_orders, official_settings_points,
-    official_settings_session, official_settings_wechat_login, official_sync_source_into_settings,
+    official_realm_from_settings, official_realms_payload, official_response_items,
+    official_settings_api_keys, official_settings_call_records_list, official_settings_models,
+    official_settings_orders, official_settings_points, official_settings_session,
+    official_settings_wechat_login, official_sync_source_into_settings,
     official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
     run_official_public_json_request, run_official_public_json_request_response,
     upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
-    AppState, REDBOX_OFFICIAL_BASE_URL,
+    AppState,
 };
 
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
 const OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS: i64 = 5 * 60_000;
 const OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS: i64 = 60_000;
-const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 19] = [
+const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 22] = [
+    "redbox_official_realm",
+    "redbox_official_base_url",
     "redbox_auth_session_json",
+    "redbox_auth_sessions_json",
     "redbox_auth_api_keys_json",
     "redbox_auth_orders_json",
     "redbox_auth_points_json",
@@ -577,6 +581,13 @@ fn session_refresh_token(settings: &Value) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+fn session_refresh_token_app_slug(settings: &Value) -> Option<String> {
+    session_refresh_token(settings).and_then(|token| {
+        auth::jwt_claim_string(&token, "appSlug")
+            .or_else(|| auth::jwt_claim_string(&token, "app_slug"))
+    })
+}
+
 fn session_expires_at(settings: &Value) -> Option<i64> {
     official_settings_session(settings)
         .and_then(|session| session.get("expiresAt").and_then(value_as_i64))
@@ -676,6 +687,41 @@ fn sync_official_route_credentials(settings: &mut Value) {
         object.insert("video_api_key".to_string(), json!(token));
         object.insert("api_endpoint".to_string(), json!(base_url));
     }
+}
+
+fn switch_official_realm(settings: &mut Value, realm: &str) -> Result<(), String> {
+    if official_session_logged_in(settings) {
+        return Err("切换账号区前请先退出当前账号".to_string());
+    }
+
+    let normalized = crate::normalize_official_realm(realm);
+    if normalized.is_empty() {
+        return Err("未知账号区".to_string());
+    }
+
+    let base_url = official_base_url_for_realm(&normalized).to_string();
+    let mut sessions = payload_string(settings, "redbox_auth_sessions_json")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    sessions.remove(&normalized);
+
+    if let Some(object) = settings.as_object_mut() {
+        object.insert("redbox_official_realm".to_string(), json!(normalized));
+        object.insert("redbox_official_base_url".to_string(), json!(base_url));
+        object.insert("redbox_auth_session_json".to_string(), json!(""));
+        object.insert(
+            "redbox_auth_sessions_json".to_string(),
+            json!(serde_json::to_string(&Value::Object(sessions))
+                .unwrap_or_else(|_| "{}".to_string())),
+        );
+        object.insert("redbox_auth_points_json".to_string(), json!(""));
+        object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
+        object.insert("redbox_auth_wechat_login_json".to_string(), json!(""));
+        object.insert("redbox_official_models_json".to_string(), json!("[]"));
+    }
+    sync_official_route_credentials(settings);
+    Ok(())
 }
 
 fn clear_official_source_binding(settings: &mut Value, previous_official_token: &str) {
@@ -944,6 +990,13 @@ fn merge_official_settings(settings: &mut Value, source: &Value) {
 fn refresh_official_auth_session_in_settings(settings: &mut Value) -> Result<Value, String> {
     let refresh_token =
         session_refresh_token(settings).ok_or_else(|| "当前会话缺少 refresh token".to_string())?;
+    if let Some(app_slug) = session_refresh_token_app_slug(settings) {
+        if app_slug != "thrive" {
+            return Err(format!(
+                "旧账号体系登录态不可用于 Thrive，请重新登录。tokenAppSlug={app_slug}"
+            ));
+        }
+    }
     let existing_session = official_settings_session(settings);
     let request_candidates = [
         (
@@ -1667,6 +1720,7 @@ pub fn handle_official_channel(
     let request_generation = auth::auth_generation(state).ok();
     let result = match channel {
         "redbox-auth:get-config"
+        | "redbox-auth:set-realm"
         | "redbox-auth:bootstrap"
         | "redbox-auth:get-session-cached"
         | "redbox-auth:get-session"
@@ -1700,12 +1754,40 @@ pub fn handle_official_channel(
         | "official:billing:create-order"
         | "official:billing:list-calls" => (|| -> Result<Value, String> {
             match channel {
-                "redbox-auth:get-config" => Ok(json!({
-                    "success": true,
-                    "gatewayBase": "https://api.ziz.hk",
-                    "appSlug": "redbox",
-                    "defaultWechatState": "redconvert-desktop",
-                })),
+                "redbox-auth:get-config" => with_store(state, |store| {
+                    let active_realm = official_realm_from_settings(&store.settings);
+                    Ok(json!({
+                        "success": true,
+                        "gatewayBase": official_base_url_from_settings(&store.settings),
+                        "appSlug": "thrive",
+                        "activeRealm": active_realm.clone(),
+                        "realms": official_realms_payload(&active_realm),
+                        "defaultWechatState": "redconvert-desktop",
+                    }))
+                }),
+                "redbox-auth:set-realm" => {
+                    let realm = payload_string(payload, "realm").unwrap_or_default();
+                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
+                    let mut settings = settings_snapshot.clone();
+                    switch_official_realm(&mut settings, &realm)?;
+                    apply_official_settings_update(
+                        app,
+                        state,
+                        &settings,
+                        "official-realm-switch",
+                        Some(json!({
+                            "realm": official_realm_from_settings(&settings),
+                            "realms": official_realms_payload(&official_realm_from_settings(&settings)),
+                        })),
+                        None,
+                    )?;
+                    Ok(json!({
+                        "success": true,
+                        "activeRealm": official_realm_from_settings(&settings),
+                        "realms": official_realms_payload(&official_realm_from_settings(&settings)),
+                        "session": official_settings_session(&settings),
+                    }))
+                }
                 "redbox-auth:get-session-cached" => with_store(state, |store| {
                     Ok(json!({
                         "success": true,
@@ -2781,7 +2863,7 @@ pub fn handle_official_channel(
                             "id": make_id("official-order"),
                             "status": "PENDING",
                             "trade_status": "PENDING",
-                            "payment_url": REDBOX_OFFICIAL_BASE_URL,
+                            "payment_url": official_base_url_from_settings(&settings),
                             "amount": amount.unwrap_or(0.0),
                             "product_id": product_id,
                             "created_at": now_iso(),
@@ -3030,7 +3112,7 @@ mod tests {
 
         assert_eq!(
             payload_string(&settings, "api_endpoint").as_deref(),
-            Some("https://api.ziz.hk/redbox/v1")
+            Some("https://api.ziz.hk/thrive/v1")
         );
         assert_eq!(
             payload_string(&settings, "api_key").as_deref(),
@@ -3044,7 +3126,7 @@ mod tests {
                 .first()
                 .and_then(|item| payload_string(item, "baseURL"))
                 .as_deref(),
-            Some("https://api.ziz.hk/redbox/v1")
+            Some("https://api.ziz.hk/thrive/v1")
         );
         assert_eq!(
             sources
@@ -3052,6 +3134,71 @@ mod tests {
                 .and_then(|item| payload_string(item, "apiKey"))
                 .as_deref(),
             Some("rbx-live-1")
+        );
+    }
+
+    #[test]
+    fn switch_official_realm_sets_global_endpoint_without_reusing_cn_session() {
+        let mut settings = json!({
+            "redbox_official_realm": "cn",
+            "redbox_official_base_url": "https://api.ziz.hk",
+            "redbox_auth_session_json": "",
+            "api_endpoint": "https://api.ziz.hk/thrive/v1",
+            "api_key": "",
+        });
+
+        switch_official_realm(&mut settings, "global").expect("switch realm");
+
+        assert_eq!(
+            payload_string(&settings, "redbox_official_realm").as_deref(),
+            Some("global")
+        );
+        assert_eq!(
+            payload_string(&settings, "redbox_official_base_url").as_deref(),
+            Some("https://api.thrivingos.com/thrive/v1")
+        );
+        assert_eq!(
+            payload_string(&settings, "api_endpoint").as_deref(),
+            Some("https://api.thrivingos.com/thrive/v1")
+        );
+        assert!(official_settings_session(&settings).is_none());
+    }
+
+    #[test]
+    fn switch_official_realm_requires_logout() {
+        let mut settings = json!({
+            "redbox_official_realm": "cn",
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "accessToken": "access-1",
+                "refreshToken": "refresh-1",
+            }))
+            .unwrap(),
+        });
+
+        assert!(switch_official_realm(&mut settings, "global").is_err());
+        assert_eq!(
+            payload_string(&settings, "redbox_official_realm").as_deref(),
+            Some("cn")
+        );
+    }
+
+    #[test]
+    fn refresh_official_auth_rejects_legacy_redbox_refresh_token_before_http() {
+        let token = "header.eyJhcHBTbHVnIjoicmVkYm94IiwidHlwZSI6InJlZnJlc2gifQ.signature";
+        let mut settings = json!({
+            "redbox_official_realm": "cn",
+            "redbox_auth_session_json": serde_json::to_string(&json!({
+                "refreshToken": token,
+            }))
+            .unwrap(),
+        });
+
+        let error = refresh_official_auth_session_in_settings(&mut settings)
+            .expect_err("legacy token should be rejected locally");
+        assert!(error.contains("旧账号体系登录态不可用于 Thrive"));
+        assert_eq!(
+            session_refresh_token_app_slug(&settings).as_deref(),
+            Some("redbox")
         );
     }
 
@@ -3068,7 +3215,7 @@ mod tests {
                     "id": "redbox_official_auto",
                     "name": "RedBox Official",
                     "presetId": "redbox-official",
-                    "baseURL": "https://api.ziz.hk/redbox/v1",
+                    "baseURL": "https://api.ziz.hk/thrive/v1",
                     "apiKey": "",
                     "model": "qwen3.5-plus",
                     "models": ["qwen3.5-plus"],
@@ -3094,7 +3241,7 @@ mod tests {
             }))
             .unwrap(),
             "default_ai_source_id": "redbox_official_auto",
-            "api_endpoint": "https://api.ziz.hk/redbox/v1",
+            "api_endpoint": "https://api.ziz.hk/thrive/v1",
             "api_key": "official-key",
             "model_name": "gpt-5.5",
             "model_name_wander": "",
@@ -3108,7 +3255,7 @@ mod tests {
                 "id": "redbox_official_auto",
                 "name": "RedBox Official",
                 "presetId": "redbox-official",
-                "baseURL": "https://api.ziz.hk/redbox/v1",
+                "baseURL": "https://api.ziz.hk/thrive/v1",
                 "apiKey": "official-key",
                 "model": "gpt-5.5",
                 "models": ["gpt-5.5"],
@@ -3205,7 +3352,7 @@ mod tests {
                     "id": "redbox_official_auto",
                     "name": "RedBox Official",
                     "presetId": "redbox-official",
-                    "baseURL": "https://api.ziz.hk/redbox/v1",
+                    "baseURL": "https://api.ziz.hk/thrive/v1",
                     "apiKey": "official-token",
                     "models": ["qwen3.5-plus"],
                     "modelsMeta": [{ "id": "qwen3.5-plus" }],
@@ -3225,7 +3372,7 @@ mod tests {
             ])
             .unwrap(),
             "default_ai_source_id": "redbox_official_auto",
-            "api_endpoint": "https://api.ziz.hk/redbox/v1",
+            "api_endpoint": "https://api.ziz.hk/thrive/v1",
             "api_key": "official-token",
             "model_name": "qwen3.5-plus",
             "video_api_key": "official-token",

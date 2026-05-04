@@ -599,6 +599,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.contains(&"mcp__demo__read"));
+        assert!(names.contains(&"tool_search"));
         assert!(names.contains(&"list_mcp_resources"));
         assert!(names.contains(&"list_mcp_resource_templates"));
         assert!(names.contains(&"read_mcp_resource"));

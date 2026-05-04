@@ -296,6 +296,15 @@ pub(crate) fn jwt_expiration_ms(token: &str) -> Option<i64> {
         .map(|value| value.saturating_mul(1000))
 }
 
+pub(crate) fn jwt_claim_string(token: &str, key: &str) -> Option<String> {
+    let mut segments = token.split('.');
+    let _header = segments.next()?;
+    let payload = segments.next()?;
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let payload = serde_json::from_slice::<Value>(&decoded).ok()?;
+    payload_string(&payload, key).filter(|value| !value.trim().is_empty())
+}
+
 pub(crate) fn classify_auth_error(error: &str) -> AuthErrorKind {
     let normalized = error.trim().to_lowercase();
     if normalized.contains("invalid_grant")
@@ -306,6 +315,8 @@ pub(crate) fn classify_auth_error(error: &str) -> AuthErrorKind {
         || normalized.contains("账号已禁用")
         || normalized.contains("invalid refresh token")
         || normalized.contains("refresh token invalid")
+        || normalized.contains("旧账号体系")
+        || normalized.contains("legacy account realm")
     {
         return AuthErrorKind::ReauthRequired;
     }

@@ -63,6 +63,8 @@ const WRITE_DESCRIPTION: &str =
     "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
 const REDBOX_DESCRIPTION: &str =
     "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
+const TOOL_SEARCH_DESCRIPTION: &str =
+    "Search deferred workflow actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "team",
     "default",
@@ -748,6 +750,17 @@ fn tools_search_input_schema() -> Value {
         &[],
         None,
     )
+}
+
+fn tool_search_schema() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "tool_search",
+            "description": TOOL_SEARCH_DESCRIPTION,
+            "parameters": tools_search_input_schema()
+        }
+    })
 }
 
 fn team_session_create_input_schema() -> Value {
@@ -3425,6 +3438,14 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             concurrency_safe: false,
             output_budget_chars: 20_000,
         }),
+        "tool_search" => Some(ToolDescriptor {
+            name: "tool_search",
+            description: TOOL_SEARCH_DESCRIPTION,
+            kind: ToolKind::RuntimeControl,
+            requires_approval: false,
+            concurrency_safe: true,
+            output_budget_chars: 24_000,
+        }),
         "workflow" => Some(ToolDescriptor {
             name: "workflow",
             description: APP_CLI_DESCRIPTION,
@@ -3599,6 +3620,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             }
         })),
         "Operate" => Some(redbox_tool_schema(None)),
+        "tool_search" => Some(tool_search_schema()),
         "workflow" => Some(build_action_tool_schema(
             "workflow",
             APP_CLI_DESCRIPTION,
@@ -3870,6 +3892,7 @@ pub fn schema_for_tool_from_action_descriptors(
             descriptors,
         )),
         "Operate" => Some(redbox_tool_schema(Some(descriptors))),
+        "tool_search" => Some(tool_search_schema()),
         _ => None,
     }
 }

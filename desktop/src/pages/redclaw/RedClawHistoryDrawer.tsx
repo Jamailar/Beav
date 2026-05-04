@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { History, Loader2, MoreHorizontal, Pin, Plus, Trash2, Users, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ChevronRight, FileText, Folder, FolderOpen, History, Loader2, MoreHorizontal, Pin, Plus, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { REDCLAW_DISPLAY_NAME } from './config';
 
@@ -21,6 +21,18 @@ export interface RedClawHistoryListItem extends ContextChatSessionListItem {
 
 export type RedClawHistorySessionActivity = 'running' | 'unread-complete';
 
+type RedClawSidebarTab = 'chat' | 'manuscripts';
+
+type RedClawManuscriptNode = {
+    name: string;
+    path: string;
+    isDirectory: boolean;
+    children?: RedClawManuscriptNode[];
+    title?: string;
+    draftType?: string;
+    updatedAt?: number;
+};
+
 function displaySessionTitle(title: string, surface: RedClawHistorySurface): string {
     if (surface !== 'redclaw') return title;
     return title.replace(/^RedClaw(\s*·\s*)/, `${REDCLAW_DISPLAY_NAME}$1`);
@@ -40,6 +52,7 @@ interface RedClawHistorySidebarSectionProps {
     onSwitchSession: (session: RedClawHistoryListItem) => void;
     onDeleteSession: (session: RedClawHistoryListItem) => void | Promise<void>;
     onRenameSession?: (session: RedClawHistoryListItem, title: string) => void | Promise<void>;
+    onOpenManuscript?: (filePath: string) => void;
 }
 
 const PINNED_ROOM_IDS_STORAGE_KEY = 'redbox:redclaw:pinned-room-ids:v1';
@@ -65,6 +78,20 @@ function writePinnedIds(storageKey: string, ids: string[]): void {
     window.localStorage.setItem(storageKey, JSON.stringify(ids));
 }
 
+function manuscriptNodeLabel(node: RedClawManuscriptNode): string {
+    return String(node.title || node.name || '未命名稿件').trim();
+}
+
+function sortManuscriptNodes(nodes: RedClawManuscriptNode[]): RedClawManuscriptNode[] {
+    return [...nodes].sort((left, right) => {
+        if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
+        const leftUpdated = Number(left.updatedAt || 0);
+        const rightUpdated = Number(right.updatedAt || 0);
+        if (!left.isDirectory && rightUpdated !== leftUpdated) return rightUpdated - leftUpdated;
+        return manuscriptNodeLabel(left).localeCompare(manuscriptNodeLabel(right), 'zh-Hans-CN');
+    });
+}
+
 export function RedClawHistorySidebarSection({
     historyLoading,
     sessionList,
@@ -79,7 +106,9 @@ export function RedClawHistorySidebarSection({
     onSwitchSession,
     onDeleteSession,
     onRenameSession,
+    onOpenManuscript,
 }: RedClawHistorySidebarSectionProps) {
+    const [activeTab, setActiveTab] = useState<RedClawSidebarTab>('chat');
     const [renameTarget, setRenameTarget] = useState<RedClawHistoryListItem | null>(null);
     const [renameTitle, setRenameTitle] = useState('');
     const [renameError, setRenameError] = useState('');
@@ -87,7 +116,13 @@ export function RedClawHistorySidebarSection({
     const [menuTarget, setMenuTarget] = useState<HistoryItemMenuTarget | null>(null);
     const [pinnedRoomIds, setPinnedRoomIds] = useState<string[]>(() => readPinnedIds(PINNED_ROOM_IDS_STORAGE_KEY));
     const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => readPinnedIds(PINNED_SESSION_IDS_STORAGE_KEY));
+    const [manuscriptTree, setManuscriptTree] = useState<RedClawManuscriptNode[]>([]);
+    const [manuscriptsLoading, setManuscriptsLoading] = useState(false);
+    const [manuscriptsLoaded, setManuscriptsLoaded] = useState(false);
+    const [manuscriptsError, setManuscriptsError] = useState('');
+    const [expandedManuscriptPaths, setExpandedManuscriptPaths] = useState<Set<string>>(() => new Set());
     const renameInputRef = useRef<HTMLInputElement | null>(null);
+    const manuscriptRequestIdRef = useRef(0);
 
     const pinnedRoomIdSet = useMemo(() => new Set(pinnedRoomIds), [pinnedRoomIds]);
     const pinnedSessionIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
@@ -127,6 +162,98 @@ export function RedClawHistorySidebarSection({
             window.removeEventListener('keydown', closeMenu);
         };
     }, [menuTarget]);
+
+    const loadManuscripts = useCallback(async () => {
+        const requestId = ++manuscriptRequestIdRef.current;
+        setManuscriptsLoading(true);
+        setManuscriptsError('');
+        try {
+            const tree = await window.ipcRenderer.invoke('manuscripts:list') as RedClawManuscriptNode[];
+            if (requestId !== manuscriptRequestIdRef.current) return;
+            const items = Array.isArray(tree) ? tree : [];
+            setManuscriptTree(items);
+            setManuscriptsLoaded(true);
+            setExpandedManuscriptPaths((current) => {
+                if (current.size > 0) return current;
+                const next = new Set<string>();
+                items.filter((item) => item.isDirectory).slice(0, 8).forEach((item) => next.add(item.path));
+                return next;
+            });
+        } catch (error) {
+            if (requestId !== manuscriptRequestIdRef.current) return;
+            console.error('Failed to load RedClaw manuscript tree:', error);
+            setManuscriptsError(error instanceof Error ? error.message : '稿件加载失败');
+            setManuscriptsLoaded(true);
+        } finally {
+            if (requestId === manuscriptRequestIdRef.current) {
+                setManuscriptsLoading(false);
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        if (activeTab !== 'manuscripts' || manuscriptsLoaded || manuscriptsLoading) return;
+        void loadManuscripts();
+    }, [activeTab, loadManuscripts, manuscriptsLoaded, manuscriptsLoading]);
+
+    const toggleManuscriptFolder = (path: string) => {
+        setExpandedManuscriptPaths((current) => {
+            const next = new Set(current);
+            if (next.has(path)) {
+                next.delete(path);
+            } else {
+                next.add(path);
+            }
+            return next;
+        });
+    };
+
+    const renderManuscriptNode = (node: RedClawManuscriptNode, depth = 0): ReactNode => {
+        const label = manuscriptNodeLabel(node);
+        const childNodes = sortManuscriptNodes(node.children || []);
+        const expanded = expandedManuscriptPaths.has(node.path);
+        const indentation = Math.min(depth, 4) * 12;
+
+        if (node.isDirectory) {
+            return (
+                <div key={node.path || label}>
+                    <button
+                        type="button"
+                        onClick={() => toggleManuscriptFolder(node.path)}
+                        className="group flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary"
+                        style={{ paddingLeft: 8 + indentation }}
+                    >
+                        <ChevronRight className={clsx('h-3.5 w-3.5 shrink-0 text-text-tertiary transition-transform', expanded && 'rotate-90')} />
+                        {expanded ? (
+                            <FolderOpen className="h-4 w-4 shrink-0 text-text-tertiary group-hover:text-text-secondary" />
+                        ) : (
+                            <Folder className="h-4 w-4 shrink-0 text-text-tertiary group-hover:text-text-secondary" />
+                        )}
+                        <span className="min-w-0 flex-1 truncate">{label}</span>
+                    </button>
+                    {expanded && childNodes.length > 0 && (
+                        <div className="mt-0.5 space-y-0.5">
+                            {childNodes.map((child) => renderManuscriptNode(child, depth + 1))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        return (
+            <button
+                key={node.path || label}
+                type="button"
+                onClick={() => onOpenManuscript?.(node.path)}
+                className="group flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary"
+                style={{ paddingLeft: 28 + indentation }}
+                title={label}
+            >
+                <FileText className="h-4 w-4 shrink-0 text-text-tertiary group-hover:text-text-secondary" />
+                <span className="min-w-0 flex-1 truncate">{label}</span>
+            </button>
+        );
+    };
 
     const togglePinnedRoom = (roomId: string) => {
         setPinnedRoomIds((current) => {
@@ -187,11 +314,52 @@ export function RedClawHistorySidebarSection({
 
     return (
         <div className="flex h-full min-h-0 flex-col overflow-hidden border-t border-border/70 pt-3">
-            <div className="mb-3 px-3">
-                <h2 className="text-[12px] font-bold text-text-secondary">对话</h2>
+            <div className="mb-3 flex items-end gap-0.5 border-b border-border/70 px-3">
+                {[
+                    { id: 'chat' as const, label: '对话' },
+                    { id: 'manuscripts' as const, label: '稿件' },
+                ].map((tab) => (
+                    <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => {
+                            setMenuTarget(null);
+                            setActiveTab(tab.id);
+                        }}
+                        aria-pressed={activeTab === tab.id}
+                        className={clsx(
+                            'relative -mb-px h-8 px-3 text-[12px] font-bold transition-[background-color,border-color,color,box-shadow,transform]',
+                            activeTab === tab.id
+                                ? 'rounded-t-lg border border-border/70 border-b-surface-primary bg-surface-primary text-text-primary shadow-[0_-1px_0_rgba(255,255,255,0.7),0_2px_8px_rgba(15,23,42,0.04)]'
+                                : 'rounded-t-lg border border-transparent text-text-tertiary hover:bg-surface-secondary/60 hover:text-text-secondary'
+                        )}
+                    >
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 custom-scrollbar">
+            <div className="min-h-0 flex-1 overflow-y-auto px-2 custom-scrollbar">
+                {activeTab === 'manuscripts' ? (
+                    <div className="space-y-0.5 pb-6">
+                        {manuscriptsLoading && manuscriptTree.length === 0 ? (
+                            <div className="flex h-full items-center justify-center py-10">
+                                <Loader2 className="w-5 h-5 animate-spin text-accent-primary/50" />
+                            </div>
+                        ) : manuscriptsError && manuscriptTree.length === 0 ? (
+                            <div className="mx-3 rounded-lg border border-dashed border-border/80 px-3 py-3 text-center text-[11px] text-text-tertiary">
+                                稿件加载失败
+                            </div>
+                        ) : manuscriptTree.length === 0 ? (
+                            <div className="mx-3 rounded-lg border border-dashed border-border/80 px-3 py-3 text-center text-[11px] text-text-tertiary">
+                                暂无稿件
+                            </div>
+                        ) : (
+                            sortManuscriptNodes(manuscriptTree).map((node) => renderManuscriptNode(node))
+                        )}
+                    </div>
+                ) : (
+                    <>
                 <div className="mb-3 border-b border-border/70 pb-3">
                     <div className="mb-1.5 flex items-center justify-between px-3">
                         <span className="text-[11px] font-bold text-text-tertiary">团队</span>
@@ -374,8 +542,26 @@ export function RedClawHistorySidebarSection({
                                     )}
 
                                     <div className="flex items-center justify-between gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+                                                togglePinnedSession(session.id);
+                                            }}
+                                            className={clsx(
+                                                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition hover:bg-surface-secondary hover:text-text-primary',
+                                                isPinned
+                                                    ? 'text-accent-primary opacity-100'
+                                                    : 'text-text-tertiary opacity-0 group-hover:opacity-100'
+                                            )}
+                                            title={isPinned ? '取消置顶' : '置顶'}
+                                            aria-label={isPinned ? '取消置顶' : '置顶'}
+                                        >
+                                            <Pin className="h-3.5 w-3.5" />
+                                        </button>
                                         <h4 className={clsx(
-                                            'min-w-0 flex-1 truncate pr-14 text-[13px] font-bold leading-tight transition-colors',
+                                            'min-w-0 flex-1 truncate pr-8 text-[13px] font-bold leading-tight transition-colors',
                                             isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
                                         )}>
                                             {title}
@@ -405,15 +591,6 @@ export function RedClawHistorySidebarSection({
                                                 <>
                                                     <button
                                                         type="button"
-                                                        onClick={() => togglePinnedSession(session.id)}
-                                                        className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
-                                                        title={isPinned ? '取消置顶' : '置顶'}
-                                                        aria-label={isPinned ? '取消置顶' : '置顶'}
-                                                    >
-                                                        <Pin className="h-3.5 w-3.5" />
-                                                    </button>
-                                                    <button
-                                                        type="button"
                                                         onClick={() => {
                                                             setMenuTarget(null);
                                                             void onDeleteSession(session);
@@ -427,18 +604,6 @@ export function RedClawHistorySidebarSection({
                                                 </>
                                             ) : (
                                                 <>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => togglePinnedSession(session.id)}
-                                                        className={clsx(
-                                                            'flex h-6 w-6 items-center justify-center rounded-md hover:bg-surface-secondary hover:text-text-primary',
-                                                            isPinned ? 'text-accent-primary opacity-100' : 'text-text-tertiary'
-                                                        )}
-                                                        title={isPinned ? '取消置顶' : '置顶'}
-                                                        aria-label={isPinned ? '取消置顶' : '置顶'}
-                                                    >
-                                                        <Pin className="h-3.5 w-3.5" />
-                                                    </button>
                                                     <button
                                                         type="button"
                                                         onClick={(e) => {
@@ -460,6 +625,8 @@ export function RedClawHistorySidebarSection({
                             );
                         })}
                     </div>
+                )}
+                    </>
                 )}
             </div>
             {renameTarget && (

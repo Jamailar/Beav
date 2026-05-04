@@ -1,14 +1,19 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
-import { Link2, Loader2 } from 'lucide-react';
+import { Link2, Loader2, ShieldCheck } from 'lucide-react';
+import QRCode from 'qrcode';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
+import { useOfficialAuthState } from './hooks/useOfficialAuthState';
 import { NotificationsHost } from './notifications/NotificationsHost';
 import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
 import { RedClawOnboardingFlowHost } from './pages/redclaw/RedClawOnboardingFlowHost';
 import { useI18n } from './i18n';
+import { APP_BRAND } from './config/brand';
+import googleIcon from './assets/auth/google.svg';
+import wechatIcon from './assets/auth/wechat.svg';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
 import { uiTraceInteraction } from './utils/uiDebug';
 
@@ -293,9 +298,8 @@ function clearStaleOfficialAuthSnapshots(): boolean {
   return cleared;
 }
 
-function App() {
+function AuthenticatedApp() {
   const { t } = useI18n();
-  useOfficialAuthLifecycle();
 
   const [currentView, setCurrentView] = useState<ViewType>('home');
   const [immersiveMode, setImmersiveMode] = useState<ImmersiveMode>(false);
@@ -303,6 +307,7 @@ function App() {
   const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
+  const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['home']));
   const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
@@ -333,6 +338,22 @@ function App() {
     nextMounted.add(currentView);
     setMountedViews(nextMounted);
   }, [currentView]);
+
+  const openSubjectsModal = useCallback(() => {
+    setSubjectsModalOpen(true);
+  }, []);
+
+  const closeSubjectsModal = useCallback(() => {
+    setSubjectsModalOpen(false);
+  }, []);
+
+  const navigateToView = useCallback((view: ViewType) => {
+    if (view === 'subjects') {
+      openSubjectsModal();
+      return;
+    }
+    setCurrentView(view);
+  }, [openSubjectsModal]);
 
   useEffect(() => {
     let mounted = true;
@@ -421,14 +442,25 @@ function App() {
           nonce: Date.now(),
         });
       }
-      setCurrentView(nextView);
+      navigateToView(nextView);
     };
 
     window.addEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
     return () => {
       window.removeEventListener(REDBOX_NAVIGATE_EVENT, handleNavigate as EventListener);
     };
-  }, []);
+  }, [navigateToView]);
+
+  useEffect(() => {
+    if (!subjectsModalOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSubjectsModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [subjectsModalOpen]);
 
   useEffect(() => {
     const openedSessionIds = new Set<string>();
@@ -669,7 +701,7 @@ function App() {
         || startupMigration.status === 'pending'
       ),
   );
-  const effectiveImmersiveMode: ImmersiveMode = currentView === 'subjects' ? 'theme' : immersiveMode;
+  const effectiveImmersiveMode: ImmersiveMode = immersiveMode;
 
   const handleStartStartupMigration = useCallback(async () => {
     setStartupMigrationBusy(true);
@@ -700,11 +732,12 @@ function App() {
     <>
       <Layout
         currentView={currentView}
-        onNavigate={setCurrentView}
+        onNavigate={navigateToView}
         immersiveMode={effectiveImmersiveMode}
         hideGlobalSidebar={currentView === 'settings'}
         globalNotice={globalAuthNotice}
         globalSidebarContent={redClawGlobalSidebarContent}
+        activeModalView={subjectsModalOpen ? 'subjects' : undefined}
         renderTitleBarContent={({ currentView }) => {
           if (currentView === 'wander') return wanderTitleBarContent;
           if (currentView === 'knowledge') return knowledgeTitleBarContent;
@@ -787,16 +820,6 @@ function App() {
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 onGlobalSidebarContentChange={setRedClawGlobalSidebarContent}
                 onOpenChatSurface={() => setCurrentView('redclaw')}
-              />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'subjects') && (
-          <div className={currentView === 'subjects' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'subjects' ? <ViewLoadingFallback /> : null}>
-              <SubjectsPage
-                isActive={currentView === 'subjects'}
-                onReturnHome={() => setCurrentView('home')}
               />
             </Suspense>
           </div>
@@ -890,6 +913,29 @@ function App() {
           </div>
         </div>
       )}
+      {subjectsModalOpen && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/35 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="资产库"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeSubjectsModal();
+            }
+          }}
+        >
+          <div className="h-[min(860px,calc(100vh-48px))] w-[min(1180px,calc(100vw-40px))] overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <SubjectsPage
+                isActive={subjectsModalOpen}
+                variant="modal"
+                onClose={closeSubjectsModal}
+              />
+            </Suspense>
+          </div>
+        </div>
+      )}
       <StartupMigrationModal
         open={shouldShowStartupMigration}
         state={startupMigration}
@@ -905,11 +951,287 @@ function App() {
           setRedclawOnboardingVersion((value) => value + 1);
         }}
       />
-      <FirstRunTour currentView={currentView} onNavigate={setCurrentView} />
+      <FirstRunTour currentView={currentView} onNavigate={navigateToView} />
       <NotificationsHost currentView={currentView} />
       <AppDialogsHost />
     </>
   );
+}
+
+type OfficialAuthGateMode = 'checking' | 'login' | 'expired';
+type LoginNoticeType = 'idle' | 'success' | 'error';
+
+function isOfficialAuthLoggedIn(
+  snapshot: Awaited<ReturnType<typeof window.ipcRenderer.auth.getState>> | null,
+  bootstrapped: boolean,
+): boolean {
+  if (!bootstrapped || !snapshot?.loggedIn) return false;
+  const status = String(snapshot.status || '').trim();
+  return status !== 'anonymous'
+    && status !== 'reauthRequired'
+    && status !== 'restoring'
+    && status !== 'refreshing';
+}
+
+function isLikelyImageUrl(value: string): boolean {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized.startsWith('data:image/')
+    || normalized.startsWith('blob:')
+    || /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?(#.*)?$/i.test(normalized);
+}
+
+async function buildWechatQrDataUrl(value: string): Promise<string> {
+  const content = String(value || '').trim();
+  if (!content) {
+    throw new Error('二维码内容为空');
+  }
+  if (isLikelyImageUrl(content)) {
+    return content;
+  }
+  return QRCode.toDataURL(content, {
+    errorCorrectionLevel: 'M',
+    margin: 1,
+    width: 420,
+    color: {
+      dark: '#111827',
+      light: '#ffffff',
+    },
+  });
+}
+
+function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
+  const [wechatBusy, setWechatBusy] = useState(false);
+  const [wechatQrUrl, setWechatQrUrl] = useState('');
+  const [wechatStatus, setWechatStatus] = useState('');
+  const [notice, setNotice] = useState('');
+  const [noticeType, setNoticeType] = useState<LoginNoticeType>('idle');
+  const wechatSessionIdRef = useRef('');
+  const wechatPollTimerRef = useRef<number | null>(null);
+  const wechatPollTokenRef = useRef(0);
+
+  const setLoginNotice = useCallback((type: LoginNoticeType, message: string) => {
+    setNoticeType(type);
+    setNotice(message);
+  }, []);
+
+  const refreshAuthAfterLogin = useCallback(() => {
+    void window.ipcRenderer.officialAuth.bootstrap({ reason: 'login-gate-authenticated' });
+  }, []);
+
+  const stopWechatPolling = useCallback(() => {
+    wechatPollTokenRef.current += 1;
+    if (wechatPollTimerRef.current !== null) {
+      window.clearTimeout(wechatPollTimerRef.current);
+      wechatPollTimerRef.current = null;
+    }
+  }, []);
+
+  const pollWechatStatus = useCallback((sessionId: string, token: number) => {
+    const run = async () => {
+      if (wechatPollTokenRef.current !== token) return;
+      try {
+        const result = await window.ipcRenderer.invoke('redbox-auth:wechat-status', { sessionId }) as {
+          success?: boolean;
+          data?: {
+            status?: string;
+            session?: unknown;
+          };
+          error?: string;
+        };
+        if (!result?.success) {
+          throw new Error(result?.error || '微信登录状态检查失败');
+        }
+
+        const nextStatus = String(result.data?.status || '').toUpperCase();
+        setWechatStatus(nextStatus);
+        if (nextStatus === 'CONFIRMED') {
+          stopWechatPolling();
+          setLoginNotice('success', '登录成功，正在进入工作台…');
+          refreshAuthAfterLogin();
+          return;
+        }
+        if (nextStatus === 'EXPIRED' || nextStatus === 'FAILED') {
+          stopWechatPolling();
+          setLoginNotice('error', nextStatus === 'EXPIRED' ? '二维码已过期，请重新获取。' : '微信登录失败，请重试。');
+          return;
+        }
+      } catch (error) {
+        setWechatStatus('FAILED');
+        setLoginNotice('error', error instanceof Error ? error.message : '微信登录状态检查失败');
+      }
+
+      if (wechatPollTokenRef.current === token) {
+        wechatPollTimerRef.current = window.setTimeout(run, 900);
+      }
+    };
+
+    wechatPollTimerRef.current = window.setTimeout(run, 300);
+  }, [refreshAuthAfterLogin, setLoginNotice, stopWechatPolling]);
+
+  useEffect(() => {
+    return () => stopWechatPolling();
+  }, [stopWechatPolling]);
+
+  const startWechatLogin = useCallback(async () => {
+    setWechatBusy(true);
+    stopWechatPolling();
+    try {
+      const result = await window.ipcRenderer.invoke('redbox-auth:wechat-url', { state: 'redconvert-desktop' }) as {
+        success?: boolean;
+        data?: {
+          sessionId?: string;
+          qrContentUrl?: string;
+          url?: string;
+        };
+        error?: string;
+      };
+      if (!result?.success || !result.data) {
+        throw new Error(result?.error || '微信登录初始化失败');
+      }
+      const sessionId = String(result.data.sessionId || '').trim();
+      const qrContent = String(result.data.qrContentUrl || result.data.url || '').trim();
+      if (!sessionId || !qrContent) {
+        throw new Error('微信登录二维码数据不完整');
+      }
+      const qrUrl = await buildWechatQrDataUrl(qrContent);
+      wechatSessionIdRef.current = sessionId;
+      setWechatQrUrl(qrUrl);
+      setWechatStatus('PENDING');
+      setLoginNotice('idle', '');
+      const token = wechatPollTokenRef.current + 1;
+      wechatPollTokenRef.current = token;
+      pollWechatStatus(sessionId, token);
+    } catch (error) {
+      setWechatStatus('');
+      setWechatQrUrl('');
+      setLoginNotice('error', error instanceof Error ? error.message : '微信登录初始化失败');
+    } finally {
+      setWechatBusy(false);
+    }
+  }, [pollWechatStatus, setLoginNotice, stopWechatPolling]);
+
+  const startGoogleLogin = useCallback(() => {
+    setLoginNotice('error', 'Google 登录通道尚未接入。');
+  }, [setLoginNotice]);
+
+  const title = mode === 'checking'
+    ? 'Checking session'
+    : 'Welcome back';
+  const subtitle = mode === 'checking'
+    ? `Restoring ${APP_BRAND.displayName}.`
+    : mode === 'expired'
+      ? 'Your session expired. Log in to continue.'
+      : `Log in to continue to ${APP_BRAND.displayName}.`;
+
+  return (
+    <>
+      <div className="min-h-screen overflow-hidden bg-[#f7fbfb] text-slate-950">
+        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_85%,rgba(80,215,191,0.26),transparent_34%),radial-gradient(circle_at_32%_45%,rgba(158,230,207,0.18),transparent_28%),linear-gradient(135deg,#f9fbfb_0%,#ffffff_52%,#f6faf9_100%)]" />
+        <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[1fr_520px]">
+          <section className="hidden lg:flex min-h-screen flex-col justify-center px-[11vw]">
+            <div className="relative h-[420px] w-[360px]">
+              <img
+                src={APP_BRAND.logoSrc}
+                alt=""
+                className="absolute left-0 top-0 h-[300px] w-[300px] object-contain opacity-20 blur-[1px]"
+              />
+              <div className="absolute left-10 bottom-0 flex items-center gap-3">
+                <img src={APP_BRAND.logoSrc} alt="" className="h-9 w-9 object-contain" />
+                <div className="text-4xl font-semibold tracking-[0]">{APP_BRAND.displayName}</div>
+              </div>
+            </div>
+            <p className="mt-3 max-w-[340px] text-[19px] leading-8 text-slate-700">
+              The AI content workspace that helps your ideas <span className="font-semibold text-emerald-500">thrive.</span>
+            </p>
+            <div className="absolute bottom-10 left-12 flex items-center gap-2 text-xs text-slate-500">
+              <ShieldCheck className="h-4 w-4 text-emerald-500" />
+              Your data is encrypted and secure.
+            </div>
+          </section>
+
+          <main className="flex min-h-screen items-center justify-center px-6 py-8 lg:justify-start lg:px-0">
+            <div className="w-full max-w-[432px]">
+              <div className="mb-10 text-center lg:text-left">
+                <h1 className="text-4xl font-semibold tracking-[0] text-slate-950">{title}</h1>
+                <p className="mt-3 text-base text-slate-500">{subtitle}</p>
+              </div>
+
+          {mode === 'checking' ? (
+                <div className="flex h-52 items-center justify-center rounded-2xl border border-slate-200/80 bg-white/70 text-slate-500 shadow-sm">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  正在恢复账号
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  <button
+                    type="button"
+                    onClick={startGoogleLogin}
+                    disabled={wechatBusy}
+                    className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                  >
+                    <img src={googleIcon} alt="" className="h-5 w-5" />
+                    Continue with Google
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void startWechatLogin()}
+                    disabled={wechatBusy}
+                    className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                  >
+                    {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-emerald-500" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
+                    Continue with WeChat
+                  </button>
+
+                  {wechatQrUrl && (
+                    <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white/80 p-4 shadow-[0_10px_34px_rgba(15,23,42,0.04)]">
+                      <img src={wechatQrUrl} alt="微信登录二维码" className="h-24 w-24 rounded-lg bg-white object-contain" />
+                      <div className="min-w-0 text-sm text-slate-500">
+                        <div className="font-medium text-slate-700">微信扫码登录</div>
+                        <div className="mt-1">状态：{wechatStatus || 'PENDING'}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {notice && (
+                    <div className={`text-center text-sm ${
+                      noticeType === 'error'
+                        ? 'text-red-500'
+                        : noticeType === 'success'
+                          ? 'text-emerald-600'
+                          : 'text-slate-500'
+                    }`}>
+                      {notice}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </main>
+        </div>
+      </div>
+      <AppDialogsHost />
+    </>
+  );
+}
+
+function App() {
+  useOfficialAuthLifecycle();
+  const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
+  const officialAuthStatus = String(officialAuthState?.status || '').trim();
+  const officialAuthPending = !officialAuthBootstrapped
+    || officialAuthStatus === 'restoring'
+    || officialAuthStatus === 'refreshing';
+
+  if (officialAuthPending) {
+    return <OfficialLoginGate mode="checking" />;
+  }
+
+  if (!isOfficialAuthLoggedIn(officialAuthState, officialAuthBootstrapped)) {
+    return <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />;
+  }
+
+  return <AuthenticatedApp />;
 }
 
 export default App;

@@ -83,9 +83,18 @@ struct PersistedSessionArtifacts {
 }
 
 pub(crate) fn load_workspace_hydration_snapshot(root: &Path) -> WorkspaceHydrationSnapshot {
+    let assets_root = root.join("assets");
+    let legacy_subjects_root = root.join("subjects");
+    let subjects_root = if assets_root.join("catalog.json").exists()
+        || !legacy_subjects_root.join("catalog.json").exists()
+    {
+        assets_root
+    } else {
+        legacy_subjects_root
+    };
     WorkspaceHydrationSnapshot {
-        categories: load_subject_categories_from_fs(&root.join("subjects")),
-        subjects: load_subjects_from_fs(&root.join("subjects")),
+        categories: load_subject_categories_from_fs(&subjects_root),
+        subjects: load_subjects_from_fs(&subjects_root),
         advisors: load_advisors_from_fs(&root.join("advisors")),
         chat_rooms: load_chat_rooms_from_fs(&root.join("chatrooms")),
         chatroom_messages: load_chatroom_messages_from_fs(&root.join("chatrooms")),
@@ -123,7 +132,15 @@ pub(crate) fn apply_knowledge_hydration_snapshot(
 }
 
 pub(crate) fn load_subjects_hydration_snapshot(root: &Path) -> SubjectsHydrationSnapshot {
-    let subjects_root = root.join("subjects");
+    let assets_root = root.join("assets");
+    let legacy_subjects_root = root.join("subjects");
+    let subjects_root = if assets_root.join("catalog.json").exists()
+        || !legacy_subjects_root.join("catalog.json").exists()
+    {
+        assets_root
+    } else {
+        legacy_subjects_root
+    };
     SubjectsHydrationSnapshot {
         categories: load_subject_categories_from_fs(&subjects_root),
         subjects: load_subjects_from_fs(&subjects_root),
