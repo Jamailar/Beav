@@ -119,11 +119,10 @@ interface WanderProps {
   isActive?: boolean;
   onExecutionStateChange?: (active: boolean) => void;
   onTitleBarContentChange?: (content: ReactNode | null) => void;
-  onNavigateToManuscript?: (filePath: string) => void;
   onNavigateToRedClaw?: (payload: PendingChatMessage) => void;
 }
 
-export function Wander({ isActive = true, onExecutionStateChange, onTitleBarContentChange, onNavigateToManuscript, onNavigateToRedClaw }: WanderProps) {
+export function Wander({ isActive = true, onExecutionStateChange, onTitleBarContentChange, onNavigateToRedClaw }: WanderProps) {
   const [items, setItems] = useState<WanderItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [multiChoiceEnabled, setMultiChoiceEnabled] = useState(false);

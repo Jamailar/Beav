@@ -10,7 +10,6 @@ interface HomeProps {
     isActive?: boolean;
     onNavigateToCoverStudio?: () => void;
     onNavigateToGenerationStudio?: (mode: 'image' | 'video') => void;
-    onNavigateToManuscript?: (filePath: string) => void;
     onNavigateToRedClaw?: (message: {
         content: string;
         displayContent?: string;
@@ -220,10 +219,8 @@ function QuickAppButton({
 
 function RecentManuscriptCard({
     manuscript,
-    onOpen,
 }: {
     manuscript: RecentManuscript;
-    onOpen?: (filePath: string) => void;
 }) {
     const Icon = manuscript.draftType === 'video'
         ? Clapperboard
@@ -233,10 +230,8 @@ function RecentManuscriptCard({
     const previewSrc = manuscript.previewUrl ? resolveAssetUrl(manuscript.previewUrl) : '';
 
     return (
-        <button
-            type="button"
-            onClick={() => onOpen?.(manuscript.path)}
-            className="group overflow-hidden rounded-xl border border-border bg-surface-primary text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-accent-primary/30 hover:shadow-md"
+        <div
+            className="overflow-hidden rounded-xl border border-border bg-surface-primary text-left shadow-sm"
         >
             <div className="relative aspect-[16/7] overflow-hidden bg-surface-secondary">
                 {previewSrc ? (
@@ -256,7 +251,7 @@ function RecentManuscriptCard({
                     {formatRecentDate(manuscript.updatedAt)}
                 </div>
             </div>
-        </button>
+        </div>
     );
 }
 
@@ -344,7 +339,7 @@ function PluginHomeWidgetCard({
     );
 }
 
-export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToManuscript, onNavigateToRedClaw }: HomeProps) {
+export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToRedClaw }: HomeProps) {
     const [stats, setStats] = useState<HomeStats>(EMPTY_STATS);
     const [recentManuscripts, setRecentManuscripts] = useState<RecentManuscript[]>([]);
     const [pluginHomeWidgets, setPluginHomeWidgets] = useState<ThrivePluginHomeWidget[]>([]);
@@ -591,15 +586,6 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                     <section className="flex min-h-[310px] flex-col gap-3">
                         <div className="flex items-center justify-between gap-3">
                             <h2 className="text-[15px] font-semibold text-text-primary">最近稿件</h2>
-                            <button
-                                type="button"
-                                onClick={() => recentManuscripts[0]?.path && onNavigateToManuscript?.(recentManuscripts[0].path)}
-                                disabled={!recentManuscripts[0]}
-                                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:pointer-events-none disabled:opacity-40"
-                            >
-                                打开最近
-                                <ArrowRight className="h-3.5 w-3.5" strokeWidth={1.8} />
-                            </button>
                         </div>
                         {recentManuscripts.length > 0 ? (
                             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -607,7 +593,6 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                                     <RecentManuscriptCard
                                         key={manuscript.path}
                                         manuscript={manuscript}
-                                        onOpen={onNavigateToManuscript}
                                     />
                                 ))}
                             </div>

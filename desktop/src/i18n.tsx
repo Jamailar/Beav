@@ -36,7 +36,6 @@ const zhCN = {
   'nav.automation': '自动化',
   'nav.home': '主页',
   'nav.wander': '漫步',
-  'nav.manuscripts': '稿件',
   'nav.settings': '设置',
 
   'layout.expandSidebar': '展开侧边栏',
@@ -127,7 +126,6 @@ const enUS: Record<keyof typeof zhCN, string> = {
   'nav.automation': 'Automation',
   'nav.home': 'Home',
   'nav.wander': 'Wander',
-  'nav.manuscripts': 'Drafts',
   'nav.settings': 'Settings',
 
   'layout.expandSidebar': 'Expand sidebar',
