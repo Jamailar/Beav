@@ -4557,6 +4557,32 @@ pub(crate) fn save_manuscript_content(
             .unwrap_or_else(|| title_from_relative_path(&active_relative));
         create_manuscript_package(&path, content, &active_relative, &package_title)?;
     }
+    if is_thrive_package_path(&path)
+        && is_manuscript_package_name(
+            path.file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(""),
+        )
+    {
+        let manifest = update_thrive_post_content(&path, content, Some(&merged_metadata))?;
+        return Ok(json!({
+            "success": true,
+            "newPath": active_relative,
+            "title": active_title,
+            "state": get_manuscript_package_state(&path)?,
+            "script": {
+                "body": content,
+                "approval": {
+                    "status": "pending",
+                    "lastScriptUpdateAt": Value::Null,
+                    "lastScriptUpdateSource": source,
+                    "confirmedAt": Value::Null
+                }
+            },
+            "content": content,
+            "metadata": manifest,
+        }));
+    }
     if path.is_dir()
         && is_manuscript_package_name(
             path.file_name()
@@ -4614,6 +4640,116 @@ fn normalize_package_html_target(
         },
         _ => Err("只有长文和图文工程支持 HTML 资产".to_string()),
     }
+}
+
+fn default_thrive_post_bindings() -> Value {
+    json!({
+        "media": [],
+        "targets": [],
+        "publishedPosts": [],
+        "sources": [],
+        "inspirations": []
+    })
+}
+
+fn require_thrive_post_package(path: &std::path::Path) -> Result<(), String> {
+    if !is_thrive_package_path(path) {
+        return Err("Not a .thrive post package".to_string());
+    }
+    let manifest = read_thrive_json_entry_or(path, "manifest.json", json!({}));
+    let kind = manifest
+        .get("kind")
+        .or_else(|| manifest.get("packageKind"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if kind != "post" {
+        return Err("Only post .thrive packages are supported".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_post_platform(value: &str) -> Result<String, String> {
+    let mut output = String::new();
+    let mut last_dash = false;
+    for ch in value.trim().to_ascii_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            output.push(ch);
+            last_dash = false;
+        } else if ch == '-' && !last_dash {
+            output.push(ch);
+            last_dash = true;
+        } else if !last_dash {
+            output.push('-');
+            last_dash = true;
+        }
+    }
+    let normalized = output.trim_matches('-').to_string();
+    if normalized.is_empty() {
+        Err("platform is required".to_string())
+    } else {
+        Ok(normalized)
+    }
+}
+
+fn thrive_post_variant_path(platform: &str) -> String {
+    format!("variants/{platform}.md")
+}
+
+fn read_thrive_post_bindings(package_path: &std::path::Path) -> Value {
+    read_thrive_json_entry_or(
+        package_path,
+        "bindings.json",
+        default_thrive_post_bindings(),
+    )
+}
+
+fn write_thrive_post_bindings(
+    package_path: &std::path::Path,
+    bindings: &Value,
+) -> Result<Value, String> {
+    write_thrive_json_entry(package_path, "bindings.json", bindings)?;
+    let mut manifest = read_thrive_json_entry_or(package_path, "manifest.json", json!({}));
+    if let Some(object) = manifest.as_object_mut() {
+        object.insert("updatedAt".to_string(), json!(now_i64()));
+        write_thrive_json_entry(package_path, "manifest.json", &manifest)?;
+    }
+    Ok(bindings.clone())
+}
+
+fn upsert_thrive_post_target(bindings: &mut Value, platform: &str, variant_path: &str) {
+    if !bindings.is_object() {
+        *bindings = default_thrive_post_bindings();
+    }
+    let object = bindings.as_object_mut().expect("bindings should be object");
+    let targets_value = object
+        .entry("targets".to_string())
+        .or_insert_with(|| json!([]));
+    if !targets_value.is_array() {
+        *targets_value = json!([]);
+    }
+    let targets = targets_value
+        .as_array_mut()
+        .expect("targets should be array");
+    if let Some(target) = targets.iter_mut().find(|target| {
+        target
+            .get("platform")
+            .and_then(Value::as_str)
+            .map(|value| value == platform)
+            .unwrap_or(false)
+    }) {
+        if let Some(target_object) = target.as_object_mut() {
+            target_object.insert("variantPath".to_string(), json!(variant_path));
+            target_object
+                .entry("status".to_string())
+                .or_insert(json!("draft"));
+        }
+        return;
+    }
+    targets.push(json!({
+        "platform": platform,
+        "variantPath": variant_path,
+        "status": "draft"
+    }));
 }
 
 fn package_html_target_label(package_kind: &str, target: &str) -> &'static str {
@@ -7694,7 +7830,7 @@ pub fn handle_manuscripts_channel(
                 } else {
                     resolve_manuscript_path(state, &relative)?
                 };
-                if path.is_dir()
+                if (path.is_dir() || is_thrive_package_path(&path))
                     && is_manuscript_package_name(
                         path.file_name()
                             .and_then(|value| value.to_str())
@@ -7705,10 +7841,24 @@ pub fn handle_manuscripts_channel(
                         .file_name()
                         .and_then(|value| value.to_str())
                         .unwrap_or("");
-                    let manifest = read_json_value_or(&package_manifest_path(&path), json!({}));
-                    let content =
+                    let manifest = if is_thrive_package_path(&path) {
+                        read_thrive_json_entry_or(&path, "manifest.json", json!({}))
+                    } else {
+                        read_json_value_or(&package_manifest_path(&path), json!({}))
+                    };
+                    let content = if is_thrive_package_path(&path) {
+                        read_thrive_text_entry(
+                            &path,
+                            manifest
+                                .get("entry")
+                                .and_then(Value::as_str)
+                                .unwrap_or_else(|| get_default_package_entry(file_name)),
+                        )
+                        .unwrap_or_default()
+                    } else {
                         fs::read_to_string(package_entry_path(&path, file_name, Some(&manifest)))
-                            .unwrap_or_default();
+                            .unwrap_or_default()
+                    };
                     return Ok(json!({
                         "content": content,
                         "metadata": manifest
@@ -7832,9 +7982,14 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("");
-                if source.is_dir() && is_manuscript_package_name(source_name) {
-                    let manifest_path = package_manifest_path(&source);
-                    let mut manifest = read_json_value_or(&manifest_path, json!({}));
+                if is_manuscript_package_name(source_name)
+                    && (source.is_dir() || is_thrive_package_path(&source))
+                {
+                    let mut manifest = if is_thrive_package_path(&source) {
+                        read_thrive_json_entry_or(&source, "manifest.json", json!({}))
+                    } else {
+                        read_json_value_or(&package_manifest_path(&source), json!({}))
+                    };
                     let next_title = new_name.trim();
                     if next_title.is_empty() {
                         return Ok(json!({ "success": false, "error": "缺少新名称" }));
@@ -7848,7 +8003,30 @@ pub fn handle_manuscripts_channel(
                             "updatedAt": now_i64(),
                         });
                     }
-                    write_json_value(&manifest_path, &manifest)?;
+                    if is_thrive_package_path(&source) {
+                        let content = read_thrive_text_entry(
+                            &source,
+                            manifest
+                                .get("entry")
+                                .and_then(Value::as_str)
+                                .unwrap_or("content.md"),
+                        )
+                        .unwrap_or_default();
+                        let bindings = read_thrive_json_entry_or(
+                            &source,
+                            "bindings.json",
+                            json!({
+                                "media": [],
+                                "targets": [],
+                                "publishedPosts": [],
+                                "sources": [],
+                                "inspirations": []
+                            }),
+                        );
+                        write_thrive_post_package(&source, &manifest, &content, &bindings)?;
+                    } else {
+                        write_json_value(&package_manifest_path(&source), &manifest)?;
+                    }
                     return Ok(
                         json!({ "success": true, "newPath": normalize_relative_path(&old_path) }),
                     );
@@ -7925,7 +8103,7 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir()
+                if !(full_path.is_dir() || is_thrive_package_path(&full_path))
                     || !is_manuscript_package_name(
                         full_path
                             .file_name()
@@ -7936,6 +8114,89 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
+            }
+            "manuscripts:get-post-bindings" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .or_else(|| payload_value_as_string(&payload))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                require_thrive_post_package(&full_path)?;
+                Ok(json!({
+                    "success": true,
+                    "bindings": read_thrive_post_bindings(&full_path)
+                }))
+            }
+            "manuscripts:update-post-bindings" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let bindings = payload_field(&payload, "bindings")
+                    .cloned()
+                    .unwrap_or_else(default_thrive_post_bindings);
+                if !bindings.is_object() {
+                    return Ok(json!({ "success": false, "error": "bindings must be an object" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                require_thrive_post_package(&full_path)?;
+                let bindings = write_thrive_post_bindings(&full_path, &bindings)?;
+                Ok(json!({
+                    "success": true,
+                    "bindings": bindings,
+                    "state": get_manuscript_package_state(&full_path)?
+                }))
+            }
+            "manuscripts:read-post-variant" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                let platform = normalize_post_platform(
+                    &payload_string(&payload, "platform").unwrap_or_default(),
+                )?;
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                require_thrive_post_package(&full_path)?;
+                let variant_path = thrive_post_variant_path(&platform);
+                Ok(json!({
+                    "success": true,
+                    "platform": platform,
+                    "variantPath": variant_path,
+                    "content": read_thrive_text_entry(&full_path, &variant_path).unwrap_or_default()
+                }))
+            }
+            "manuscripts:save-post-variant" => {
+                let file_path = payload_string(&payload, "filePath")
+                    .or_else(|| payload_string(&payload, "path"))
+                    .unwrap_or_default();
+                let platform = normalize_post_platform(
+                    &payload_string(&payload, "platform").unwrap_or_default(),
+                )?;
+                let content = payload_string(&payload, "content").unwrap_or_default();
+                if file_path.is_empty() {
+                    return Ok(json!({ "success": false, "error": "filePath is required" }));
+                }
+                let full_path = resolve_manuscript_path(state, &file_path)?;
+                require_thrive_post_package(&full_path)?;
+                let variant_path = thrive_post_variant_path(&platform);
+                write_thrive_text_entry(&full_path, &variant_path, &content)?;
+                let mut bindings = read_thrive_post_bindings(&full_path);
+                upsert_thrive_post_target(&mut bindings, &platform, &variant_path);
+                let bindings = write_thrive_post_bindings(&full_path, &bindings)?;
+                Ok(json!({
+                    "success": true,
+                    "platform": platform,
+                    "variantPath": variant_path,
+                    "bindings": bindings,
+                    "state": get_manuscript_package_state(&full_path)?
+                }))
             }
             "manuscripts:save-package-template"
             | "manuscripts:save-package-template-html"

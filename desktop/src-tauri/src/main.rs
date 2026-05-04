@@ -1740,16 +1740,16 @@ mod tests {
         assert_eq!(
             manuscript_save_result_path(&json!({
                 "success": true,
-                "newPath": "wander/demo.redpost"
+                "newPath": "wander/demo.thrive"
             })),
-            Some("wander/demo.redpost")
+            Some("wander/demo.thrive")
         );
         assert_eq!(
             manuscript_save_result_path(&json!({
                 "success": true,
-                "projectPath": "wander/demo.redpost"
+                "projectPath": "wander/demo.thrive"
             })),
-            Some("wander/demo.redpost")
+            Some("wander/demo.thrive")
         );
     }
 
@@ -1839,8 +1839,8 @@ mod tests {
             "allowedAppCliActions": ["manuscripts.writeCurrent", "skills.invoke"],
             "saveSubdir": "wander",
             "sourceMode": "knowledge",
-            "currentAuthoringProjectPath": "wander/demo.redpost",
-            "currentAuthoringContentPath": "wander/demo.redpost/content.md"
+            "currentAuthoringProjectPath": "wander/demo.thrive",
+            "currentAuthoringContentPath": "wander/demo.thrive/content.md"
         })
         .as_object()
         .cloned()
@@ -1868,11 +1868,11 @@ mod tests {
         );
         assert_eq!(
             metadata.get("currentAuthoringProjectPath"),
-            Some(&json!("wander/demo.redpost"))
+            Some(&json!("wander/demo.thrive"))
         );
         assert_eq!(
             metadata.get("currentAuthoringContentPath"),
-            Some(&json!("wander/demo.redpost/content.md"))
+            Some(&json!("wander/demo.thrive/content.md"))
         );
     }
 
@@ -1886,7 +1886,7 @@ mod tests {
                 "tool": "workflow",
                 "action": "manuscripts.writeCurrent",
                 "data": {
-                    "projectPath": "wander/demo.redpost"
+                    "projectPath": "wander/demo.thrive"
                 }
             }"#
         })));

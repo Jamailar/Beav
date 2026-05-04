@@ -177,7 +177,7 @@ function flattenManuscripts(nodes: FileNode[]): string[] {
                 walk(item.children || []);
                 continue;
             }
-            if (item.path.endsWith('.md')) {
+            if (item.path.endsWith('.md') || item.path.endsWith('.thrive')) {
                 result.push(item.path);
             }
         }

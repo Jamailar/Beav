@@ -108,6 +108,7 @@ function isInternalPackageFile(filePath: string): boolean {
     if (parts.length <= 1) return false;
     return parts.slice(0, -1).some((part) => (
         part.endsWith('.redpost')
+        || part.endsWith('.thrive')
         || part.endsWith('.redarticle')
         || part.endsWith('.redvideo')
         || part.endsWith('.redaudio')
@@ -115,7 +116,7 @@ function isInternalPackageFile(filePath: string): boolean {
 }
 
 function stripDraftExtension(fileName: string): string {
-    return fileName.replace(/\.(redpost|redarticle|redvideo|redaudio|md)$/i, '');
+    return fileName.replace(/\.(thrive|redpost|redarticle|redvideo|redaudio|md)$/i, '');
 }
 
 function resolveDraftTypeLabel(type: RecentManuscript['draftType']): string {

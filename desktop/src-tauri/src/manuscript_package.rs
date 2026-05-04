@@ -17,21 +17,22 @@ use crate::{
         timeline_clip_duration_ms,
     },
     file_url_for_path, get_default_package_entry, get_draft_type_from_file_name,
-    get_package_kind_from_file_name, join_relative, make_id, normalize_relative_path, now_i64,
-    now_iso, now_ms, package_assets_path, package_content_map_path, package_cover_path,
-    package_editor_project_path, package_entry_path, package_images_path, package_layout_html_path,
-    package_layout_template_path, package_layout_tokens_path, package_manifest_path,
-    package_remotion_input_props_path, package_remotion_path, package_richpost_master_path,
-    package_richpost_masters_dir, package_richpost_page_html_path, package_richpost_page_plan_path,
-    package_richpost_pages_dir, package_richpost_theme_assets_dir,
-    package_richpost_theme_config_path, package_richpost_theme_master_path,
-    package_richpost_theme_masters_dir, package_richpost_theme_root_dir,
-    package_richpost_theme_store_dir, package_richpost_theme_template_path,
-    package_richpost_theme_tokens_path, package_richpost_themes_path, package_scene_ui_path,
-    package_timeline_path, package_track_ui_path, package_wechat_html_path,
-    package_wechat_template_path, parse_json_value_from_text, read_json_value_or,
-    redbox_project_root, resolve_manuscript_path, title_from_relative_path, write_json_value,
-    write_text_file, AppState,
+    get_package_kind_from_file_name, is_thrive_package_path, join_relative, make_id,
+    normalize_relative_path, now_i64, now_iso, now_ms, package_assets_path,
+    package_content_map_path, package_cover_path, package_editor_project_path, package_entry_path,
+    package_images_path, package_layout_html_path, package_layout_template_path,
+    package_layout_tokens_path, package_manifest_path, package_remotion_input_props_path,
+    package_remotion_path, package_richpost_master_path, package_richpost_masters_dir,
+    package_richpost_page_html_path, package_richpost_page_plan_path, package_richpost_pages_dir,
+    package_richpost_theme_assets_dir, package_richpost_theme_config_path,
+    package_richpost_theme_master_path, package_richpost_theme_masters_dir,
+    package_richpost_theme_root_dir, package_richpost_theme_store_dir,
+    package_richpost_theme_template_path, package_richpost_theme_tokens_path,
+    package_richpost_themes_path, package_scene_ui_path, package_timeline_path,
+    package_track_ui_path, package_wechat_html_path, package_wechat_template_path,
+    parse_json_value_from_text, read_json_value_or, read_thrive_json_entry_or, redbox_project_root,
+    resolve_manuscript_path, title_from_relative_path, write_json_value, write_text_file,
+    write_thrive_post_package, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -2837,6 +2838,46 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("");
+    if is_thrive_package_path(package_path) {
+        let manifest = read_thrive_json_entry_or(package_path, "manifest.json", json!({}));
+        let bindings = read_thrive_json_entry_or(
+            package_path,
+            "bindings.json",
+            json!({
+                "media": [],
+                "targets": [],
+                "publishedPosts": [],
+                "sources": [],
+                "inspirations": []
+            }),
+        );
+        return Ok(json!({
+            "manifest": {
+                "packageKind": manifest.get("packageKind").cloned().unwrap_or(json!("post")),
+                "kind": manifest.get("kind").cloned().unwrap_or(json!("post")),
+                "draftType": manifest.get("draftType").cloned().unwrap_or(json!("richpost")),
+                "title": manifest.get("title").cloned().unwrap_or_else(|| json!(title_from_relative_path(file_name))),
+                "entry": manifest.get("entry").cloned().unwrap_or(json!("content.md")),
+                "updatedAt": manifest.get("updatedAt").cloned().unwrap_or(json!(now_i64())),
+                "schemaVersion": manifest.get("schemaVersion").cloned().unwrap_or(json!(1))
+            },
+            "bindings": bindings,
+            "assets": json!({ "items": [] }),
+            "cover": json!({ "assetId": Value::Null }),
+            "images": json!({ "items": [] }),
+            "contentMapExists": false,
+            "richpostPagePlanExists": false,
+            "richpostTheme": Value::Null,
+            "richpostThemeId": Value::Null,
+            "richpostThemeCatalog": Value::Null,
+            "richpostPages": [],
+            "richpostPageCount": 0,
+            "hasLayoutHtml": false,
+            "layoutHtmlExists": false,
+            "layoutHtml": "",
+            "wechatHtml": ""
+        }));
+    }
     let manifest = read_json_value_or(package_manifest_path(package_path).as_path(), json!({}));
     let assets = read_json_value_or(
         package_assets_path(package_path).as_path(),
@@ -3340,6 +3381,33 @@ pub(crate) fn create_manuscript_package(
     let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("article");
     let draft_type = get_draft_type_from_file_name(file_name);
     let entry = get_default_package_entry(file_name);
+    if package_kind == "post" && is_thrive_package_path(package_path) {
+        write_thrive_post_package(
+            package_path,
+            &json!({
+                "id": make_id("thrive-post"),
+                "type": "thrive-package",
+                "schemaVersion": 1,
+                "kind": "post",
+                "packageKind": "post",
+                "draftType": draft_type,
+                "title": title,
+                "status": "writing",
+                "createdAt": now_i64(),
+                "updatedAt": now_i64(),
+                "entry": "content.md"
+            }),
+            content,
+            &json!({
+                "media": [],
+                "targets": [],
+                "publishedPosts": [],
+                "sources": [],
+                "inspirations": []
+            }),
+        )?;
+        return Ok(());
+    }
     fs::create_dir_all(package_path).map_err(|error| error.to_string())?;
     write_json_value(
         &package_manifest_path(package_path),

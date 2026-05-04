@@ -52,10 +52,10 @@ export function StartupMigrationModal({
     const needsDbImport = Boolean(state.needsDbImport);
     const needsProjectUpgrade = Boolean(state.needsProjectUpgrade || legacyMarkdownCount > 0);
     const strategyLabel = needsDbImport && needsProjectUpgrade
-        ? '数据库导入 + 旧 Markdown 稿件升级为 .redpost 图文工程。'
+        ? '数据库导入 + 旧 Markdown 稿件升级为 .thrive post 工程。'
         : needsDbImport
             ? '只导入旧版数据库，继续沿用原有文件目录。'
-            : '只升级 manuscripts 下旧 `.md` 稿件为 `.redpost` 图文工程。';
+            : '只升级 manuscripts 下旧 `.md` 稿件为 `.thrive` post 工程。';
 
     return (
         <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 backdrop-blur-sm">
@@ -119,7 +119,7 @@ export function StartupMigrationModal({
                             <div className="mb-3 font-medium text-text-primary">工程升级结果</div>
                             <div className="space-y-2">
                                 {countLine('发现旧 Markdown', projectCounts.found)}
-                                {countLine('已升级为 .redpost', projectCounts.upgraded)}
+                                {countLine('已升级为 .thrive', projectCounts.upgraded)}
                                 {countLine('跳过同名工程冲突', projectCounts.skipped)}
                             </div>
                         </div>
