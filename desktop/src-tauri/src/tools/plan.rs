@@ -456,6 +456,7 @@ fn pinned_direct_app_cli_actions(
     if wants_host_cli || (!media_intent && matches!(runtime_mode, "team" | "redclaw" | "knowledge"))
     {
         &[
+            "skills.invoke",
             "web.fetch",
             "cli_runtime.inspect",
             "cli_runtime.diagnose",
@@ -661,6 +662,17 @@ mod tests {
             .iter()
             .any(|tool| tool.name == "tool_search"));
         assert!(plan.has_direct_app_cli_action("memory.add"));
+    }
+
+    #[test]
+    fn redclaw_default_keeps_skill_invocation_direct() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+
+        assert!(plan.has_direct_app_cli_action("skills.invoke"));
+        assert!(!plan.has_deferred_app_cli_action("skills.invoke"));
     }
 
     #[test]
