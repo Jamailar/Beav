@@ -18,7 +18,6 @@ import {
     RefreshCw,
     Search,
     Scissors,
-    Sparkles,
     Trash2,
     Upload,
     X,
@@ -259,43 +258,6 @@ type PackageState = {
     contentMapExists?: boolean;
     contentMapFile?: string | null;
     contentMapUpdatedAt?: number | null;
-    layoutTokensExists?: boolean;
-    layoutTokensFile?: string | null;
-    layoutTokensUpdatedAt?: number | null;
-    longformLayoutPreset?: {
-        id?: string | null;
-        label?: string | null;
-        description?: string | null;
-    } | null;
-    longformLayoutPresetId?: string | null;
-    longformLayoutPresetLabel?: string | null;
-    longformLayoutPresetDescription?: string | null;
-    longformLayoutPresetCatalog?: Array<{
-        id?: string;
-        label?: string;
-        description?: string | null;
-        surfaceColor?: string | null;
-        textColor?: string | null;
-        accentColor?: string | null;
-    }>;
-    layoutTemplateExists?: boolean;
-    wechatTemplateExists?: boolean;
-    layoutTemplateFile?: string | null;
-    wechatTemplateFile?: string | null;
-    layoutTemplateUpdatedAt?: number | null;
-    wechatTemplateUpdatedAt?: number | null;
-    hasLayoutHtml?: boolean;
-    hasWechatHtml?: boolean;
-    layoutHtmlExists?: boolean;
-    wechatHtmlExists?: boolean;
-    layoutHtmlFile?: string | null;
-    wechatHtmlFile?: string | null;
-    layoutHtmlFileUrl?: string | null;
-    wechatHtmlFileUrl?: string | null;
-    layoutHtmlUpdatedAt?: number | null;
-    wechatHtmlUpdatedAt?: number | null;
-    layoutHtml?: string;
-    wechatHtml?: string;
 };
 
 type ExportVideoResolution = 'source' | '1080p' | '720p';
@@ -858,7 +820,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
     const [activeVideoJobId, setActiveVideoJobId] = useState<string | null>(null);
     const [videoWorkbenchVersion, setVideoWorkbenchVersion] = useState<'v2' | 'legacy'>('legacy');
-    const [isUpgradingDraft, setIsUpgradingDraft] = useState(false);
     const [packageState, setPackageState] = useState<PackageState | null>(null);
     const [isGeneratingRemotion, setIsGeneratingRemotion] = useState(false);
     const [isRenderingRemotion, setIsRenderingRemotion] = useState(false);
@@ -1884,51 +1845,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         return !editorBodyDirtyRef.current;
     }, [runEditorSave]);
 
-    const handleGeneratePackageHtml = useCallback(async (target: 'layout' | 'wechat') => {
-        if (!editorFile) return;
-        const workingKey = `package-html:${target}`;
-        setWorkingId(workingKey);
-        try {
-            const saved = await ensureLatestEditorContentSaved();
-            if (!saved) return;
-            const result = await window.ipcRenderer.invoke('manuscripts:generate-package-html', {
-                filePath: editorFile,
-                target,
-            }) as { success?: boolean; error?: string; state?: PackageState };
-            if (!result?.success || !result.state) {
-                throw new Error(result?.error || '生成 HTML 失败');
-            }
-            setPackageState(result.state);
-        } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '生成 HTML 失败');
-        } finally {
-            setWorkingId((current) => current === workingKey ? null : current);
-        }
-    }, [editorFile, ensureLatestEditorContentSaved]);
-
-    const handleSelectLongformLayoutPreset = useCallback(async (presetId: string, target: 'layout' | 'wechat') => {
-        if (!editorFile || !presetId.trim()) return;
-        const workingKey = `longform-layout-preset:${presetId}:${target}`;
-        setWorkingId(workingKey);
-        try {
-            const saved = await ensureLatestEditorContentSaved();
-            if (!saved) return;
-            const result = await window.ipcRenderer.invoke('manuscripts:set-longform-layout-preset', {
-                filePath: editorFile,
-                presetId,
-                target,
-            }) as { success?: boolean; error?: string; state?: PackageState };
-            if (!result?.success || !result.state) {
-                throw new Error(result?.error || '切换长文母版失败');
-            }
-            setPackageState(result.state);
-        } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '切换长文母版失败');
-        } finally {
-            setWorkingId((current) => current === workingKey ? null : current);
-        }
-    }, [editorFile, ensureLatestEditorContentSaved]);
-
     const handleImportAndBindAssetsToPackage = useCallback(async () => {
         if (!editorFile) return;
         setWorkingId('media-import-bind');
@@ -2102,27 +2018,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             window.ipcRenderer.off('manuscripts:render-progress', handleProgress);
         };
     }, [editorFile]);
-
-    const handleUpgradeDraftPackage = useCallback(async (targetKind: 'article' | 'post') => {
-        if (!editorFile) return;
-        setIsUpgradingDraft(true);
-        try {
-            const result = await window.ipcRenderer.invoke('manuscripts:upgrade-to-package', {
-                sourcePath: editorFile,
-                targetKind,
-            }) as { success?: boolean; error?: string; newPath?: string };
-            if (!result?.success || !result.newPath) {
-                throw new Error(result?.error || '升级工程稿件失败');
-            }
-            await loadData();
-            setEditorFile(result.newPath);
-            await refreshPackageState(result.newPath);
-        } catch (upgradeError) {
-            void appAlert(upgradeError instanceof Error ? upgradeError.message : '升级工程稿件失败');
-        } finally {
-            setIsUpgradingDraft(false);
-        }
-    }, [editorFile, loadData, refreshPackageState]);
 
     useEffect(() => {
         if (!editorFile) {
@@ -2696,8 +2591,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const isVideoDraft = draftType === 'video';
         const isAudioDraft = draftType === 'audio';
         const isImmersiveWorkbench = mode === 'editor';
-        const isMarkdownDraft = editorFile.endsWith('.md');
-        const canUpgradeToArticle = draftType === 'longform' && isMarkdownDraft;
         const isArticlePackage = editorFile.endsWith(ARTICLE_DRAFT_EXTENSION);
         const isVideoPackage = editorFile.endsWith(VIDEO_DRAFT_EXTENSION);
         const isAudioPackage = editorFile.endsWith(AUDIO_DRAFT_EXTENSION);
@@ -2773,22 +2666,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 ...packageAssetFallbacks,
             ].map((asset) => [asset.id, asset])
         ).values());
-        const articleLayoutPreview = {
-            filePath: packageState?.layoutHtmlFile || null,
-            fileUrl: packageState?.layoutHtmlFileUrl || null,
-            exists: Boolean(packageState?.layoutHtmlExists || packageState?.layoutHtmlFile || packageState?.layoutHtmlFileUrl),
-            hasContent: Boolean(packageState?.hasLayoutHtml),
-            updatedAt: Number(packageState?.layoutHtmlUpdatedAt || 0) || null,
-        };
-        const articleWechatPreview = {
-            filePath: packageState?.wechatHtmlFile || null,
-            fileUrl: packageState?.wechatHtmlFileUrl || null,
-            exists: Boolean(packageState?.wechatHtmlExists || packageState?.wechatHtmlFile || packageState?.wechatHtmlFileUrl),
-            hasContent: Boolean(packageState?.hasWechatHtml),
-            updatedAt: Number(packageState?.wechatHtmlUpdatedAt || 0) || null,
-        };
-        const isGeneratingLayoutHtml = workingId === 'package-html:layout';
-        const isGeneratingWechatHtml = workingId === 'package-html:wechat';
         const packageCoverAsset = packagePreviewAssets.find((asset) => asset.id === packageCoverId) || null;
         const packageImageAssets = packagePreviewAssets.filter((asset) => (
             inferAssetKind(asset) === 'image' && asset.id !== packageCoverId
@@ -2909,55 +2786,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                             </div>
                         )}
                         
-                        {canUpgradeToArticle && (
-                            <button
-                                type="button"
-                                onClick={() => void handleUpgradeDraftPackage('article')}
-                                disabled={isUpgradingDraft}
-                                className={clsx(
-                                    'inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95 shadow-sm',
-                                    isImmersiveWorkbench
-                                        ? 'bg-accent-primary text-white hover:bg-accent-hover'
-                                        : 'bg-text-primary text-white hover:bg-text-primary/90 shadow-text-primary/10'
-                                )}
-                            >
-                                <Sparkles className="h-3.5 w-3.5" />
-                                {isUpgradingDraft ? 'UPGRADING...' : '升级为排版工程'}
-                            </button>
-                        )}
-                        {isArticlePackage && (
-                            <div className="flex items-center gap-1">
-                                <button
-                                    type="button"
-                                    onClick={() => void handleGeneratePackageHtml('layout')}
-                                    disabled={isGeneratingLayoutHtml}
-                                    className={clsx(
-                                        'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
-                                        isImmersiveWorkbench
-                                            ? 'border border-border bg-surface-secondary/50 text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                            : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
-                                    )}
-                                >
-                                    {isGeneratingLayoutHtml ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                                    {articleLayoutPreview.hasContent ? '重做排版' : '生成排版'}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => void handleGeneratePackageHtml('wechat')}
-                                    disabled={isGeneratingWechatHtml}
-                                    className={clsx(
-                                        'inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-[12px] font-bold transition-all disabled:opacity-40 active:scale-95',
-                                        isImmersiveWorkbench
-                                            ? 'border border-border bg-surface-secondary/50 text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                            : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:text-text-primary hover:bg-black/[0.06]'
-                                    )}
-                                >
-                                    {isGeneratingWechatHtml ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                                    {articleWechatPreview.hasContent ? '重做公众号' : '生成公众号'}
-                                </button>
-                            </div>
-                        )}
-
                         {isArticlePackage && (
                             <div className="flex items-center gap-1">
                                 <button
@@ -3150,14 +2978,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                             isRejectingWriteProposal={isRejectingWriteProposal}
                             editorChatSessionId={editorChatSessionId}
                             editorChatReady={editorChatSessionReady}
-                            layoutPreview={articleLayoutPreview}
-                            wechatPreview={articleWechatPreview}
-                            hasGeneratedHtml={Boolean(packageState?.hasWechatHtml || packageState?.hasLayoutHtml)}
-                            longformLayoutPresetId={typeof packageState?.longformLayoutPresetId === 'string' ? packageState.longformLayoutPresetId : null}
-                            longformLayoutPresets={Array.isArray(packageState?.longformLayoutPresetCatalog) ? packageState.longformLayoutPresetCatalog : []}
-                            isApplyingLongformLayoutPreset={String(workingId || '').startsWith('longform-layout-preset:')}
-                            coverAsset={packageCoverAsset}
-                            imageAssets={packageImageAssets}
                             onEditorBodyChange={(value) => {
                                 if (editorWriteProposalView) {
                                     setEditorReviewBody(value);
@@ -3169,11 +2989,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                             onAcceptWriteProposal={() => {
                                 void handleAcceptEditorWriteProposal();
                             }}
-                            onSelectLongformLayoutPreset={(presetId, target) => {
-                                void handleSelectLongformLayoutPreset(presetId, target);
-                            }}
                             onAiWorkspaceModeChange={setEditorAiWorkspaceMode}
-                            onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
                             onRejectWriteProposal={() => {
                                 void handleRejectEditorWriteProposal();
                             }}
