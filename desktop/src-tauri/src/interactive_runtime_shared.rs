@@ -1,10 +1,8 @@
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
-use crate::persistence::ensure_store_hydrated_for_subjects;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
     append_session_checkpoint, build_runtime_context_bundle_summary, load_session_bundle_messages,
@@ -134,7 +132,7 @@ pub(crate) fn interactive_runtime_context_bundle(
     let workspace_root_value = workspace_root(state)
         .map(|value| value.display().to_string())
         .unwrap_or_default();
-    let subjects_section = build_subjects_section(state, &workspace_root_value);
+    let subjects_section = build_asset_library_tool_section(&workspace_root_value);
     let memory_section =
         crate::memory::build_memory_prompt_section(state, runtime_mode, session_id, 8);
     let account_context_section = crate::accounts::build_account_prompt_section(state);
@@ -767,105 +765,18 @@ fn subagent_role_overlay_section(metadata: Option<&Value>) -> String {
     lines.join("\n")
 }
 
-fn build_subjects_section(state: &State<'_, AppState>, workspace_root_value: &str) -> String {
-    let subjects_root = if workspace_root_value.trim().is_empty() {
+fn build_asset_library_tool_section(workspace_root_value: &str) -> String {
+    let assets_root = if workspace_root_value.trim().is_empty() {
         "assets".to_string()
     } else {
         format!("{workspace_root_value}/assets")
     };
 
-    let _ = ensure_store_hydrated_for_subjects(state);
-    let (subjects, categories) = match with_store(state, |store| {
-        Ok((store.subjects.clone(), store.categories.clone()))
-    }) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            return [
-                format!("Assets root: {subjects_root}"),
-                format!("读取资产索引失败: {error}"),
-            ]
-            .join("\n");
-        }
-    };
-
-    if subjects.is_empty() {
-        let lines = vec![
-            "当前空间还没有注册资产。".to_string(),
-            format!("Assets root: {subjects_root}"),
-            "如果用户提到具体人物、商品、场景，仍应优先查询资产库；若结果为空，再明确说明未找到。"
-                .to_string(),
-        ];
-        return lines.join("\n");
-    }
-
-    let category_map = categories
-        .iter()
-        .map(|item| (item.id.clone(), item.name.clone()))
-        .collect::<HashMap<_, _>>();
-
-    let subject_nodes = subjects
-        .iter()
-        .take(200)
-        .map(|subject| {
-            let category_name = subject
-                .category_id
-                .as_ref()
-                .and_then(|id| category_map.get(id))
-                .cloned()
-                .unwrap_or_else(|| {
-                    subject
-                        .category_id
-                        .clone()
-                        .filter(|value| !value.trim().is_empty())
-                        .unwrap_or_else(|| "未分类".to_string())
-                });
-            let attribute_keys = subject
-                .attributes
-                .iter()
-                .map(|item| item.key.trim())
-                .filter(|item| !item.is_empty())
-                .collect::<Vec<_>>();
-            let location = format!("{subjects_root}/{}/subject.json", subject.id);
-            [
-                "  <subject>".to_string(),
-                format!("    <id>{}</id>", subject.id),
-                format!("    <name>{}</name>", subject.name),
-                format!("    <category>{category_name}</category>"),
-                format!("    <tags>{}</tags>", subject.tags.join(", ")),
-                format!(
-                    "    <attribute_keys>{}</attribute_keys>",
-                    attribute_keys.join(", ")
-                ),
-                format!(
-                    "    <has_images>{}</has_images>",
-                    if subject.image_paths.is_empty() {
-                        "false"
-                    } else {
-                        "true"
-                    }
-                ),
-                format!(
-                    "    <has_voice_reference>{}</has_voice_reference>",
-                    if subject.voice_path.is_some() {
-                        "true"
-                    } else {
-                        "false"
-                    }
-                ),
-                format!("    <location>{location}</location>"),
-                "  </subject>".to_string(),
-            ]
-            .join("\n")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
     [
-        "These asset names have reference materials in the current space.",
-        "When the user mentions one of these names or a close combination of them, inspect the asset library before answering.",
-        "<available_subjects>",
-        &subject_nodes,
-        "</available_subjects>",
+        "Asset library is available as an on-demand tool, not as a preloaded name list.",
+        "When the user needs a person, product, scene, prop, brand, model, voice, or visual reference, search the asset library with `assets.search` or `Search(path=\"assets://\", query=\"...\")` before inventing details.",
+        "Use `assets.get` or `Read(path=\"assets://<asset-id>\")` for one selected asset; reference images are returned as `absoluteImagePaths` and preview URLs.",
+        &format!("Assets root: {assets_root}"),
     ]
     .join("\n")
 }

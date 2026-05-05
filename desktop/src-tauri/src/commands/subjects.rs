@@ -18,7 +18,9 @@ pub fn handle_subjects_channel(
         "subjects:list" => {
             let _ = ensure_store_hydrated_for_subjects(state);
             with_store(state, |store| {
-                Ok(json!({ "success": true, "subjects": store.subjects.clone() }))
+                Ok(
+                    json!({ "success": true, "assets": store.subjects.clone(), "subjects": store.subjects.clone() }),
+                )
             })
         }
         "subjects:get" => {
@@ -28,7 +30,7 @@ pub fn handle_subjects_channel(
             };
             with_store(state, |store| {
                 let subject = store.subjects.iter().find(|item| item.id == id).cloned();
-                Ok(json!({ "success": true, "subject": subject }))
+                Ok(json!({ "success": true, "asset": subject.clone(), "subject": subject }))
             })
         }
         "subjects:create" => handle_subject_create(payload.clone(), state),
@@ -65,7 +67,7 @@ pub fn handle_subjects_channel(
                     })
                     .cloned()
                     .collect();
-                Ok(json!({ "success": true, "subjects": subjects }))
+                Ok(json!({ "success": true, "assets": subjects.clone(), "subjects": subjects }))
             })
         }
         "subjects:categories:list" => {
