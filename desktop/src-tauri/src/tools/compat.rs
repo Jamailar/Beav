@@ -1546,13 +1546,13 @@ mod tests {
     fn passes_tool_search_through() {
         let normalized = normalize_tool_call(
             "tool_search",
-            &json!({ "query": "redbox-image-director", "includeDirect": true }),
+            &json!({ "query": "image-director", "includeDirect": true }),
         );
 
         assert_eq!(normalized.name, "tool_search");
         assert_eq!(
             normalized.arguments.get("query"),
-            Some(&json!("redbox-image-director"))
+            Some(&json!("image-director"))
         );
     }
 

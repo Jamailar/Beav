@@ -301,10 +301,10 @@ mod tests {
     fn build_skill_runtime_state_lists_multi_image_director_in_image_generation_catalog() {
         let state = build_skill_runtime_state(
             &[SkillRecord {
-                name: "redbox-image-director".to_string(),
+                name: "image-director".to_string(),
                 description: "image desc".to_string(),
-                location: "redbox://skills/redbox-image-director".to_string(),
-                body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
+                location: "redbox://skills/image-director".to_string(),
+                body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -314,19 +314,17 @@ mod tests {
             &["workflow".to_string()],
         );
         assert!(state.active_skills.is_empty());
-        assert!(state
-            .skills_section
-            .contains("redbox-image-director: image desc"));
+        assert!(state.skills_section.contains("image-director: image desc"));
         assert!(state.skills_section.contains(
             "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
         ));
 
         let redclaw_state = build_skill_runtime_state(
             &[SkillRecord {
-                name: "redbox-image-director".to_string(),
+                name: "image-director".to_string(),
                 description: "image desc".to_string(),
-                location: "redbox://skills/redbox-image-director".to_string(),
-                body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# RedBox Image Director\n\nBody".to_string(),
+                location: "redbox://skills/image-director".to_string(),
+                body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -338,6 +336,6 @@ mod tests {
         assert!(redclaw_state.active_skills.is_empty());
         assert!(redclaw_state
             .skills_section
-            .contains("redbox-image-director: image desc"));
+            .contains("image-director: image desc"));
     }
 }

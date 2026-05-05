@@ -20,12 +20,15 @@ mod tests {
             names,
             std::collections::BTreeSet::from([
                 "cover-builder",
+                "image-director",
                 "image-prompt-optimizer",
                 "longform-layout-designer",
-                "redbox-image-director",
-                "redbox-video-director",
+                "member-skill-distiller",
                 "remotion-best-practices",
+                "richpost-layout-designer",
+                "richpost-theme-editor",
                 "skill-creator",
+                "video-director",
                 "writing-style",
             ])
         );

@@ -31,7 +31,7 @@ promptSuffix: 只使用宿主支持的 Remotion scene/entity/animation 能力落
 1. 先 `Read(path="editor://current/remotion")` 读取当前 Composition、scene、selection 与 asset metadata。
 2. 运行时会自动加载内置 `rules/*.md`，覆盖 compositions / animations / sequencing / timing / assets / text-animations / subtitles / transitions / calculate-metadata。
 3. 设计 scene patch 时，优先保留现有 Composition 元数据与未触及 entities。
-4. 生成后通过 `Redbox(resource="editor", operation="run", input={ "workflow": "remotion.generate" | "remotion.save", ... })` 回写宿主工程。
+4. 生成后通过 `Operate(resource="editor", operation="run", input={ "workflow": "remotion.generate" | "remotion.save", ... })` 回写宿主工程。
 
 ## 强制约束
 

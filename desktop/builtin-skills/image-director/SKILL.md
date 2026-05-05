@@ -1,16 +1,16 @@
 ---
-name: redbox-image-director
-description: Use when the user wants to做一整套图片、组图、卡片图、轮播图、配图包或电商套图 in RedBox. First identify the user's motive and final goal, then choose the right image-set type and ordering strategy, lock the batch-level subject anchor, keep the style guide concise, define text placement and image details for each card, and always show the full batch plan to the user first. Only after the user explicitly agrees may you call Redbox(resource="image", operation="generate", input={ ... }) for batch generation. Never submit multi-image generation without user approval.
+name: image-director
+description: Use when the user wants to做一整套图片、组图、卡片图、轮播图、配图包或电商套图. First identify the user's motive and final goal, then choose the right image-set type and ordering strategy, lock the batch-level subject anchor, keep the style guide concise, define text placement and image details for each card, and always show the full batch plan to the user first. Only after the user explicitly agrees may you call Operate(resource="image", operation="generate", input={ ... }) for batch generation. Never submit multi-image generation without user approval.
 allowedRuntimeModes: [chatroom, redclaw, image-generation]
-allowed-tools: Redbox
+allowedTools: [workflow]
 activationScope: turn
 autoActivate: false
-activationHint: 当用户要做文章卡片、图解卡片、演示卡片、小红书图文卡片、知识卡片、电商套图、商品套图、商品详情图、组图、轮播图、多卡配图时，先调用 `Redbox(resource="skill", operation="run", input={ "name": "redbox-image-director" })`。只要最终交付物是成套图片，而不是正文写稿，就优先本技能；不要只因为输入里出现“文章”“内容”“标题”就先启用 writing-style。
-contextNote: 这是 RedBox 的多图编排技能。凡是“把文章/内容做成卡片图、图解卡片、演示卡片、电商套图、轮播图、组图”的任务，优先由它决定套图类型、顺序、统一风格锚点与每张图的文案位置；只有当用户额外要求改写正文或重写文案时，才考虑叠加 writing-style。
+activationHint: 当用户要做文章卡片、图解卡片、演示卡片、小红书图文卡片、知识卡片、电商套图、商品套图、商品详情图、组图、轮播图、多卡配图时，先调用 `Operate(resource="skill", operation="run", input={ "name": "image-director" })`。只要最终交付物是成套图片，而不是正文写稿，就优先本技能；不要只因为输入里出现“文章”“内容”“标题”就先启用 writing-style。
+contextNote: 这是多图编排技能。凡是“把文章/内容做成卡片图、图解卡片、演示卡片、电商套图、轮播图、组图”的任务，优先由它决定套图类型、顺序、统一风格锚点与每张图的文案位置；只有当用户额外要求改写正文或重写文案时，才考虑叠加 writing-style。
 hookMode: inline
 ---
 
-# RedBox Image Director
+# Image Director
 
 Use this skill only for multi-image work.
 
@@ -79,7 +79,7 @@ If a planning choice makes the set harder to read, weaker in sequence, or more v
 Approval rule, repeated on purpose:
 
 - 先出图片编排方案，再等用户明确同意，最后才能批量生成。
-- 没有用户明确同意时，不允许擅自调用 `Redbox(resource="image", operation="generate", input={ ... })`。
+- 没有用户明确同意时，不允许擅自调用 `Operate(resource="image", operation="generate", input={ ... })`。
 - “我已经理解需求” 不算确认；必须是用户明确表示同意方案后，才能进入生成。
 
 ## Motive-Driven Planning
@@ -261,7 +261,7 @@ Planning focus:
 
 ## Default Workflow
 
-Before any multi-image `Redbox(resource="image", operation="generate", input={ ... })` call:
+Before any multi-image `Operate(resource="image", operation="generate", input={ ... })` call:
 
 1. Identify the user's motive, platform, set type, required image count, intended order, and final usage.
 2. Choose the sequence strategy that best matches that motive and set type.
@@ -269,7 +269,7 @@ Before any multi-image `Redbox(resource="image", operation="generate", input={ .
 4. Draft an image plan as a Markdown table with explicit text placement and must-keep details.
 5. Show the plan to the user and wait for explicit confirmation.
 6. Do not treat silence, implied preference, or runtime mode as confirmation.
-7. Only after the user explicitly approves the plan, call `Redbox(resource="image", operation="generate", input={ ... })` once for the whole batch.
+7. Only after the user explicitly approves the plan, call `Operate(resource="image", operation="generate", input={ ... })` once for the whole batch.
 
 After image generation:
 
@@ -374,7 +374,7 @@ This rule is strict:
 
 After the user explicitly confirms, call:
 
-`Redbox(resource="image", operation="generate", input={ ... })`
+`Operate(resource="image", operation="generate", input={ ... })`
 
 The payload should include:
 
