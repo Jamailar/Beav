@@ -1251,48 +1251,6 @@ impl<'a> AppCliExecutor<'a> {
                 }
                 self.call_channel("manuscripts:save", merged)
             }
-            "write-html" | "save-html" => {
-                let path = args
-                    .string(&["path"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "manuscripts save-html requires --path".to_string())?;
-                let target = args
-                    .string(&["target"])
-                    .or_else(|| payload_string(payload, "target"))
-                    .unwrap_or_else(|| "layout".to_string());
-                let html = payload_string(payload, "html")
-                    .or_else(|| args.string(&["html", "content"]))
-                    .ok_or_else(|| "manuscripts save-html requires --html".to_string())?;
-                self.call_channel(
-                    "manuscripts:save-package-html",
-                    json!({
-                        "filePath": path,
-                        "target": target,
-                        "html": html
-                    }),
-                )
-            }
-            "write-template" | "save-template" => {
-                let path = args
-                    .string(&["path"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "manuscripts save-template requires --path".to_string())?;
-                let target = args
-                    .string(&["target"])
-                    .or_else(|| payload_string(payload, "target"))
-                    .unwrap_or_else(|| "layout".to_string());
-                let html = payload_string(payload, "html")
-                    .or_else(|| args.string(&["html", "content"]))
-                    .ok_or_else(|| "manuscripts save-template requires --html".to_string())?;
-                self.call_channel(
-                    "manuscripts:save-package-template",
-                    json!({
-                        "filePath": path,
-                        "target": target,
-                        "html": html
-                    }),
-                )
-            }
             "create" => {
                 let relative = args
                     .string(&["path"])
@@ -1340,38 +1298,9 @@ impl<'a> AppCliExecutor<'a> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("manuscripts")));
         };
-        let args = parse_cli_args(&tokens[1..])?;
         match action {
             "get" => self.call_channel("manuscripts:get-layout", json!({})),
             "save" => self.call_channel("manuscripts:save-layout", payload.clone()),
-            "preset" => self.call_channel(
-                "manuscripts:set-longform-layout-preset",
-                json!({
-                    "filePath": args
-                        .string(&["path", "file-path", "filePath"])
-                        .or_else(|| payload_string(payload, "path"))
-                        .or_else(|| payload_string(payload, "filePath"))
-                        .ok_or_else(|| "manuscripts layout preset requires --path".to_string())?,
-                    "presetId": args
-                        .string(&["preset-id", "presetId"])
-                        .or_else(|| payload_string(payload, "presetId"))
-                        .ok_or_else(|| "manuscripts layout preset requires --preset-id".to_string())?,
-                    "target": args.string(&["target"]).or_else(|| payload_string(payload, "target")),
-                    "modelConfig": payload_field(payload, "modelConfig").cloned(),
-                }),
-            ),
-            "render" => {
-                let mut merged = merge_payload(&args.options, payload);
-                if let Some(object) = merged.as_object_mut() {
-                    let file_path = args
-                        .string(&["path", "file-path", "filePath"])
-                        .or_else(|| payload_string(payload, "path"))
-                        .or_else(|| payload_string(payload, "filePath"))
-                        .ok_or_else(|| "manuscripts layout render requires --path".to_string())?;
-                    object.entry("filePath".to_string()).or_insert(json!(file_path));
-                }
-                self.call_channel("manuscripts:render-package-html", merged)
-            }
             _ => Err(format!("unsupported manuscripts layout action: {action}")),
         }
     }
@@ -5287,7 +5216,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "chat sessions list|get",
             "spaces list|get|create|rename|delete|switch",
             "subjects list|get|search|categories list|create|update|delete",
-            "manuscripts list|read|write|create|delete|theme apply|preview|create|save|delete|background-upload|previews|layout get|save|preset|render",
+            "manuscripts list|read|write|create|delete|theme apply|preview|create|save|delete|background-upload|previews|layout get|save",
             "media list|get|update|bind|delete",
             "image generate|history list|get|providers|models",
             "video generate|project-create|project-list|project-get|project-brief|project-script|project-asset-add",
@@ -5344,8 +5273,6 @@ fn help_response(namespace: Option<&str>) -> Value {
             "manuscripts theme previews --path <relativePath> [payload.themeIds]",
             "manuscripts layout get",
             "manuscripts layout save [payload]",
-            "manuscripts layout preset --path <relativePath> --preset-id <presetId>",
-            "manuscripts layout render --path <relativePath> [--target layout]",
         ],
         "media" => vec![
             "media list",

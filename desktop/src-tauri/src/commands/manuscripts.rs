@@ -32,8 +32,6 @@ const IMAGE_TIMELINE_CLIP_MS: i64 = 500;
 const DEFAULT_MIN_CLIP_MS: i64 = 1000;
 const DEFAULT_EDITOR_MOTION_PROMPT: &str =
     "请根据当前时间线和脚本，生成适合短视频的对象动画与节奏设计。默认不要额外标题、说明或字幕。";
-const PACKAGE_HTML_LAYOUT_TARGET: &str = "layout";
-const PACKAGE_HTML_WECHAT_TARGET: &str = "wechat";
 const RICHPOST_FONT_SCALE_MIN: f64 = 0.8;
 const RICHPOST_FONT_SCALE_MAX: f64 = 1.6;
 const RICHPOST_LINE_HEIGHT_SCALE_MIN: f64 = 0.8;
@@ -121,18 +119,6 @@ struct RichpostThemePreset {
     accent: &'static str,
     heading_font: &'static str,
     body_font: &'static str,
-}
-
-#[derive(Clone, Copy)]
-struct LongformLayoutPreset {
-    id: &'static str,
-    label: &'static str,
-    description: &'static str,
-    surface_bg: &'static str,
-    text: &'static str,
-    accent: &'static str,
-    layout_instructions: &'static str,
-    wechat_instructions: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -278,51 +264,6 @@ pub(crate) fn ensure_richpost_theme_template_file(
 
 fn richpost_theme_catalog() -> &'static [RichpostThemePreset] {
     &[]
-}
-
-fn longform_layout_preset_catalog() -> &'static [LongformLayoutPreset] {
-    &[
-        LongformLayoutPreset {
-            id: "clean-reading",
-            label: "清朗阅读",
-            description: "简洁阅读页，标题清楚，正文克制，适合大多数长文稿件。",
-            surface_bg: "#ffffff",
-            text: "#171717",
-            accent: "#171717",
-            layout_instructions: "采用清晰、克制、稳定的长文阅读页。可以有导语区、章节分隔和轻量强调，但不要花哨。正文默认单栏，只有在局部信息块确实需要时才做双栏。",
-            wechat_instructions: "转成适合公众号正文的清朗单栏版式。标题、导语、引用层级明确，段落宽度和留白稳定，不要做真正多栏正文。",
-        },
-        LongformLayoutPreset {
-            id: "editorial-columns",
-            label: "杂志分栏",
-            description: "更强的版面感，适合专题、评论和叙事型长文。",
-            surface_bg: "#fbf7f0",
-            text: "#241d18",
-            accent: "#8c5a34",
-            layout_instructions: "采用偏杂志化的长文母版。允许在 layout.html 中使用双栏正文、跨栏章节标题、导语卡片和图片穿插，但阅读仍要稳定，不要做网页导航。",
-            wechat_instructions: "保留杂志感的气质，但必须适配公众号单栏正文。可以用大标题、导语卡片、章节分隔和图片穿插，不要保留真实双栏排版。",
-        },
-        LongformLayoutPreset {
-            id: "serif-notes",
-            label: "衬线笔记",
-            description: "偏文稿和随笔感，适合观点、读书、散文类长文。",
-            surface_bg: "#f8f3ea",
-            text: "#2e261f",
-            accent: "#7a5636",
-            layout_instructions: "采用偏文稿和随笔感的长文版式。标题可以用衬线感更强的层级，正文节奏舒展，留白更宽，强调阅读沉浸感。",
-            wechat_instructions: "保持文稿和随笔气质，但仍按公众号单栏阅读页输出。可以强化标题、引文和章节间距，不要出现多栏正文或复杂浮动布局。",
-        },
-        LongformLayoutPreset {
-            id: "report-brief",
-            label: "信息简报",
-            description: "更适合方法、复盘、知识整理和说明型长文。",
-            surface_bg: "#f5f8fc",
-            text: "#1d2733",
-            accent: "#1f5fa6",
-            layout_instructions: "采用更偏信息简报的长文母版。适合清晰的小标题、摘要框、清单、引用和图文说明。layout.html 可以局部使用两栏信息区，但正文主链路仍以易读为先。",
-            wechat_instructions: "把信息简报风格转成公众号友好的单栏信息阅读页。摘要框、清单、提示块可以保留，但正文保持单栏，不做报表式分栏。",
-        },
-    ]
 }
 
 fn richpost_theme_spec_from_preset(theme: &RichpostThemePreset) -> RichpostThemeSpec {
@@ -740,21 +681,6 @@ fn write_richpost_typography_settings_to_manifest(
     );
 }
 
-fn longform_layout_preset(preset_id: &str) -> &'static LongformLayoutPreset {
-    longform_layout_preset_catalog()
-        .iter()
-        .find(|preset| preset.id == preset_id.trim())
-        .unwrap_or(&longform_layout_preset_catalog()[0])
-}
-
-fn longform_layout_preset_from_manifest(manifest: &Value) -> &'static LongformLayoutPreset {
-    manifest
-        .get("longformLayoutPresetId")
-        .and_then(Value::as_str)
-        .map(longform_layout_preset)
-        .unwrap_or(&longform_layout_preset_catalog()[0])
-}
-
 fn sanitize_richpost_master_name(raw: &str) -> Option<String> {
     let mut sanitized = String::new();
     let mut last_was_dash = false;
@@ -934,31 +860,6 @@ pub(crate) fn richpost_theme_state_value(
     manifest: &Value,
 ) -> Value {
     theme::scaffold::richpost_theme_state_value(package_path, manifest)
-}
-
-pub(crate) fn longform_layout_preset_catalog_value() -> Value {
-    json!(longform_layout_preset_catalog()
-        .iter()
-        .map(|preset| {
-            json!({
-                "id": preset.id,
-                "label": preset.label,
-                "description": preset.description,
-                "surfaceColor": preset.surface_bg,
-                "textColor": preset.text,
-                "accentColor": preset.accent
-            })
-        })
-        .collect::<Vec<_>>())
-}
-
-pub(crate) fn longform_layout_preset_state_value(manifest: &Value) -> Value {
-    let preset = longform_layout_preset_from_manifest(manifest);
-    json!({
-        "id": preset.id,
-        "label": preset.label,
-        "description": preset.description
-    })
 }
 
 fn package_block_is_page_break(kind: &str) -> bool {
@@ -1557,22 +1458,6 @@ fn build_remotion_best_practices_prompt_patch(
         sections.push(format!("## Loaded rule: {rule_name}\n{rule_content}"));
     }
     sections.join("\n\n")
-}
-
-fn package_html_file_path(package_path: &std::path::Path, target: &str) -> std::path::PathBuf {
-    if target == PACKAGE_HTML_WECHAT_TARGET {
-        package_wechat_html_path(package_path)
-    } else {
-        package_layout_html_path(package_path)
-    }
-}
-
-fn package_html_template_path(package_path: &std::path::Path, target: &str) -> std::path::PathBuf {
-    if target == PACKAGE_HTML_WECHAT_TARGET {
-        package_wechat_template_path(package_path)
-    } else {
-        package_layout_template_path(package_path)
-    }
 }
 
 fn normalize_package_block_text(value: &str) -> String {
@@ -4204,58 +4089,6 @@ fn persist_richpost_page_plan(
     get_manuscript_package_state(package_path)
 }
 
-fn package_content_outline_prompt(blocks: &[PackageContentBlock]) -> String {
-    if blocks.is_empty() {
-        return "无正文块".to_string();
-    }
-    blocks
-        .iter()
-        .map(|block| {
-            let preview = normalize_package_block_text(&block.text)
-                .chars()
-                .take(24)
-                .collect::<String>();
-            if block.kind == "heading" {
-                format!(
-                    "- {} | heading h{} | {} chars | preview={}",
-                    block.slot,
-                    block.level.unwrap_or(2),
-                    block.char_count,
-                    preview
-                )
-            } else {
-                format!(
-                    "- {} | paragraph | {} chars | preview={}",
-                    block.slot, block.char_count, preview
-                )
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn available_package_asset_slot_lines(image_assets: &[PackageBoundAsset]) -> Vec<String> {
-    let mut lines = vec![
-        "- {{asset:cover_url}} | 封面图片 URL，没有封面时为空".to_string(),
-        "- {{asset:cover_figure}} | 已包好 <figure><img/></figure> 的封面块，没有封面时为空"
-            .to_string(),
-        "- {{asset:image_gallery}} | 已包好图库 HTML，没有配图时为空".to_string(),
-        "- {{asset:image_count}} | 已绑定配图数量".to_string(),
-    ];
-    for (index, _) in image_assets.iter().enumerate() {
-        let slot_index = index + 1;
-        lines.push(format!(
-            "- {{asset:image_{}_url}} | 第 {} 张配图 URL",
-            slot_index, slot_index
-        ));
-        lines.push(format!(
-            "- {{asset:image_{}_alt}} | 第 {} 张配图 alt 文本",
-            slot_index, slot_index
-        ));
-    }
-    lines
-}
-
 pub(crate) fn sync_manuscript_package_html_assets(
     state: Option<&State<'_, AppState>>,
     package_path: &std::path::Path,
@@ -4364,11 +4197,6 @@ fn persist_package_script_body(
             object
                 .entry("richpostThemeSnapshot".to_string())
                 .or_insert_with(|| richpost_theme_spec_storage_value(&default_theme));
-        }
-        if matches!(get_package_kind_from_file_name(file_name), Some("article")) {
-            object
-                .entry("longformLayoutPresetId".to_string())
-                .or_insert(json!(longform_layout_preset_catalog()[0].id));
         }
     }
     write_json_value(&package_manifest_path(package_path), &manifest)?;
@@ -4552,25 +4380,6 @@ pub(crate) fn save_manuscript_content(
     }))
 }
 
-fn normalize_package_html_target(
-    package_kind: &str,
-    raw_target: &str,
-) -> Result<&'static str, String> {
-    let normalized = raw_target.trim().to_ascii_lowercase();
-    match package_kind {
-        "article" => match normalized.as_str() {
-            "" | "layout" => Ok(PACKAGE_HTML_LAYOUT_TARGET),
-            "wechat" => Ok(PACKAGE_HTML_WECHAT_TARGET),
-            _ => Err("长文工程只支持 layout 或 wechat HTML".to_string()),
-        },
-        "post" => match normalized.as_str() {
-            "" | "layout" | "richpost" => Ok(PACKAGE_HTML_LAYOUT_TARGET),
-            _ => Err("图文工程只支持 layout HTML".to_string()),
-        },
-        _ => Err("只有长文和图文工程支持 HTML 资产".to_string()),
-    }
-}
-
 fn default_thrive_post_bindings() -> Value {
     json!({
         "media": [],
@@ -4681,53 +4490,6 @@ fn upsert_thrive_post_target(bindings: &mut Value, platform: &str, variant_path:
     }));
 }
 
-fn package_html_target_label(package_kind: &str, target: &str) -> &'static str {
-    match (package_kind, target) {
-        ("article", PACKAGE_HTML_WECHAT_TARGET) => "公众号正文",
-        ("article", _) => "长文排版",
-        ("post", _) => "图文排版",
-        _ => "HTML 排版",
-    }
-}
-
-fn package_html_base_style_instructions(package_kind: &str, target: &str) -> &'static str {
-    match (package_kind, target) {
-        ("article", PACKAGE_HTML_WECHAT_TARGET) => {
-            "输出适合公众号正文的单栏长文排版。文字区域偏窄、留白稳定、标题层级清晰、引用和强调块克制，整体像真实公众号文章预览。"
-        }
-        ("article", _) => {
-            "输出适合长文阅读的排版页。重点是标题、导语、小标题、正文、总结的层级清晰，可包含封面图和分隔区块，阅读体验比默认 Markdown 明显更强。"
-        }
-        ("post", _) => {
-            "输出适合图文笔记预览的页面。整体偏移动端卡片感，段落更短，视觉节奏更快，封面和配图应自然穿插，但不要做成网页导航站。"
-        }
-        _ => "输出可读、克制、适合发布预览的 HTML 页面。",
-    }
-}
-
-fn package_html_style_instructions(
-    package_kind: &str,
-    target: &str,
-    manifest: Option<&Value>,
-) -> String {
-    let mut instructions = package_html_base_style_instructions(package_kind, target).to_string();
-    if package_kind == "article" {
-        let preset = manifest
-            .map(longform_layout_preset_from_manifest)
-            .unwrap_or(&longform_layout_preset_catalog()[0]);
-        let preset_instructions = if target == PACKAGE_HTML_WECHAT_TARGET {
-            preset.wechat_instructions
-        } else {
-            preset.layout_instructions
-        };
-        instructions.push_str("\n当前长文母版：");
-        instructions.push_str(preset.label);
-        instructions.push_str("。");
-        instructions.push_str(preset_instructions);
-    }
-    instructions
-}
-
 fn asset_prompt_url(asset: &MediaAssetRecord) -> Option<String> {
     asset
         .preview_url
@@ -4745,162 +4507,6 @@ fn asset_prompt_url(asset: &MediaAssetRecord) -> Option<String> {
         })
 }
 
-fn collect_package_prompt_assets(
-    state: &State<'_, AppState>,
-    package_path: &std::path::Path,
-) -> Result<(String, String, String), String> {
-    let (cover_asset, image_assets) = collect_package_bound_assets(Some(state), package_path)?;
-    let cover_block = cover_asset
-        .as_ref()
-        .map(|asset| format!("- {} | url={}", asset.title, asset.url))
-        .unwrap_or_else(|| "无".to_string());
-    let image_block = if image_assets.is_empty() {
-        "无".to_string()
-    } else {
-        image_assets
-            .iter()
-            .enumerate()
-            .map(|(index, asset)| {
-                format!(
-                    "- {} | imageIndex={} | url={}",
-                    asset.title,
-                    index + 1,
-                    asset.url
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    Ok((
-        cover_block,
-        image_block,
-        available_package_asset_slot_lines(&image_assets).join("\n"),
-    ))
-}
-
-fn extract_html_document_from_text(raw: &str, title: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Some(start) = trimmed.find("```") {
-        let fenced = &trimmed[start + 3..];
-        let fenced = fenced
-            .strip_prefix("html")
-            .or_else(|| fenced.strip_prefix("HTML"))
-            .unwrap_or(fenced)
-            .trim_start_matches('\n');
-        if let Some(end) = fenced.find("```") {
-            return extract_html_document_from_text(fenced[..end].trim(), title);
-        }
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.starts_with("<!doctype html") || lower.starts_with("<html") {
-        return Some(trimmed.to_string());
-    }
-    if trimmed.contains("<body")
-        || trimmed.contains("<section")
-        || trimmed.contains("<article")
-        || trimmed.contains("<div")
-    {
-        return Some(format!(
-            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{}</title></head>{}</html>",
-            escape_html(title),
-            trimmed
-        ));
-    }
-    None
-}
-
-fn persist_package_html_template(
-    state: &State<'_, AppState>,
-    package_path: &std::path::Path,
-    file_name: &str,
-    target: &str,
-    html_template: &str,
-) -> Result<Value, String> {
-    write_text_file(
-        &package_html_template_path(package_path, target),
-        html_template,
-    )?;
-    sync_manuscript_package_html_assets(Some(state), package_path, file_name, None, Some(target))
-}
-
-fn generate_package_html_template(
-    state: &State<'_, AppState>,
-    package_path: &std::path::Path,
-    file_name: &str,
-    target: &str,
-    title: &str,
-    body: &str,
-    model_config: Option<&Value>,
-) -> Result<String, String> {
-    let package_kind =
-        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
-    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
-    let content_map_path = package_content_map_path(package_path);
-    let blocks = build_package_content_blocks(&content_map_path, body);
-    let (cover_asset_block, image_asset_block, asset_slot_block) =
-        collect_package_prompt_assets(state, package_path)?;
-    let prompt = render_redbox_prompt(
-        &load_redbox_prompt_or_embedded(
-            "templates/package_html_renderer.txt",
-            include_str!("../../../prompts/library/templates/package_html_renderer.txt"),
-        ),
-        &[
-            (
-                "package_kind",
-                if package_kind == "article" {
-                    "longform"
-                } else {
-                    "richpost"
-                }
-                .to_string(),
-            ),
-            (
-                "target_label",
-                package_html_target_label(package_kind, target).to_string(),
-            ),
-            ("title", title.to_string()),
-            (
-                "style_instructions",
-                package_html_style_instructions(package_kind, target, Some(&manifest)),
-            ),
-            (
-                "available_text_slots",
-                if blocks.is_empty() {
-                    "无正文槽位，可只输出基础骨架和 {{slot:content_tail}}".to_string()
-                } else {
-                    package_content_outline_prompt(&blocks)
-                },
-            ),
-            ("available_asset_slots", asset_slot_block),
-            ("cover_asset_block", cover_asset_block),
-            ("image_asset_block", image_asset_block),
-            ("body_outline", markdown_summary(body, 240)),
-        ],
-    );
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = run_model_structured_task_with_settings(
-        &settings_snapshot,
-        model_config,
-        "你是 RedBox 的工程排版模板生成器。只输出严格 JSON：{\"html\": string}。html 必须是完整 HTML 模板文档，不要附加解释。",
-        &prompt,
-        true,
-    )?;
-    let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
-    let html = parsed
-        .get("html")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| extract_html_document_from_text(&raw, title))
-        .ok_or_else(|| "AI 没有返回可保存的 HTML 模板".to_string())?;
-    extract_html_document_from_text(&html, title)
-        .ok_or_else(|| "生成结果不是有效的 HTML 模板文档".to_string())
-}
-
 fn generate_richpost_page_plan(
     state: &State<'_, AppState>,
     package_path: &std::path::Path,
@@ -4911,74 +4517,6 @@ fn generate_richpost_page_plan(
 ) -> Result<Value, String> {
     let _ = (state, package_path, file_name, title, body, model_config);
     Err("图文分页方案功能已下线".to_string())
-}
-
-fn persist_package_html_document(
-    package_path: &std::path::Path,
-    target: &str,
-    html: &str,
-) -> Result<Value, String> {
-    write_text_file(&package_html_file_path(package_path, target), html)?;
-    let mut manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
-    if let Some(object) = manifest.as_object_mut() {
-        object.insert("updatedAt".to_string(), json!(now_i64()));
-    }
-    write_json_value(&package_manifest_path(package_path), &manifest)?;
-    get_manuscript_package_state(package_path)
-}
-
-fn generate_package_html_document(
-    state: &State<'_, AppState>,
-    package_path: &std::path::Path,
-    file_name: &str,
-    target: &str,
-    title: &str,
-    body: &str,
-    model_config: Option<&Value>,
-) -> Result<String, String> {
-    let package_kind =
-        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
-    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
-    let (cover_asset_block, image_asset_block, _) =
-        collect_package_prompt_assets(state, package_path)?;
-    let prompt = render_redbox_prompt(
-        &load_redbox_prompt_or_embedded(
-            "templates/package_html_document_renderer.txt",
-            include_str!("../../../prompts/library/templates/package_html_document_renderer.txt"),
-        ),
-        &[
-            ("package_kind", "longform".to_string()),
-            (
-                "target_label",
-                package_html_target_label(package_kind, target).to_string(),
-            ),
-            ("title", title.to_string()),
-            (
-                "style_instructions",
-                package_html_style_instructions(package_kind, target, Some(&manifest)),
-            ),
-            ("cover_asset_block", cover_asset_block),
-            ("image_asset_block", image_asset_block),
-            ("body", body.to_string()),
-        ],
-    );
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = run_model_structured_task_with_settings(
-        &settings_snapshot,
-        model_config,
-        "你是 RedBox 的 HTML 排版生成器。只输出严格 JSON：{\"html\": string}。html 必须是完整 HTML 文档，不要附加解释。",
-        &prompt,
-        true,
-    )?;
-    let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
-    let html = parsed
-        .get("html")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
-        .or_else(|| extract_html_document_from_text(&raw, title))
-        .ok_or_else(|| "AI 没有返回可保存的 HTML 文档".to_string())?;
-    extract_html_document_from_text(&html, title)
-        .ok_or_else(|| "生成结果不是有效的 HTML 文档".to_string())
 }
 
 fn manuscript_write_proposal_by_file_path(
@@ -8087,110 +7625,6 @@ pub fn handle_manuscripts_channel(
                     "state": get_manuscript_package_state(&full_path)?
                 }))
             }
-            "manuscripts:save-package-template"
-            | "manuscripts:save-package-template-html"
-            | "manuscripts:save-package-html" => {
-                let channel = channel;
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("");
-                let target = normalize_package_html_target(
-                    package_kind,
-                    &payload_string(&payload, "target").unwrap_or_default(),
-                )?;
-                let html = payload_string(&payload, "html").unwrap_or_default();
-                if html.trim().is_empty() {
-                    return Ok(json!({ "success": false, "error": "html is required" }));
-                }
-                let template_mode = channel != "manuscripts:save-package-html";
-                Ok(json!({
-                    "success": true,
-                    "target": target,
-                    "state": if package_kind == "post" || template_mode {
-                        persist_package_html_template(state, &full_path, file_name, target, &html)?
-                    } else {
-                        persist_package_html_document(&full_path, target, &html)?
-                    },
-                }))
-            }
-            "manuscripts:generate-package-template"
-            | "manuscripts:generate-package-template-html"
-            | "manuscripts:generate-package-html" => {
-                let channel = channel;
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("");
-                let target = normalize_package_html_target(
-                    package_kind,
-                    &payload_string(&payload, "target").unwrap_or_default(),
-                )?;
-                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                let title = manifest
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| title_from_relative_path(file_name));
-                let content =
-                    fs::read_to_string(package_entry_path(&full_path, file_name, Some(&manifest)))
-                        .unwrap_or_default();
-                let template_mode = channel != "manuscripts:generate-package-html";
-                let html = if package_kind == "post" || template_mode {
-                    generate_package_html_template(
-                        state,
-                        &full_path,
-                        file_name,
-                        target,
-                        &title,
-                        &content,
-                        payload_field(&payload, "modelConfig"),
-                    )?
-                } else {
-                    generate_package_html_document(
-                        state,
-                        &full_path,
-                        file_name,
-                        target,
-                        &title,
-                        &content,
-                        payload_field(&payload, "modelConfig"),
-                    )?
-                };
-                Ok(json!({
-                    "success": true,
-                    "target": target,
-                    "html": html,
-                    "state": if package_kind == "post" || template_mode {
-                        persist_package_html_template(state, &full_path, file_name, target, &html)?
-                    } else {
-                        persist_package_html_document(&full_path, target, &html)?
-                    },
-                }))
-            }
             "manuscripts:generate-richpost-page-plan" => {
                 let file_path = payload_string(&payload, "filePath")
                     .or_else(|| payload_string(&payload, "path"))
@@ -8778,65 +8212,6 @@ pub fn handle_manuscripts_channel(
                     "previews": previews,
                 }))
             }
-            "manuscripts:set-longform-layout-preset" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let preset_id = payload_string(&payload, "presetId").unwrap_or_default();
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("article") {
-                    return Ok(
-                        json!({ "success": false, "error": "Only longform packages support layout presets" }),
-                    );
-                }
-                let preset = longform_layout_preset(&preset_id);
-                let target = normalize_package_html_target(
-                    "article",
-                    &payload_string(&payload, "target")
-                        .unwrap_or_else(|| PACKAGE_HTML_LAYOUT_TARGET.to_string()),
-                )?;
-                let mut manifest =
-                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                if let Some(object) = manifest.as_object_mut() {
-                    object.insert("longformLayoutPresetId".to_string(), json!(preset.id));
-                    object.insert("updatedAt".to_string(), json!(now_i64()));
-                }
-                write_json_value(&package_manifest_path(&full_path), &manifest)?;
-                let title = manifest
-                    .get("title")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.trim().is_empty())
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| title_from_relative_path(file_name));
-                let content =
-                    fs::read_to_string(package_entry_path(&full_path, file_name, Some(&manifest)))
-                        .unwrap_or_default();
-                let html = generate_package_html_document(
-                    state,
-                    &full_path,
-                    file_name,
-                    target,
-                    &title,
-                    &content,
-                    payload_field(&payload, "modelConfig"),
-                )?;
-                Ok(json!({
-                    "success": true,
-                    "presetId": preset.id,
-                    "target": target,
-                    "state": persist_package_html_document(&full_path, target, &html)?,
-                }))
-            }
             "manuscripts:render-richpost-pages" => {
                 let file_path = payload_string(&payload, "filePath")
                     .or_else(|| payload_string(&payload, "path"))
@@ -8878,38 +8253,6 @@ pub fn handle_manuscripts_channel(
                 Ok(json!({
                     "success": true,
                     "state": sync_manuscript_package_html_assets(Some(state), &full_path, file_name, None, None)?,
-                }))
-            }
-            "manuscripts:render-package-html" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("");
-                let target = payload_string(&payload, "target")
-                    .filter(|value| !value.trim().is_empty())
-                    .map(|value| normalize_package_html_target(package_kind, &value))
-                    .transpose()?;
-                Ok(json!({
-                    "success": true,
-                    "target": target,
-                    "state": sync_manuscript_package_html_assets(
-                        Some(state),
-                        &full_path,
-                        file_name,
-                        None,
-                        target,
-                    )?,
                 }))
             }
             "manuscripts:get-video-project-state" => {
@@ -11479,15 +10822,6 @@ Remotion 读取结果 JSON：{}\n\
                 )
                 .map_err(|error| error.to_string())?;
                 Ok(json!({ "success": true }))
-            }
-            "manuscripts:format-wechat" => {
-                let title = payload_string(&payload, "title").unwrap_or_default();
-                let content = payload_string(&payload, "content").unwrap_or_default();
-                Ok(json!({
-                    "success": true,
-                    "html": markdown_to_html(&title, &content),
-                    "plainText": content,
-                }))
             }
             _ => Err(format!(
                 "RedBox host does not recognize channel `{channel}`."
