@@ -224,6 +224,7 @@ export interface Message {
       cover?: string;
     }>;
   } | {
+    attachmentId?: string;
     type: 'uploaded-file';
     name: string;
     ext?: string;
@@ -231,18 +232,54 @@ export interface Message {
     thumbnailDataUrl?: string;
     inlineDataUrl?: string;
     workspaceRelativePath?: string;
+    toolPath?: string;
     absolutePath?: string;
     originalAbsolutePath?: string;
     localUrl?: string;
-    kind?: 'text' | 'image' | 'audio' | 'video' | 'binary' | string;
+    kind?: 'text' | 'image' | 'audio' | 'video' | 'document' | 'binary' | string;
     mimeType?: string;
     storageMode?: 'staged' | string;
     directUploadEligible?: boolean;
     processingStrategy?: string;
     deliveryMode?: 'direct-input' | 'tool-read';
+    intakeStatus?: string;
+    capabilities?: Record<string, boolean | undefined>;
+    deliveryPlan?: {
+      mode?: string;
+      toolPath?: string;
+      toolName?: string;
+      requiresTool?: boolean;
+      reason?: string;
+    };
     summary?: string;
     requiresMultimodal?: boolean;
   };
+  attachments?: Array<{
+    type: 'uploaded-file';
+    name: string;
+    attachmentId?: string;
+    workspaceRelativePath?: string;
+    toolPath?: string;
+    absolutePath?: string;
+    originalAbsolutePath?: string;
+    localUrl?: string;
+    inlineDataUrl?: string;
+    thumbnailDataUrl?: string;
+    kind?: string;
+    mimeType?: string;
+    size?: number;
+    ext?: string;
+    storageMode?: string;
+    directUploadEligible?: boolean;
+    processingStrategy?: string;
+    deliveryMode?: string;
+    intakeStatus?: string;
+    capabilities?: Record<string, boolean | undefined>;
+    deliveryPlan?: Record<string, unknown>;
+    summary?: string;
+    requiresMultimodal?: boolean;
+    attachmentLifecycle?: string;
+  }>;
   // New unified timeline
   timeline: ProcessItem[];
   // Plan steps
@@ -266,6 +303,7 @@ export type ChatMessageLinkKind =
   | 'image'
   | 'video'
   | 'audio'
+  | 'manuscript'
   | 'pdf'
   | 'html'
   | 'text'
@@ -426,7 +464,7 @@ const TEXT_LINK_EXTENSIONS = new Set([
 ]);
 const ARCHIVE_LINK_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'tgz']);
 const PREVIEW_VIRTUAL_PATH_RE = /^(workspace|knowledge|manuscripts|media|cover|redclaw):\/\/.+/i;
-const PREVIEW_PATH_LINKIFY_EXT_PATTERN = '(?:png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)';
+const PREVIEW_PATH_LINKIFY_EXT_PATTERN = '(?:png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|thrive|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)';
 const PREVIEW_PATH_LINKIFY_RE = new RegExp(
   String.raw`(^|[\s([{])((?:(?:workspace|knowledge|manuscripts|media|cover|redclaw):\/\/|file:\/\/|local-file:\/\/|redbox-asset:\/\/asset\/|[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]|[A-Za-z0-9._@ -]+[\\/])[^<>"'\n\r]*?\.${PREVIEW_PATH_LINKIFY_EXT_PATTERN})(?=$|[\s)\]},.!?;:'">])`,
   'gi',
@@ -438,7 +476,7 @@ const isPreviewRelativePath = (value: string): boolean => {
   const raw = String(value || '').trim();
   if (!raw || /^https?:/i.test(raw)) return false;
   if (raw.includes('..')) return false;
-  return /\.(png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
+  return /\.(png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|thrive|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
 };
 
 const escapeMarkdownLinkLabel = (value: string): string => (
@@ -510,6 +548,7 @@ const inferMessageLinkKind = (href: string, localPathCandidate?: string): ChatMe
   if (IMAGE_LINK_EXTENSIONS.has(extension)) return 'image';
   if (VIDEO_LINK_EXTENSIONS.has(extension)) return 'video';
   if (AUDIO_LINK_EXTENSIONS.has(extension)) return 'audio';
+  if (extension === 'thrive') return 'manuscript';
   if (extension === 'pdf') return 'pdf';
   if (extension === 'html' || extension === 'htm') return 'html';
   if (TEXT_LINK_EXTENSIONS.has(extension)) return 'text';
@@ -526,6 +565,8 @@ const getMessageLinkKindLabel = (target: ChatMessageLinkTarget): string => {
         return '视频';
       case 'audio':
         return '音频';
+      case 'manuscript':
+        return '稿件';
       case 'web':
       case 'html':
         return '网页';
@@ -549,6 +590,8 @@ const getMessageLinkIcon = (kind: ChatMessageLinkKind) => {
       return Video;
     case 'audio':
       return Music;
+    case 'manuscript':
+      return FileText;
     case 'web':
     case 'html':
       return Globe;
@@ -1265,7 +1308,16 @@ export const MessageItem = memo(({
                 )}
                 {showAttachments && renderKnowledgeReferenceCards(msg.knowledgeReferences)}
                 {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
-                {showAttachments && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
+                {showAttachments && msg.attachments && msg.attachments.length > 0 ? (
+                  <div className="mt-2 flex w-full max-w-[520px] flex-col gap-2">
+                    {msg.attachments.map((attachment, index) => (
+                      <div key={String(attachment.attachmentId || attachment.workspaceRelativePath || attachment.name || index)}>
+                        {renderUploadedFileCard(attachment as Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>)}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {showAttachments && (!msg.attachments || msg.attachments.length === 0) && msg.attachment?.type === 'uploaded-file' && renderUploadedFileCard(msg.attachment)}
               </div>
             );
           })()

@@ -5,7 +5,7 @@
 ## 职责
 
 - `catalog.rs`：工具 descriptor 与 OpenAI schema 定义（kind / approval / concurrency / budget）。
-- `compat.rs`：模型可见工具和历史工具名兼容层，统一映射到内部 canonical 工具入口。
+- `compat.rs`：历史工具名兼容层，只在 session metadata 显式启用 legacy compat 时映射到内部 canonical 工具入口。
   - 兼容层应优先继续收敛到 canonical tools，而不是给 legacy tool 保持完整独立语义面。
 - `packs.rs`：`runtimeMode -> tool pack` 映射，区分模型可见工具集合和内部执行工具集合。
 - `registry.rs`：按 mode 提供模型可见工具列表、schema 列表和提示词可读描述。
@@ -27,7 +27,7 @@
   - `resource`
   - `workflow`
   - `editor`（仅编辑器 runtime）
-- 兼容层保留：
+- 兼容层仅在 `toolCompatMode=legacy` 或 `allowLegacyToolAliases=true` 时接受：
   - `query`
   - `profile_doc`
   - `mcp`
@@ -41,7 +41,7 @@
 - 文件和知识读取优先通过 `Read` / `List` / `Search`，内部再映射到 `resource`；不要继续保留或新增大量 `*_glob` / `*_grep` / `*_read` 一类模型可见工具。
 - 宿主业务能力优先通过 `Operate(resource, operation, input)`，内部再映射到 `workflow`；不要把查询、profile、MCP、skill、runtime control 再拆成独立产品级工具面。
 - 编辑器原生协议优先通过 `Read` / `Write` / `Operate(resource="editor", ...)`，内部再映射到 `editor`。编辑器内部可以有动作分组，但不要把 UI 面板或模板类型直接映射成新的模型可见工具。
-- compatibility alias 只用于迁移，不是长期治理边界。新 prompt、skill、pack、runtime metadata 一律使用 canonical tool names。
+- compatibility alias 只用于迁移，不是长期治理边界。新 prompt、skill、pack、runtime metadata 一律使用 canonical tool names。新会话默认禁用 legacy alias；只有迁移/历史恢复 session 可以显式设置 `toolCompatMode=legacy` 或 `allowLegacyToolAliases=true`。
 - 任何新模型可见工具都必须先回答一个问题：`Read`、`List`、`Search`、`Write`、`Operate`、`bash` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。
 
 ## 当前 Canonical 规则
@@ -84,4 +84,4 @@
 - 工具返回值默认使用结构化 envelope：成功返回 `ok=true`，失败返回 `ok=false` 和结构化 `error.code / error.message / error.retryable`。
 - 能补 `tool` 和 `action` 的结果，一律补齐，方便诊断和 UI 展示。
 - `compat.rs` 只做翻译，不承载新的产品语义。
-- legacy 调用可以继续被翻译，但只能视为迁移输入，不能再作为文档推荐写法。
+- legacy 调用只有在 session 显式启用兼容模式时才会被翻译；默认新会话应返回结构化错误，让模型改用 `Read` / `List` / `Search` / `Write` / `Operate`。

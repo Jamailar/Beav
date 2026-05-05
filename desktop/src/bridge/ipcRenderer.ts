@@ -251,6 +251,7 @@ function inlineAttachmentFallback(payload: unknown): any {
   return {
     success: true,
     attachment: {
+      attachmentId: `inline-${Date.now()}`,
       type: 'uploaded-file',
       name: fileName,
       ext: fileExtFromName(fileName),
@@ -261,8 +262,25 @@ function inlineAttachmentFallback(payload: unknown): any {
       mimeType,
       storageMode: 'inline',
       directUploadEligible: kind === 'image',
-      processingStrategy: kind === 'image' ? 'direct' : 'inline',
+      processingStrategy: kind === 'image' ? 'media-tool' : 'unsupported',
       deliveryMode: kind === 'image' ? 'direct-input' : 'tool-read',
+      intakeStatus: kind === 'image' ? 'ready' : 'unsupported',
+      attachmentLifecycle: 'pending',
+      capabilities: {
+        directInput: kind === 'image',
+        workspaceRead: false,
+        textExtract: false,
+        documentExtract: false,
+        imageVision: kind === 'image',
+        audioTranscribe: false,
+        videoAnalyze: false,
+        videoEdit: false,
+      },
+      deliveryPlan: {
+        mode: kind === 'image' ? 'direct-input' : 'unsupported',
+        requiresTool: kind !== 'image',
+        reason: kind === 'image' ? '' : '浏览器回退上传没有工作区暂存路径，当前工具无法稳定读取。',
+      },
       summary: fileName,
       requiresMultimodal: kind === 'image' || kind === 'audio' || kind === 'video',
     },
@@ -390,6 +408,12 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   }
   if (channel === 'chat:create-inline-attachment') {
     return inlineAttachmentFallback(payload);
+  }
+  if (channel === 'chat:create-path-attachment') {
+    return { success: false, error: `RedBox path attachment unavailable: ${message}` };
+  }
+  if (channel === 'chat:discard-attachments') {
+    return { success: true };
   }
   if (channel === 'chat:transcribe-audio') {
     return { success: false, error: `RedBox audio transcription failed: ${message}` };
@@ -1201,8 +1225,12 @@ function createIpcRenderer() {
     chat: {
       send: (data: Record<string, unknown>) => sendChannel('chat:send-message', data),
       pickAttachment: (payload?: { sessionId?: string }) => invokeChannel('chat:pick-attachment', payload || {}),
+      createPathAttachment: (payload: { path: string; sessionId?: string }) =>
+        invokeChannel('chat:create-path-attachment', payload),
       createInlineAttachment: async (payload: { dataUrl: string; fileName?: string; sessionId?: string }) =>
         invokeChannel('chat:create-inline-attachment', await preflightInlineAttachmentPayload(payload)),
+      discardAttachments: (payload: { attachments: unknown[] }) =>
+        invokeChannel('chat:discard-attachments', payload),
       transcribeAudio: (payload: Record<string, unknown>) => invokeChannel('chat:transcribe-audio', payload),
       cancel: (data?: { sessionId?: string } | string) => sendChannel('chat:cancel', data),
       confirmTool: (callId: string, confirmed: boolean) => sendChannel('chat:confirm-tool', { callId, confirmed }),

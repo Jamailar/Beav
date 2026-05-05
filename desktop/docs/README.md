@@ -64,6 +64,7 @@
 - [runtime-script-execution-v1.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/runtime-script-execution-v1.md)
 - [runtime-agent-job-v1.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/runtime-agent-job-v1.md)
 - [runtime-capability-guardrails.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/runtime-capability-guardrails.md)
+- [video-analysis-agent-architecture-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/video-analysis-agent-architecture-plan.md)
 
 ## Doc Conventions
 

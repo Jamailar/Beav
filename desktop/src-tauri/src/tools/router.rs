@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 use crate::payload_string;
 use crate::tools::catalog::descriptor_by_name;
-use crate::tools::compat::{canonical_tool_name, normalize_tool_call};
+use crate::tools::compat::{canonical_tool_name, is_legacy_tool_alias, normalize_tool_call};
 use crate::tools::plan::ToolRegistryPlan;
 
 #[derive(Debug, Clone)]
@@ -84,6 +84,20 @@ impl ToolRouter {
     }
 
     pub fn prepare(&self, name: &str, arguments: &Value) -> Result<PreparedToolCall, String> {
+        if is_legacy_tool_alias(name) && !self.plan.allow_legacy_tool_aliases {
+            return Err(self
+                .error(
+                    "LEGACY_TOOL_ALIAS_DISABLED",
+                    format!(
+                        "legacy tool alias `{name}` is disabled for this session; use the canonical tools shown in visibleTools"
+                    ),
+                    false,
+                    Some(json!({
+                        "visibleTools": self.visible_tool_names(),
+                    })),
+                )
+                .to_json_string(Some(name), None));
+        }
         let raw_allowed = self.is_allowed_tool_name(name);
         if let Some(tool) = self.plan.direct_mcp_tool(name).cloned() {
             return Ok(PreparedToolCall {
@@ -121,6 +135,18 @@ impl ToolRouter {
                         "suggestedAction": "tool_search",
                         "queryHint": format!("{} {}", tool.server_name, tool.description.clone().unwrap_or_default()),
                         "deferredMcpNamespaces": self.plan.mcp_tool_namespaces,
+                    })),
+                )
+                .to_json_string(Some(name), None));
+        }
+        if self.is_legacy_workflow_command(name, arguments) {
+            return Err(self
+                .error(
+                    "LEGACY_COMMAND_DISABLED",
+                    "legacy workflow command strings are disabled for this session; call workflow with a structured action or use Operate".to_string(),
+                    false,
+                    Some(json!({
+                        "visibleTools": self.visible_tool_names(),
                     })),
                 )
                 .to_json_string(Some(name), None));
@@ -310,6 +336,13 @@ impl ToolRouter {
             || self.prepare_mcp_resource_tool(name).is_some()
     }
 
+    fn is_legacy_workflow_command(&self, name: &str, arguments: &Value) -> bool {
+        !self.plan.allow_legacy_tool_aliases
+            && matches!(name.trim(), "workflow")
+            && arguments.get("action").and_then(Value::as_str).is_none()
+            && arguments.get("command").and_then(Value::as_str).is_some()
+    }
+
     fn prepare_mcp_resource_tool(&self, name: &str) -> Option<McpResourcePreparedCall> {
         if self.plan.mcp_tool_namespaces.is_empty() {
             return None;
@@ -383,6 +416,69 @@ mod tests {
             prepared.arguments.get("action"),
             Some(&json!("image.generate"))
         );
+    }
+
+    #[test]
+    fn router_rejects_legacy_tool_aliases_by_default() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "image-generation",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare(
+                "Redbox",
+                &json!({
+                    "resource": "image",
+                    "operation": "generate",
+                    "input": { "prompt": "cover" }
+                }),
+            )
+            .expect_err("legacy alias should be disabled");
+
+        assert!(error.contains("LEGACY_TOOL_ALIAS_DISABLED"));
+        assert!(error.contains("Operate"));
+    }
+
+    #[test]
+    fn router_allows_legacy_tool_aliases_when_session_opts_in() {
+        let metadata = json!({ "toolCompatMode": "legacy" });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "image-generation",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Redbox",
+                &json!({
+                    "resource": "image",
+                    "operation": "generate",
+                    "input": { "prompt": "cover" }
+                }),
+            )
+            .expect("legacy alias should be allowed in legacy compat mode");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("image.generate"))
+        );
+    }
+
+    #[test]
+    fn router_rejects_legacy_workflow_commands_by_default() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "team",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare("workflow", &json!({ "command": "help" }))
+            .expect_err("legacy command should be disabled");
+
+        assert!(error.contains("LEGACY_COMMAND_DISABLED"));
     }
 
     #[test]

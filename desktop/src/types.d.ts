@@ -1727,7 +1727,9 @@ declare global {
         };
       }) => void;
         pickAttachment: (payload?: { sessionId?: string }) => Promise<{ success?: boolean; canceled?: boolean; error?: string; attachment?: unknown }>;
+        createPathAttachment: (payload: { path: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; attachment?: unknown }>;
         createInlineAttachment: (payload: { dataUrl: string; fileName?: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; attachment?: unknown }>;
+        discardAttachments: (payload: { attachments: unknown[] }) => Promise<{ success?: boolean; error?: string }>;
         transcribeAudio: (payload: { audioBase64: string; mimeType?: string; fileName?: string }) => Promise<{ success?: boolean; text?: string; error?: string; reason?: string; diagnostic?: string }>;
         cancel: (data?: { sessionId?: string } | string) => void;
         confirmTool: (callId: string, confirmed: boolean) => void;

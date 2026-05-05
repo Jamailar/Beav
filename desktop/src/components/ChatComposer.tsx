@@ -33,6 +33,7 @@ import { resolveAssetUrl } from '../utils/pathManager';
 import { ChatComposerFrame, getChatComposerPalette, type ChatComposerTheme, type ChatComposerVariant } from './ChatComposerFrame';
 
 export interface UploadedFileAttachment {
+  attachmentId?: string;
   type: 'uploaded-file';
   name: string;
   ext?: string;
@@ -40,15 +41,35 @@ export interface UploadedFileAttachment {
   thumbnailDataUrl?: string;
   inlineDataUrl?: string;
   workspaceRelativePath?: string;
+  toolPath?: string;
   absolutePath?: string;
   originalAbsolutePath?: string;
   localUrl?: string;
-  kind?: 'text' | 'image' | 'audio' | 'video' | 'binary' | string;
+  kind?: 'text' | 'image' | 'audio' | 'video' | 'document' | 'binary' | string;
   mimeType?: string;
   storageMode?: 'staged' | string;
   directUploadEligible?: boolean;
   processingStrategy?: string;
   deliveryMode?: 'direct-input' | 'tool-read';
+  intakeStatus?: 'ready' | 'unsupported' | 'failed' | string;
+  attachmentLifecycle?: 'pending' | 'committed' | 'orphaned' | 'deleted' | string;
+  capabilities?: {
+    directInput?: boolean;
+    workspaceRead?: boolean;
+    textExtract?: boolean;
+    documentExtract?: boolean;
+    imageVision?: boolean;
+    audioTranscribe?: boolean;
+    videoAnalyze?: boolean;
+    videoEdit?: boolean;
+  };
+  deliveryPlan?: {
+    mode?: 'direct-input' | 'workspace-tool' | 'media-tool' | 'document-tool' | 'unsupported' | string;
+    toolPath?: string;
+    toolName?: string;
+    requiresTool?: boolean;
+    reason?: string;
+  };
   summary?: string;
   requiresMultimodal?: boolean;
 }
@@ -122,10 +143,12 @@ export interface ChatComposerProps {
   onSubmit: () => void;
   placeholder: string;
   attachment?: UploadedFileAttachment | null;
+  attachments?: UploadedFileAttachment[];
   attachmentStatus?: ChatComposerAttachmentStatus | null;
   attachmentPreviewMode?: 'default' | 'compact-status';
   onPickAttachment?: (() => void | Promise<void>) | null;
   onClearAttachment?: (() => void) | null;
+  onRemoveAttachment?: ((attachment: UploadedFileAttachment) => void) | null;
   modelOptions?: ChatModelOption[];
   selectedModelKey?: string;
   onSelectedModelKeyChange?: (key: string) => void;
@@ -155,6 +178,7 @@ const IMAGE_ATTACHMENT_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$
 const VIDEO_ATTACHMENT_EXT_RE = /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i;
 const AUDIO_ATTACHMENT_EXT_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*)?$/i;
 const TEXT_ATTACHMENT_EXT_RE = /\.(txt|md|markdown|json|csv|tsv|doc|docx|pdf|rtf|xml|yaml|yml|ts|tsx|js|jsx|py|rs|java|go|c|cpp|h|hpp)(?:[?#].*)?$/i;
+const DOCUMENT_ATTACHMENT_EXT_RE = /\.(pdf|docx?|xlsx?|pptx?|rtf)(?:[?#].*)?$/i;
 
 function modelSupportsChat(model: string | { id?: unknown; capability?: unknown; capabilities?: unknown }): boolean {
   if (typeof model === 'string') {
@@ -218,6 +242,7 @@ function getAttachmentVisualKind(attachment: UploadedFileAttachment): ComposerAt
   if (kind === 'image' || mimeType.startsWith('image/') || IMAGE_ATTACHMENT_EXT_RE.test(source)) return 'image';
   if (kind === 'video' || mimeType.startsWith('video/') || VIDEO_ATTACHMENT_EXT_RE.test(source)) return 'video';
   if (kind === 'audio' || mimeType.startsWith('audio/') || AUDIO_ATTACHMENT_EXT_RE.test(source)) return 'audio';
+  if (kind === 'document' || DOCUMENT_ATTACHMENT_EXT_RE.test(source)) return 'text';
   if (kind === 'text' || mimeType.startsWith('text/') || TEXT_ATTACHMENT_EXT_RE.test(source)) return 'text';
   return 'file';
 }
@@ -727,6 +752,91 @@ function ComposerAttachmentPlaceholder({
   );
 }
 
+function ComposerMediaAttachmentSlot({
+  attachment,
+  darkEmbedded,
+  variant,
+  disabled,
+  onRemove,
+}: {
+  attachment: UploadedFileAttachment;
+  darkEmbedded: boolean;
+  variant: ChatComposerVariant;
+  disabled: boolean;
+  onRemove: () => void;
+}) {
+  const visualKind = getAttachmentVisualKind(attachment);
+  const source = getAttachmentSource(attachment);
+  const frameClass = variant === 'empty' ? 'h-[88px] w-[64px]' : 'h-[68px] w-[50px]';
+  const iconClass = variant === 'empty' ? 'h-6 w-6' : 'h-5 w-5';
+  const frameToneClass = darkEmbedded
+    ? 'border-white/12 bg-white/[0.045] text-white/58'
+    : 'border-[#d8d8d4] bg-[#f4f4f1] text-[#7d878f]';
+
+  return (
+    <div className={clsx(
+      'group/media relative shrink-0 rotate-[-7deg] overflow-hidden rounded-[6px] border transition-all duration-200',
+      frameClass,
+      frameToneClass,
+      !disabled && 'hover:rotate-[-5deg]',
+    )}>
+      {source && visualKind === 'image' ? (
+        <img src={source} alt={attachment.name} className="h-full w-full object-cover" />
+      ) : source && visualKind === 'video' ? (
+        <video src={source} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">
+          {getAttachmentKindIcon(visualKind, iconClass)}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        disabled={disabled}
+        className={clsx(
+          'absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border text-[11px] opacity-0 shadow-sm transition-opacity group-hover/media:opacity-100 disabled:cursor-not-allowed',
+          darkEmbedded
+            ? 'border-white/10 bg-[#1b2026] text-white/70 hover:text-white'
+            : 'border-white bg-white text-[#786d5f] hover:text-[#2d2822]',
+        )}
+        title="移除文件"
+        aria-label={`移除 ${attachment.name}`}
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function ComposerMediaAttachmentStack({
+  attachments,
+  darkEmbedded,
+  variant,
+  disabled,
+  onRemove,
+}: {
+  attachments: UploadedFileAttachment[];
+  darkEmbedded: boolean;
+  variant: ChatComposerVariant;
+  disabled: boolean;
+  onRemove: (attachment: UploadedFileAttachment) => void;
+}) {
+  return (
+    <div className="flex max-w-[180px] shrink-0 flex-wrap items-start gap-2">
+      {attachments.map((item) => (
+        <ComposerMediaAttachmentSlot
+          key={item.attachmentId || item.workspaceRelativePath || item.toolPath || item.absolutePath || item.originalAbsolutePath || item.name}
+          attachment={item}
+          darkEmbedded={darkEmbedded}
+          variant={variant}
+          disabled={disabled}
+          onRemove={() => onRemove(item)}
+        />
+      ))}
+    </div>
+  );
+}
+
 export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(function ChatComposer({
   theme = 'default',
   variant = 'main',
@@ -736,10 +846,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   onSubmit,
   placeholder,
   attachment,
+  attachments,
   attachmentStatus,
   attachmentPreviewMode = 'default',
   onPickAttachment,
   onClearAttachment,
+  onRemoveAttachment,
   modelOptions = [],
   selectedModelKey = '',
   onSelectedModelKeyChange,
@@ -1074,12 +1186,35 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   }, [filteredKnowledgeMentionOptions, knowledgeMentionActiveIndex, toggleKnowledgeMention]);
 
   const wrapperClass = variant === 'empty' ? 'px-4 pt-4' : 'px-3.5 pt-3';
+  const attachmentItems = attachments && attachments.length > 0 ? attachments : attachment ? [attachment] : [];
+  const primaryAttachment = attachmentItems[0] || null;
   const compactAttachmentMode = attachmentPreviewMode === 'compact-status';
   const resolvedAttachmentStatus: ChatComposerAttachmentStatus | null = attachmentStatus
-    || (attachment ? 'uploaded' : null);
-  const showCompactAttachmentTray = compactAttachmentMode && (Boolean(attachment) || resolvedAttachmentStatus === 'uploading');
-  const showInlineAttachmentPlaceholder = showAttachmentButton && !attachment;
-  const inlineAttachmentPlaceholder = showInlineAttachmentPlaceholder ? (
+    || (attachmentItems.length > 0 ? 'uploaded' : null);
+  const mediaSlotAttachments = attachmentItems.filter((item) => {
+    const kind = getAttachmentVisualKind(item);
+    return kind === 'image' || kind === 'video';
+  });
+  const showAttachmentInMediaSlot = mediaSlotAttachments.length > 0;
+  const showCompactAttachmentTray = compactAttachmentMode
+    && !showAttachmentInMediaSlot
+    && (attachmentItems.length > 0 || resolvedAttachmentStatus === 'uploading');
+  const showInlineAttachmentPlaceholder = showAttachmentButton && attachmentItems.length === 0;
+  const inlineAttachmentSlot = showAttachmentInMediaSlot ? (
+    <ComposerMediaAttachmentStack
+      attachments={mediaSlotAttachments}
+      darkEmbedded={darkEmbedded}
+      variant={variant}
+      disabled={disabled || isBusy || attachmentBusy}
+      onRemove={(item) => {
+        if (onRemoveAttachment) {
+          onRemoveAttachment(item);
+        } else {
+          onClearAttachment?.();
+        }
+      }}
+    />
+  ) : showInlineAttachmentPlaceholder ? (
     <ComposerAttachmentPlaceholder
       darkEmbedded={darkEmbedded}
       variant={variant}
@@ -1087,11 +1222,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
       onClick={() => onPickAttachment?.()}
     />
   ) : null;
-  const textareaClass = attachment
+  const textareaClass = primaryAttachment && !showAttachmentInMediaSlot
     ? variant === 'empty'
       ? 'mt-3 w-full bg-transparent pr-1 pb-1 text-[16px] focus:outline-none resize-none min-h-[64px] max-h-[220px] overflow-y-auto'
       : 'mt-2.5 w-full bg-transparent pr-1 pb-1 text-[14px] focus:outline-none resize-none min-h-[52px] max-h-[180px] overflow-y-auto'
-    : showInlineAttachmentPlaceholder
+    : showInlineAttachmentPlaceholder || showAttachmentInMediaSlot
       ? variant === 'empty'
         ? 'w-full bg-transparent px-2 py-0.5 text-[16px] focus:outline-none resize-none min-h-[72px] max-h-[96px] overflow-y-auto'
         : 'w-full bg-transparent px-2 py-0.5 text-[14px] focus:outline-none resize-none min-h-[56px] max-h-[160px] overflow-y-auto'
@@ -1329,17 +1464,27 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
         {showCompactAttachmentTray ? (
           <>
             <ComposerCompactAttachmentTray
-              attachment={attachment}
+              attachment={primaryAttachment}
               status={resolvedAttachmentStatus}
               darkEmbedded={darkEmbedded}
               onRemove={() => onClearAttachment?.()}
             />
             {textarea}
           </>
-        ) : attachment ? (
+        ) : showAttachmentInMediaSlot ? (
+          <div className={clsx(
+            'flex items-start gap-5',
+            variant === 'empty' ? 'px-8 pt-5 pb-0' : 'px-4 pt-3 pb-0',
+          )}>
+            {inlineAttachmentSlot}
+            <div className="min-w-0 flex-1">
+              {textarea}
+            </div>
+          </div>
+        ) : primaryAttachment ? (
           <div className={wrapperClass}>
             <ComposerAttachmentPreview
-              attachment={attachment}
+              attachment={primaryAttachment}
               darkEmbedded={darkEmbedded}
               variant={variant}
               onRemove={() => onClearAttachment?.()}
@@ -1352,7 +1497,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             'flex items-start gap-5',
             variant === 'empty' ? 'px-8 pt-5 pb-0' : 'px-4 pt-3 pb-0',
           )}>
-            {inlineAttachmentPlaceholder}
+            {inlineAttachmentSlot}
             <div className="min-w-0 flex-1">
               {textarea}
             </div>

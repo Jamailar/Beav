@@ -23,6 +23,24 @@ use crate::{
     now_ms, payload_field, payload_string, AppState,
 };
 
+const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[
+    "taskHints",
+    "intent",
+    "platform",
+    "taskType",
+    "formatTarget",
+    "allowedTools",
+    "allowedAppCliActions",
+    "saveSubdir",
+    "sourcePlatform",
+    "sourceNoteId",
+    "sourceMode",
+    "sourceTitle",
+    "sourceManuscriptPath",
+    "forceMultiAgent",
+    "forceLongRunningTask",
+];
+
 fn payload_member_mention_advisor_id(payload: &Value) -> Option<String> {
     payload
         .get("memberMention")
@@ -220,26 +238,13 @@ fn merge_task_hints_into_session_metadata(
                 "taskHints".to_string(),
                 Value::Object(task_hints_object.clone()),
             );
-            for field in [
-                "intent",
-                "platform",
-                "taskType",
-                "formatTarget",
-                "allowedTools",
-                "allowedAppCliActions",
-                "initialContext",
-                "saveSubdir",
-                "sourcePlatform",
-                "sourceNoteId",
-                "sourceMode",
-                "sourceTitle",
-                "sourceManuscriptPath",
-                "forceMultiAgent",
-                "forceLongRunningTask",
-            ] {
-                if let Some(value) = task_hints_object.get(field) {
-                    metadata.insert(field.to_string(), value.clone());
+            for field in TASK_SCOPED_METADATA_FIELDS {
+                if let Some(value) = task_hints_object.get(*field) {
+                    metadata.insert((*field).to_string(), value.clone());
                 }
+            }
+            if let Some(value) = task_hints_object.get("initialContext") {
+                metadata.insert("initialContext".to_string(), value.clone());
             }
         }
         if !requested_skills.is_empty() {
@@ -256,6 +261,38 @@ fn merge_task_hints_into_session_metadata(
         Ok(())
     })?;
     Ok(requested_skills)
+}
+
+fn clear_stale_task_hints_from_metadata(metadata: &Value) -> Option<Value> {
+    let mut metadata_object = metadata.as_object()?.clone();
+    let mut changed = false;
+    for field in TASK_SCOPED_METADATA_FIELDS {
+        changed |= metadata_object.remove(*field).is_some();
+    }
+    changed.then(|| Value::Object(metadata_object))
+}
+
+fn clear_stale_task_hints_from_session_metadata(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<(), String> {
+    with_store_mut(state, |store| {
+        let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        else {
+            return Ok(());
+        };
+        let Some(metadata) = session.metadata.as_ref() else {
+            return Ok(());
+        };
+        if let Some(next_metadata) = clear_stale_task_hints_from_metadata(metadata) {
+            session.metadata = Some(next_metadata);
+            session.updated_at = now_iso();
+        }
+        Ok(())
+    })
 }
 
 fn collect_active_skill_items_for_session(
@@ -327,22 +364,19 @@ pub fn handle_send_channel(
                 started_at,
                 Some(format!("chars={}", message.chars().count())),
             );
-            let requested_skills = payload_field(&payload, "taskHints")
-                .map(|task_hints| {
-                    session_id
-                        .as_deref()
-                        .map(|value| {
-                            merge_task_hints_into_session_metadata(state, value, task_hints)
-                        })
-                        .transpose()
-                        .map(|value| {
-                            value.unwrap_or_else(|| {
-                                requested_skill_names_from_task_hints(task_hints)
-                            })
-                        })
-                })
-                .transpose()?
-                .unwrap_or_default();
+            let requested_skills = match payload_field(&payload, "taskHints") {
+                Some(task_hints) if task_hints.is_object() => session_id
+                    .as_deref()
+                    .map(|value| merge_task_hints_into_session_metadata(state, value, task_hints))
+                    .transpose()?
+                    .unwrap_or_else(|| requested_skill_names_from_task_hints(task_hints)),
+                _ => {
+                    if let Some(active_session_id) = session_id.as_deref() {
+                        clear_stale_task_hints_from_session_metadata(state, active_session_id)?;
+                    }
+                    Vec::new()
+                }
+            };
             if !requested_skills.is_empty() {
                 append_debug_log_state(
                     state,
@@ -394,12 +428,21 @@ pub fn handle_send_channel(
             } else {
                 None
             };
+            let runtime_attachment = payload_field(&payload, "attachments")
+                .and_then(|value| {
+                    value
+                        .as_array()
+                        .filter(|items| !items.is_empty())
+                        .map(|_| value)
+                })
+                .cloned()
+                .or_else(|| payload_field(&payload, "attachment").cloned());
             let turn = build_chat_send_turn(
                 session_id.clone(),
                 message.clone(),
                 display_content.clone(),
                 payload_field(&payload, "modelConfig"),
-                payload_field(&payload, "attachment").cloned(),
+                runtime_attachment.clone(),
             );
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
             let completed_result = run_chat_send_turn(app, state, &prepared_turn, &message);
@@ -416,6 +459,11 @@ pub fn handle_send_channel(
                         .unwrap_or(Value::Null),
                 );
             }
+            crate::commands::chat_sessions_wander::commit_chat_attachments_state(
+                state,
+                runtime_attachment.as_ref(),
+                session_id.as_deref(),
+            )?;
             log_timing_event(
                 state,
                 "ai",
@@ -530,5 +578,81 @@ pub fn handle_send_channel(
             )
         }
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clear_stale_task_hints_from_metadata;
+    use serde_json::json;
+
+    #[test]
+    fn clears_task_scoped_metadata_without_dropping_session_context() {
+        let metadata = json!({
+            "contextType": "redclaw",
+            "initialContext": "space bootstrap",
+            "taskHints": {
+                "intent": "manuscript_creation",
+                "requireProfileRead": true,
+                "requireSourceRead": true,
+                "requireSave": true
+            },
+            "intent": "manuscript_creation",
+            "platform": "xiaohongshu",
+            "taskType": "direct_write",
+            "formatTarget": "markdown",
+            "allowedTools": ["resource", "workflow"],
+            "allowedAppCliActions": ["manuscripts.writeCurrent"],
+            "saveSubdir": "wander",
+            "sourcePlatform": "xiaohongshu",
+            "sourceNoteId": "note-1",
+            "sourceMode": "knowledge",
+            "sourceTitle": "source",
+            "sourceManuscriptPath": "wander/source.thrive",
+            "forceMultiAgent": true,
+            "forceLongRunningTask": true,
+            "currentAuthoringProjectPath": "wander/demo.thrive"
+        });
+
+        let cleaned = clear_stale_task_hints_from_metadata(&metadata).expect("cleaned metadata");
+
+        for field in [
+            "taskHints",
+            "intent",
+            "platform",
+            "taskType",
+            "formatTarget",
+            "allowedTools",
+            "allowedAppCliActions",
+            "saveSubdir",
+            "sourcePlatform",
+            "sourceNoteId",
+            "sourceMode",
+            "sourceTitle",
+            "sourceManuscriptPath",
+            "forceMultiAgent",
+            "forceLongRunningTask",
+        ] {
+            assert!(cleaned.get(field).is_none(), "{field} should be cleared");
+        }
+        assert_eq!(cleaned.get("contextType"), Some(&json!("redclaw")));
+        assert_eq!(
+            cleaned.get("initialContext"),
+            Some(&json!("space bootstrap"))
+        );
+        assert_eq!(
+            cleaned.get("currentAuthoringProjectPath"),
+            Some(&json!("wander/demo.thrive"))
+        );
+    }
+
+    #[test]
+    fn leaves_metadata_unchanged_when_no_task_fields_exist() {
+        let metadata = json!({
+            "contextType": "redclaw",
+            "initialContext": "space bootstrap"
+        });
+
+        assert!(clear_stale_task_hints_from_metadata(&metadata).is_none());
     }
 }

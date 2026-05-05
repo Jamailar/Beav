@@ -142,6 +142,11 @@ fn attachment_requested_direct_multimodal(attachment: Option<&Value>) -> bool {
     let Some(attachment) = attachment else {
         return false;
     };
+    if let Some(items) = attachment.as_array() {
+        return items
+            .iter()
+            .any(|item| attachment_requested_direct_multimodal(Some(item)));
+    }
     let mode = attachment
         .get("deliveryMode")
         .and_then(Value::as_str)
@@ -189,6 +194,21 @@ fn should_retry_as_text_after_multimodal_error(error: &str, attachment: Option<&
 
 fn multimodal_text_fallback_attachment(attachment: &Value) -> Value {
     let mut downgraded = attachment.clone();
+    if let Some(items) = downgraded.as_array_mut() {
+        for item in items {
+            if let Some(object) = item.as_object_mut() {
+                object.insert(
+                    "deliveryMode".to_string(),
+                    Value::String("tool-read".to_string()),
+                );
+                object.insert(
+                    "multimodalFallbackReason".to_string(),
+                    Value::String("provider-rejected-direct-media-input".to_string()),
+                );
+            }
+        }
+        return downgraded;
+    }
     if let Some(object) = downgraded.as_object_mut() {
         object.insert(
             "deliveryMode".to_string(),

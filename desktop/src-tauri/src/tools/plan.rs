@@ -45,6 +45,7 @@ pub struct ToolRegistryPlan {
     pub runtime_mode: String,
     pub internal_tool_names: Vec<String>,
     pub visible_tools: Vec<ToolDescriptor>,
+    pub allow_legacy_tool_aliases: bool,
     pub direct_app_cli_actions: Vec<ActionDescriptor>,
     pub deferred_app_cli_actions: Vec<DeferredActionEntry>,
     pub deferred_action_namespaces: Vec<String>,
@@ -214,6 +215,7 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .unwrap_or_else(|| base_tool_names_for_metadata(&runtime_mode, params.session_metadata));
     let visible_tool_names =
         visible_tool_names_for_internal_tools(&runtime_mode, &internal_tool_names);
+    let allow_legacy_tool_aliases = legacy_tool_aliases_allowed(params.session_metadata);
     let mut visible_tools = visible_tool_names
         .iter()
         .filter_map(|name| descriptor_by_name(name))
@@ -285,6 +287,7 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         runtime_mode,
         internal_tool_names,
         visible_tools,
+        allow_legacy_tool_aliases,
         direct_app_cli_actions,
         deferred_app_cli_actions,
         deferred_action_namespaces,
@@ -297,6 +300,24 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         mcp_exposure_mode: mcp_exposure.mode,
         fingerprint,
     }
+}
+
+pub(crate) fn legacy_tool_aliases_allowed(metadata: Option<&Value>) -> bool {
+    let Some(metadata) = metadata else {
+        return false;
+    };
+    if metadata
+        .get("allowLegacyToolAliases")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    metadata
+        .get("toolCompatMode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| matches!(value, "legacy" | "compat" | "compatibility"))
 }
 
 pub fn base_tool_names_for_metadata(runtime_mode: &str, metadata: Option<&Value>) -> Vec<String> {
@@ -578,7 +599,9 @@ fn canonical_metadata_for_hash(metadata: Option<&Value>) -> String {
     for key in [
         "allowedTools",
         "allowedAppCliActions",
+        "allowLegacyToolAliases",
         "taskIntent",
+        "toolCompatMode",
         "runtimeMode",
     ] {
         if let Some(value) = object.get(key) {
@@ -712,6 +735,23 @@ mod tests {
 
         assert_eq!(names, vec!["Read", "List", "Search"]);
         assert!(plan.direct_app_cli_actions.is_empty());
+    }
+
+    #[test]
+    fn legacy_tool_aliases_are_opt_in() {
+        let default_plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "team",
+            ..ToolRegistryPlanParams::default()
+        });
+        assert!(!default_plan.allow_legacy_tool_aliases);
+
+        let metadata = json!({ "allowLegacyToolAliases": true });
+        let legacy_plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "team",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        assert!(legacy_plan.allow_legacy_tool_aliases);
     }
 
     #[test]

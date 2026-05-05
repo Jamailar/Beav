@@ -21,7 +21,8 @@ example.thrive
   bindings.json
   variants/
     xiaohongshu.md
-    weibo.md
+    reddit.md
+    x.md
 ```
 
 Rules:
@@ -147,7 +148,7 @@ The post format is intentionally small:
 - Platform-specific edits are stored as optional Markdown variants.
 - Published platform posts are bindings, not separate local file types.
 
-This keeps the same `.thrive` post usable for Xiaohongshu, Weibo, Threads, LinkedIn, WeChat Channels, and future post-like platforms without changing the package structure.
+This keeps the same `.thrive` post usable for Xiaohongshu, Reddit, X, Threads, LinkedIn, WeChat Channels, and future post-like platforms without changing the package structure.
 
 ## Current App Commands
 

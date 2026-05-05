@@ -182,6 +182,7 @@ const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
     'image',
     'video',
     'audio',
+    'manuscript',
     'pdf',
     'html',
     'text',
@@ -1005,7 +1006,8 @@ export function RedClaw({
             return;
         }
 
-        const routing = pendingMessage.sessionRouting || 'current';
+        const isAuthoringTask = pendingMessage.taskHints?.intent === 'manuscript_creation';
+        const routing = pendingMessage.sessionRouting || (isAuthoringTask ? 'new' : 'current');
         if (routing !== 'new') {
             routedPendingMessageRef.current = pendingMessage;
             setResolvedPendingMessage(pendingMessage);
@@ -2349,6 +2351,21 @@ export function RedClaw({
         })();
     }, []);
 
+    const handleOpenManuscript = useCallback((filePath: string) => {
+        const normalizedPath = String(filePath || '').trim();
+        if (!normalizedPath) return;
+        handlePreviewLink({
+            href: `manuscripts://${normalizedPath}`,
+            label: normalizedPath.split('/').filter(Boolean).pop() || normalizedPath,
+            kind: normalizedPath.toLowerCase().endsWith('.thrive') ? 'manuscript' : 'text',
+            resolvedUrl: '',
+            isLocal: true,
+            localPathCandidate: `manuscripts://${normalizedPath}`,
+            extension: normalizedPath.toLowerCase().endsWith('.thrive') ? 'thrive' : undefined,
+            sourceMessageId: 'redclaw-manuscript-list',
+        });
+    }, [handlePreviewLink]);
+
     const handleClosePreview = useCallback(() => {
         setPreviewTarget(null);
     }, []);
@@ -2431,6 +2448,7 @@ export function RedClaw({
                 onSwitchSession={switchHistorySession}
                 onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
                 onRenameSession={renameUnifiedHistorySession}
+                onOpenManuscript={handleOpenManuscript}
             />
         );
     }, [
@@ -2440,6 +2458,7 @@ export function RedClaw({
         deleteRoomFromRedClaw,
         deleteUnifiedHistorySession,
         historyLoading,
+        handleOpenManuscript,
         onGlobalSidebarContentChange,
         renameUnifiedHistorySession,
         selectedRoomId,

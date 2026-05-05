@@ -457,6 +457,7 @@ fn resolve_reference_from_object(
         .or_else(|| get("originalAbsolutePath"))
         .or_else(|| get("path").filter(|candidate| Path::new(candidate).is_absolute()));
     let relative_path = get("workspaceRelativePath")
+        .or_else(|| get("toolPath"))
         .or_else(|| get("relativePath"))
         .or_else(|| get("path").filter(|candidate| !Path::new(candidate).is_absolute()));
     let remote_path = get("previewUrl").or_else(|| get("localUrl"));

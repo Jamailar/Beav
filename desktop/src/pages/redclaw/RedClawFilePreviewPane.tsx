@@ -32,6 +32,8 @@ const getKindIcon = (kind: ChatMessageLinkKind) => {
             return Video;
         case 'audio':
             return Music;
+        case 'manuscript':
+            return FileText;
         case 'web':
         case 'html':
             return Globe;
@@ -54,6 +56,8 @@ const getKindLabel = (target: ChatMessageLinkTarget): string => {
                 return '视频';
             case 'audio':
                 return '音频';
+            case 'manuscript':
+                return '稿件';
             case 'web':
             case 'html':
                 return '网页';
@@ -87,6 +91,7 @@ export function RedClawFilePreviewPane({
         target.kind === 'image'
         || target.kind === 'video'
         || target.kind === 'audio'
+        || target.kind === 'manuscript'
         || target.kind === 'pdf'
         || target.kind === 'html'
         || target.kind === 'text'
@@ -132,6 +137,14 @@ export function RedClawFilePreviewPane({
             );
         }
 
+        if ((target.kind === 'text' || target.kind === 'html' || target.kind === 'manuscript') && typeof target.previewText === 'string') {
+            return (
+                <pre className="h-full w-full overflow-auto bg-surface-secondary/30 p-4 font-mono text-xs leading-5 text-text-secondary whitespace-pre-wrap">
+                    {target.previewText}
+                </pre>
+            );
+        }
+
         if (loadFailed || !target.resolvedUrl || !canInlinePreview) {
             return (
                 <div className="flex h-full min-h-[280px] flex-col items-center justify-center gap-4 px-8 text-center">
@@ -151,14 +164,6 @@ export function RedClawFilePreviewPane({
                         打开
                     </button>
                 </div>
-            );
-        }
-
-        if ((target.kind === 'text' || target.kind === 'html') && typeof target.previewText === 'string') {
-            return (
-                <pre className="h-full w-full overflow-auto bg-surface-secondary/30 p-4 font-mono text-xs leading-5 text-text-secondary whitespace-pre-wrap">
-                    {target.previewText}
-                </pre>
             );
         }
 

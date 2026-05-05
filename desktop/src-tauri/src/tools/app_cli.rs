@@ -11,8 +11,8 @@ use crate::events::{
 use crate::helpers::{
     compose_markdown_with_frontmatter, ensure_manuscript_file_name,
     extract_markdown_frontmatter_block, get_default_package_entry, get_draft_type_from_file_name,
-    normalize_relative_path, strip_markdown_frontmatter, ARTICLE_DRAFT_EXTENSION,
-    AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
+    normalize_relative_path, storage_safe_file_stem, strip_markdown_frontmatter,
+    ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
@@ -23,6 +23,7 @@ use crate::skills::{
 };
 use crate::tools::plan::{
     build_tool_registry_plan_for_session, build_tool_registry_plan_for_session_with_mcp,
+    legacy_tool_aliases_allowed,
 };
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::tools::tool_search::tool_search_payload;
@@ -360,6 +361,16 @@ fn build_authoring_project_relative_path(
     ))
 }
 
+fn build_authoring_project_id(title: &str, kind: AuthoringProjectKind) -> String {
+    match kind {
+        AuthoringProjectKind::Redpost => {
+            let stem = storage_safe_file_stem(title);
+            format!("{stem}-{}", crate::now_ms())
+        }
+        AuthoringProjectKind::Redarticle => make_id("redarticle"),
+    }
+}
+
 impl CliArgs {
     fn string(&self, keys: &[&str]) -> Option<String> {
         keys.iter().find_map(|key| match self.options.get(*key) {
@@ -426,6 +437,22 @@ impl<'a> AppCliExecutor<'a> {
         })
         .ok()
         .flatten()
+    }
+
+    fn session_allows_legacy_tool_aliases(&self) -> bool {
+        let Some(session_id) = self.session_id else {
+            return false;
+        };
+        with_store(self.state, |store| {
+            Ok(store
+                .chat_sessions
+                .iter()
+                .find(|item| item.id == session_id)
+                .and_then(|item| item.metadata.as_ref())
+                .map(|metadata| legacy_tool_aliases_allowed(Some(metadata)))
+                .unwrap_or(false))
+        })
+        .unwrap_or(false)
     }
 
     fn ensure_action_allowed(&self, action: &str) -> Result<(), String> {
@@ -530,6 +557,15 @@ impl<'a> AppCliExecutor<'a> {
                 "workflow requires a structured action",
                 false,
                 None,
+            ));
+        }
+        if !self.session_allows_legacy_tool_aliases() {
+            return Err(app_cli_error_json(
+                None,
+                "LEGACY_COMMAND_DISABLED",
+                "legacy workflow command strings are disabled for this session",
+                false,
+                compat,
             ));
         }
         let command = payload_string(&normalized_arguments, "command").ok_or_else(|| {
@@ -3784,10 +3820,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 .as_deref(),
         )
         .unwrap_or_else(|| self.default_authoring_project_kind());
-        let project_id = make_id(match project_kind {
-            AuthoringProjectKind::Redpost => "redpost",
-            AuthoringProjectKind::Redarticle => "redarticle",
-        });
+        let project_id = build_authoring_project_id(&title, project_kind);
         let preferred_subdir = self
             .current_authoring_target_preference()
             .and_then(|preference| preference.preferred_subdir);
@@ -5326,14 +5359,14 @@ mod tests {
     }
 
     #[test]
-    fn build_authoring_project_relative_path_uses_id_and_kind_extension() {
+    fn build_authoring_project_relative_path_uses_stem_and_kind_extension() {
         assert_eq!(
             build_authoring_project_relative_path(
                 Some("wander"),
-                "redpost-123",
+                "测试标题-123",
                 AuthoringProjectKind::Redpost,
             ),
-            "wander/redpost-123.thrive"
+            "wander/测试标题-123.thrive"
         );
         assert_eq!(
             build_authoring_project_relative_path(
@@ -5343,6 +5376,15 @@ mod tests {
             ),
             "articles/redarticle-456.redarticle"
         );
+    }
+
+    #[test]
+    fn build_authoring_project_id_uses_title_for_post_files() {
+        let project_id =
+            build_authoring_project_id("测试标题:Redpost", AuthoringProjectKind::Redpost);
+
+        assert!(project_id.starts_with("测试标题-Redpost-"));
+        assert!(!project_id.starts_with("redpost-"));
     }
 
     #[test]

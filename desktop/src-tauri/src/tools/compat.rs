@@ -5,6 +5,42 @@ pub struct NormalizedToolCall {
     pub arguments: Value,
 }
 
+pub fn is_legacy_tool_alias(name: &str) -> bool {
+    matches!(
+        name.trim(),
+        "Redbox"
+            | "app_cli"
+            | "query"
+            | "redbox_app_query"
+            | "profile_doc"
+            | "redbox_profile_doc"
+            | "mcp"
+            | "redbox_mcp"
+            | "skill"
+            | "redbox_skill"
+            | "runtime_control"
+            | "redbox_runtime_control"
+            | "redbox_list_spaces"
+            | "redbox_list_advisors"
+            | "redbox_search_knowledge"
+            | "redbox_list_work_items"
+            | "redbox_search_memory"
+            | "redbox_list_chat_sessions"
+            | "redbox_get_settings_summary"
+            | "redbox_list_redclaw_projects"
+            | "redbox_fs"
+            | "redbox_list_directory"
+            | "redbox_read_path"
+            | "knowledge_search"
+            | "knowledge_glob"
+            | "knowledge_grep"
+            | "knowledge_read"
+            | "redclaw_update_profile_doc"
+            | "redclaw_update_creator_profile"
+            | "redbox_editor"
+    )
+}
+
 pub fn canonical_tool_name(name: &str) -> &str {
     match name.trim() {
         "Read" | "List" | "Search" => "resource",
@@ -507,7 +543,10 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("manuscript.get"),
             )
         }
-        ("manuscript" | "manuscripts", "update" | "run" | "write") => app_cli_action_call(
+        (
+            "manuscript" | "manuscripts",
+            "update" | "run" | "write" | "writecurrent" | "write-current",
+        ) => app_cli_action_call(
             "manuscripts.writeCurrent",
             payload,
             Some("Operate"),
@@ -600,12 +639,20 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("skill" | "skills", "list") => {
             app_cli_action_call("skills.list", payload, Some("Operate"), Some("skill.list"))
         }
-        ("skill" | "skills", "run" | "create" | "confirm") => app_cli_action_call(
-            "skills.invoke",
-            payload,
-            Some("Operate"),
-            Some("skill.invoke"),
-        ),
+        ("skill" | "skills", "run" | "invoke" | "create" | "confirm") => {
+            let mut map = payload.as_object().cloned().unwrap_or_default();
+            if !map.contains_key("name") {
+                if let Some(id) = map.get("id").and_then(Value::as_str) {
+                    map.insert("name".to_string(), json!(id));
+                }
+            }
+            app_cli_action_call(
+                "skills.invoke",
+                Value::Object(map),
+                Some("Operate"),
+                Some("skill.invoke"),
+            )
+        }
         ("mcp", "list") => {
             app_cli_action_call("mcp.list", payload, Some("Operate"), Some("mcp.list"))
         }
@@ -1684,6 +1731,56 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("content")),
             Some(&json!("body"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_manuscript_write_current_to_structured_save() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "manuscript",
+                "operation": "writeCurrent",
+                "input": { "content": "body" }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("manuscripts.writeCurrent"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("content")),
+            Some(&json!("body"))
+        );
+    }
+
+    #[test]
+    fn normalizes_redbox_skill_invoke_id_to_name() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "skill",
+                "operation": "invoke",
+                "id": "writing-style"
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("skills.invoke"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("name")),
+            Some(&json!("writing-style"))
         );
     }
 
