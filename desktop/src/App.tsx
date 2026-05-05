@@ -21,7 +21,7 @@ const HomePage = lazy(async () => ({ default: (await import('./pages/Home')).Hom
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
-const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
+const ManuscriptEditorHost = lazy(async () => ({ default: (await import('./components/manuscripts/ManuscriptEditorHost')).ManuscriptEditorHost }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
 const WanderPage = lazy(async () => ({ default: (await import('./pages/Wander')).Wander }));
 const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw')).RedClaw }));
@@ -346,7 +346,6 @@ function AuthenticatedApp() {
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
-  const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
   const [activeManuscriptEditorFile, setActiveManuscriptEditorFile] = useState<string | null>(null);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['home']));
@@ -555,15 +554,9 @@ function AuthenticatedApp() {
   const navigateToManuscript = (filePath: string) => {
     uiTraceInteraction('app', 'open_manuscript_editor', { sourceView: currentView });
     setActiveManuscriptEditorFile(filePath);
-    setPendingManuscriptFile(filePath);
-  };
-
-  const clearPendingManuscriptFile = () => {
-    setPendingManuscriptFile(null);
   };
 
   const closeManuscriptEditor = () => {
-    setPendingManuscriptFile(null);
     setActiveManuscriptEditorFile(null);
     setImmersiveMode(false);
   };
@@ -926,14 +919,12 @@ function AuthenticatedApp() {
       {activeManuscriptEditorFile && (
         <div className="fixed inset-0 z-[9500] bg-background">
           <Suspense fallback={<ViewLoadingFallback />}>
-            <ManuscriptsPage
-              pendingFile={pendingManuscriptFile || activeManuscriptEditorFile}
-              onFileConsumed={clearPendingManuscriptFile}
+            <ManuscriptEditorHost
+              filePath={activeManuscriptEditorFile}
               onNavigateToRedClaw={navigateToRedClaw}
               onNavigateToGenerationStudio={navigateToGenerationStudio}
               isActive={true}
-              editorOnly
-              onCloseEditor={closeManuscriptEditor}
+              onClose={closeManuscriptEditor}
               onImmersiveModeChange={setImmersiveMode}
             />
           </Suspense>
