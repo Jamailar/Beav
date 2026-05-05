@@ -48,3 +48,11 @@ export function saveAttachmentDraft(
     // Ignore storage failures and keep the in-memory draft usable.
   }
 }
+
+export function clearAttachmentDraft(surface: string, scopeId: string): void {
+  try {
+    window.localStorage.removeItem(storageKey(surface, scopeId));
+  } catch {
+    // Ignore storage failures and keep the in-memory draft usable.
+  }
+}
