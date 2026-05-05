@@ -22,6 +22,7 @@ interface RedClawFilePreviewPaneProps {
     onClose: () => void;
     onOpenExternal: (target: ChatMessageLinkTarget) => void | Promise<void>;
     onRevealInFolder: (target: ChatMessageLinkTarget) => void | Promise<void>;
+    variant?: 'card' | 'sidebar';
 }
 
 const getKindIcon = (kind: ChatMessageLinkKind) => {
@@ -82,6 +83,7 @@ export function RedClawFilePreviewPane({
     onClose,
     onOpenExternal,
     onRevealInFolder,
+    variant = 'card',
 }: RedClawFilePreviewPaneProps) {
     const [loadFailed, setLoadFailed] = useState(false);
     const [copied, setCopied] = useState(false);
@@ -219,11 +221,21 @@ export function RedClawFilePreviewPane({
             />
         );
     };
+    const sidebarVariant = variant === 'sidebar';
 
     return (
-        <section className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-surface-primary">
-            <div className="flex min-h-[72px] items-center gap-3 border-b border-border px-4 py-3">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-surface-secondary text-text-tertiary">
+        <section className={clsx(
+            'flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface-primary',
+            sidebarVariant ? 'rounded-none border-0' : 'rounded-2xl border border-border'
+        )}>
+            <div className={clsx(
+                'flex items-center gap-3 border-b border-border',
+                sidebarVariant ? 'min-h-[56px] px-4 py-2' : 'min-h-[72px] px-4 py-3'
+            )}>
+                <div className={clsx(
+                    'flex shrink-0 items-center justify-center bg-surface-secondary text-text-tertiary',
+                    sidebarVariant ? 'h-9 w-9 rounded-lg' : 'h-11 w-11 rounded-xl'
+                )}>
                     <Icon className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -238,7 +250,10 @@ export function RedClawFilePreviewPane({
                     <button
                         type="button"
                         onClick={() => void copySource()}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary"
+                        className={clsx(
+                            'inline-flex items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary',
+                            sidebarVariant ? 'h-8 w-8' : 'h-9 w-9'
+                        )}
                         title="复制路径"
                     >
                         {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
@@ -247,7 +262,10 @@ export function RedClawFilePreviewPane({
                         <button
                             type="button"
                             onClick={() => void onRevealInFolder(target)}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary"
+                            className={clsx(
+                                'inline-flex items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary',
+                                sidebarVariant ? 'h-8 w-8' : 'h-9 w-9'
+                            )}
                             title="在文件夹中显示"
                         >
                             <FolderOpen className="h-4 w-4" />
@@ -256,7 +274,10 @@ export function RedClawFilePreviewPane({
                     <button
                         type="button"
                         onClick={() => void onOpenExternal(target)}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary"
+                        className={clsx(
+                            'inline-flex items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary',
+                            sidebarVariant ? 'h-8 w-8' : 'h-9 w-9'
+                        )}
                         title="打开"
                     >
                         <ExternalLink className="h-4 w-4" />
@@ -264,7 +285,10 @@ export function RedClawFilePreviewPane({
                     <button
                         type="button"
                         onClick={onClose}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary"
+                        className={clsx(
+                            'inline-flex items-center justify-center rounded-lg text-text-tertiary transition hover:bg-surface-secondary hover:text-text-primary',
+                            sidebarVariant ? 'h-8 w-8' : 'h-9 w-9'
+                        )}
                         title="关闭预览"
                     >
                         <X className="h-4 w-4" />

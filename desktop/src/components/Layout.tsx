@@ -23,6 +23,7 @@ interface LayoutProps {
   globalSidebarContent?: ReactNode;
   activeModalView?: ViewType;
   renderTitleBarContent?: (context: { currentView: ViewType }) => ReactNode;
+  renderTitleBarActions?: (context: { currentView: ViewType }) => ReactNode;
 }
 
 type SidebarNavItem = {
@@ -121,6 +122,7 @@ function AppTitleBar({
   toggleNotificationDrawer,
   themeMode,
   setThemeMode,
+  extraActions,
 }: {
   immersiveMode: ImmersiveMode;
   enabled: boolean;
@@ -133,6 +135,7 @@ function AppTitleBar({
   toggleNotificationDrawer: () => void;
   themeMode: ThemeMode;
   setThemeMode: Dispatch<SetStateAction<ThemeMode>>;
+  extraActions: ReactNode;
 }) {
   const { t } = useI18n();
   if (!enabled) return null;
@@ -182,6 +185,7 @@ function AppTitleBar({
         {content}
       </div>
       <div className="app-titlebar-actions">
+        {extraActions}
         <button
           type="button"
           onClick={toggleNotificationDrawer}
@@ -212,7 +216,7 @@ function AppTitleBar({
   );
 }
 
-export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent }: LayoutProps) {
+export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
   const [appVersion, setAppVersion] = useState('');
@@ -248,6 +252,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const isFixedViewportView = false;
   const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
   const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
+  const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
   const activeSpaceName = useMemo(
@@ -759,6 +764,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         toggleNotificationDrawer={toggleNotificationDrawer}
         themeMode={themeMode}
         setThemeMode={setThemeMode}
+        extraActions={titleBarActions}
       />
 
       {globalNotice && (

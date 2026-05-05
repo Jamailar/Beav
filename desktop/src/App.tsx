@@ -350,6 +350,7 @@ function AuthenticatedApp() {
   const [redclawOnboardingVersion, setRedclawOnboardingVersion] = useState(0);
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
+  const [redClawTitleBarActions, setRedClawTitleBarActions] = useState<ReactNode>(null);
   const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
   const [activeManuscriptEditorFile, setActiveManuscriptEditorFile] = useState<string | null>(null);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
@@ -806,6 +807,9 @@ function AuthenticatedApp() {
           if (currentView === 'knowledge') return knowledgeTitleBarContent;
           return null;
         }}
+        renderTitleBarActions={({ currentView }) => (
+          currentView === 'redclaw' ? redClawTitleBarActions : null
+        )}
       >
         {shouldRenderView(mountedViews, currentView, persistentViews, 'home') && (
           <div className={currentView === 'home' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
@@ -882,8 +886,10 @@ function AuthenticatedApp() {
                 onOpenRedClawOnboarding={openRedClawOnboarding}
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 onGlobalSidebarContentChange={setRedClawGlobalSidebarContent}
+                onTitleBarActionsChange={setRedClawTitleBarActions}
                 onOpenChatSurface={() => setCurrentView('redclaw')}
                 onOpenManuscriptEditor={navigateToManuscript}
+                titleBarActive={currentView === 'redclaw'}
               />
             </Suspense>
           </div>
