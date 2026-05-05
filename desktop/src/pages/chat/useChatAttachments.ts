@@ -2,7 +2,7 @@ import { getCurrentWindow, type DragDropEvent } from '@tauri-apps/api/window';
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 import type { ChatComposerHandle, UploadedFileAttachment } from '../../components/ChatComposer';
-import { loadAttachmentDraft, saveAttachmentDraft } from '../../features/chat/attachmentDraftStore';
+import { clearAttachmentDraft, loadAttachmentDraft, saveAttachmentDraft } from '../../features/chat/attachmentDraftStore';
 
 interface UseChatAttachmentsInput {
   allowFileUpload: boolean;
@@ -36,6 +36,11 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
     reader.readAsDataURL(file);
   });
+}
+
+function isPersistentAttachmentDraftScope(scopeId: string): boolean {
+  const normalized = String(scopeId || '').trim();
+  return Boolean(normalized && !normalized.startsWith('__'));
 }
 
 export function useChatAttachments({
@@ -124,11 +129,18 @@ export function useChatAttachments({
   }, [focusComposer]);
 
   useEffect(() => {
+    if (!isPersistentAttachmentDraftScope(attachmentDraftScopeId)) {
+      clearAttachmentDraft('chat', attachmentDraftScopeId);
+      setIsAttachmentUploading(false);
+      setPendingAttachments([]);
+      return;
+    }
     const draft = loadAttachmentDraft('chat', attachmentDraftScopeId);
     setPendingAttachments(draft ? [draft] : []);
   }, [attachmentDraftScopeId]);
 
   useEffect(() => {
+    if (!isPersistentAttachmentDraftScope(attachmentDraftScopeId)) return;
     saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachments[0] || null);
   }, [attachmentDraftScopeId, pendingAttachments]);
 
