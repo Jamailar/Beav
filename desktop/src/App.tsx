@@ -997,6 +997,7 @@ function AuthenticatedApp() {
 
 type OfficialAuthGateMode = 'checking' | 'login' | 'expired';
 type LoginNoticeType = 'idle' | 'success' | 'error';
+type OfficialAuthRealm = 'cn' | 'global';
 
 function isOfficialAuthLoggedIn(
   snapshot: Awaited<ReturnType<typeof window.ipcRenderer.auth.getState>> | null,
@@ -1037,6 +1038,9 @@ async function buildWechatQrDataUrl(value: string): Promise<string> {
 }
 
 function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
+  const [activeRealm, setActiveRealm] = useState<OfficialAuthRealm>('cn');
+  const [smsBusy, setSmsBusy] = useState(false);
+  const [smsForm, setSmsForm] = useState({ phone: '', code: '', inviteCode: '' });
   const [wechatBusy, setWechatBusy] = useState(false);
   const [wechatQrUrl, setWechatQrUrl] = useState('');
   const [wechatStatus, setWechatStatus] = useState('');
@@ -1053,6 +1057,29 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
 
   const refreshAuthAfterLogin = useCallback(() => {
     void window.ipcRenderer.officialAuth.bootstrap({ reason: 'login-gate-authenticated' });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadConfig = async () => {
+      try {
+        const result = await window.ipcRenderer.invoke('redbox-auth:get-config') as {
+          success?: boolean;
+          activeRealm?: OfficialAuthRealm;
+        };
+        if (!cancelled && result?.success) {
+          setActiveRealm(result.activeRealm === 'global' ? 'global' : 'cn');
+        }
+      } catch {
+        if (!cancelled) {
+          setActiveRealm('cn');
+        }
+      }
+    };
+    void loadConfig();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const stopWechatPolling = useCallback(() => {
@@ -1147,10 +1174,64 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     }
   }, [pollWechatStatus, setLoginNotice, stopWechatPolling]);
 
+  const sendSmsCode = useCallback(async () => {
+    const phone = String(smsForm.phone || '').trim();
+    if (!phone) {
+      setLoginNotice('error', '请先输入手机号');
+      return;
+    }
+    setSmsBusy(true);
+    try {
+      const result = await window.ipcRenderer.invoke('redbox-auth:send-sms-code', { phone }) as {
+        success?: boolean;
+        error?: string;
+      };
+      if (!result?.success) {
+        throw new Error(result?.error || '验证码发送失败');
+      }
+      setLoginNotice('success', '验证码已发送');
+    } catch (error) {
+      setLoginNotice('error', error instanceof Error ? error.message : '验证码发送失败');
+    } finally {
+      setSmsBusy(false);
+    }
+  }, [setLoginNotice, smsForm.phone]);
+
+  const handleSmsAuth = useCallback(async (mode: 'login' | 'register') => {
+    const phone = String(smsForm.phone || '').trim();
+    const code = String(smsForm.code || '').trim();
+    if (!phone || !code) {
+      setLoginNotice('error', '请输入手机号和验证码');
+      return;
+    }
+    setSmsBusy(true);
+    try {
+      const result = await window.ipcRenderer.invoke(
+        mode === 'login' ? 'redbox-auth:login-sms' : 'redbox-auth:register-sms',
+        { phone, code, inviteCode: smsForm.inviteCode.trim() || undefined },
+      ) as {
+        success?: boolean;
+        session?: unknown;
+        error?: string;
+      };
+      if (!result?.success || !result.session) {
+        throw new Error(result?.error || (mode === 'login' ? '登录失败' : '注册失败'));
+      }
+      setLoginNotice('success', mode === 'login' ? '登录成功，正在进入工作台…' : '注册成功，正在进入工作台…');
+      refreshAuthAfterLogin();
+    } catch (error) {
+      setLoginNotice('error', error instanceof Error ? error.message : (mode === 'login' ? '登录失败' : '注册失败'));
+    } finally {
+      setSmsBusy(false);
+    }
+  }, [refreshAuthAfterLogin, setLoginNotice, smsForm.code, smsForm.inviteCode, smsForm.phone]);
+
   const startGoogleLogin = useCallback(() => {
     setLoginNotice('error', 'Google 登录通道尚未接入。');
   }, [setLoginNotice]);
 
+  const isMainlandRealm = activeRealm === 'cn';
+  const authBusy = wechatBusy || smsBusy;
   const title = mode === 'checking'
     ? 'Checking session'
     : 'Welcome back';
@@ -1200,25 +1281,98 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  <button
-                    type="button"
-                    onClick={startGoogleLogin}
-                    disabled={wechatBusy}
-                    className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
-                  >
-                    <img src={googleIcon} alt="" className="h-5 w-5" />
-                    Continue with Google
-                  </button>
+                  {isMainlandRealm && (
+                    <form
+                      className="space-y-3 rounded-xl border border-slate-200 bg-white/80 p-4 shadow-[0_10px_34px_rgba(15,23,42,0.04)]"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleSmsAuth('login');
+                      }}
+                    >
+                      <div className="text-sm font-medium text-slate-700">手机号登录</div>
+                      <input
+                        type="tel"
+                        value={smsForm.phone}
+                        onChange={(event) => setSmsForm((prev) => ({ ...prev, phone: event.target.value }))}
+                        placeholder="手机号"
+                        autoComplete="tel"
+                        disabled={authBusy}
+                        className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 disabled:opacity-60"
+                      />
+                      <div className="grid grid-cols-[1fr_auto] gap-2">
+                        <input
+                          type="text"
+                          value={smsForm.code}
+                          onChange={(event) => setSmsForm((prev) => ({ ...prev, code: event.target.value }))}
+                          placeholder="短信验证码"
+                          autoComplete="one-time-code"
+                          disabled={authBusy}
+                          className="h-11 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 disabled:opacity-60"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void sendSmsCode()}
+                          disabled={authBusy}
+                          className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          发送验证码
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={smsForm.inviteCode}
+                        onChange={(event) => setSmsForm((prev) => ({ ...prev, inviteCode: event.target.value }))}
+                        placeholder="邀请码（可选）"
+                        disabled={authBusy}
+                        className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 disabled:opacity-60"
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="submit"
+                          disabled={authBusy}
+                          className="h-11 rounded-lg bg-emerald-500 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:opacity-60"
+                        >
+                          {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleSmsAuth('register')}
+                          disabled={authBusy}
+                          className="h-11 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          注册并登录
+                        </button>
+                      </div>
+                    </form>
+                  )}
 
-                  <button
-                    type="button"
-                    onClick={() => void startWechatLogin()}
-                    disabled={wechatBusy}
-                    className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
-                  >
-                    {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-emerald-500" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
-                    Continue with WeChat
-                  </button>
+                  <div className="space-y-3">
+                    {isMainlandRealm && (
+                      <div className="text-center text-xs font-medium text-slate-400">第三方登录</div>
+                    )}
+
+                    {!isMainlandRealm && (
+                      <button
+                        type="button"
+                        onClick={startGoogleLogin}
+                        disabled={authBusy}
+                        className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                      >
+                        <img src={googleIcon} alt="" className="h-5 w-5" />
+                        Continue with Google
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => void startWechatLogin()}
+                      disabled={authBusy}
+                      className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                    >
+                      {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-emerald-500" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
+                      Continue with WeChat
+                    </button>
+                  </div>
 
                   {wechatQrUrl && (
                     <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white/80 p-4 shadow-[0_10px_34px_rgba(15,23,42,0.04)]">
