@@ -494,6 +494,75 @@ pub(crate) fn invoke_gemini_structured_chat(
     Ok(text)
 }
 
+pub(crate) fn invoke_video_analysis_by_protocol(
+    protocol: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    mime_type: &str,
+    base64_data: &str,
+) -> Result<String, String> {
+    if protocol != "gemini" {
+        return Err(format!(
+            "video analysis direct input currently requires a Gemini-compatible provider, got {protocol}"
+        ));
+    }
+    let body = json!({
+        "system_instruction": {
+            "parts": [{ "text": system_prompt }]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    { "text": user_prompt },
+                    {
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": base64_data,
+                        }
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json"
+        }
+    });
+    let endpoint = gemini_url(
+        base_url,
+        &format!("/models/{}:generateContent", model_name),
+        api_key,
+    );
+    let response = run_curl_json_response("POST", &endpoint, None, &[], Some(body), Some(120))?;
+    let response = ensure_successful_ai_response(
+        "gemini",
+        "video-analysis",
+        "POST",
+        &endpoint,
+        model_name,
+        response,
+    )?;
+    let text = response
+        .get("candidates")
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|value| value.as_array())
+        .and_then(|parts| parts.first())
+        .and_then(|part| part.get("text"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        return Err("Video Analysis Agent returned an empty response".to_string());
+    }
+    Ok(text)
+}
+
 pub(crate) fn fetch_models_by_protocol(
     protocol: &str,
     base_url: &str,

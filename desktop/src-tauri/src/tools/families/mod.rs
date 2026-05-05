@@ -34,25 +34,25 @@ pub fn default_direct_namespaces(
 ) -> Vec<&'static str> {
     let mut namespaces = match normalize_runtime_mode(runtime_mode) {
         "image-generation" => vec![
-            "tools",
             image::NAMESPACE,
+            "video_analysis",
             subjects::NAMESPACE,
             "skills",
             "media",
         ],
-        "knowledge" => vec!["tools", subjects::NAMESPACE, memory::NAMESPACE, "skills"],
+        "knowledge" => vec![subjects::NAMESPACE, memory::NAMESPACE, "skills"],
         "redclaw" => vec![
-            "tools",
-            redclaw::TASK_NAMESPACE,
+            memory::NAMESPACE,
+            redclaw::PROFILE_NAMESPACE,
             image::NAMESPACE,
+            "video_analysis",
+            redclaw::TASK_NAMESPACE,
             "video",
             manuscripts::NAMESPACE,
             subjects::NAMESPACE,
-            memory::NAMESPACE,
             "skills",
         ],
         "background-maintenance" | "diagnostics" => vec![
-            "tools",
             runtime::NAMESPACE,
             runtime::TASKS_NAMESPACE,
             redclaw::TASK_NAMESPACE,
@@ -61,7 +61,7 @@ pub fn default_direct_namespaces(
             "settings",
         ],
         "video-editor" | "audio-editor" => vec![
-            "tools",
+            "video_analysis",
             image::NAMESPACE,
             "video",
             subjects::NAMESPACE,
@@ -70,20 +70,23 @@ pub fn default_direct_namespaces(
             "skills",
         ],
         "team" => vec![
-            "tools",
+            team::SESSION_NAMESPACE,
+            "team.member",
+            team::TASK_NAMESPACE,
             subjects::NAMESPACE,
             memory::NAMESPACE,
             "skills",
             image::NAMESPACE,
             manuscripts::NAMESPACE,
+            "video_analysis",
         ],
         _ => vec![
-            "tools",
             subjects::NAMESPACE,
             memory::NAMESPACE,
             "skills",
             image::NAMESPACE,
             manuscripts::NAMESPACE,
+            "video_analysis",
         ],
     };
     match task_intent
@@ -94,6 +97,9 @@ pub fn default_direct_namespaces(
     {
         "image" | "image-generation" | "cover" => {
             prepend_namespace(&mut namespaces, image::NAMESPACE)
+        }
+        "video-analysis" | "video_analyze" | "video-analyze" => {
+            prepend_namespace(&mut namespaces, "video_analysis")
         }
         "video" | "video-generation" => prepend_namespace(&mut namespaces, "video"),
         "redclaw-task" | "scheduled-task" => {
@@ -141,6 +147,7 @@ pub fn action_family_for_action(action: &str) -> Option<&'static str> {
     let namespace = action.split('.').next().unwrap_or(action);
     match namespace {
         "image" => Some(image::FAMILY),
+        "video_analysis" => Some("video_analysis"),
         "video" => Some("video"),
         "manuscripts" => Some(manuscripts::FAMILY),
         "memory" => Some(memory::FAMILY),
@@ -151,7 +158,6 @@ pub fn action_family_for_action(action: &str) -> Option<&'static str> {
         "cli_runtime" => Some(cli_runtime::FAMILY),
         "skills" => Some("skills"),
         "mcp" => Some("mcp"),
-        "tools" => Some("tools"),
         _ => None,
     }
 }
@@ -186,8 +192,9 @@ mod tests {
     fn image_generation_policy_prioritizes_image_family() {
         let namespaces = default_direct_namespaces("image-generation", None);
 
-        assert_eq!(namespaces.first(), Some(&"tools"));
+        assert_eq!(namespaces.first(), Some(&image::NAMESPACE));
         assert!(namespaces.contains(&image::NAMESPACE));
+        assert!(!namespaces.contains(&"tools"));
         assert!(!namespaces.contains(&team::SESSION_NAMESPACE));
     }
 
