@@ -799,7 +799,7 @@ Files:
 
 - `desktop/src/features/templates/*`
 - `desktop/src/pages/Knowledge.tsx`
-- `desktop/src/pages/Manuscripts.tsx`
+- `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx`
 - optional `desktop/src/pages/Templates.tsx`
 - `desktop/src/App.tsx`
 - `desktop/src/components/Layout.tsx`

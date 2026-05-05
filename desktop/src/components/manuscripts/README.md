@@ -27,6 +27,6 @@
 
 ## Verification
 
-- 打开稿件页并切换不同 draft 类型
+- 打开稿件编辑器并切换不同 draft 类型
 - 验证选中、拖拽、时间线滚动、预览更新
 - 如改动 FreeCut 适配，验证 vendored timeline 未断裂

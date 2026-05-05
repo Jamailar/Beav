@@ -14,7 +14,7 @@ target_files:
   - desktop/src/bridge/ipcRenderer.ts
   - desktop/src/features/media-jobs/*
   - desktop/src/pages/GenerationStudio.tsx
-  - desktop/src/pages/Manuscripts.tsx
+  - desktop/src/components/manuscripts/ManuscriptEditorHost.tsx
   - desktop/src/pages/RedClaw.tsx
 success_metrics:
   - 任意时刻同时提交 100 个图片任务时，已创建任务不会因后续任务提交而失败
@@ -169,7 +169,7 @@ flowchart TB
 ### 页面改造范围
 
 - `desktop/src/pages/GenerationStudio.tsx`
-- `desktop/src/pages/Manuscripts.tsx`
+- `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx`
 - `desktop/src/pages/RedClaw.tsx`
 - 新增 `desktop/src/features/media-jobs/*`
 
@@ -191,7 +191,7 @@ flowchart TB
 - feed / 卡片显示来自 job projection，而不是本地 `isGenerating` 布尔状态。
 - 刷新时先展示最近一次成功的 job 列表，再后台刷新。
 - 页面切换不能清空任务列表。
-- 稿件页在任务完成后通过 binder 回写素材列表，不自己拼结果。
+- 稿件编辑器在任务完成后通过 binder 回写素材列表，不自己拼结果。
 
 ### 必须自研
 

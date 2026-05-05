@@ -52,7 +52,7 @@ scope: repository
 2. `Plugin/background.js` 负责识别页面类型、拼装采集 payload，并写入桌面端本地 HTTP 接口。
 3. 桌面端宿主接收后进入知识库 / 媒体库写入链路。
 4. `desktop/src-tauri/src/persistence/` 与 `desktop/src-tauri/src/knowledge_index/` 负责落盘、索引、重建、监听。
-5. `desktop/src/pages/Knowledge.tsx`、`Wander.tsx`、`Manuscripts.tsx`、`RedClaw.tsx` 消费这些内容做二次创作。
+5. `desktop/src/pages/Knowledge.tsx`、`Wander.tsx`、`ManuscriptEditorHost.tsx`、`RedClaw.tsx` 消费这些内容做二次创作。
 
 ### 3.2 AI 创作链路
 
@@ -106,7 +106,7 @@ scope: repository
 | Skills | `desktop/src/pages/Skills.tsx` | 技能浏览、管理、启停 | `skills_ai`、`skills/*` |
 | Knowledge | `desktop/src/pages/Knowledge.tsx` | 知识库、文档源、YouTube、索引状态 | `library`、`knowledge_index` |
 | Settings | `desktop/src/pages/Settings.tsx` | AI、MCP、守护进程、诊断、后台任务 | `system`、`mcp_tools`、`assistant_daemon`、`runtime` |
-| Manuscripts | `desktop/src/pages/Manuscripts.tsx` | 稿件树、图文包、视频稿、导出 | `manuscripts`、`generation`、`media` |
+| Manuscript Editor | `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx` | 稿件编辑、图文包、视频稿、导出 | `manuscripts`、`generation`、`media` |
 | Archives | `desktop/src/pages/Archives.tsx` | 创作档案与样本库 | `archives` 相关 channel |
 | Wander | `desktop/src/pages/Wander.tsx` | 随机素材联想与选题发散 | `chat_sessions_wander`、`runtime` |
 | RedClaw | `desktop/src/pages/RedClaw.tsx` | 自动化创作、长周期任务、运行台 | `redclaw`、`redclaw_runtime`、`scheduler` |
@@ -141,7 +141,7 @@ scope: repository
 
 **关键实现**
 
-- `App.tsx` 维护 `currentView`、`pendingChatMessage`、`pendingRedClawMessage`、`pendingManuscriptFile`
+- `App.tsx` 维护 `currentView`、`pendingChatMessage`、`pendingRedClawMessage`
 - `Layout.tsx` 负责读取 space 列表、切换当前 workspace、显示版本和升级入口
 - 页面采用 `React.lazy` + `Suspense` 延迟加载
 
@@ -355,7 +355,7 @@ scope: repository
 
 **实现位置**
 
-- Page: `desktop/src/pages/Manuscripts.tsx`
+- Editor host: `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx`
 - Components: `desktop/src/components/manuscripts/*`
 - Feature store: `desktop/src/features/video-editor/store/useVideoEditorStore.ts`
 - Host: `desktop/src-tauri/src/commands/manuscripts.rs`
@@ -410,7 +410,7 @@ scope: repository
 **关键实现**
 
 - `generation.rs` 是图片/视频生成任务的宿主入口
-- `Manuscripts.tsx` 也会直接消费 `image-gen:generate`、`video-gen:generate`，说明媒体生成已深度嵌入稿件链路
+- `ManuscriptEditorHost.tsx` 也会直接消费 `image-gen:generate`、`video-gen:generate`，说明媒体生成已深度嵌入稿件链路
 - 媒体库是共享资源池，而不是孤立页面
 
 **库与自研**
@@ -791,7 +791,7 @@ scope: repository
 
 ### 10.3 当前高风险热点
 
-- `desktop/src/pages/Manuscripts.tsx`
+- `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx`
 - `desktop/src/components/manuscripts/VideoDraftWorkbench.tsx`
 - `desktop/src/pages/Settings.tsx`
 - `desktop/src-tauri/src/commands/manuscripts.rs`

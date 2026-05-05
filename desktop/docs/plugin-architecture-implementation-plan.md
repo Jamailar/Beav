@@ -763,7 +763,7 @@ desktop/src/bridge/ipcRenderer.ts
 
 宿主页面只提供 slot 容器：
 
-- 稿件页右侧侧栏。
+- 稿件编辑器右侧侧栏。
 - 视频页检查面板。
 - 设置页插件配置区。
 - 导入预览弹窗。
@@ -853,7 +853,7 @@ plugin.videoPreset.applyExportPreset
 
 ### 10.3 当前对象绑定
 
-在稿件页或视频编辑页，插件 action 必须强绑定当前对象：
+在稿件编辑器或视频编辑页，插件 action 必须强绑定当前对象：
 
 ```text
 manuscripts://current

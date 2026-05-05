@@ -53,7 +53,7 @@ Status: Current
 | `skills` | `src/pages/Skills.tsx` | 技能浏览、创建、编辑、启停 |
 | `knowledge` | `src/pages/Knowledge.tsx` | 知识采集、目录浏览、转写、相似度检索 |
 | `settings` | `src/pages/Settings.tsx` | 配置、诊断、MCP、daemon、任务、工具观测 |
-| `manuscripts` | `src/pages/Manuscripts.tsx` | 写作、富文稿、视频稿、音频稿、导出 |
+| `manuscript-editor` | `src/components/manuscripts/ManuscriptEditorHost.tsx` | 写作编辑、视频稿、音频稿、导出 |
 | `archives` | `src/pages/Archives.tsx` | 创作档案与样本库 |
 | `wander` | `src/pages/Wander.tsx` | 随机素材联想与选题方向生成 |
 | `redclaw` | `src/pages/RedClaw.tsx` | 自动化创作、长周期任务、技能运营台 |
@@ -93,7 +93,7 @@ Status: Current
 **实现方式**
 
 - 页面全部通过 `React.lazy` + `Suspense` 按需加载。
-- `App.tsx` 维护 `currentView`、`pendingChatMessage`、`pendingRedClawMessage`、`pendingManuscriptFile`。
+- `App.tsx` 维护 `currentView`、`pendingChatMessage`、`pendingRedClawMessage`。
 - 剪贴板轮询里内建 YouTube URL 识别，允许从系统剪贴板直接发起知识采集。
 - 官方账号状态、迁移状态、全局对话框都挂在 shell 层，而不是散落到各页。
 
@@ -487,7 +487,7 @@ Status: Current
 
 **入口文件**
 
-- `src/pages/Manuscripts.tsx`
+- `src/components/manuscripts/ManuscriptEditorHost.tsx`
 - `src/components/manuscripts/*`
 - `shared/manuscriptFiles.ts`
 - `src-tauri/src/commands/manuscripts.rs`
@@ -502,7 +502,7 @@ Status: Current
 
 **实现方式**
 
-- `Manuscripts.tsx` 同时承担文件管理器和工作台入口。
+- `ManuscriptEditorHost.tsx` 只承载已选稿件的编辑器；稿件列表与文件管理入口由 RedClaw 侧边栏负责。
 - 不同稿件类型分别懒加载 `WritingDraftWorkbench`、`AudioDraftWorkbench`、`ExperimentalVideoWorkbench`。
 - 支持 AI 写作提案：`manuscripts:get-write-proposal` / accept / reject。
 - 支持图文稿预览图生成、富文稿 HTML 渲染、Remotion 场景生成与导出。
@@ -523,7 +523,7 @@ Status: Current
 
 - 文件树与媒体列表分开刷新。
 - 首屏只加载当前文件和必要目录摘要。
-- 大型视频编辑状态拆到子组件与 store，不让整个 `Manuscripts.tsx` 反复重渲染。
+- 大型视频编辑状态拆到子组件与 store，不让整个 `ManuscriptEditorHost.tsx` 反复重渲染。
 
 ### 5.4 Video Editor, Timeline And Export Pipeline
 
@@ -926,7 +926,7 @@ Status: Current
 ### 9.3 接下来最值得优先优化的点
 
 - `src/pages/Settings.tsx` 继续拆面板级加载，避免巨页集中观测成本。
-- `src/pages/Manuscripts.tsx` 继续把视频/写作/文件管理做更强隔离，减少一个文件承载过多职责。
+- `src/components/manuscripts/ManuscriptEditorHost.tsx` 继续把视频/写作编辑职责做更强隔离，减少一个文件承载过多职责。
 - `src-tauri/src/main.rs` 继续瘦身，把 assembly 以外逻辑再下沉。
 - 对 `Team`、`RedClaw`、`Knowledge` 这类多事件页统一补更显式的 request/version token 规范。
 
@@ -954,7 +954,7 @@ Status: Current
 3. 本文
 4. `src/App.tsx`
 5. `src/bridge/ipcRenderer.ts`
-6. `src/pages/Manuscripts.tsx`、`src/pages/Knowledge.tsx`、`src/pages/RedClaw.tsx`、`src/pages/Settings.tsx`
+6. `src/components/manuscripts/ManuscriptEditorHost.tsx`、`src/pages/Knowledge.tsx`、`src/pages/RedClaw.tsx`、`src/pages/Settings.tsx`
 7. `src-tauri/src/main.rs`
 8. `src-tauri/src/commands/README.md`
 9. `src-tauri/src/runtime/README.md`

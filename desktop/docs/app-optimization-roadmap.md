@@ -89,7 +89,7 @@ Status: Current
 | AI Runtime | `desktop/src-tauri/src/runtime/*`, `desktop/src-tauri/src/agent/*`, `desktop/src-tauri/src/skills/*`, `desktop/src-tauri/src/tools/*`, `desktop/src-tauri/src/mcp/*`, `desktop/src-tauri/src/subagents/*` | 会话、任务、工具、技能、审批、MCP、子代理 | LLM transport、JSON schema、外部模型 API | runtime contract、context bundle、permission、tool policy、subagent orchestration |
 | Persistence / Workspace | `desktop/src-tauri/src/persistence/*`, `desktop/src-tauri/src/workspace_loaders.rs` | store、workspace hydrate、快照恢复、文件落盘 | 文件系统、serde_json | schema、增量 hydration、锁外 I/O、快照瘦身 |
 | Knowledge / Retrieval | `desktop/src-tauri/src/knowledge_index/*`, `desktop/src-tauri/src/document_ingest/*`, `desktop/src-tauri/src/commands/library.rs` | 文档摄取、切片、索引、召回、引用 | 嵌入模型、文件解析库、watcher | catalog、chunk policy、citation contract、重建调度 |
-| Manuscripts / Video | `desktop/src/pages/Manuscripts.tsx`, `desktop/src/components/manuscripts/*`, `desktop/src/features/video-editor/*`, `desktop/src/remotion/*`, `desktop/src/vendor/freecut/*` | 稿件、时间线、字幕、转场、预览、导出 | Remotion、媒体探测库、浏览器媒体 API | 编辑协议、轨道状态、稿件到时间线映射、导出编排 |
+| Manuscripts / Video | `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx`, `desktop/src/components/manuscripts/*`, `desktop/src/features/video-editor/*`, `desktop/src/remotion/*`, `desktop/src/vendor/freecut/*` | 稿件、时间线、字幕、转场、预览、导出 | Remotion、媒体探测库、浏览器媒体 API | 编辑协议、轨道状态、稿件到时间线映射、导出编排 |
 | RedClaw / Automation | `desktop/src/pages/RedClaw.tsx`, `desktop/src/pages/Workboard.tsx`, `desktop/src-tauri/src/scheduler/*`, `desktop/src-tauri/src/commands/redclaw*.rs` | 自动化任务、长期调度、任务执行、结果回写 | 调度基础库、系统时间 API | 任务模型、执行状态机、可恢复作业、长期运行时 |
 | Diagnostics / Ops | `desktop/src/pages/Settings.tsx`, `desktop/src/pages/settings/*`, `desktop/src-tauri/src/diagnostics.rs`, `desktop/src-tauri/src/logging/*` | 配置、调试、性能观测、错误恢复 | 日志库、系统 API | 运行时摘要、调试面板、回归证据收集 |
 
@@ -502,7 +502,7 @@ Status: Current
 | Task | Manuscripts 数据模型与编辑状态机收口 |
 | Status | planned |
 | Progress | 0% |
-| Entry Points | `desktop/src/pages/Manuscripts.tsx`, `desktop/src/components/manuscripts/*`, `desktop/src-tauri/src/commands/manuscripts.rs` |
+| Entry Points | `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx`, `desktop/src/components/manuscripts/*`, `desktop/src-tauri/src/commands/manuscripts.rs` |
 | Implementation | 明确 manuscript package、scene、track item、asset binding、theme、script proposal 的 schema；编辑器只改 canonical state，派生视图不反写多套结构 |
 | Existing Libraries | 编辑器基础组件、CodeMirror 等 |
 | Must Self Build | manuscript package schema、editing state machine、proposal merge logic |
@@ -566,7 +566,7 @@ Status: Current
 | Task | 自动剪视频工作流 |
 | Status | planned |
 | Progress | 0% |
-| Entry Points | `desktop/src/pages/Manuscripts.tsx`, `desktop/src/features/video-editor/*`, `desktop/src/components/manuscripts/*`, `desktop/src-tauri/src/commands/manuscripts.rs`, `desktop/src-tauri/src/commands/generation.rs` |
+| Entry Points | `desktop/src/components/manuscripts/ManuscriptEditorHost.tsx`, `desktop/src/features/video-editor/*`, `desktop/src/components/manuscripts/*`, `desktop/src-tauri/src/commands/manuscripts.rs`, `desktop/src-tauri/src/commands/generation.rs` |
 | Why | 这是核心生产力功能，必须从“素材仓库”推进到“可自动产出粗剪结果”的完整工作流 |
 | Implementation | 建立 `ingest -> transcript/segment -> shot selection -> timeline assembly -> rough-cut review -> export` 链路；输入支持长视频、分镜脚本、口播稿、素材包；输出必须是可继续编辑的 canonical timeline，而不是一次性导出黑盒视频 |
 | Existing Libraries | 媒体探测/转码库、转录能力、现有 timeline / Remotion 基础 |

@@ -112,7 +112,7 @@ Status: Completed
 缺点：
 
 - 只能缓解，不会真正解决 contract、memory、approval 的结构问题
-- `main.rs`、`commands/*`、`Settings.tsx`、`Manuscripts.tsx` 的复杂度还会继续堆积
+- `main.rs`、`commands/*`、`Settings.tsx`、`ManuscriptEditorHost.tsx` 的复杂度还会继续堆积
 
 ### Option B
 
