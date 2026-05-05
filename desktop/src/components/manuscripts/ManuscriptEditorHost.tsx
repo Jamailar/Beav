@@ -845,7 +845,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const [editorAiWorkspaceMode, setEditorAiWorkspaceMode] = useState<EditorAiWorkspaceMode>({
         id: 'manuscript-editing',
         label: '稿件编辑',
-        activeSkills: [],
     });
     const [immersiveMaterialsCollapsed, setImmersiveMaterialsCollapsed] = useState(false);
     const [immersiveTimelineCollapsed, setImmersiveTimelineCollapsed] = useState(false);
