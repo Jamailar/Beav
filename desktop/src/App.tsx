@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
-import { Link2, Loader2, ShieldCheck } from 'lucide-react';
+import { FileText, Link2, Loader2, ShieldCheck } from 'lucide-react';
 import QRCode from 'qrcode';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
@@ -296,6 +296,11 @@ function ViewLoadingFallback() {
   );
 }
 
+function shouldUseMacOverlayTitleBar(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /\bMac\b/i.test(navigator.platform || '') || /\bMac OS X\b/i.test(navigator.userAgent || '');
+}
+
 function computeMountedViews(history: ViewType[]): Set<ViewType> {
   const next = new Set<ViewType>();
   const recent = history.slice(-MAX_CACHED_VIEWS);
@@ -362,6 +367,7 @@ function AuthenticatedApp() {
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
+  const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -788,6 +794,14 @@ function AuthenticatedApp() {
         globalSidebarContent={redClawGlobalSidebarContent}
         activeModalView={subjectsModalOpen ? 'subjects' : undefined}
         renderTitleBarContent={({ currentView }) => {
+          if (activeManuscriptEditorFile) {
+            return (
+              <div className="inline-flex min-w-0 items-center gap-2 text-[12px] font-semibold text-text-secondary">
+                <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+                <span className="truncate">稿件编辑器</span>
+              </div>
+            );
+          }
           if (currentView === 'wander') return wanderTitleBarContent;
           if (currentView === 'knowledge') return knowledgeTitleBarContent;
           return null;
@@ -917,7 +931,10 @@ function AuthenticatedApp() {
         )}
       </Layout>
       {activeManuscriptEditorFile && (
-        <div className="fixed inset-0 z-[9500] bg-background">
+        <div
+          className="fixed inset-x-0 bottom-0 z-[60] bg-background"
+          style={{ top: usesMacOverlayTitleBar ? 'var(--app-titlebar-height)' : 0 }}
+        >
           <Suspense fallback={<ViewLoadingFallback />}>
             <ManuscriptEditorHost
               filePath={activeManuscriptEditorFile}
