@@ -120,7 +120,6 @@ pub(crate) const AUDIO_DRAFT_EXTENSION: &str = ".redaudio";
 
 pub(crate) fn is_manuscript_package_name(file_name: &str) -> bool {
     file_name.ends_with(ARTICLE_DRAFT_EXTENSION)
-        || file_name.ends_with(POST_DRAFT_EXTENSION)
         || file_name.ends_with(VIDEO_DRAFT_EXTENSION)
         || file_name.ends_with(AUDIO_DRAFT_EXTENSION)
 }
@@ -128,8 +127,6 @@ pub(crate) fn is_manuscript_package_name(file_name: &str) -> bool {
 pub(crate) fn get_package_kind_from_file_name(file_name: &str) -> Option<&'static str> {
     if file_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
         Some("article")
-    } else if file_name.ends_with(POST_DRAFT_EXTENSION) {
-        Some("post")
     } else if file_name.ends_with(VIDEO_DRAFT_EXTENSION) {
         Some("video")
     } else if file_name.ends_with(AUDIO_DRAFT_EXTENSION) {
@@ -142,7 +139,6 @@ pub(crate) fn get_package_kind_from_file_name(file_name: &str) -> Option<&'stati
 pub(crate) fn get_draft_type_from_file_name(file_name: &str) -> &'static str {
     match get_package_kind_from_file_name(file_name) {
         Some("article") => "longform",
-        Some("post") => "richpost",
         Some("video") => "video",
         Some("audio") => "audio",
         _ => "unknown",
@@ -160,7 +156,6 @@ pub(crate) fn ensure_manuscript_file_name(name: &str, fallback_extension: &str) 
     let trimmed = name.trim();
     if trimmed.ends_with(".md")
         || trimmed.ends_with(ARTICLE_DRAFT_EXTENSION)
-        || trimmed.ends_with(POST_DRAFT_EXTENSION)
         || trimmed.ends_with(VIDEO_DRAFT_EXTENSION)
         || trimmed.ends_with(AUDIO_DRAFT_EXTENSION)
     {
@@ -321,13 +316,15 @@ pub(crate) fn update_thrive_post_content(
         object
             .entry("schemaVersion".to_string())
             .or_insert(json!(1));
-        object.entry("kind".to_string()).or_insert(json!("post"));
+        object
+            .entry("kind".to_string())
+            .or_insert(json!("article"));
         object
             .entry("packageKind".to_string())
-            .or_insert(json!("post"));
+            .or_insert(json!("article"));
         object
             .entry("draftType".to_string())
-            .or_insert(json!("richpost"));
+            .or_insert(json!("longform"));
         object
             .entry("entry".to_string())
             .or_insert(json!("content.md"));
@@ -968,18 +965,6 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
     } else {
         Some(markdown_summary(&entry_content, 72))
     };
-    let (
-        richpost_preview_file,
-        richpost_preview_file_url,
-        richpost_preview_updated_at,
-        richpost_preview_page_file,
-        richpost_preview_page_file_url,
-        richpost_preview_page_updated_at,
-    ) = if draft_type == "richpost" {
-        resolve_richpost_first_page_preview(path)
-    } else {
-        (None, None, None, None, None, None)
-    };
     FileNode {
         name: file_name.to_string(),
         path: relative,
@@ -990,12 +975,12 @@ fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> Fil
         draft_type: Some(draft_type),
         updated_at,
         summary,
-        richpost_preview_file,
-        richpost_preview_file_url,
-        richpost_preview_updated_at,
-        richpost_preview_page_file,
-        richpost_preview_page_file_url,
-        richpost_preview_page_updated_at,
+        richpost_preview_file: None,
+        richpost_preview_file_url: None,
+        richpost_preview_updated_at: None,
+        richpost_preview_page_file: None,
+        richpost_preview_page_file_url: None,
+        richpost_preview_page_updated_at: None,
     }
 }
 
@@ -1042,71 +1027,6 @@ fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> Fi
         richpost_preview_page_file_url: None,
         richpost_preview_page_updated_at: None,
     }
-}
-
-fn path_updated_at_ms(path: &Path) -> Option<i64> {
-    fs::metadata(path)
-        .ok()
-        .and_then(|meta| meta.modified().ok())
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis() as i64)
-}
-
-fn resolve_richpost_first_page_preview(
-    package_path: &Path,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-    Option<String>,
-    Option<i64>,
-) {
-    let page_plan = read_json_value_or(&package_richpost_page_plan_path(package_path), json!({}));
-    let Some(page_id) = page_plan
-        .get("pages")
-        .and_then(Value::as_array)
-        .and_then(|pages| {
-            pages.iter().find_map(|page| {
-                page.get("id")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-            })
-        })
-    else {
-        return (None, None, None, None, None, None);
-    };
-    let page_path = package_richpost_page_html_path(package_path, &page_id);
-    if !page_path.exists() {
-        return (None, None, None, None, None, None);
-    }
-    let page_updated_at = path_updated_at_ms(&page_path);
-    let preview_path = package_richpost_card_preview_image_path(package_path);
-    let preview_updated_at = path_updated_at_ms(&preview_path);
-    let has_fresh_preview = preview_path.exists()
-        && preview_updated_at.unwrap_or_default() >= page_updated_at.unwrap_or_default();
-    (
-        if has_fresh_preview {
-            Some(preview_path.display().to_string())
-        } else {
-            None
-        },
-        if has_fresh_preview {
-            Some(file_url_for_path(&preview_path))
-        } else {
-            None
-        },
-        if has_fresh_preview {
-            preview_updated_at
-        } else {
-            None
-        },
-        Some(page_path.display().to_string()),
-        Some(file_url_for_path(&page_path)),
-        page_updated_at,
-    )
 }
 
 pub(crate) fn resolve_manuscript_path(

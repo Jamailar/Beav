@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronRight, FileText, Folder, FolderOpen, History, Loader2, MoreHorizontal, Pin, Plus, Trash2, Users, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
+import { ChevronRight, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { REDCLAW_DISPLAY_NAME } from './config';
+import { appAlert, appConfirm } from '../../utils/appDialogs';
 
 interface RedClawTeamRoom {
     id: string;
@@ -60,7 +61,27 @@ const PINNED_SESSION_IDS_STORAGE_KEY = 'redbox:redclaw:pinned-session-ids:v1';
 
 type HistoryItemMenuTarget =
     | { type: 'room'; id: string }
-    | { type: 'session'; id: string };
+    | { type: 'session'; id: string }
+    | { type: 'manuscript'; path: string };
+
+type ManuscriptDraftKind = 'article' | 'markdown';
+
+type ManuscriptDialogState =
+    | { mode: 'create-folder'; parentPath: string }
+    | { mode: 'create-file'; parentPath: string }
+    | { mode: 'rename'; node: RedClawManuscriptNode };
+
+type ManuscriptContextMenuState = {
+    x: number;
+    y: number;
+    parentPath: string;
+    node?: RedClawManuscriptNode;
+};
+
+const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string }> = [
+    { id: 'article', label: '长文', extension: '.redarticle' },
+    { id: 'markdown', label: 'Markdown', extension: '.md' },
+];
 
 function readPinnedIds(storageKey: string): string[] {
     if (typeof window === 'undefined') return [];
@@ -80,6 +101,39 @@ function writePinnedIds(storageKey: string, ids: string[]): void {
 
 function manuscriptNodeLabel(node: RedClawManuscriptNode): string {
     return String(node.title || node.name || '未命名稿件').trim();
+}
+
+function manuscriptResultError(result: unknown): string {
+    if (result && typeof result === 'object' && 'error' in result) {
+        const error = (result as { error?: unknown }).error;
+        if (typeof error === 'string' && error.trim()) return error;
+    }
+    if (result && typeof result === 'object' && 'success' in result && (result as { success?: unknown }).success === false) {
+        return '操作失败';
+    }
+    return '';
+}
+
+function manuscriptResultPath(result: unknown): string {
+    if (!result || typeof result !== 'object') return '';
+    const value = (result as { path?: unknown; newPath?: unknown }).path || (result as { path?: unknown; newPath?: unknown }).newPath;
+    return typeof value === 'string' ? value : '';
+}
+
+function parentManuscriptPath(path: string): string {
+    const normalized = path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const index = normalized.lastIndexOf('/');
+    return index > 0 ? normalized.slice(0, index) : '';
+}
+
+function canMoveManuscriptPath(sourcePath: string, targetDir: string): boolean {
+    const source = sourcePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const target = targetDir.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!source) return false;
+    if (parentManuscriptPath(source) === target) return false;
+    if (!target) return true;
+    if (source === target) return false;
+    return !target.startsWith(`${source}/`);
 }
 
 function sortManuscriptNodes(nodes: RedClawManuscriptNode[]): RedClawManuscriptNode[] {
@@ -120,8 +174,19 @@ export function RedClawHistorySidebarSection({
     const [manuscriptsLoading, setManuscriptsLoading] = useState(false);
     const [manuscriptsError, setManuscriptsError] = useState('');
     const [expandedManuscriptPaths, setExpandedManuscriptPaths] = useState<Set<string>>(() => new Set());
+    const [manuscriptDialog, setManuscriptDialog] = useState<ManuscriptDialogState | null>(null);
+    const [manuscriptDialogName, setManuscriptDialogName] = useState('');
+    const [manuscriptDraftKind, setManuscriptDraftKind] = useState<ManuscriptDraftKind>('article');
+    const [manuscriptDialogError, setManuscriptDialogError] = useState('');
+    const [manuscriptContextMenu, setManuscriptContextMenu] = useState<ManuscriptContextMenuState | null>(null);
+    const [isSubmittingManuscriptDialog, setIsSubmittingManuscriptDialog] = useState(false);
+    const [draggedManuscriptPath, setDraggedManuscriptPath] = useState('');
+    const [manuscriptDropTargetPath, setManuscriptDropTargetPath] = useState<string | null>(null);
+    const [movingManuscriptPath, setMovingManuscriptPath] = useState('');
     const renameInputRef = useRef<HTMLInputElement | null>(null);
+    const manuscriptDialogInputRef = useRef<HTMLInputElement | null>(null);
     const manuscriptRequestIdRef = useRef(0);
+    const manuscriptClickTimerRef = useRef<number | null>(null);
 
     const pinnedRoomIdSet = useMemo(() => new Set(pinnedRoomIds), [pinnedRoomIds]);
     const pinnedSessionIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
@@ -152,6 +217,15 @@ export function RedClawHistorySidebarSection({
     }, [renameTarget]);
 
     useEffect(() => {
+        if (!manuscriptDialog) return;
+        const timer = window.setTimeout(() => {
+            manuscriptDialogInputRef.current?.focus();
+            manuscriptDialogInputRef.current?.select();
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [manuscriptDialog]);
+
+    useEffect(() => {
         if (!menuTarget) return;
         const closeMenu = () => setMenuTarget(null);
         window.addEventListener('click', closeMenu);
@@ -161,6 +235,25 @@ export function RedClawHistorySidebarSection({
             window.removeEventListener('keydown', closeMenu);
         };
     }, [menuTarget]);
+
+    useEffect(() => {
+        if (!manuscriptContextMenu) return;
+        const closeMenu = () => setManuscriptContextMenu(null);
+        window.addEventListener('click', closeMenu);
+        window.addEventListener('keydown', closeMenu);
+        return () => {
+            window.removeEventListener('click', closeMenu);
+            window.removeEventListener('keydown', closeMenu);
+        };
+    }, [manuscriptContextMenu]);
+
+    useEffect(() => {
+        return () => {
+            if (manuscriptClickTimerRef.current !== null) {
+                window.clearTimeout(manuscriptClickTimerRef.current);
+            }
+        };
+    }, []);
 
     const loadManuscripts = useCallback(async () => {
         const requestId = ++manuscriptRequestIdRef.current;
@@ -209,19 +302,238 @@ export function RedClawHistorySidebarSection({
         });
     };
 
+    const cancelPendingManuscriptClick = () => {
+        if (manuscriptClickTimerRef.current === null) return;
+        window.clearTimeout(manuscriptClickTimerRef.current);
+        manuscriptClickTimerRef.current = null;
+    };
+
+    const scheduleManuscriptClick = (action: () => void) => {
+        cancelPendingManuscriptClick();
+        manuscriptClickTimerRef.current = window.setTimeout(() => {
+            manuscriptClickTimerRef.current = null;
+            action();
+        }, 180);
+    };
+
+    const openManuscriptDialog = (dialog: ManuscriptDialogState) => {
+        setMenuTarget(null);
+        setManuscriptContextMenu(null);
+        setManuscriptDialog(dialog);
+        setManuscriptDialogError('');
+        if (dialog.mode === 'rename') {
+            setManuscriptDialogName(manuscriptNodeLabel(dialog.node));
+        } else {
+            setManuscriptDialogName('');
+            setManuscriptDraftKind('article');
+        }
+    };
+
+    const closeManuscriptDialog = () => {
+        if (isSubmittingManuscriptDialog) return;
+        setManuscriptDialog(null);
+        setManuscriptDialogName('');
+        setManuscriptDialogError('');
+    };
+
+    const expandManuscriptPath = (path: string) => {
+        if (!path) return;
+        setExpandedManuscriptPaths((current) => {
+            const next = new Set(current);
+            next.add(path);
+            return next;
+        });
+    };
+
+    const openManuscriptContextMenu = (
+        event: MouseEvent<HTMLElement>,
+        parentPath: string,
+        node?: RedClawManuscriptNode,
+    ) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenuTarget(null);
+        setManuscriptContextMenu({
+            x: event.clientX,
+            y: event.clientY,
+            parentPath,
+            node,
+        });
+    };
+
+    const submitManuscriptDialog = async () => {
+        if (!manuscriptDialog || isSubmittingManuscriptDialog) return;
+        const name = manuscriptDialogName.trim();
+        if (!name) {
+            setManuscriptDialogError('请输入名称');
+            return;
+        }
+        setIsSubmittingManuscriptDialog(true);
+        setManuscriptDialogError('');
+        try {
+            let result: unknown;
+            if (manuscriptDialog.mode === 'create-folder') {
+                result = await window.ipcRenderer.invoke('manuscripts:create-folder', {
+                    parentPath: manuscriptDialog.parentPath,
+                    name,
+                });
+                expandManuscriptPath(manuscriptDialog.parentPath);
+            } else if (manuscriptDialog.mode === 'create-file') {
+                const draftKind = MANUSCRIPT_DRAFT_KIND_OPTIONS.find((option) => option.id === manuscriptDraftKind) || MANUSCRIPT_DRAFT_KIND_OPTIONS[0];
+                const fileName = name.endsWith(draftKind.extension) ? name : `${name}${draftKind.extension}`;
+                result = await window.ipcRenderer.invoke('manuscripts:create-file', {
+                    parentPath: manuscriptDialog.parentPath,
+                    name: fileName,
+                    title: name,
+                    content: '',
+                });
+                expandManuscriptPath(manuscriptDialog.parentPath);
+            } else {
+                result = await window.ipcRenderer.invoke('manuscripts:rename', {
+                    oldPath: manuscriptDialog.node.path,
+                    newName: name,
+                });
+            }
+
+            const error = manuscriptResultError(result);
+            if (error) {
+                setManuscriptDialogError(error);
+                return;
+            }
+
+            const nextPath = manuscriptResultPath(result);
+            setManuscriptDialog(null);
+            setManuscriptDialogName('');
+            await loadManuscripts();
+            if (manuscriptDialog.mode === 'create-file' && nextPath) {
+                onOpenManuscript?.(nextPath);
+            }
+        } catch (error) {
+            setManuscriptDialogError(error instanceof Error ? error.message : '操作失败');
+        } finally {
+            setIsSubmittingManuscriptDialog(false);
+        }
+    };
+
+    const deleteManuscriptNode = async (node: RedClawManuscriptNode) => {
+        setMenuTarget(null);
+        setManuscriptContextMenu(null);
+        const label = manuscriptNodeLabel(node);
+        const confirmed = await appConfirm(
+            node.isDirectory ? `删除文件夹“${label}”及其中全部稿件？` : `删除稿件“${label}”？`,
+            { title: node.isDirectory ? '删除文件夹' : '删除稿件', confirmLabel: '删除', tone: 'danger' }
+        );
+        if (!confirmed) return;
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:delete', node.path);
+            const error = manuscriptResultError(result);
+            if (error) {
+                void appAlert(error);
+                return;
+            }
+            await loadManuscripts();
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '删除失败');
+        }
+    };
+
+    const moveManuscriptNode = async (sourcePath: string, targetDir: string) => {
+        if (!canMoveManuscriptPath(sourcePath, targetDir) || movingManuscriptPath) return;
+        setMenuTarget(null);
+        setMovingManuscriptPath(sourcePath);
+        try {
+            const result = await window.ipcRenderer.invoke('manuscripts:move', {
+                sourcePath,
+                targetDir,
+            });
+            const error = manuscriptResultError(result);
+            if (error) {
+                void appAlert(error);
+                return;
+            }
+            expandManuscriptPath(targetDir);
+            await loadManuscripts();
+        } catch (error) {
+            void appAlert(error instanceof Error ? error.message : '移动失败');
+        } finally {
+            setMovingManuscriptPath('');
+            setDraggedManuscriptPath('');
+            setManuscriptDropTargetPath(null);
+        }
+    };
+
+    const handleManuscriptDragStart = (event: DragEvent<HTMLElement>, node: RedClawManuscriptNode) => {
+        event.stopPropagation();
+        setMenuTarget(null);
+        setManuscriptContextMenu(null);
+        setDraggedManuscriptPath(node.path);
+        setManuscriptDropTargetPath(null);
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', node.path);
+        event.dataTransfer.setData('application/x-redbox-manuscript-path', node.path);
+    };
+
+    const handleManuscriptDragOver = (event: DragEvent<HTMLElement>, targetDir: string) => {
+        const sourcePath = draggedManuscriptPath || event.dataTransfer.getData('application/x-redbox-manuscript-path') || event.dataTransfer.getData('text/plain');
+        if (!canMoveManuscriptPath(sourcePath, targetDir)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'move';
+        setManuscriptDropTargetPath(targetDir);
+    };
+
+    const handleManuscriptDrop = (event: DragEvent<HTMLElement>, targetDir: string) => {
+        const sourcePath = draggedManuscriptPath || event.dataTransfer.getData('application/x-redbox-manuscript-path') || event.dataTransfer.getData('text/plain');
+        if (!canMoveManuscriptPath(sourcePath, targetDir)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void moveManuscriptNode(sourcePath, targetDir);
+    };
+
+    const handleManuscriptDragEnd = () => {
+        setMenuTarget(null);
+        setManuscriptContextMenu(null);
+        setDraggedManuscriptPath('');
+        setManuscriptDropTargetPath(null);
+    };
+
     const renderManuscriptNode = (node: RedClawManuscriptNode, depth = 0): ReactNode => {
         const label = manuscriptNodeLabel(node);
         const childNodes = sortManuscriptNodes(node.children || []);
         const expanded = expandedManuscriptPaths.has(node.path);
         const indentation = Math.min(depth, 4) * 12;
+        const isDragging = draggedManuscriptPath === node.path || movingManuscriptPath === node.path;
 
         if (node.isDirectory) {
+            const menuOpen = menuTarget?.type === 'manuscript' && menuTarget.path === node.path;
+            const isDropTarget = manuscriptDropTargetPath === node.path;
             return (
-                <div key={node.path || label}>
+                <div
+                    key={node.path || label}
+                    className={clsx('group/node relative rounded-lg', isDropTarget && 'bg-accent-primary/10 ring-1 ring-accent-primary/25')}
+                    draggable
+                    onContextMenu={(event) => openManuscriptContextMenu(event, node.path, node)}
+                    onDragStart={(event) => handleManuscriptDragStart(event, node)}
+                    onDragOver={(event) => handleManuscriptDragOver(event, node.path)}
+                    onDrop={(event) => handleManuscriptDrop(event, node.path)}
+                    onDragEnd={handleManuscriptDragEnd}
+                    onDragLeave={() => {
+                        if (manuscriptDropTargetPath === node.path) setManuscriptDropTargetPath(null);
+                    }}
+                >
                     <button
                         type="button"
-                        onClick={() => toggleManuscriptFolder(node.path)}
-                        className="group flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary"
+                        onClick={() => scheduleManuscriptClick(() => toggleManuscriptFolder(node.path))}
+                        onDoubleClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            cancelPendingManuscriptClick();
+                            openManuscriptDialog({ mode: 'rename', node });
+                        }}
+                        className={clsx(
+                            'group flex h-9 w-full items-center gap-2 rounded-lg px-2 pr-10 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary',
+                            isDragging && 'opacity-45'
+                        )}
                         style={{ paddingLeft: 8 + indentation }}
                     >
                         <ChevronRight className={clsx('h-3.5 w-3.5 shrink-0 text-text-tertiary transition-transform', expanded && 'rotate-90')} />
@@ -232,6 +544,44 @@ export function RedClawHistorySidebarSection({
                         )}
                         <span className="min-w-0 flex-1 truncate">{label}</span>
                     </button>
+                    <div
+                        className={clsx(
+                            'absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 transition group-hover/node:opacity-100',
+                            menuOpen && 'opacity-100'
+                        )}
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        {menuOpen ? (
+                            <>
+                                <button type="button" onClick={() => openManuscriptDialog({ mode: 'create-file', parentPath: node.path })} className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary" title="新建稿件" aria-label="新建稿件">
+                                    <FilePlus2 className="h-3.5 w-3.5" />
+                                </button>
+                                <button type="button" onClick={() => openManuscriptDialog({ mode: 'create-folder', parentPath: node.path })} className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary" title="新建文件夹" aria-label="新建文件夹">
+                                    <FolderPlus className="h-3.5 w-3.5" />
+                                </button>
+                                <button type="button" onClick={() => openManuscriptDialog({ mode: 'rename', node })} className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary" title="重命名" aria-label="重命名">
+                                    <Edit3 className="h-3.5 w-3.5" />
+                                </button>
+                                <button type="button" onClick={() => void deleteManuscriptNode(node)} className="flex h-6 w-6 items-center justify-center rounded-md text-red-500 hover:bg-red-500/10" title="删除" aria-label="删除">
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                            </>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    setMenuTarget({ type: 'manuscript', path: node.path });
+                                }}
+                                className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
+                                title="更多"
+                                aria-label="更多"
+                            >
+                                <MoreHorizontal className="h-3.5 w-3.5" />
+                            </button>
+                        )}
+                    </div>
                     {expanded && childNodes.length > 0 && (
                         <div className="mt-0.5 space-y-0.5">
                             {childNodes.map((child) => renderManuscriptNode(child, depth + 1))}
@@ -241,18 +591,67 @@ export function RedClawHistorySidebarSection({
             );
         }
 
+        const menuOpen = menuTarget?.type === 'manuscript' && menuTarget.path === node.path;
         return (
-            <button
+            <div
                 key={node.path || label}
+                className="group/node relative"
+                draggable
+                onDragStart={(event) => handleManuscriptDragStart(event, node)}
+                onDragEnd={handleManuscriptDragEnd}
+            >
+            <button
                 type="button"
-                onClick={() => onOpenManuscript?.(node.path)}
-                className="group flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary"
+                onClick={() => scheduleManuscriptClick(() => onOpenManuscript?.(node.path))}
+                onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    cancelPendingManuscriptClick();
+                    openManuscriptDialog({ mode: 'rename', node });
+                }}
+                className={clsx(
+                    'group flex h-9 w-full items-center gap-2 rounded-lg px-2 pr-10 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary',
+                    isDragging && 'opacity-45'
+                )}
                 style={{ paddingLeft: 28 + indentation }}
                 title={label}
             >
                 <FileText className="h-4 w-4 shrink-0 text-text-tertiary group-hover:text-text-secondary" />
                 <span className="min-w-0 flex-1 truncate">{label}</span>
             </button>
+            <div
+                className={clsx(
+                    'absolute right-1 top-1.5 flex items-center gap-0.5 opacity-0 transition group-hover/node:opacity-100',
+                    menuOpen && 'opacity-100'
+                )}
+                onClick={(event) => event.stopPropagation()}
+            >
+                {menuOpen ? (
+                    <>
+                        <button type="button" onClick={() => openManuscriptDialog({ mode: 'rename', node })} className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary" title="重命名" aria-label="重命名">
+                            <Edit3 className="h-3.5 w-3.5" />
+                        </button>
+                        <button type="button" onClick={() => void deleteManuscriptNode(node)} className="flex h-6 w-6 items-center justify-center rounded-md text-red-500 hover:bg-red-500/10" title="删除" aria-label="删除">
+                            <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                    </>
+                ) : (
+                    <button
+                        type="button"
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setMenuTarget({ type: 'manuscript', path: node.path });
+                        }}
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-secondary hover:text-text-primary"
+                        title="更多"
+                        aria-label="更多"
+                    >
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                    </button>
+                )}
+            </div>
+            </div>
         );
     };
 
@@ -342,7 +741,51 @@ export function RedClawHistorySidebarSection({
 
             <div className="min-h-0 flex-1 overflow-y-auto px-2 custom-scrollbar">
                 {activeTab === 'manuscripts' ? (
-                    <div className="space-y-0.5 pb-6">
+                    <div
+                        className={clsx(
+                            'min-h-full space-y-0.5 rounded-lg pb-6 transition-colors',
+                            manuscriptDropTargetPath === '' && 'bg-accent-primary/8 ring-1 ring-inset ring-accent-primary/20'
+                        )}
+                        onContextMenu={(event) => openManuscriptContextMenu(event, '')}
+                        onDragOver={(event) => handleManuscriptDragOver(event, '')}
+                        onDrop={(event) => handleManuscriptDrop(event, '')}
+                        onDragLeave={() => {
+                            if (manuscriptDropTargetPath === '') setManuscriptDropTargetPath(null);
+                        }}
+                    >
+                        <div className="mb-2 flex items-center justify-between px-1">
+                            <div className="text-[11px] font-bold text-text-tertiary">稿件库</div>
+                            <div className="flex items-center gap-0.5">
+                                <button
+                                    type="button"
+                                    onClick={() => openManuscriptDialog({ mode: 'create-file', parentPath: '' })}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                    title="新建稿件"
+                                    aria-label="新建稿件"
+                                >
+                                    <FilePlus2 className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => openManuscriptDialog({ mode: 'create-folder', parentPath: '' })}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                                    title="新建文件夹"
+                                    aria-label="新建文件夹"
+                                >
+                                    <FolderPlus className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void loadManuscripts()}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                    title="刷新"
+                                    aria-label="刷新"
+                                    disabled={manuscriptsLoading}
+                                >
+                                    <RefreshCw className={clsx('h-3.5 w-3.5', manuscriptsLoading && 'animate-spin')} />
+                                </button>
+                            </div>
+                        </div>
                         {manuscriptsLoading && manuscriptTree.length === 0 ? (
                             <div className="flex h-full items-center justify-center py-10">
                                 <Loader2 className="w-5 h-5 animate-spin text-accent-primary/50" />
@@ -630,6 +1073,61 @@ export function RedClawHistorySidebarSection({
                     </>
                 )}
             </div>
+            {manuscriptContextMenu && (
+                <div
+                    className="fixed z-[140] min-w-[168px] rounded-xl border border-border bg-surface-primary p-1.5 shadow-2xl"
+                    style={{
+                        left: Math.min(manuscriptContextMenu.x, window.innerWidth - 184),
+                        top: Math.min(manuscriptContextMenu.y, window.innerHeight - (manuscriptContextMenu.node ? 188 : 94)),
+                    }}
+                    onClick={(event) => event.stopPropagation()}
+                    onContextMenu={(event) => event.preventDefault()}
+                >
+                    <button
+                        type="button"
+                        onClick={() => openManuscriptDialog({ mode: 'create-file', parentPath: manuscriptContextMenu.parentPath })}
+                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                    >
+                        <FilePlus2 className="h-3.5 w-3.5" />
+                        <span>新建稿件</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => openManuscriptDialog({ mode: 'create-folder', parentPath: manuscriptContextMenu.parentPath })}
+                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                    >
+                        <FolderPlus className="h-3.5 w-3.5" />
+                        <span>新建文件夹</span>
+                    </button>
+                    {manuscriptContextMenu.node ? (
+                        <>
+                            <div className="my-1 h-px bg-border/70" />
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const node = manuscriptContextMenu.node;
+                                    if (node) openManuscriptDialog({ mode: 'rename', node });
+                                }}
+                                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            >
+                                <Edit3 className="h-3.5 w-3.5" />
+                                <span>重命名</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const node = manuscriptContextMenu.node;
+                                    if (node) void deleteManuscriptNode(node);
+                                }}
+                                className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/10"
+                            >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                <span>删除</span>
+                            </button>
+                        </>
+                    ) : null}
+                </div>
+            )}
             {renameTarget && (
                 <div
                     className="fixed inset-0 z-[130] flex items-center justify-center bg-black/30 px-4"
@@ -693,6 +1191,106 @@ export function RedClawHistorySidebarSection({
                                 className="inline-flex h-9 items-center gap-2 rounded-xl bg-text-primary px-4 text-sm font-medium text-white transition-colors hover:bg-text-primary/90 disabled:opacity-50"
                             >
                                 {isRenaming && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                                保存
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {manuscriptDialog && (
+                <div
+                    className="fixed inset-0 z-[130] flex items-center justify-center bg-black/30 px-4"
+                    onMouseDown={closeManuscriptDialog}
+                >
+                    <div
+                        className="w-full max-w-[420px] rounded-2xl border border-border bg-surface-primary p-5 shadow-2xl"
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                                <h3 className="text-lg font-bold text-text-primary">
+                                    {manuscriptDialog.mode === 'create-folder'
+                                        ? '新建文件夹'
+                                        : manuscriptDialog.mode === 'create-file'
+                                            ? '新建稿件'
+                                            : '重命名'}
+                                </h3>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeManuscriptDialog}
+                                disabled={isSubmittingManuscriptDialog}
+                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                title="关闭"
+                                aria-label="关闭"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+
+                        {manuscriptDialog.mode === 'create-file' && (
+                            <div className="mt-5 flex rounded-xl border border-border bg-surface-secondary p-1">
+                                {MANUSCRIPT_DRAFT_KIND_OPTIONS.map((option) => (
+                                    <button
+                                        key={option.id}
+                                        type="button"
+                                        onClick={() => setManuscriptDraftKind(option.id)}
+                                        disabled={isSubmittingManuscriptDialog}
+                                        className={clsx(
+                                            'h-8 flex-1 rounded-lg text-xs font-bold transition-colors disabled:opacity-50',
+                                            manuscriptDraftKind === option.id
+                                                ? 'bg-surface-primary text-text-primary shadow-sm'
+                                                : 'text-text-tertiary hover:text-text-primary'
+                                        )}
+                                    >
+                                        {option.label}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        <input
+                            ref={manuscriptDialogInputRef}
+                            value={manuscriptDialogName}
+                            onChange={(event) => {
+                                setManuscriptDialogName(event.target.value);
+                                if (manuscriptDialogError) setManuscriptDialogError('');
+                            }}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    void submitManuscriptDialog();
+                                } else if (event.key === 'Escape') {
+                                    closeManuscriptDialog();
+                                }
+                            }}
+                            disabled={isSubmittingManuscriptDialog}
+                            className={clsx(
+                                'h-11 w-full rounded-xl border border-border bg-surface-secondary px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15 disabled:opacity-60',
+                                manuscriptDialog.mode === 'create-file' ? 'mt-3' : 'mt-5'
+                            )}
+                            placeholder={manuscriptDialog.mode === 'create-folder' ? '文件夹名称' : '稿件名称'}
+                            maxLength={100}
+                        />
+                        {manuscriptDialogError && (
+                            <div className="mt-2 text-xs text-red-500">{manuscriptDialogError}</div>
+                        )}
+                        <div className="mt-5 flex items-center justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={closeManuscriptDialog}
+                                disabled={isSubmittingManuscriptDialog}
+                                className="h-9 rounded-xl border border-border px-4 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                            >
+                                取消
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => void submitManuscriptDialog()}
+                                disabled={isSubmittingManuscriptDialog || !manuscriptDialogName.trim()}
+                                className="inline-flex h-9 items-center gap-2 rounded-xl bg-text-primary px-4 text-sm font-medium text-white transition-colors hover:bg-text-primary/90 disabled:opacity-50"
+                            >
+                                {isSubmittingManuscriptDialog && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                                 保存
                             </button>
                         </div>

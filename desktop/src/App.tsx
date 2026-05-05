@@ -21,6 +21,7 @@ const HomePage = lazy(async () => ({ default: (await import('./pages/Home')).Hom
 const SkillsPage = lazy(async () => ({ default: (await import('./pages/Skills')).Skills }));
 const KnowledgePage = lazy(async () => ({ default: (await import('./pages/Knowledge')).Knowledge }));
 const SettingsPage = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }));
+const ManuscriptsPage = lazy(async () => ({ default: (await import('./pages/Manuscripts')).Manuscripts }));
 const ArchivesPage = lazy(async () => ({ default: (await import('./pages/Archives')).Archives }));
 const WanderPage = lazy(async () => ({ default: (await import('./pages/Wander')).Wander }));
 const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw')).RedClaw }));
@@ -345,6 +346,8 @@ function AuthenticatedApp() {
   const [pendingRedClawMessage, setPendingRedClawMessage] = useState<PendingChatMessage | null>(null);
   const [redClawGlobalSidebarContent, setRedClawGlobalSidebarContent] = useState<ReactNode>(null);
   const [subjectsModalOpen, setSubjectsModalOpen] = useState(false);
+  const [pendingManuscriptFile, setPendingManuscriptFile] = useState<string | null>(null);
+  const [activeManuscriptEditorFile, setActiveManuscriptEditorFile] = useState<string | null>(null);
   const [pendingGenerationIntent, setPendingGenerationIntent] = useState<GenerationIntent | null>(null);
   const [mountedViews, setMountedViews] = useState<Set<ViewType>>(() => computeMountedViews(['home']));
   const [persistentViews, setPersistentViews] = useState<Set<ViewType>>(() => new Set());
@@ -547,6 +550,22 @@ function AuthenticatedApp() {
 
   const clearRedClawNavigationAction = () => {
     setRedClawNavigationAction(null);
+  };
+
+  const navigateToManuscript = (filePath: string) => {
+    uiTraceInteraction('app', 'open_manuscript_editor', { sourceView: currentView });
+    setActiveManuscriptEditorFile(filePath);
+    setPendingManuscriptFile(filePath);
+  };
+
+  const clearPendingManuscriptFile = () => {
+    setPendingManuscriptFile(null);
+  };
+
+  const closeManuscriptEditor = () => {
+    setPendingManuscriptFile(null);
+    setActiveManuscriptEditorFile(null);
+    setImmersiveMode(false);
   };
 
   const navigateToGenerationStudio = (intent: GenerationIntent) => {
@@ -857,6 +876,7 @@ function AuthenticatedApp() {
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 onGlobalSidebarContentChange={setRedClawGlobalSidebarContent}
                 onOpenChatSurface={() => setCurrentView('redclaw')}
+                onOpenManuscriptEditor={navigateToManuscript}
               />
             </Suspense>
           </div>
@@ -903,6 +923,22 @@ function AuthenticatedApp() {
           </div>
         )}
       </Layout>
+      {activeManuscriptEditorFile && (
+        <div className="fixed inset-0 z-[9500] bg-background">
+          <Suspense fallback={<ViewLoadingFallback />}>
+            <ManuscriptsPage
+              pendingFile={pendingManuscriptFile || activeManuscriptEditorFile}
+              onFileConsumed={clearPendingManuscriptFile}
+              onNavigateToRedClaw={navigateToRedClaw}
+              onNavigateToGenerationStudio={navigateToGenerationStudio}
+              isActive={true}
+              editorOnly
+              onCloseEditor={closeManuscriptEditor}
+              onImmersiveModeChange={setImmersiveMode}
+            />
+          </Suspense>
+        </div>
+      )}
       {isCapturePromptOpen && clipboardCandidate && (
         <div className="fixed inset-0 z-[10000] bg-black/35 flex items-center justify-center px-4">
           <div className="w-full max-w-[560px] rounded-xl border border-border bg-surface-primary shadow-2xl p-5">
@@ -1230,8 +1266,16 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     setLoginNotice('error', 'Google 登录通道尚未接入。');
   }, [setLoginNotice]);
 
+  const returnToSmsLogin = useCallback(() => {
+    stopWechatPolling();
+    setWechatQrUrl('');
+    setWechatStatus('');
+    setLoginNotice('idle', '');
+  }, [setLoginNotice, stopWechatPolling]);
+
   const isMainlandRealm = activeRealm === 'cn';
   const authBusy = wechatBusy || smsBusy;
+  const showMainlandWechatQr = isMainlandRealm && Boolean(wechatQrUrl);
   const title = mode === 'checking'
     ? 'Checking session'
     : 'Welcome back';
@@ -1281,9 +1325,25 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  {isMainlandRealm && (
+                  {showMainlandWechatQr ? (
+                    <div className="space-y-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-slate-700">微信扫码登录</div>
+                        <button
+                          type="button"
+                          onClick={returnToSmsLogin}
+                          className="text-sm font-medium text-slate-500 transition hover:text-slate-700"
+                        >
+                          手机号登录
+                        </button>
+                      </div>
+                      <div className="flex justify-center py-2">
+                        <img src={wechatQrUrl} alt="微信登录二维码" className="h-64 w-64 rounded-xl bg-white object-contain p-3 shadow-[0_16px_44px_rgba(15,23,42,0.08)]" />
+                      </div>
+                    </div>
+                  ) : isMainlandRealm && (
                     <form
-                      className="space-y-3 rounded-xl border border-slate-200 bg-white/80 p-4 shadow-[0_10px_34px_rgba(15,23,42,0.04)]"
+                      className="space-y-4"
                       onSubmit={(event) => {
                         event.preventDefault();
                         void handleSmsAuth('login');
@@ -1297,9 +1357,9 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                         placeholder="手机号"
                         autoComplete="tel"
                         disabled={authBusy}
-                        className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 disabled:opacity-60"
+                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
                       />
-                      <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <div className="grid grid-cols-[1fr_auto] gap-3">
                         <input
                           type="text"
                           value={smsForm.code}
@@ -1307,50 +1367,29 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                           placeholder="短信验证码"
                           autoComplete="one-time-code"
                           disabled={authBusy}
-                          className="h-11 min-w-0 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 disabled:opacity-60"
+                          className="h-12 min-w-0 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
                         />
                         <button
                           type="button"
                           onClick={() => void sendSmsCode()}
                           disabled={authBusy}
-                          className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+                          className="h-12 rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm font-medium text-slate-600 shadow-[0_8px_24px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
                         >
                           发送验证码
                         </button>
                       </div>
-                      <input
-                        type="text"
-                        value={smsForm.inviteCode}
-                        onChange={(event) => setSmsForm((prev) => ({ ...prev, inviteCode: event.target.value }))}
-                        placeholder="邀请码（可选）"
+                      <button
+                        type="submit"
                         disabled={authBusy}
-                        className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-emerald-400 disabled:opacity-60"
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="submit"
-                          disabled={authBusy}
-                          className="h-11 rounded-lg bg-emerald-500 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:opacity-60"
-                        >
-                          {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleSmsAuth('register')}
-                          disabled={authBusy}
-                          className="h-11 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
-                        >
-                          注册并登录
-                        </button>
-                      </div>
+                        className="h-12 w-full rounded-xl bg-emerald-500 text-sm font-medium text-white shadow-[0_14px_28px_rgba(16,185,129,0.22)] transition hover:bg-emerald-600 disabled:opacity-60"
+                      >
+                        {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录 / 注册'}
+                      </button>
                     </form>
                   )}
 
-                  <div className="space-y-3">
-                    {isMainlandRealm && (
-                      <div className="text-center text-xs font-medium text-slate-400">第三方登录</div>
-                    )}
-
+                  {!showMainlandWechatQr && (
+                    <div className="space-y-4">
                     {!isMainlandRealm && (
                       <button
                         type="button"
@@ -1367,19 +1406,19 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                       type="button"
                       onClick={() => void startWechatLogin()}
                       disabled={authBusy}
-                      className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
+                      className="flex h-[56px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200/80 bg-white/80 text-base font-medium text-slate-600 shadow-[0_10px_34px_rgba(15,23,42,0.04)] transition hover:bg-white disabled:opacity-60"
                     >
                       {wechatBusy ? <Loader2 className="h-5 w-5 animate-spin text-emerald-500" /> : <img src={wechatIcon} alt="" className="h-5 w-5" />}
                       Continue with WeChat
                     </button>
-                  </div>
+                    </div>
+                  )}
 
-                  {wechatQrUrl && (
-                    <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white/80 p-4 shadow-[0_10px_34px_rgba(15,23,42,0.04)]">
+                  {wechatQrUrl && !showMainlandWechatQr && (
+                    <div className="flex items-center gap-4">
                       <img src={wechatQrUrl} alt="微信登录二维码" className="h-24 w-24 rounded-lg bg-white object-contain" />
                       <div className="min-w-0 text-sm text-slate-500">
                         <div className="font-medium text-slate-700">微信扫码登录</div>
-                        <div className="mt-1">状态：{wechatStatus || 'PENDING'}</div>
                       </div>
                     </div>
                   )}

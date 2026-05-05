@@ -314,6 +314,7 @@ interface RedClawProps {
     welcomeShortcutInputs?: RedClawComposerShortcutInput[];
     onGlobalSidebarContentChange?: (content: ReactNode | null) => void;
     onOpenChatSurface?: () => void;
+    onOpenManuscriptEditor?: (filePath: string) => void;
 }
 
 interface RedClawSpaceListPayload {
@@ -618,6 +619,7 @@ export function RedClaw({
     welcomeShortcutInputs,
     onGlobalSidebarContentChange,
     onOpenChatSurface,
+    onOpenManuscriptEditor,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
         if (!import.meta.env.DEV) return;
@@ -2354,6 +2356,10 @@ export function RedClaw({
     const handleOpenManuscript = useCallback((filePath: string) => {
         const normalizedPath = String(filePath || '').trim();
         if (!normalizedPath) return;
+        if (onOpenManuscriptEditor) {
+            onOpenManuscriptEditor(normalizedPath);
+            return;
+        }
         handlePreviewLink({
             href: `manuscripts://${normalizedPath}`,
             label: normalizedPath.split('/').filter(Boolean).pop() || normalizedPath,
@@ -2364,7 +2370,7 @@ export function RedClaw({
             extension: normalizedPath.toLowerCase().endsWith('.thrive') ? 'thrive' : undefined,
             sourceMessageId: 'redclaw-manuscript-list',
         });
-    }, [handlePreviewLink]);
+    }, [handlePreviewLink, onOpenManuscriptEditor]);
 
     const handleClosePreview = useCallback(() => {
         setPreviewTarget(null);

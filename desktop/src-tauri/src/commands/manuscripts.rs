@@ -2079,17 +2079,6 @@ fn collect_package_bound_assets(
     })
 }
 
-fn richpost_template_catalog() -> &'static [&'static str] {
-    &[
-        "cover",
-        "text-stack",
-        "text-image",
-        "image-focus",
-        "quote",
-        "ending",
-    ]
-}
-
 fn normalize_richpost_template(value: &str) -> &'static str {
     match value.trim() {
         "cover" => "cover",
@@ -2258,33 +2247,6 @@ fn richpost_asset_records(
     }
     items.extend(image_assets.iter().cloned());
     items
-}
-
-fn richpost_asset_outline_prompt(
-    cover_asset: Option<&PackageBoundAsset>,
-    image_assets: &[PackageBoundAsset],
-) -> String {
-    let mut lines = Vec::<String>::new();
-    if let Some(asset) = cover_asset {
-        lines.push(format!(
-            "- id={} | role=cover | title={} | url={}",
-            asset.id, asset.title, asset.url
-        ));
-    }
-    if image_assets.is_empty() {
-        lines.push("- 无额外配图".to_string());
-    } else {
-        lines.extend(image_assets.iter().enumerate().map(|(index, asset)| {
-            format!(
-                "- id={} | role=image | imageIndex={} | title={} | url={}",
-                asset.id,
-                index + 1,
-                asset.title,
-                asset.url
-            )
-        }));
-    }
-    lines.join("\n")
 }
 
 fn richpost_body_font_size_px(settings: RichpostTypographySettings) -> f64 {
@@ -3326,39 +3288,6 @@ fn normalize_richpost_page_plan(
         "pageCount": pages.len(),
         "pages": pages
     })
-}
-
-fn richpost_page_plan_outline(blocks: &[PackageContentBlock]) -> String {
-    if blocks.is_empty() {
-        return "无正文块".to_string();
-    }
-    blocks
-        .iter()
-        .map(|block| {
-            if package_block_is_page_break(&block.kind) {
-                return format!(
-                    "- id={} | type=page-break | 由连续三个空行触发，表示这里必须换页",
-                    block.id
-                );
-            }
-            let preview = normalize_package_block_text(&block.text)
-                .chars()
-                .take(36)
-                .collect::<String>();
-            format!(
-                "- id={} | type={}{} | chars={} | preview={}",
-                block.id,
-                block.kind,
-                block
-                    .level
-                    .map(|level| format!(" h{level}"))
-                    .unwrap_or_default(),
-                block.char_count,
-                preview
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn richpost_css_var_map_from_tokens(
@@ -4980,75 +4909,8 @@ fn generate_richpost_page_plan(
     body: &str,
     model_config: Option<&Value>,
 ) -> Result<Value, String> {
-    let package_kind =
-        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
-    if package_kind != "post" {
-        return Err("只有图文工程支持分页方案".to_string());
-    }
-    let content_map_path = package_content_map_path(package_path);
-    let blocks = build_package_content_blocks(&content_map_path, body);
-    let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
-    let typography = richpost_typography_settings_from_manifest(&manifest);
-    let theme = richpost_theme_spec_from_manifest(Some(package_path), &manifest);
-    let (cover_asset, image_assets) = collect_package_bound_assets(Some(state), package_path)?;
-    let default_plan = default_richpost_page_plan(
-        title,
-        &blocks,
-        cover_asset.as_ref(),
-        &image_assets,
-        "system-default",
-        typography,
-        &theme,
-    );
-    let prompt = render_redbox_prompt(
-        &load_redbox_prompt_or_embedded(
-            "templates/richpost_page_planner.txt",
-            include_str!("../../../prompts/library/templates/richpost_page_planner.txt"),
-        ),
-        &[
-            ("title", title.to_string()),
-            ("body_outline", markdown_summary(body, 260)),
-            ("content_block_outline", richpost_page_plan_outline(&blocks)),
-            (
-                "asset_outline",
-                richpost_asset_outline_prompt(cover_asset.as_ref(), &image_assets),
-            ),
-            (
-                "template_catalog",
-                richpost_template_catalog()
-                    .iter()
-                    .map(|item| format!("- {item}"))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
-            (
-                "default_plan_json",
-                serde_json::to_string_pretty(&default_plan).map_err(|error| error.to_string())?,
-            ),
-        ],
-    );
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let raw = run_model_structured_task_with_settings(
-        &settings_snapshot,
-        model_config,
-        "你是 RedBox 的小红书图文分页规划器。只输出严格 JSON。不要解释。",
-        &prompt,
-        true,
-    )?;
-    let parsed = parse_json_value_from_text(&raw).unwrap_or(Value::Null);
-    if !parsed.is_object() {
-        return Ok(default_plan);
-    }
-    Ok(normalize_richpost_page_plan(
-        &parsed,
-        title,
-        &blocks,
-        cover_asset.as_ref(),
-        &image_assets,
-        "ai",
-        typography,
-        &theme,
-    ))
+    let _ = (state, package_path, file_name, title, body, model_config);
+    Err("图文分页方案功能已下线".to_string())
 }
 
 fn persist_package_html_document(
@@ -8083,15 +7945,42 @@ pub fn handle_manuscripts_channel(
             "manuscripts:move" => {
                 let source_path = payload_string(&payload, "sourcePath").unwrap_or_default();
                 let target_dir = payload_string(&payload, "targetDir").unwrap_or_default();
+                let source_relative = normalize_relative_path(&source_path);
+                let target_dir_relative = normalize_relative_path(&target_dir);
+                if source_relative.is_empty() {
+                    return Ok(json!({ "success": false, "error": "缺少移动源路径" }));
+                }
+                if source_relative == target_dir_relative
+                    || (!target_dir_relative.is_empty()
+                        && target_dir_relative.starts_with(&format!("{source_relative}/")))
+                {
+                    return Ok(json!({ "success": false, "error": "不能移动到自身或子文件夹内" }));
+                }
                 let source = resolve_manuscript_path(state, &source_path)?;
+                if !source.exists() {
+                    return Ok(json!({ "success": false, "error": "移动源不存在" }));
+                }
                 let file_name = source
                     .file_name()
                     .and_then(|value| value.to_str())
                     .ok_or_else(|| "Invalid manuscript source".to_string())?;
                 let target_relative =
-                    normalize_relative_path(&join_relative(&target_dir, file_name));
+                    normalize_relative_path(&join_relative(&target_dir_relative, file_name));
+                let source_parent = source_relative
+                    .rsplit_once('/')
+                    .map(|(parent, _)| normalize_relative_path(parent))
+                    .unwrap_or_default();
+                if source_parent == target_dir_relative {
+                    return Ok(json!({ "success": true, "newPath": source_relative }));
+                }
                 let target = resolve_manuscript_path(state, &target_relative)?;
+                if target.exists() {
+                    return Ok(json!({ "success": false, "error": "目标位置已存在同名文件或文件夹" }));
+                }
                 if let Some(parent) = target.parent() {
+                    if parent.exists() && !parent.is_dir() {
+                        return Ok(json!({ "success": false, "error": "目标父路径不是文件夹" }));
+                    }
                     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
                 }
                 fs::rename(&source, &target).map_err(|error| error.to_string())?;

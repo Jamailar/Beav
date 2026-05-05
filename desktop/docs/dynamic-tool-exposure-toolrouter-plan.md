@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-05-04
+last_updated: 2026-05-05
 owner: codex
 scope:
   - desktop/src-tauri/src/tools
@@ -56,8 +56,8 @@ success_metrics:
 
 - 新增 `desktop/src-tauri/src/tools/plan.rs`，建立 session-scoped `ToolRegistryPlan`，集中计算 internal tools、visible tools、direct `app_cli` actions、deferred action index 和 fingerprint。
 - `registry.rs` 的 session schema / prompt tool lines 已切到 `ToolRegistryPlan`，`Redbox` 的 `resource` / `operation` enum 会按本轮 direct actions 收敛。
-- 新增 `tools.search` app_cli action，并通过 `Redbox { resource: "tools", operation: "search" }` 暴露 deferred action discovery。
-- `app_cli` 执行层会拒绝本轮 deferred action，返回结构化 `ACTION_DEFERRED`，并给出 `tools.search` 查询建议。
+- 新增 `tool_search` app_cli action，并通过 `tool_search` 暴露 deferred action discovery。
+- `app_cli` 执行层会拒绝本轮 deferred action，返回结构化 `ACTION_DEFERRED`，并给出 `tool_search` 查询建议。
 - `image-generation` runtime 已补齐 `image.generate` / `video.generate` action 覆盖。
 - 每次生成 provider tools 时会在 app 日志输出 `[tools][plan]` 快照，包含 fingerprint、visible tools、direct actions、deferred namespace 和 deferred count。
 
@@ -70,15 +70,15 @@ success_metrics:
 - `interactive_runtime_tools_for_mode` 会持久化 `tool_plan` checkpoint，不再只是日志输出。
 - 新增 `desktop/src-tauri/src/tools/families/*`，把 action family taxonomy 和默认曝光策略从 `plan.rs` 拆出。
 - `directActionFamilies` / `allowedActionFamilies` / `maxDirectActions` session metadata 已接入 ToolRegistryPlan，用于结构化控制本轮 action 曝光。
-- prompt 工具摘要会明确提示 deferred actions 通过 `Redbox(resource=tools, operation=search)` 发现。
+- prompt 工具摘要会明确提示 deferred actions 通过 `tool_search` 发现。
 
 本计划约定“不做 UI 改造”，且后续也不应新增用户可见的 ToolRegistryPlan / ToolRouter 诊断面板。当前底层已经输出 checkpoint / log / schema；出现问题时通过本地日志、session checkpoint 和 tool result metadata 复盘。
 
 2026-05-04 Codex 对齐补强：
 
-- `tool_search` 已从 `workflow(action="tools.search")` 兼容 action 提升为一等模型工具；常规 runtime 在存在 deferred app action 或 deferred MCP tool 时才暴露它。
-- 旧 `tools.search` action 保留为兼容入口，内部复用同一套搜索实现；ToolRouter 的 deferred 错误现在建议模型调用 `tool_search`。
-- `manuscript-editor` 保持极小工具面，只暴露绑定稿件 `Write`，不会因为 deferred workflow action 自动增加搜索工具。
+- `tool_search` 已硬切为一等模型工具；常规 runtime 在存在 deferred app action 或 deferred MCP tool 时才暴露它。
+- 旧 `tools.search` app_cli action 和 `Operate(resource="tools", operation="search")` 已移除；ToolRouter 的 deferred 错误只建议模型调用 `tool_search`。
+- `manuscript-editor` 保持极小工具面，只暴露绑定稿件 `Write`，不会因为 deferred action 自动增加搜索工具。
 
 ## 2. Current Problem
 

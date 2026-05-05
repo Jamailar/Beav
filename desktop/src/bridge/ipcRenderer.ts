@@ -1190,7 +1190,6 @@ function createIpcRenderer() {
     openPath: (path: string) => invokeChannel('app:open-path', { path }),
     clipboardReadText: () => invokeChannel('clipboard:read-text'),
     openKnowledgeApiGuide: () => invokeChannel('app:open-knowledge-api-guide'),
-    openRichpostThemeGuide: () => invokeChannel('app:open-richpost-theme-guide'),
     audio: {
       getCaptureCapability: () => invokeChannel('audio:get-capture-capability'),
       startRecording: () => invokeChannel('audio:start-recording'),
