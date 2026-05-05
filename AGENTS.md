@@ -65,6 +65,7 @@
   2. `structured metadata` / `typed payload` / `explicit runtime mode` 承载路由意图。
   3. `tool/runtime` 层负责输入校验、安全边界和执行约束。
 - 避免基于用户消息的硬编码关键词做意图路由；若必须约束，优先用 typed state、schema、tool contract、role spec、runtime mode。文本启发式只能是最后手段，且必须窄、显式、可移除。
+- 禁止把 LLM 行为、技能选择、角色选择写成业务关键词硬编码。模型是否使用某个技能，必须由模型基于 skills catalog、activationHint、tool contract 和当前上下文自行决定；宿主层只能提供可调用能力、显式用户/页面传入的 typed intent，或已声明的 runtime mode，不得因为“电商套图/文章卡片/轮播图”等自然语言短语直接写入 `activeSkills` 或强制切换角色。
 - 顶层工具面保持收敛：优先使用 `bash`、`redbox_fs`、`app_cli`、`redbox_editor`；新增能力优先扩 `action + payload`，不要按业务再拆新的顶层工具。
 
 ## Tool Design
