@@ -116,6 +116,7 @@ const ATTACHMENT_KIND_TO_INPUT_CAPABILITY: Record<string, ModelInputCapability |
     image: 'image',
     audio: 'audio',
     video: 'video',
+    document: 'file',
     text: 'file',
     binary: 'file',
 };

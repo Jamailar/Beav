@@ -194,6 +194,7 @@ pub fn tool_plan_snapshot_for_session(
         "runtimeMode": plan.runtime_mode,
         "sessionId": session_id,
         "fingerprint": plan.fingerprint,
+        "allowLegacyToolAliases": plan.allow_legacy_tool_aliases,
         "internalTools": plan.internal_tool_names,
         "visibleTools": plan
             .visible_tools
@@ -238,6 +239,7 @@ pub fn tool_plan_snapshot_for_session_with_mcp(
         "runtimeMode": plan.runtime_mode,
         "sessionId": session_id,
         "fingerprint": plan.fingerprint,
+        "allowLegacyToolAliases": plan.allow_legacy_tool_aliases,
         "internalTools": plan.internal_tool_names,
         "visibleTools": plan
             .visible_tools

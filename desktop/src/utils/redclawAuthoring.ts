@@ -13,7 +13,7 @@ export interface AuthoringTaskHints {
     requireSourceRead?: boolean;
     requireProfileRead?: boolean;
     requireSave?: boolean;
-    saveArtifact?: 'redpost' | 'redarticle';
+    saveArtifact?: 'thrive' | 'redarticle';
     saveSubdir?: string;
     platform?: AuthoringPlatform;
     taskType?: AuthoringTaskType;
@@ -106,12 +106,13 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
     return {
         content,
         displayContent,
+        sessionRouting: 'new' as const,
         taskHints: {
             intent: 'manuscript_creation',
             allowedTools: AUTHORING_ALLOWED_TOOLS,
             allowedAppCliActions: AUTHORING_ALLOWED_APP_CLI_ACTIONS,
             requireSave: true,
-            saveArtifact: input.platform === 'xiaohongshu' ? 'redpost' : 'redarticle',
+            saveArtifact: input.platform === 'xiaohongshu' ? 'thrive' : 'redarticle',
             platform: input.platform,
             taskType: input.taskType,
             formatTarget: 'markdown' as const,

@@ -34,11 +34,12 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { type AudioRecordingClip } from '../features/audio-input/audioInput';
 import { resolveUsableTranscript } from '../features/audio-input/transcriptionResult';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
-import { loadAttachmentDraft, saveAttachmentDraft } from '../features/chat/attachmentDraftStore';
 import { subscribeRuntimeEventStream, type ToolConfirmRequestPayload } from '../runtime/runtimeEventStream';
 import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { useDocumentThemeMode } from '../hooks/useDocumentThemeMode';
+import { ChatDropOverlay } from './chat/ChatDropOverlay';
+import { useChatAttachments } from './chat/useChatAttachments';
 
 interface AdvisorMentionRecord {
   id: string;
@@ -191,6 +192,7 @@ export interface ChatShortcutContext {
   input: string;
   hasInput: boolean;
   attachment: UploadedFileAttachment | null;
+  attachments?: UploadedFileAttachment[];
   selectedMemberMention: ChatMemberMentionOption | null;
   selectedKnowledgeMentions: ChatKnowledgeMentionOption[];
 }
@@ -202,6 +204,7 @@ interface ChatDispatchOverridePayload {
   message: string;
   displayContent: string;
   attachment?: Message['attachment'];
+  attachments?: UploadedFileAttachment[];
   knowledgeReferences?: ChatKnowledgeMentionOption[];
   taskHints?: unknown;
 }
@@ -326,19 +329,137 @@ function stripTransientAttachmentPreview(
   return persisted;
 }
 
+function attachmentKind(attachment: UploadedFileAttachment | undefined): string {
+  return String(attachment?.kind || '').trim().toLowerCase() || 'binary';
+}
+
+function hasStableToolPath(attachment: UploadedFileAttachment | undefined): boolean {
+  return Boolean(String(attachment?.toolPath || attachment?.workspaceRelativePath || '').trim());
+}
+
+function attachmentCapability(
+  attachment: UploadedFileAttachment | undefined,
+  key: keyof NonNullable<UploadedFileAttachment['capabilities']>,
+): boolean {
+  const value = attachment?.capabilities?.[key];
+  if (typeof value === 'boolean') return value;
+  const kind = attachmentKind(attachment);
+  const hasToolPath = hasStableToolPath(attachment);
+  if (key === 'workspaceRead') return hasToolPath;
+  if (key === 'textExtract') return hasToolPath && kind === 'text';
+  if (key === 'documentExtract') return hasToolPath && kind === 'document';
+  if (key === 'imageVision') return kind === 'image';
+  if (key === 'audioTranscribe') return hasToolPath && kind === 'audio';
+  if (key === 'videoAnalyze' || key === 'videoEdit') return hasToolPath && kind === 'video';
+  if (key === 'directInput') return Boolean(attachment?.directUploadEligible) || ['image', 'audio', 'video', 'text', 'document'].includes(kind);
+  return false;
+}
+
+function toolDeliveryModeForAttachment(attachment: UploadedFileAttachment): string {
+  const explicit = String(attachment.deliveryPlan?.mode || '').trim();
+  if (explicit && explicit !== 'direct-input') return explicit;
+  const kind = attachmentKind(attachment);
+  if (!hasStableToolPath(attachment)) return 'unsupported';
+  if (kind === 'document') return 'document-tool';
+  if (kind === 'image' || kind === 'audio' || kind === 'video') return 'media-tool';
+  return 'workspace-tool';
+}
+
+function withAttachmentDeliveryPlan(
+  attachment: UploadedFileAttachment,
+  mode: 'direct-input' | 'tool-read',
+): UploadedFileAttachment {
+  if (mode === 'direct-input') {
+    return {
+      ...attachment,
+      deliveryMode: 'direct-input',
+      deliveryPlan: {
+        ...(attachment.deliveryPlan || {}),
+        mode: 'direct-input',
+        requiresTool: false,
+        toolPath: attachment.toolPath || attachment.workspaceRelativePath || attachment.deliveryPlan?.toolPath,
+      },
+    };
+  }
+  const toolMode = toolDeliveryModeForAttachment(attachment);
+  return {
+    ...attachment,
+    deliveryMode: 'tool-read',
+    deliveryPlan: {
+      ...(attachment.deliveryPlan || {}),
+      mode: toolMode,
+      requiresTool: toolMode !== 'unsupported',
+      toolPath: attachment.toolPath || attachment.workspaceRelativePath || attachment.deliveryPlan?.toolPath,
+      reason: toolMode === 'unsupported'
+        ? (attachment.deliveryPlan?.reason || '文件未进入工作区暂存区，当前工具无法稳定读取。')
+        : attachment.deliveryPlan?.reason,
+    },
+  };
+}
+
 function applyAttachmentDeliveryMode(
   attachment: UploadedFileAttachment | undefined,
   modelName?: string,
 ): UploadedFileAttachment | undefined {
   if (!attachment) return undefined;
+  if (attachment.intakeStatus && attachment.intakeStatus !== 'ready') {
+    return withAttachmentDeliveryPlan(attachment, 'tool-read');
+  }
   const directInput = Boolean(
     modelName
-    && supportsAttachmentKindDirectInput(modelName, String(attachment.kind || '').trim().toLowerCase()),
+    && attachmentCapability(attachment, 'directInput')
+    && supportsAttachmentKindDirectInput(modelName, attachmentKind(attachment)),
   );
+  return withAttachmentDeliveryPlan(attachment, directInput ? 'direct-input' : 'tool-read');
+}
+
+function applyAttachmentsDeliveryMode(
+  attachments: UploadedFileAttachment[],
+  modelName?: string,
+): UploadedFileAttachment[] {
+  return attachments
+    .map((attachment) => applyAttachmentDeliveryMode(attachment, modelName))
+    .filter((attachment): attachment is UploadedFileAttachment => Boolean(attachment));
+}
+
+function commitAttachmentForSend(attachment: UploadedFileAttachment): UploadedFileAttachment {
   return {
     ...attachment,
-    deliveryMode: directInput ? 'direct-input' : 'tool-read',
+    attachmentLifecycle: 'committed',
   };
+}
+
+function commitAttachmentsForSend(attachments: UploadedFileAttachment[]): UploadedFileAttachment[] {
+  return attachments.map(commitAttachmentForSend);
+}
+
+function attachmentSendBlockReason(attachment: UploadedFileAttachment | undefined): string {
+  if (!attachment) return '';
+  if (attachment.intakeStatus && attachment.intakeStatus !== 'ready') {
+    return attachment.deliveryPlan?.reason || '这个文件还没有进入可处理状态，暂时不能发送给 AI。';
+  }
+  if (!hasStableToolPath(attachment) && !attachment.inlineDataUrl && !attachment.directUploadEligible) {
+    return '这个文件没有可控的暂存路径，AI 工具无法稳定读取。请重新拖入或选择文件。';
+  }
+  return '';
+}
+
+function attachmentsSendBlockReason(attachments: UploadedFileAttachment[]): string {
+  for (const attachment of attachments) {
+    const reason = attachmentSendBlockReason(attachment);
+    if (reason) return reason;
+  }
+  return '';
+}
+
+function uploadedFileAttachmentsFromMessageAttachment(attachment: Message['attachment'] | undefined): UploadedFileAttachment[] {
+  if (!attachment || attachment.type !== 'uploaded-file') return [];
+  return [attachment as UploadedFileAttachment];
+}
+
+function createAttachmentPayload(attachments: UploadedFileAttachment[]): Message['attachment'] | undefined {
+  if (attachments.length === 0) return undefined;
+  return attachments[0] as Message['attachment'];
 }
 
 type FixedSessionWarmSnapshot = {
@@ -357,6 +478,57 @@ function resolveChatShortcutProvider(
   context: ChatShortcutContext,
 ): ChatShortcut[] {
   return provider ? (typeof provider === 'function' ? provider(context) : provider) : fallback;
+}
+
+function attachmentShortcutKind(attachment: UploadedFileAttachment | null): 'image' | 'video' | 'file' | null {
+  if (!attachment) return null;
+  const kind = attachmentKind(attachment);
+  const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+  const ext = String(attachment.ext || '').trim().toLowerCase();
+  if (kind === 'image' || mimeType.startsWith('image/')) return 'image';
+  if (kind === 'video' || mimeType.startsWith('video/')) return 'video';
+  if (kind === 'audio' || mimeType.startsWith('audio/')) return 'file';
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'].includes(ext)) return 'image';
+  if (['mp4', 'mov', 'mkv', 'avi', 'webm'].includes(ext)) return 'video';
+  return 'file';
+}
+
+function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] {
+  const attachmentKind = attachmentShortcutKind(context.attachment);
+  const attachment = context.attachment || undefined;
+  if (attachmentKind === 'image' && attachmentCapability(attachment, 'imageVision')) {
+    return [
+      { label: '🖼️ 分析图片', text: '请分析这张图片的内容、风格和可用于创作的亮点。' },
+      { label: '✨ 生成同款', text: '请基于这张图片生成同款视觉方案，保留核心风格并给出可执行提示词。' },
+      { label: '📝 提取文案', text: '请从这张图片中提取可用文案，并改写成适合发布的内容。' },
+      { label: '🎬 做成视频', text: '请把这张图片设计成一条 AI 视频方案，包括画面运动、镜头节奏和口播文案。' },
+    ];
+  }
+  if (attachmentKind === 'video' && (attachmentCapability(attachment, 'videoAnalyze') || attachmentCapability(attachment, 'videoEdit'))) {
+    return [
+      { label: '剪口播', text: '请把这个视频剪成一条口播短视频，保留核心观点和最有传播力的表达。' },
+      { label: '智能剪辑', text: '请分析这个视频并给出智能剪辑方案，包括结构、节奏、删减点和成片脚本。' },
+      { label: '提取精彩切片', text: '请从这个视频中提取最精彩的短切片，按传播潜力排序并说明每段用途。' },
+    ];
+  }
+  if (attachmentKind === 'file' && (
+    attachmentCapability(attachment, 'workspaceRead')
+    || attachmentCapability(attachment, 'textExtract')
+    || attachmentCapability(attachment, 'documentExtract')
+  )) {
+    return [
+      { label: '变成口播稿', text: '请把这个文件内容改写成一篇自然、有节奏的口播稿。' },
+      { label: '变成讲解漫画', text: '请把这个文件内容改编成讲解漫画脚本，包括分镜、画面说明和对白。' },
+      { label: '做成AI视频', text: '请把这个文件内容改编成 AI 视频方案，包括脚本、镜头和画面提示词。' },
+      { label: '改写成短文', text: '请把这个文件内容改写成一篇适合社交平台发布的短文。' },
+    ];
+  }
+  return [
+    { label: '📝 总结内容', text: '请总结以上内容，提炼核心要点。' },
+    { label: '💡 提炼观点', text: '请提炼其中的关键观点和洞察。' },
+    { label: '✂️ 润色优化', text: '请润色这段内容，使其更具吸引力。' },
+    { label: '❓ 延伸提问', text: '基于以上内容，提出3个值得思考的延伸问题。' },
+  ];
 }
 
 function readFixedSessionWarmSnapshot(sessionId: string | null | undefined): FixedSessionWarmSnapshot | null {
@@ -704,8 +876,6 @@ export function Chat({
     readFixedSessionWarmSnapshot(fixedSessionId)?.contextUsage || null
   ));
   const [errorNotice, setErrorNotice] = useState<string | StructuredChatErrorNotice | null>(null);
-  const [pendingAttachment, setPendingAttachment] = useState<UploadedFileAttachment | null>(null);
-  const [isAttachmentUploading, setIsAttachmentUploading] = useState(false);
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const [memberMentionOptions, setMemberMentionOptions] = useState<ChatMemberMentionOption[]>([]);
   const [selectedMemberMention, setSelectedMemberMention] = useState<ChatMemberMentionOption | null>(null);
@@ -741,6 +911,27 @@ export function Chat({
     `chat-${Math.random().toString(36).slice(2, 8)}-${Date.now().toString(36)}`
   );
   const composerRef = useRef<ChatComposerHandle>(null);
+  const {
+    clearPendingAttachment,
+    dragHandlers,
+    isAttachmentUploading,
+    isFileDragActive,
+    pendingAttachment,
+    pendingAttachments,
+    pickAttachment,
+    removePendingAttachment,
+    resetPendingAttachment,
+    setPendingAttachment,
+    setPendingAttachments,
+  } = useChatAttachments({
+    allowFileUpload,
+    attachmentDraftScopeId,
+    composerRef,
+    currentSessionId,
+    isActive,
+    isProcessing,
+    setErrorNotice,
+  });
   
   // Throttle buffer for streaming updates
   const pendingUpdateRef = useRef<{ content: string } | null>(null);
@@ -973,23 +1164,6 @@ export function Chat({
     },
   ]), []);
 
-  const clearPendingAttachment = useCallback(() => {
-    setIsAttachmentUploading(false);
-    setPendingAttachment(null);
-    requestAnimationFrame(() => {
-      composerRef.current?.syncHeight();
-      composerRef.current?.focus();
-    });
-  }, []);
-
-  useEffect(() => {
-    setPendingAttachment(loadAttachmentDraft('chat', attachmentDraftScopeId));
-  }, [attachmentDraftScopeId]);
-
-  useEffect(() => {
-    saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachment);
-  }, [attachmentDraftScopeId, pendingAttachment]);
-
   useEffect(() => {
     setSelectedMemberMention(null);
     setSelectedKnowledgeMentions([]);
@@ -1208,6 +1382,7 @@ export function Chat({
     message: string;
     displayContent: string;
     attachment?: Message['attachment'];
+    attachments?: UploadedFileAttachment[];
     memberMention?: {
       type: 'advisor';
       advisorId: string;
@@ -1225,7 +1400,8 @@ export function Chat({
     debugUi('dispatch_send:queued', {
       sessionId: payload.sessionId || null,
       chars: payload.message.length,
-      hasAttachment: Boolean(payload.attachment),
+      hasAttachment: Boolean(payload.attachment) || Boolean(payload.attachments?.length),
+      attachmentCount: payload.attachments?.length || (payload.attachment ? 1 : 0),
       targetAdvisorId: payload.memberMention?.advisorId || null,
       knowledgeReferenceCount: payload.knowledgeReferences?.length || 0,
     });
@@ -1261,6 +1437,10 @@ export function Chat({
 
     // 标记为已处理
     pendingMessageHandledRef.current = true;
+    const pendingMessageAttachments = [
+      ...((pendingMessage.attachments || []) as UploadedFileAttachment[]),
+      ...uploadedFileAttachmentsFromMessageAttachment(pendingMessage.attachment as Message['attachment'] | undefined),
+    ];
 
     if (pendingMessage.deliveryMode === 'draft') {
       const draftKnowledgeReferences = (pendingMessage.knowledgeReferences || [])
@@ -1281,8 +1461,8 @@ export function Chat({
         }));
       setInput(String(pendingMessage.content || ''));
       setSelectedKnowledgeMentions(draftKnowledgeReferences);
-      if (pendingMessage.attachment?.type === 'uploaded-file') {
-        setPendingAttachment(pendingMessage.attachment);
+      if (pendingMessageAttachments.length > 0) {
+        setPendingAttachments(pendingMessageAttachments);
       }
       requestAnimationFrame(() => {
         composerRef.current?.focus();
@@ -1332,10 +1512,19 @@ export function Chat({
         console.error('Failed to resolve pending chat model config:', error);
         resolvedModelConfig = undefined;
       }
-      const resolvedAttachment = applyAttachmentDeliveryMode(
-        pendingMessage.attachment as UploadedFileAttachment | undefined,
+      const resolvedAttachments = applyAttachmentsDeliveryMode(
+        pendingMessageAttachments,
         resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
       );
+      const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
+      const resolvedAttachment = createAttachmentPayload(committedAttachments);
+      const pendingAttachmentBlockReason = attachmentsSendBlockReason(resolvedAttachments);
+      if (pendingAttachmentBlockReason) {
+        setErrorNotice(pendingAttachmentBlockReason);
+        pendingMessageHandledRef.current = false;
+        onMessageConsumed?.();
+        return;
+      }
       const pendingKnowledgeReferences = (pendingMessage.knowledgeReferences || [])
         .filter((item) => item.id)
         .map((item) => ({
@@ -1367,6 +1556,7 @@ export function Chat({
         content: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
         attachment: resolvedAttachment as Message['attachment'],
+        attachments: committedAttachments,
         knowledgeReferences: pendingKnowledgeReferences,
         tools: [],
         timeline: []
@@ -1401,7 +1591,8 @@ export function Chat({
         sessionId: sessionId,
         message: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
-        attachment: stripTransientAttachmentPreview(resolvedAttachment),
+        attachment: stripTransientAttachmentPreview(resolvedAttachment as UploadedFileAttachment | undefined),
+        attachments: committedAttachments.map((attachment) => stripTransientAttachmentPreview(attachment) as UploadedFileAttachment),
         knowledgeReferences: pendingKnowledgeReferences,
         modelConfig: resolvedModelConfig,
         taskHints: pendingMessage.taskHints,
@@ -1477,9 +1668,17 @@ export function Chat({
       const uiMessages: Message[] = history.map((msg: any) => {
         // 解析 attachment（数据库中存储为 JSON 字符串）
         let attachment = undefined;
+        let attachments: UploadedFileAttachment[] = [];
         if (msg.attachment) {
           try {
-            attachment = typeof msg.attachment === 'string' ? JSON.parse(msg.attachment) : msg.attachment;
+            const parsed = typeof msg.attachment === 'string' ? JSON.parse(msg.attachment) : msg.attachment;
+            if (Array.isArray(parsed)) {
+              attachments = parsed.filter((item) => item?.type === 'uploaded-file') as UploadedFileAttachment[];
+              attachment = attachments[0];
+            } else {
+              attachment = parsed;
+              attachments = uploadedFileAttachmentsFromMessageAttachment(parsed as Message['attachment'] | undefined);
+            }
           } catch (e) {
             console.error('Failed to parse attachment:', e);
           }
@@ -1503,6 +1702,7 @@ export function Chat({
           content: msg.content,
           displayContent: msg.display_content || undefined,
           attachment: attachment,
+          attachments,
           knowledgeReferences: role === 'user' ? knowledgeReferences : [],
           memberMention: role === 'user' ? memberActor : undefined,
           memberActor: role === 'ai' ? memberActor : undefined,
@@ -2931,34 +3131,6 @@ export function Chat({
     };
   }, [debugUi, flushPendingAssistantChunk, isActive]);
 
-  const pickAttachment = useCallback(async () => {
-    if (isProcessing) return;
-    setIsAttachmentUploading(true);
-    setErrorNotice(null);
-    try {
-      const result = await window.ipcRenderer.chat.pickAttachment({
-        sessionId: currentSessionId || undefined,
-      }) as { success?: boolean; canceled?: boolean; error?: string; attachment?: UploadedFileAttachment };
-      if (!result?.success) {
-        setErrorNotice(result?.error || '上传文件失败');
-        return;
-      }
-      if (result.canceled) return;
-      if (result.attachment) {
-        setErrorNotice(null);
-        setPendingAttachment(result.attachment);
-        requestAnimationFrame(() => {
-          composerRef.current?.syncHeight();
-          composerRef.current?.focus();
-        });
-      }
-    } catch (error) {
-      setErrorNotice(String(error || '上传文件失败'));
-    } finally {
-      setIsAttachmentUploading(false);
-    }
-  }, [currentSessionId, isProcessing]);
-
   const getChatModelConfig = useCallback(() => {
     if (!selectedChatModel) return undefined;
     return {
@@ -3030,15 +3202,17 @@ export function Chat({
 
   const sendMessage = async (
     content: string,
-    attachment?: UploadedFileAttachment,
+    attachments: UploadedFileAttachment[] = [],
     memberMention: ChatMemberMentionOption | null = selectedMemberMention || fixedMemberMention,
     knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
   ) => {
+    const primaryAttachment = attachments[0];
     const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
     uiTraceInteraction('chat', 'send_message', {
       sessionId: currentSessionId || null,
       chars: String(content || '').trim().length,
-      hasAttachment: Boolean(attachment),
+      hasAttachment: attachments.length > 0,
+      attachmentCount: attachments.length,
       targetAdvisorId: memberMention?.id || null,
       knowledgeReferenceCount: safeKnowledgeMentions.length,
     });
@@ -3049,9 +3223,14 @@ export function Chat({
     const normalizedContent = String(content || '').trim();
     const mentionLabel = memberMention ? `@${memberMention.name}` : '';
     const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
-    const displayBody = normalizedContent || (attachment ? `请分析这个附件：${attachment.name}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
+    const displayBody = normalizedContent || (attachments.length > 0 ? `请分析这些附件：${attachments.map((item) => item.name).join('、')}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
     const displayText = [mentionLabel, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
     if (!displayText) return;
+    const attachmentBlockReason = attachmentsSendBlockReason(attachments);
+    if (attachmentBlockReason) {
+      setErrorNotice(attachmentBlockReason);
+      return;
+    }
     const baseRuntimeMessage = normalizedContent || displayBody || displayText;
     const knowledgeRuntimeContext = buildKnowledgeReferenceRuntimeContext(safeKnowledgeMentions);
     const runtimeMessage = [
@@ -3087,7 +3266,8 @@ export function Chat({
       role: 'user',
       content: runtimeMessage,
       displayContent: displayText,
-      attachment: attachment as unknown as Message['attachment'],
+      attachment: primaryAttachment as unknown as Message['attachment'],
+      attachments,
       knowledgeReferences: safeKnowledgeMentions,
       memberMention: memberActor,
       tools: [],
@@ -3111,8 +3291,7 @@ export function Chat({
     setInput('');
     setSelectedMemberMention(null);
     setSelectedKnowledgeMentions([]);
-    setPendingAttachment(null);
-    setIsAttachmentUploading(false);
+    resetPendingAttachment();
     setIsProcessing(true);
 
     if (onDispatchOverride) {
@@ -3121,7 +3300,8 @@ export function Chat({
           sessionId: targetSessionId || undefined,
           message: runtimeMessage,
           displayContent: displayText,
-          attachment: attachment as Message['attachment'],
+          attachment: primaryAttachment as Message['attachment'],
+          attachments,
           knowledgeReferences: safeKnowledgeMentions,
           taskHints: fixedSessionTaskHints,
         });
@@ -3171,16 +3351,19 @@ export function Chat({
       console.error('Failed to resolve chat model config:', error);
       resolvedModelConfig = undefined;
     }
-    const resolvedAttachment = applyAttachmentDeliveryMode(
-      attachment,
+    const resolvedAttachments = applyAttachmentsDeliveryMode(
+      attachments,
       resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
     );
+    const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
+    const resolvedAttachment = createAttachmentPayload(committedAttachments);
 
     dispatchChatSend({
       sessionId: targetSessionId || undefined,
       message: runtimeMessage,
       displayContent: displayText,
-      attachment: stripTransientAttachmentPreview(resolvedAttachment),
+      attachment: stripTransientAttachmentPreview(resolvedAttachment as UploadedFileAttachment | undefined),
+      attachments: committedAttachments.map((attachment) => stripTransientAttachmentPreview(attachment) as UploadedFileAttachment),
       memberMention: memberMention ? {
         type: 'advisor',
         advisorId: memberMention.id,
@@ -3197,16 +3380,16 @@ export function Chat({
     input,
     hasInput: Boolean(input.trim()),
     attachment: pendingAttachment,
+    attachments: pendingAttachments,
     selectedMemberMention,
     selectedKnowledgeMentions,
   };
 
-  const shortcuts = resolveChatShortcutProvider(shortcutsProp, [
-    { label: '📝 总结内容', text: '请总结以上内容，提炼核心要点。' },
-    { label: '💡 提炼观点', text: '请提炼其中的关键观点和洞察。' },
-    { label: '✂️ 润色优化', text: '请润色这段内容，使其更具吸引力。' },
-    { label: '❓ 延伸提问', text: '基于以上内容，提出3个值得思考的延伸问题。' },
-  ], shortcutContext);
+  const shortcuts = resolveChatShortcutProvider(
+    shortcutsProp,
+    defaultComposerShortcuts(shortcutContext),
+    shortcutContext,
+  );
 
   const welcomeShortcuts = resolveChatShortcutProvider(welcomeShortcutsProp, [
     { label: '📄 阅读稿件', text: '请帮我阅读并理解当前的稿件内容。' },
@@ -3289,6 +3472,12 @@ export function Chat({
   );
   const composerContextUsageLabel = `${contextUsedPercentDisplay}% · ${formatTokenLabel(estimatedEffectiveTokens)} / ${formatTokenLabel(compactThreshold)} 上下文已使用`;
   const dockedEmptyState = isEmptySession && emptyStateComposerPlacement === 'bottom';
+  const showNewConversationDropOverlay = Boolean(
+    allowFileUpload &&
+    isEmptySession &&
+    isFileDragActive &&
+    showComposer
+  );
   const shouldCollapseEmptyFixedSession = Boolean(
     collapseEmptyFixedSession &&
     fixedSessionMode &&
@@ -3363,13 +3552,15 @@ export function Chat({
         className={options?.className}
         value={input}
         onValueChange={setInput}
-        onSubmit={() => sendMessage(input, pendingAttachment || undefined, selectedMemberMention, selectedKnowledgeMentions)}
+        onSubmit={() => sendMessage(input, pendingAttachments, selectedMemberMention, selectedKnowledgeMentions)}
         placeholder={placeholder}
         attachment={pendingAttachment}
+        attachments={pendingAttachments}
         attachmentStatus={isAttachmentUploading ? 'uploading' : pendingAttachment ? 'uploaded' : null}
         attachmentPreviewMode={attachmentPreviewMode}
         onPickAttachment={allowFileUpload ? pickAttachment : undefined}
         onClearAttachment={clearPendingAttachment}
+        onRemoveAttachment={removePendingAttachment}
         modelOptions={chatModelOptions}
         selectedModelKey={selectedChatModelKey}
         onSelectedModelKeyChange={setSelectedChatModelKey}
@@ -3522,9 +3713,15 @@ export function Chat({
   }
 
   return (
-    <div className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}>
+    <div
+      className={clsx('flex h-full min-w-0', wideContent && 'chat-layout-wide', narrowContent && 'chat-layout-narrow')}
+      {...dragHandlers}
+    >
       {/* Main Chat Area */}
       <div className="flex-1 min-w-0 flex flex-col h-full relative overflow-hidden">
+        {showNewConversationDropOverlay ? (
+          <ChatDropOverlay darkEmbedded={darkEmbedded} />
+        ) : null}
         {/* Linked Session Indicator */}
         {fixedSessionId && currentSessionId && fixedSessionBannerText && fixedSessionContextIndicatorMode === 'top' && (
           <div className="absolute top-0 left-0 right-0 z-10 flex flex-col items-center gap-1 pointer-events-none">

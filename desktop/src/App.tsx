@@ -123,6 +123,7 @@ export interface PendingChatMessage {
       cover?: string;
     }>;
   } | {
+    attachmentId?: string;
     type: 'uploaded-file';
     name: string;
     ext?: string;
@@ -130,18 +131,54 @@ export interface PendingChatMessage {
     thumbnailDataUrl?: string;
     inlineDataUrl?: string;
     workspaceRelativePath?: string;
+    toolPath?: string;
     absolutePath?: string;
     originalAbsolutePath?: string;
     localUrl?: string;
-    kind?: 'text' | 'image' | 'audio' | 'video' | 'binary' | string;
+    kind?: 'text' | 'image' | 'audio' | 'video' | 'document' | 'binary' | string;
     mimeType?: string;
     storageMode?: 'staged' | string;
     directUploadEligible?: boolean;
     processingStrategy?: string;
     deliveryMode?: 'direct-input' | 'tool-read';
+    intakeStatus?: 'ready' | 'unsupported' | 'failed' | string;
+    capabilities?: Record<string, boolean | undefined>;
+    deliveryPlan?: {
+      mode?: string;
+      toolPath?: string;
+      toolName?: string;
+      requiresTool?: boolean;
+      reason?: string;
+    };
     summary?: string;
     requiresMultimodal?: boolean;
   };
+  attachments?: Array<{
+    type: 'uploaded-file';
+    name: string;
+    attachmentId?: string;
+    workspaceRelativePath?: string;
+    toolPath?: string;
+    absolutePath?: string;
+    originalAbsolutePath?: string;
+    localUrl?: string;
+    inlineDataUrl?: string;
+    thumbnailDataUrl?: string;
+    kind?: string;
+    mimeType?: string;
+    size?: number;
+    ext?: string;
+    storageMode?: string;
+    directUploadEligible?: boolean;
+    processingStrategy?: string;
+    deliveryMode?: string;
+    intakeStatus?: string;
+    capabilities?: Record<string, boolean | undefined>;
+    deliveryPlan?: Record<string, unknown>;
+    summary?: string;
+    requiresMultimodal?: boolean;
+    attachmentLifecycle?: string;
+  }>;
 }
 
 export interface GenerationIntent {

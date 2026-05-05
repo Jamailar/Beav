@@ -25,7 +25,267 @@ use tauri::{AppHandle, Emitter, State};
 
 const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
 const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
-const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const CHAT_ATTACHMENT_PENDING_TTL_MS: u128 = 72 * 60 * 60 * 1000;
+
+fn chat_attachment_registry_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    Ok(workspace_root(state)?
+        .join(".redbox")
+        .join("chat-attachments")
+        .join("registry.json"))
+}
+
+fn load_chat_attachment_registry(state: &State<'_, AppState>) -> Vec<Value> {
+    let Ok(path) = chat_attachment_registry_path(state) else {
+        return Vec::new();
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Value>(&raw)
+        .ok()
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default()
+}
+
+fn save_chat_attachment_registry(
+    state: &State<'_, AppState>,
+    items: &[Value],
+) -> Result<(), String> {
+    let path = chat_attachment_registry_path(state)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let raw = serde_json::to_string_pretty(items).map_err(|error| error.to_string())?;
+    fs::write(path, raw).map_err(|error| error.to_string())
+}
+
+fn cleanup_stale_pending_chat_attachments(state: &State<'_, AppState>) {
+    let now = now_ms();
+    let workspace = match workspace_root(state) {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+    let mut changed = false;
+    let mut items = load_chat_attachment_registry(state);
+    for item in items.iter_mut() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let lifecycle = object
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if lifecycle != "pending" {
+            continue;
+        }
+        let created_at = object
+            .get("createdAtMs")
+            .and_then(Value::as_u64)
+            .map(u128::from)
+            .unwrap_or(0);
+        if created_at == 0 || now.saturating_sub(created_at) < CHAT_ATTACHMENT_PENDING_TTL_MS {
+            continue;
+        }
+        if let Some(relative_path) = object
+            .get("workspaceRelativePath")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| value.starts_with(".redbox/chat-attachments/"))
+        {
+            let target = workspace.join(relative_path);
+            let _ = fs::remove_file(target);
+        }
+        object.insert("lifecycle".to_string(), json!("orphaned"));
+        object.insert("updatedAtMs".to_string(), json!(now as u64));
+        changed = true;
+    }
+    if changed {
+        let _ = save_chat_attachment_registry(state, &items);
+    }
+}
+
+fn register_pending_chat_attachment(state: &State<'_, AppState>, attachment: &Value) {
+    let Some(attachment_id) = attachment
+        .get("attachmentId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let mut items = load_chat_attachment_registry(state);
+    let now = now_ms();
+    let record = json!({
+        "attachmentId": attachment_id,
+        "lifecycle": "pending",
+        "createdAtMs": now as u64,
+        "updatedAtMs": now as u64,
+        "name": attachment.get("name").cloned().unwrap_or(Value::Null),
+        "kind": attachment.get("kind").cloned().unwrap_or(Value::Null),
+        "workspaceRelativePath": attachment.get("workspaceRelativePath").cloned().unwrap_or(Value::Null),
+        "absolutePath": attachment.get("absolutePath").cloned().unwrap_or(Value::Null),
+        "mediaAssetId": attachment.get("mediaAssetId").cloned().unwrap_or(Value::Null),
+    });
+    if let Some(existing) = items.iter_mut().find(|item| {
+        item.get("attachmentId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            == Some(attachment_id)
+    }) {
+        *existing = record;
+    } else {
+        items.push(record);
+    }
+    let _ = save_chat_attachment_registry(state, &items);
+}
+
+fn attachment_ids_from_payload_value(value: &Value) -> Vec<String> {
+    let mut ids = Vec::<String>::new();
+    let values: Vec<&Value> = if let Some(array) = value.as_array() {
+        array.iter().collect()
+    } else {
+        vec![value]
+    };
+    for item in values {
+        if let Some(id) = item
+            .get("attachmentId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            ids.push(id.to_string());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub(crate) fn commit_chat_attachments_state(
+    state: &State<'_, AppState>,
+    attachments: Option<&Value>,
+    session_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(attachments) = attachments else {
+        return Ok(());
+    };
+    let ids = attachment_ids_from_payload_value(attachments);
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut changed = false;
+    let now = now_ms();
+    let mut items = load_chat_attachment_registry(state);
+    for item in items.iter_mut() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let id = object
+            .get("attachmentId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if !ids.iter().any(|candidate| candidate == id) {
+            continue;
+        }
+        object.insert("lifecycle".to_string(), json!("committed"));
+        object.insert("updatedAtMs".to_string(), json!(now as u64));
+        if let Some(session_id) = session_id {
+            object.insert("sessionId".to_string(), json!(session_id));
+        }
+        changed = true;
+    }
+    if changed {
+        save_chat_attachment_registry(state, &items)?;
+    }
+    Ok(())
+}
+
+fn discard_chat_attachments_state(
+    state: &State<'_, AppState>,
+    attachments: Option<&Value>,
+) -> Result<(), String> {
+    let Some(attachments) = attachments else {
+        return Ok(());
+    };
+    let ids = attachment_ids_from_payload_value(attachments);
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let workspace = workspace_root(state)?;
+    let mut changed = false;
+    let now = now_ms();
+    let mut items = load_chat_attachment_registry(state);
+    for item in items.iter_mut() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let id = object
+            .get("attachmentId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if !ids.iter().any(|candidate| candidate == id) {
+            continue;
+        }
+        let lifecycle = object
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if lifecycle != "pending" {
+            continue;
+        }
+        if let Some(relative_path) = object
+            .get("workspaceRelativePath")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| value.starts_with(".redbox/chat-attachments/"))
+        {
+            let _ = fs::remove_file(workspace.join(relative_path));
+        }
+        object.insert("lifecycle".to_string(), json!("deleted"));
+        object.insert("updatedAtMs".to_string(), json!(now as u64));
+        changed = true;
+    }
+    if changed {
+        save_chat_attachment_registry(state, &items)?;
+    }
+    Ok(())
+}
+
+fn attachment_capabilities(
+    kind: &str,
+    has_workspace_path: bool,
+    direct_upload_eligible: bool,
+) -> Value {
+    let is_text = kind == "text";
+    let is_document = kind == "document";
+    let is_image = kind == "image";
+    let is_audio = kind == "audio";
+    let is_video = kind == "video";
+    json!({
+        "directInput": direct_upload_eligible || matches!(kind, "image" | "audio" | "video" | "text" | "document"),
+        "workspaceRead": has_workspace_path,
+        "textExtract": has_workspace_path && (is_text || is_document),
+        "documentExtract": has_workspace_path && is_document,
+        "imageVision": is_image,
+        "audioTranscribe": has_workspace_path && is_audio,
+        "videoAnalyze": has_workspace_path && is_video,
+        "videoEdit": has_workspace_path && is_video,
+    })
+}
+
+fn attachment_delivery_mode(kind: &str, has_workspace_path: bool) -> &'static str {
+    if !has_workspace_path {
+        return "unsupported";
+    }
+    match kind {
+        "audio" | "video" | "image" => "media-tool",
+        "document" => "document-tool",
+        _ => "workspace-tool",
+    }
+}
 
 fn chat_attachment_value_for_path(
     original_path: &Path,
@@ -44,13 +304,18 @@ fn chat_attachment_value_for_path(
         .and_then(|asset| asset.relative_path.as_ref())
         .map(|relative_path| format!("media/{relative_path}"))
         .or(staged_relative_path);
+    let has_workspace_path = workspace_relative_path.is_some();
+    let delivery_mode = attachment_delivery_mode(&kind, has_workspace_path);
+    let tool_path = workspace_relative_path.clone();
     json!({
+        "attachmentId": make_id("attachment"),
         "type": "uploaded-file",
         "name": original_path.file_name().and_then(|value| value.to_str()).unwrap_or("attachment"),
         "ext": original_path.extension().and_then(|value| value.to_str()).unwrap_or(""),
         "size": file_size,
         "thumbnailDataUrl": thumbnail_data_url,
-        "workspaceRelativePath": workspace_relative_path,
+        "workspaceRelativePath": workspace_relative_path.clone(),
+        "toolPath": tool_path.clone(),
         "absolutePath": effective_path.display().to_string(),
         "originalAbsolutePath": original_path.display().to_string(),
         "localUrl": file_url_for_path(effective_path),
@@ -58,7 +323,16 @@ fn chat_attachment_value_for_path(
         "mimeType": mime_type,
         "storageMode": if effective_path != original_path { "staged" } else { "absolute" },
         "directUploadEligible": direct_upload_eligible,
-        "processingStrategy": if direct_upload_eligible { "direct" } else { "path-reference" },
+        "processingStrategy": delivery_mode,
+        "intakeStatus": if has_workspace_path { "ready" } else { "unsupported" },
+        "attachmentLifecycle": "pending",
+        "capabilities": attachment_capabilities(&kind, has_workspace_path, direct_upload_eligible),
+        "deliveryPlan": {
+            "mode": delivery_mode,
+            "toolPath": tool_path,
+            "requiresTool": delivery_mode != "unsupported",
+            "reason": if delivery_mode == "unsupported" { "文件未能进入工作区暂存区，当前工具无法稳定读取。" } else { "" },
+        },
         "summary": original_path.display().to_string(),
         "requiresMultimodal": kind == "image" || kind == "audio" || kind == "video",
         "mediaAssetId": media_asset.map(|asset| asset.id.clone()),
@@ -147,7 +421,9 @@ fn stage_chat_attachment_for_workspace(
         .unwrap_or_else(|| "attachment".to_string());
     let staged_name = format!("{}-{}", now_ms(), file_name);
     let staged_path = stage_root.join(staged_name);
-    fs::copy(original_path, &staged_path).ok()?;
+    if fs::hard_link(original_path, &staged_path).is_err() {
+        fs::copy(original_path, &staged_path).ok()?;
+    }
     let relative = staged_path
         .strip_prefix(&workspace)
         .ok()?
@@ -155,6 +431,54 @@ fn stage_chat_attachment_for_workspace(
         .to_string()
         .replace('\\', "/");
     Some((staged_path, relative))
+}
+
+fn create_chat_attachment_for_path(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    path: &Path,
+) -> Result<Value, String> {
+    cleanup_stale_pending_chat_attachments(state);
+    if !path.is_file() {
+        return Err(format!("不是可发送的文件: {}", path.display()));
+    }
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    let imported_media_asset =
+        crate::knowledge::import_chat_attachment_image(Some(app), state, path).ok();
+    let staged = if imported_media_asset.is_some() {
+        None
+    } else {
+        stage_chat_attachment_for_workspace(state, path, metadata.len())
+    };
+    if imported_media_asset.is_none() && staged.is_none() {
+        if metadata.len() == 0 {
+            return Err("文件为空，无法作为聊天附件发送。".to_string());
+        }
+        if metadata.len() > CHAT_ATTACHMENT_STAGE_MAX_BYTES {
+            return Err(format!(
+                "文件超过 {} MB，当前无法稳定暂存给 AI 工具处理。",
+                CHAT_ATTACHMENT_STAGE_MAX_BYTES / 1024 / 1024
+            ));
+        }
+        return Err("文件未能进入工作区暂存区，当前无法稳定交给 AI 工具处理。".to_string());
+    }
+    let imported_absolute_path = imported_media_asset
+        .as_ref()
+        .and_then(|asset| asset.absolute_path.as_ref())
+        .map(PathBuf::from);
+    let effective_path = imported_absolute_path
+        .as_deref()
+        .or_else(|| staged.as_ref().map(|(absolute, _)| absolute.as_path()))
+        .unwrap_or(path);
+    let attachment = chat_attachment_value_for_path(
+        path,
+        effective_path,
+        metadata.len(),
+        staged.as_ref().map(|(_, relative)| relative.clone()),
+        imported_media_asset.as_ref(),
+    );
+    register_pending_chat_attachment(state, &attachment);
+    Ok(attachment)
 }
 
 fn xorshift64(mut seed: u64) -> u64 {
@@ -1607,7 +1931,9 @@ pub fn handle_chat_sessions_wander_channel(
             | "chat:update-session-metadata"
             | "chat:bind-editor-session"
             | "chat:pick-attachment"
+            | "chat:create-path-attachment"
             | "chat:create-inline-attachment"
+            | "chat:discard-attachments"
             | "chat:transcribe-audio"
             | "wander:list-history"
             | "wander:delete-history"
@@ -2142,30 +2468,15 @@ pub fn handle_chat_sessions_wander_channel(
                 let Some(path) = files.into_iter().next() else {
                     return Ok(json!({ "success": true, "canceled": true }));
                 };
-                let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
-                let imported_media_asset =
-                    crate::knowledge::import_chat_attachment_image(Some(app), state, &path).ok();
-                let staged = if imported_media_asset.is_some() {
-                    None
-                } else {
-                    stage_chat_attachment_for_workspace(state, &path, metadata.len())
-                };
-                let imported_absolute_path = imported_media_asset
-                    .as_ref()
-                    .and_then(|asset| asset.absolute_path.as_ref())
-                    .map(PathBuf::from);
-                let effective_path = imported_absolute_path
-                    .as_deref()
-                    .or_else(|| staged.as_ref().map(|(absolute, _)| absolute.as_path()))
-                    .unwrap_or(path.as_path());
-                let attachment = chat_attachment_value_for_path(
-                    &path,
-                    effective_path,
-                    metadata.len(),
-                    staged.as_ref().map(|(_, relative)| relative.clone()),
-                    imported_media_asset.as_ref(),
-                );
+                let attachment = create_chat_attachment_for_path(app, state, &path)?;
                 Ok(json!({ "success": true, "canceled": false, "attachment": attachment }))
+            }
+            "chat:create-path-attachment" => {
+                let path = payload_string(&payload, "path")
+                    .map(PathBuf::from)
+                    .ok_or_else(|| "缺少文件路径".to_string())?;
+                let attachment = create_chat_attachment_for_path(app, state, &path)?;
+                Ok(json!({ "success": true, "attachment": attachment }))
             }
             "chat:create-inline-attachment" => {
                 let data_url = payload_string(&payload, "dataUrl")
@@ -2189,6 +2500,20 @@ pub fn handle_chat_sessions_wander_channel(
                 } else {
                     stage_chat_attachment_for_workspace(state, &output_path, metadata.len())
                 };
+                if imported_media_asset.is_none() && staged.is_none() {
+                    if metadata.len() == 0 {
+                        return Err("文件为空，无法作为聊天附件发送。".to_string());
+                    }
+                    if metadata.len() > CHAT_ATTACHMENT_STAGE_MAX_BYTES {
+                        return Err(format!(
+                            "文件超过 {} MB，当前无法稳定暂存给 AI 工具处理。",
+                            CHAT_ATTACHMENT_STAGE_MAX_BYTES / 1024 / 1024
+                        ));
+                    }
+                    return Err(
+                        "文件未能进入工作区暂存区，当前无法稳定交给 AI 工具处理。".to_string()
+                    );
+                }
                 let imported_absolute_path = imported_media_asset
                     .as_ref()
                     .and_then(|asset| asset.absolute_path.as_ref())
@@ -2204,7 +2529,12 @@ pub fn handle_chat_sessions_wander_channel(
                     staged.as_ref().map(|(_, relative)| relative.clone()),
                     imported_media_asset.as_ref(),
                 );
+                register_pending_chat_attachment(state, &attachment);
                 Ok(json!({ "success": true, "attachment": attachment }))
+            }
+            "chat:discard-attachments" => {
+                discard_chat_attachments_state(state, payload_field(&payload, "attachments"))?;
+                Ok(json!({ "success": true }))
             }
             "chat:transcribe-audio" => {
                 let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;

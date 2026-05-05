@@ -118,7 +118,6 @@ export function RedClawHistorySidebarSection({
     const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(() => readPinnedIds(PINNED_SESSION_IDS_STORAGE_KEY));
     const [manuscriptTree, setManuscriptTree] = useState<RedClawManuscriptNode[]>([]);
     const [manuscriptsLoading, setManuscriptsLoading] = useState(false);
-    const [manuscriptsLoaded, setManuscriptsLoaded] = useState(false);
     const [manuscriptsError, setManuscriptsError] = useState('');
     const [expandedManuscriptPaths, setExpandedManuscriptPaths] = useState<Set<string>>(() => new Set());
     const renameInputRef = useRef<HTMLInputElement | null>(null);
@@ -172,7 +171,6 @@ export function RedClawHistorySidebarSection({
             if (requestId !== manuscriptRequestIdRef.current) return;
             const items = Array.isArray(tree) ? tree : [];
             setManuscriptTree(items);
-            setManuscriptsLoaded(true);
             setExpandedManuscriptPaths((current) => {
                 if (current.size > 0) return current;
                 const next = new Set<string>();
@@ -183,7 +181,6 @@ export function RedClawHistorySidebarSection({
             if (requestId !== manuscriptRequestIdRef.current) return;
             console.error('Failed to load RedClaw manuscript tree:', error);
             setManuscriptsError(error instanceof Error ? error.message : '稿件加载失败');
-            setManuscriptsLoaded(true);
         } finally {
             if (requestId === manuscriptRequestIdRef.current) {
                 setManuscriptsLoading(false);
@@ -192,9 +189,13 @@ export function RedClawHistorySidebarSection({
     }, []);
 
     useEffect(() => {
-        if (activeTab !== 'manuscripts' || manuscriptsLoaded || manuscriptsLoading) return;
+        if (activeTab !== 'manuscripts') return;
         void loadManuscripts();
-    }, [activeTab, loadManuscripts, manuscriptsLoaded, manuscriptsLoading]);
+        const timer = window.setInterval(() => {
+            void loadManuscripts();
+        }, 5000);
+        return () => window.clearInterval(timer);
+    }, [activeTab, loadManuscripts]);
 
     const toggleManuscriptFolder = (path: string) => {
         setExpandedManuscriptPaths((current) => {

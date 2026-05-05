@@ -632,7 +632,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         requireSourceRead: true,
         requireProfileRead: true,
         requireSave: true,
-        saveArtifact: 'redpost',
+        saveArtifact: 'thrive',
         saveSubdir: 'wander',
         platform: 'xiaohongshu',
         taskType: 'direct_write',

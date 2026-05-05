@@ -1518,6 +1518,22 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
         "md" | "txt" | "json" | "csv" | "ts" | "tsx" | "js" | "jsx" | "html" | "css" => {
             ("text/plain".to_string(), "text".to_string(), true)
         }
+        "pdf" => ("application/pdf".to_string(), "document".to_string(), false),
+        "docx" => (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "xlsx" => (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
+            "document".to_string(),
+            false,
+        ),
+        "pptx" => (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation".to_string(),
+            "document".to_string(),
+            false,
+        ),
         _ => (
             "application/octet-stream".to_string(),
             "binary".to_string(),
@@ -4131,15 +4147,15 @@ fn execute_interactive_tool_call(
                         )
                     }
                     "workspace.list" | "list" => {
-                        if raw_path.trim().is_empty() {
-                            return Err(
-                                "path is required for resource(action=workspace.list)".to_string()
-                            );
-                        }
+                        let list_path = if raw_path.trim().is_empty() {
+                            "."
+                        } else {
+                            raw_path.as_str()
+                        };
                         let limit = parse_usize_arg(&normalized_arguments, "limit", 20, 50);
                         let resolved =
                             interactive_runtime_shared::resolve_workspace_tool_path_for_session(
-                                state, session_id, &raw_path,
+                                state, session_id, list_path,
                             )?;
                         if !resolved.is_dir() {
                             return Err(format!("not a directory: {}", resolved.display()));
@@ -4583,7 +4599,7 @@ fn interactive_transport_supports_direct_attachment(protocol: &str, attachment_k
         "openai" | "anthropic" => attachment_kind == "image",
         "gemini" => matches!(
             attachment_kind,
-            "image" | "audio" | "video" | "text" | "binary"
+            "image" | "audio" | "video" | "text" | "document" | "binary"
         ),
         _ => false,
     }
@@ -4606,7 +4622,7 @@ fn interactive_model_supports_direct_attachment(
     match protocol {
         "gemini" => matches!(
             attachment_kind,
-            "image" | "audio" | "video" | "text" | "binary"
+            "image" | "audio" | "video" | "text" | "document" | "binary"
         ),
         "anthropic" => {
             attachment_kind == "image"
@@ -4759,8 +4775,20 @@ fn interactive_attachment_tool_read_note(
     if let Some(relative_path) =
         interactive_attachment_string_field(attachment, "workspaceRelativePath")
     {
+        let delivery_mode = attachment
+            .get("deliveryPlan")
+            .and_then(|value| value.get("mode"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("workspace-tool");
+        let tool_hint = match delivery_mode {
+            "document-tool" => "优先使用文档解析/知识库导入工具抽取正文；如果只能使用 workspace.read，先读取并如实说明无法解析的格式边界。",
+            "media-tool" => "优先使用对应的媒体、转写或视频处理工具读取真实媒体内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始媒体。",
+            _ => "先调用 `resource(action=\"workspace.read\", path=...)` 或相关 workspace 工具读取。",
+        };
         return Some(format!(
-            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`。如果任务依赖它的真实内容，先调用 `resource(action=\"workspace.read\", path=\"{relative_path}\")` 或相关 workspace 工具读取，再基于读取结果回答。不要假装已经看过文件内容。"
+            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`，处理方式 `{delivery_mode}`。如果任务依赖它的真实内容，{tool_hint} 不要假装已经看过文件内容。"
         ));
     }
     interactive_attachment_string_field(attachment, "absolutePath").map(|absolute_path| {
@@ -4785,6 +4813,14 @@ fn interactive_history_attachment_note(
     Some(format!("附件：`{name}`（{kind}，{mode_label}）"))
 }
 
+fn interactive_attachment_items(attachment: Option<&Value>) -> Vec<&Value> {
+    match attachment {
+        Some(Value::Array(items)) => items.iter().collect(),
+        Some(value) => vec![value],
+        None => Vec::new(),
+    }
+}
+
 fn compose_user_message_text(base_message: &str, note: Option<&str>) -> String {
     let trimmed = base_message.trim();
     match note.map(str::trim).filter(|value| !value.is_empty()) {
@@ -4800,35 +4836,56 @@ fn build_interactive_user_turn_messages(
     protocol: &str,
     model_name: &str,
 ) -> Result<(Value, Value), String> {
-    let Some(attachment) = attachment else {
+    let attachments = interactive_attachment_items(attachment);
+    if attachments.is_empty() {
         let text = message.trim().to_string();
         let user_message = canonical_text_message("user", text);
         return Ok((user_message.clone(), user_message));
     };
 
-    if let Some(direct_input) =
-        interactive_attachment_direct_input_payload(attachment, protocol, model_name)?
-    {
+    let mut direct_inputs = Vec::<Value>::new();
+    let mut notes = Vec::<String>::new();
+    let mut history_notes = Vec::<String>::new();
+    for attachment in attachments {
+        if let Some(direct_input) =
+            interactive_attachment_direct_input_payload(attachment, protocol, model_name)?
+        {
+            direct_inputs.push(direct_input);
+            if let Some(note) = interactive_history_attachment_note(attachment, true) {
+                history_notes.push(note);
+            }
+            continue;
+        }
+        let fallback_note = interactive_attachment_fallback_note(attachment, protocol, model_name);
+        if let Some(note) =
+            interactive_attachment_tool_read_note(attachment, fallback_note.as_deref())
+        {
+            notes.push(note);
+        }
+        if let Some(note) = interactive_history_attachment_note(attachment, false) {
+            history_notes.push(note);
+        }
+    }
+    if !direct_inputs.is_empty() {
+        let prompt_content = if notes.is_empty() {
+            message.trim().to_string()
+        } else {
+            compose_user_message_text(message, Some(&notes.join("\n\n")))
+        };
         let prompt_message = json!({
             "role": "user",
-            "content": message.trim(),
-            "input_attachment": direct_input,
+            "content": prompt_content,
+            "input_attachments": direct_inputs,
         });
-        let history_text = compose_user_message_text(
-            message,
-            interactive_history_attachment_note(attachment, true).as_deref(),
-        );
+        let history_note = history_notes.join("\n");
+        let history_text = compose_user_message_text(message, Some(&history_note));
         return Ok((prompt_message, canonical_text_message("user", history_text)));
     }
 
-    let fallback_note = interactive_attachment_fallback_note(attachment, protocol, model_name);
-    let tool_read_note =
-        interactive_attachment_tool_read_note(attachment, fallback_note.as_deref());
-    let prompt_text = compose_user_message_text(message, tool_read_note.as_deref());
-    let history_text = compose_user_message_text(
-        message,
-        interactive_history_attachment_note(attachment, false).as_deref(),
-    );
+    let tool_read_note = notes.join("\n\n");
+    let history_note = history_notes.join("\n");
+    let prompt_text = compose_user_message_text(message, Some(&tool_read_note));
+    let history_text = compose_user_message_text(message, Some(&history_note));
     Ok((
         canonical_text_message("user", prompt_text),
         canonical_text_message("user", history_text),
@@ -4982,7 +5039,8 @@ fn canonical_messages_to_openai_messages(messages: &[Value]) -> Vec<Value> {
             let role = message.get("role").and_then(Value::as_str).unwrap_or("");
             match role {
                 "user" => {
-                    if let Some(attachment) = message.get("input_attachment") {
+                    let attachments = input_attachments_for_message(message);
+                    if !attachments.is_empty() {
                         let text = message.get("content").and_then(Value::as_str).unwrap_or("").trim();
                         let mut parts = Vec::<Value>::new();
                         if !text.is_empty() {
@@ -4991,21 +5049,23 @@ fn canonical_messages_to_openai_messages(messages: &[Value]) -> Vec<Value> {
                                 "text": text,
                             }));
                         }
-                        let mime_type = attachment
-                            .get("mimeType")
-                            .and_then(Value::as_str)
-                            .unwrap_or("application/octet-stream");
-                        let base64_data = attachment
-                            .get("base64Data")
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        if !base64_data.trim().is_empty() {
-                            parts.push(json!({
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": format!("data:{mime_type};base64,{base64_data}")
-                                }
-                            }));
+                        for attachment in attachments {
+                            let mime_type = attachment
+                                .get("mimeType")
+                                .and_then(Value::as_str)
+                                .unwrap_or("application/octet-stream");
+                            let base64_data = attachment
+                                .get("base64Data")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if !base64_data.trim().is_empty() {
+                                parts.push(json!({
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": format!("data:{mime_type};base64,{base64_data}")
+                                    }
+                                }));
+                            }
                         }
                         Some(json!({
                             "role": "user",
@@ -5043,6 +5103,21 @@ fn canonical_messages_to_openai_messages(messages: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+fn input_attachments_for_message(message: &Value) -> Vec<Value> {
+    if let Some(items) = message
+        .get("input_attachments")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty())
+    {
+        return items.clone();
+    }
+    message
+        .get("input_attachment")
+        .cloned()
+        .map(|value| vec![value])
+        .unwrap_or_default()
+}
+
 fn canonical_messages_to_anthropic_messages(messages: &[Value]) -> Vec<Value> {
     messages
         .iter()
@@ -5050,7 +5125,8 @@ fn canonical_messages_to_anthropic_messages(messages: &[Value]) -> Vec<Value> {
             let role = message.get("role").and_then(Value::as_str).unwrap_or("");
             match role {
                 "user" => {
-                    if let Some(attachment) = message.get("input_attachment") {
+                    let attachments = input_attachments_for_message(message);
+                    if !attachments.is_empty() {
                         let mut blocks = Vec::<Value>::new();
                         let text = message
                             .get("content")
@@ -5061,23 +5137,25 @@ fn canonical_messages_to_anthropic_messages(messages: &[Value]) -> Vec<Value> {
                         if !text.is_empty() {
                             blocks.push(json!({ "type": "text", "text": text }));
                         }
-                        let mime_type = attachment
-                            .get("mimeType")
-                            .and_then(Value::as_str)
-                            .unwrap_or("application/octet-stream");
-                        let base64_data = attachment
-                            .get("base64Data")
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        if !base64_data.trim().is_empty() {
-                            blocks.push(json!({
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": mime_type,
-                                    "data": base64_data,
-                                }
-                            }));
+                        for attachment in attachments {
+                            let mime_type = attachment
+                                .get("mimeType")
+                                .and_then(Value::as_str)
+                                .unwrap_or("application/octet-stream");
+                            let base64_data = attachment
+                                .get("base64Data")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if !base64_data.trim().is_empty() {
+                                blocks.push(json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": mime_type,
+                                        "data": base64_data,
+                                    }
+                                }));
+                            }
                         }
                         Some(json!({
                             "role": "user",
@@ -5155,7 +5233,7 @@ fn canonical_messages_to_gemini_contents(messages: &[Value]) -> Vec<Value> {
                     if !text.is_empty() {
                         parts.push(json!({ "text": text }));
                     }
-                    if let Some(attachment) = message.get("input_attachment") {
+                    for attachment in input_attachments_for_message(message) {
                         let mime_type = attachment
                             .get("mimeType")
                             .and_then(Value::as_str)
@@ -5900,7 +5978,7 @@ fn interactive_execution_contract_instruction(
             .map(|value| format!(".{value}"))
             .unwrap_or_else(|| "目标稿件".to_string());
         lines.push(format!(
-            "必须先调用 `manuscripts write-current` 把完整内容保存到 {save_target} 工程，再汇报结果。"
+            "必须先调用 `Write(path=\"manuscripts://current\", content=\"完整正文\")` 把完整内容保存到 {save_target} 工程，再汇报结果。"
         ));
     }
     Some(lines.join(" "))
@@ -6105,6 +6183,29 @@ fn auto_save_interactive_authoring_content(
         }),
         model_config,
     )
+}
+
+fn append_authoring_saved_path_link(
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
+    content: &str,
+) -> String {
+    let Some(target) = interactive_authoring_session_target(state, session_id) else {
+        return content.to_string();
+    };
+    let project_path = normalize_relative_path(&target.project_path);
+    if project_path.is_empty() || !project_path.ends_with(".thrive") {
+        return content.to_string();
+    }
+    let canonical_link = format!("manuscripts://{project_path}");
+    if content.contains(&canonical_link) {
+        return content.to_string();
+    }
+    let label = std::path::Path::new(&project_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(project_path.as_str());
+    format!("{content}\n\n保存路径：[{label}]({canonical_link})")
 }
 
 fn emit_loop_guard_checkpoint(
@@ -6951,12 +7052,13 @@ fn run_anthropic_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
-            let final_content = if final_content.trim().is_empty() {
+            let mut final_content = if final_content.trim().is_empty() {
                 interactive_tool_round_fallback_response(&latest_successful_tool_round)
                     .unwrap_or(final_content)
             } else {
                 final_content
             };
+            final_content = append_authoring_saved_path_link(state, session_id, &final_content);
             if final_content.trim().is_empty() {
                 finalize_interactive_runtime_state(
                     state,
@@ -7562,12 +7664,13 @@ fn run_gemini_interactive_chat_runtime(
                 &generated_images,
                 &generated_videos,
             );
-            let final_content = if final_content.trim().is_empty() {
+            let mut final_content = if final_content.trim().is_empty() {
                 interactive_tool_round_fallback_response(&latest_successful_tool_round)
                     .unwrap_or(final_content)
             } else {
                 final_content
             };
+            final_content = append_authoring_saved_path_link(state, session_id, &final_content);
             if final_content.trim().is_empty() {
                 finalize_interactive_runtime_state(
                     state,
@@ -8076,6 +8179,7 @@ fn run_openai_interactive_chat_runtime(
                 );
                 continue;
             }
+            final_content = append_authoring_saved_path_link(state, session_id, &final_content);
             clear_completed_interactive_execution_contract(
                 state,
                 session_id,
