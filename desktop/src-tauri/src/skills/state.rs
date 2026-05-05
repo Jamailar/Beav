@@ -60,7 +60,7 @@ fn dedupe_skill_names(items: Vec<String>) -> Vec<String> {
 
 fn requested_skill_names_from_legacy_metadata(metadata: &Value) -> Vec<String> {
     let mut items = Vec::<String>::new();
-    for field in ["activeSkills", "skillNames", "skills"] {
+    for field in ["activeSkills", "skillNames", "skills", "requiredSkill"] {
         if let Some(array) = metadata.get(field).and_then(Value::as_array) {
             for value in array.iter().filter_map(Value::as_str) {
                 if let Some(normalized) = normalize_skill_name(value) {

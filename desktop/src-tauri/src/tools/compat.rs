@@ -329,6 +329,28 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
                 )
             }
         }
+        "redclaw" if resource_path.trim_matches('/').starts_with("profile") => {
+            let profile_path = resource_path
+                .trim_matches('/')
+                .strip_prefix("profile")
+                .unwrap_or_default()
+                .trim_start_matches('/');
+            if profile_path.is_empty() || profile_path == "bundle" {
+                app_cli_action_call(
+                    "redclaw.profile.bundle",
+                    json!({}),
+                    Some("Read"),
+                    Some(path),
+                )
+            } else {
+                app_cli_action_call(
+                    "redclaw.profile.read",
+                    json!({ "docType": profile_doc_type(profile_path) }),
+                    Some("Read"),
+                    Some(path),
+                )
+            }
+        }
         "knowledge" => universal_fs_call("knowledge.read", resource_path, &object, Some("Read")),
         "manuscripts" if resource_path == "current" => app_cli_action_call(
             "manuscripts.readCurrent",
@@ -359,6 +381,12 @@ fn normalize_list_call(arguments: &Value) -> NormalizedToolCall {
             app_cli_action_call("manuscripts.list", json!({}), Some("List"), Some(path))
         }
         "profiles" | "profile" => app_cli_action_call(
+            "redclaw.profile.bundle",
+            json!({}),
+            Some("List"),
+            Some(path),
+        ),
+        "redclaw" if resource_path.trim_matches('/').starts_with("profile") => app_cli_action_call(
             "redclaw.profile.bundle",
             json!({}),
             Some("List"),
@@ -520,7 +548,7 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("manuscript.list"),
         ),
-        ("manuscript" | "manuscripts", "create") => app_cli_action_call(
+        ("manuscript" | "manuscripts", "create" | "createproject") => app_cli_action_call(
             "manuscripts.createProject",
             payload,
             Some("Operate"),
@@ -552,7 +580,10 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("manuscript.update"),
         ),
-        ("profile" | "profiles", "list" | "get") => {
+        (
+            "profile" | "profiles" | "redclaw.profile" | "redclaw_profiles" | "redclaw-profiles",
+            "list" | "get" | "read" | "bundle",
+        ) => {
             if payload.get("docType").is_some() || payload.get("id").is_some() {
                 let mut map = payload.as_object().cloned().unwrap_or_default();
                 if let Some(id) = map.remove("id") {
@@ -629,6 +660,12 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             payload,
             Some("Operate"),
             Some("video.generate"),
+        ),
+        ("video", "analyze") => app_cli_action_call(
+            "video.analyze",
+            payload,
+            Some("Operate"),
+            Some("video.analyze"),
         ),
         ("video", "create") => app_cli_action_call(
             "video.projectCreate",
@@ -780,12 +817,6 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 )
             }
         }
-        ("tool" | "tools", "search" | "list" | "get") => app_cli_action_call(
-            "tools.search",
-            payload,
-            Some("Operate"),
-            Some("tools.search"),
-        ),
         _ => app_cli_legacy_command_call(
             "help",
             json!({ "resource": resource, "operation": operation, "input": payload }),
@@ -862,7 +893,12 @@ fn editor_resource_name(path: &str) -> String {
 }
 
 fn profile_doc_type(path: &str) -> String {
-    match path.trim_matches('/').to_ascii_lowercase().as_str() {
+    let normalized = path
+        .trim_matches('/')
+        .trim_end_matches(".md")
+        .trim_end_matches(".markdown")
+        .to_ascii_lowercase();
+    match normalized.as_str() {
         "creator" | "creator-profile" | "creator_profile" | "creatorprofile" => {
             "creator_profile".to_string()
         }
@@ -1651,6 +1687,36 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_legacy_redclaw_profile_uri_to_profile_read() {
+        let normalized = normalize_tool_call(
+            "Read",
+            &json!({ "path": "redclaw://profile/CreatorProfile.md" }),
+        );
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("redclaw.profile.read"))
+        );
+        assert_eq!(
+            normalized
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("docType")),
+            Some(&json!("creator_profile"))
+        );
+    }
+
+    #[test]
+    fn normalizes_legacy_redclaw_profile_uri_list_to_profile_bundle() {
+        let normalized = normalize_tool_call("List", &json!({ "path": "redclaw://profile/" }));
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("redclaw.profile.bundle"))
+        );
+    }
+
+    #[test]
     fn normalizes_universal_read_https_url_to_web_fetch() {
         let normalized = normalize_tool_call(
             "Read",
@@ -1760,6 +1826,42 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_operate_manuscript_create_project_to_create_project_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "manuscripts",
+                "operation": "createProject",
+                "input": { "kind": "post", "title": "demo" }
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("manuscripts.createProject"))
+        );
+    }
+
+    #[test]
+    fn normalizes_operate_redclaw_profile_bundle_to_profile_bundle_action() {
+        let normalized = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "redclaw.profile",
+                "operation": "bundle",
+                "input": {}
+            }),
+        );
+
+        assert_eq!(normalized.name, "workflow");
+        assert_eq!(
+            normalized.arguments.get("action"),
+            Some(&json!("redclaw.profile.bundle"))
+        );
+    }
+
+    #[test]
     fn normalizes_redbox_skill_invoke_id_to_name() {
         let normalized = normalize_tool_call(
             "Operate",
@@ -1805,30 +1907,6 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("prompt")),
             Some(&json!("cover"))
-        );
-    }
-
-    #[test]
-    fn normalizes_redbox_tools_search_to_app_cli_action() {
-        let normalized = normalize_tool_call(
-            "Operate",
-            &json!({
-                "resource": "tools",
-                "operation": "search",
-                "input": { "query": "mcp" }
-            }),
-        );
-        assert_eq!(normalized.name, "workflow");
-        assert_eq!(
-            normalized.arguments.get("action"),
-            Some(&json!("tools.search"))
-        );
-        assert_eq!(
-            normalized
-                .arguments
-                .get("payload")
-                .and_then(|value| value.get("query")),
-            Some(&json!("mcp"))
         );
     }
 
