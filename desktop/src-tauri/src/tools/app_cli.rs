@@ -41,7 +41,7 @@ pub struct AppCliExecutor<'a> {
     tool_call_id: Option<&'a str>,
 }
 
-const IMAGE_DIRECTOR_SKILL_NAME: &str = "redbox-image-director";
+const IMAGE_DIRECTOR_SKILL_NAME: &str = "image-director";
 const MAX_IMAGE_BATCH_ITEMS: usize = 6;
 const IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED: &str = "user_confirmed";
 const DEFAULT_VIDEO_ANALYSIS_MAX_BYTES: u64 = 64 * 1024 * 1024;
@@ -5857,16 +5857,16 @@ mod tests {
         assert_eq!(
             skill_name_from_args_or_payload(
                 &CliArgs::default(),
-                &json!({ "name": "redbox-image-director" })
+                &json!({ "name": "image-director" })
             ),
-            Some("redbox-image-director".to_string())
+            Some("image-director".to_string())
         );
         assert_eq!(
             skill_name_from_args_or_payload(
                 &CliArgs::default(),
-                &json!({ "skillName": "redbox-image-director" })
+                &json!({ "skillName": "image-director" })
             ),
-            Some("redbox-image-director".to_string())
+            Some("image-director".to_string())
         );
     }
 

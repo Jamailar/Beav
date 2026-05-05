@@ -39,9 +39,17 @@ pub struct SessionSkillState {
     pub updated_at: String,
 }
 
+pub fn canonical_skill_name(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "redbox-image-director" => "image-director".to_string(),
+        "redbox-video-director" => "video-director".to_string(),
+        _ => value.trim().to_string(),
+    }
+}
+
 fn normalize_skill_name(value: &str) -> Option<String> {
     let normalized = value.trim();
-    (!normalized.is_empty()).then(|| normalized.to_string())
+    (!normalized.is_empty()).then(|| canonical_skill_name(normalized))
 }
 
 fn dedupe_skill_names(items: Vec<String>) -> Vec<String> {
@@ -250,6 +258,16 @@ mod tests {
                 "memberSkillRef": "member-advisor-1"
             }))),
             vec!["member-advisor-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn session_skill_state_canonicalizes_legacy_redbox_skill_names() {
+        assert_eq!(
+            requested_session_skill_names(Some(&json!({
+                "activeSkills": ["redbox-image-director", "redbox-video-director"]
+            }))),
+            vec!["image-director".to_string(), "video-director".to_string()]
         );
     }
 

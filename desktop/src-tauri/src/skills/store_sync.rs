@@ -7,8 +7,8 @@ use tauri::State;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    build_market_skill_record, build_user_skill_record, discover_builtin_skill_records,
-    discover_skill_records_from_root,
+    build_market_skill_record, build_user_skill_record, canonical_skill_name,
+    discover_builtin_skill_records, discover_skill_records_from_root,
 };
 use crate::{redbox_builtin_skills_root, slug_from_relative_path, workspace_root, AppState};
 
@@ -72,7 +72,7 @@ fn merge_discovered_with_existing(
     for record in merged.iter_mut() {
         if let Some(existing_record) = existing
             .iter()
-            .find(|item| item.name.eq_ignore_ascii_case(&record.name))
+            .find(|item| canonical_skill_name(&item.name).eq_ignore_ascii_case(&record.name))
         {
             record.disabled = existing_record.disabled.or(record.disabled);
         }
@@ -82,6 +82,12 @@ fn merge_discovered_with_existing(
             .iter()
             .any(|item| item.name.eq_ignore_ascii_case(&record.name))
         {
+            continue;
+        }
+        if merged.iter().any(|item| {
+            item.name
+                .eq_ignore_ascii_case(&canonical_skill_name(&record.name))
+        }) {
             continue;
         }
         let is_builtin =
@@ -196,5 +202,17 @@ mod tests {
         let existing = vec![skill("old-builtin", "builtin", false)];
         let merged = merge_discovered_with_existing(&existing, Vec::new());
         assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_discovered_with_existing_preserves_disabled_state_for_renamed_builtin_skill() {
+        let existing = vec![skill("redbox-image-director", "builtin", true)];
+        let merged = merge_discovered_with_existing(
+            &existing,
+            vec![skill("image-director", "builtin", false)],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name, "image-director");
+        assert_eq!(merged[0].disabled, Some(true));
     }
 }

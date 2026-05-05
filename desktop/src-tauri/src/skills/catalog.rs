@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::runtime::SkillRecord;
-use crate::skills::{load_skill_catalog, LoadedSkillRecord};
+use crate::skills::{canonical_skill_name, load_skill_catalog, LoadedSkillRecord};
 
 pub type SkillCatalogEntry = LoadedSkillRecord;
 
@@ -32,7 +32,8 @@ pub fn find_skill_catalog_entry_by_name(
     snapshot: &SkillCatalogSnapshot,
     name: &str,
 ) -> Option<SkillCatalogEntry> {
-    let lookup = name.trim();
+    let canonical = canonical_skill_name(name);
+    let lookup = canonical.trim();
     if lookup.is_empty() {
         return None;
     }
@@ -85,6 +86,20 @@ mod tests {
         assert_eq!(
             found.as_ref().map(|item| item.name.as_str()),
             Some("writing-style")
+        );
+    }
+
+    #[test]
+    fn find_skill_catalog_entry_by_name_accepts_legacy_redbox_prefix() {
+        let snapshot = build_skill_catalog_snapshot(&[skill(
+            "image-director",
+            "desc",
+            "---\nallowedRuntimeModes: [redclaw]\n---\n# Image Director\n\nBody",
+        )]);
+        let found = find_skill_catalog_entry_by_name(&snapshot, "redbox-image-director");
+        assert_eq!(
+            found.as_ref().map(|item| item.name.as_str()),
+            Some("image-director")
         );
     }
 }
