@@ -90,6 +90,7 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "Operate" | "Redbox" => normalize_redbox_call(arguments),
         "workflow" | "app_cli" => normalize_app_cli_call(arguments),
         "bash" | "Bash" => passthrough("bash", arguments),
+        "tool_search" => passthrough("tool_search", arguments),
         "redbox_list_spaces" => app_query("spaces.list", arguments),
         "redbox_list_advisors" => app_query("advisors.list", arguments),
         "redbox_search_knowledge" => app_query("knowledge.search", arguments),
@@ -1538,6 +1539,20 @@ mod tests {
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("runtime.tasks.list"))
+        );
+    }
+
+    #[test]
+    fn passes_tool_search_through() {
+        let normalized = normalize_tool_call(
+            "tool_search",
+            &json!({ "query": "redbox-image-director", "includeDirect": true }),
+        );
+
+        assert_eq!(normalized.name, "tool_search");
+        assert_eq!(
+            normalized.arguments.get("query"),
+            Some(&json!("redbox-image-director"))
         );
     }
 
