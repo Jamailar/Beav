@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo } from 'react';
 import clsx from 'clsx';
-import { AlertTriangle, Check, Loader2, MessageSquare, X } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, X } from 'lucide-react';
 import { CodeMirrorEditor } from './CodeMirrorEditor';
 
 const ChatWorkspace = lazy(async () => ({
@@ -12,7 +12,6 @@ type WritingDraftType = 'longform' | 'unknown';
 type AiWorkspaceMode = {
   id: string;
   label: string;
-  activeSkills: string[];
 };
 
 export interface WritingDraftWorkbenchProps {
@@ -36,12 +35,6 @@ export interface WritingDraftWorkbenchProps {
   onRejectWriteProposal?: () => void;
   onAiWorkspaceModeChange?: (mode: AiWorkspaceMode) => void;
 }
-
-const WRITING_SHORTCUTS = [
-  { label: '润色结构', text: '请先阅读当前稿件内容，重新整理段落结构，并给出更清晰的起承转合。' },
-  { label: '压缩篇幅', text: '请在保留核心观点的前提下，把当前稿件压缩成更利于阅读的版本。' },
-  { label: '扩写重点', text: '请找出当前稿件最值得展开的部分，并直接补全为更完整的正文。' },
-];
 
 const EDITOR_AI_CONTEXT_MAX_CHARS = 80000;
 const WRITING_EDITOR_ALLOWED_TOOLS = ['app_cli'];
@@ -94,7 +87,7 @@ export function WritingDraftWorkbench({
   onAiWorkspaceModeChange,
 }: WritingDraftWorkbenchProps) {
   const aiWorkspaceMode = useMemo<AiWorkspaceMode>(() => (
-    { id: 'manuscript-editing', label: '稿件编辑', activeSkills: [] }
+    { id: 'manuscript-editing', label: '稿件编辑' }
   ), []);
 
   useEffect(() => {
@@ -120,7 +113,6 @@ export function WritingDraftWorkbench({
     allowedTools: WRITING_EDITOR_ALLOWED_TOOLS,
     allowedAppCliActions: WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS,
     mode: aiWorkspaceMode.id,
-    activeSkills: aiWorkspaceMode.activeSkills,
     initialContext: editorChatMessageContext,
   }), [aiWorkspaceMode, draftType, editorChatMessageContext, filePath, title]);
 
@@ -181,13 +173,6 @@ export function WritingDraftWorkbench({
 
       <aside className="min-h-0 bg-surface-secondary/55">
         <div className="flex h-full min-h-0 flex-col">
-          <div className="border-b border-border px-5 py-3">
-            <div className="text-[11px] font-medium tracking-wide text-text-tertiary">当前页面</div>
-            <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-text-primary">
-              <MessageSquare className="h-4 w-4 text-accent-primary" />
-              {aiWorkspaceMode.label}
-            </div>
-          </div>
           <div className="min-h-0 flex-1 overflow-hidden">
             {editorChatSessionId && editorChatReady ? (
               <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 会话加载中...</div>}>
@@ -196,20 +181,15 @@ export function WritingDraftWorkbench({
                   fixedSessionId={editorChatSessionId}
                   showClearButton={false}
                   showWelcomeShortcuts={false}
-                  showComposerShortcuts
-                  fixedSessionContextIndicatorMode="corner-ring"
+                  showComposerShortcuts={false}
+                  fixedSessionContextIndicatorMode="none"
                   contentLayout="wide"
                   contentWidthPreset="default"
                   allowFileUpload
                   messageWorkflowPlacement="bottom"
                   messageWorkflowVariant="compact"
                   messageWorkflowEmphasis="default"
-                  welcomeTitle={aiWorkspaceMode.label}
-                  welcomeSubtitle="围绕当前稿件继续改结构、润色正文、生成修改版本。"
-                  shortcuts={WRITING_SHORTCUTS}
-                  welcomeShortcuts={WRITING_SHORTCUTS}
                   fixedSessionTaskHints={editorChatTaskHints}
-                  fixedSessionBannerText={aiWorkspaceMode.label}
                 />
               </Suspense>
             ) : (
@@ -217,7 +197,7 @@ export function WritingDraftWorkbench({
                 <div>
                   <Loader2 className="mx-auto h-5 w-5 animate-spin text-accent-primary/70" />
                   <div className="mt-3 text-sm text-text-secondary">
-                    {editorChatSessionId ? '正在同步当前页面上下文...' : '正在初始化 AI 会话...'}
+                    {editorChatSessionId ? '正在同步稿件上下文...' : '正在初始化 AI 会话...'}
                   </div>
                 </div>
               </div>

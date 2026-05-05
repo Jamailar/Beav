@@ -1,6 +1,5 @@
 type TimelineClipLike = Record<string, unknown>;
 type PackageStateLike = {
-  manifest?: Record<string, unknown> | null;
   assets?: { items?: Array<Record<string, unknown>> } | null;
   timelineSummary?: {
     trackNames?: string[];
@@ -19,16 +18,11 @@ type PackageStateLike = {
       status?: string | null;
     } | null;
   } | null;
-  contentMapFile?: string | null;
-  layoutTokensFile?: string | null;
-  longformLayoutPresetId?: string | null;
-  longformLayoutPresetLabel?: string | null;
 };
 
 export type EditorAiWorkspaceMode = {
   id: string;
   label: string;
-  activeSkills: string[];
 };
 
 export type EditorSessionBindingRequest = {
@@ -126,20 +120,6 @@ function resolveScriptApprovalStatus(params: BuildEditorSessionBindingParams): s
   return params.editorBodyDirty ? 'pending' : 'draft';
 }
 
-function isWritingDraftType(draftType: string): boolean {
-  return draftType === 'longform';
-}
-
-function authoringProjectKindForDraft(draftType: string): string | null {
-  if (draftType === 'longform') return 'redarticle';
-  return null;
-}
-
-function resolveAuthoringContentPath(editorFile: string, packageState?: PackageStateLike | null): string {
-  const entry = text(packageState?.manifest?.entry || 'content.md') || 'content.md';
-  return `${editorFile.replace(/\/+$/, '')}/${entry.replace(/^\/+/, '')}`;
-}
-
 export function buildEditorSessionBinding(
   params: BuildEditorSessionBindingParams,
 ): EditorSessionBindingRequest | null {
@@ -152,11 +132,7 @@ export function buildEditorSessionBinding(
   const targetTypeLabel = resolveTargetTypeLabel(params);
   const associatedFilePath = editorFile;
   const currentTitle = pickDraftTitle(params);
-  const activeSkills = Array.from(new Set(list(params.editorAiWorkspaceMode.activeSkills).map((item) => text(item)).filter(Boolean)));
   const isMediaDraft = draftType === 'video' || draftType === 'audio';
-  const isWritingDraft = isWritingDraftType(draftType);
-  const authoringProjectKind = isWritingDraft ? authoringProjectKindForDraft(draftType) : null;
-  const authoringContentPath = isWritingDraft ? resolveAuthoringContentPath(editorFile, params.packageState) : null;
 
   const metadata: Record<string, unknown> = {
     editorBindingVersion: 1,
@@ -167,54 +143,27 @@ export function buildEditorSessionBinding(
     allowedTools: WRITING_EDITOR_ALLOWED_TOOLS,
     allowedAppCliActions: WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS,
     associatedFilePath,
-    associatedPackageFilePath: editorFile,
-    associatedPackageKind: draftType,
     agentProfile: draftType === 'video'
       ? 'video-editor'
       : draftType === 'audio'
         ? 'audio-editor'
-        : isWritingDraft
+        : draftType === 'longform'
           ? 'manuscript-editor'
           : 'default',
-    associatedPackageTitle: currentTitle,
-    currentAuthoringProjectPath: isWritingDraft ? editorFile : null,
-    currentAuthoringContentPath: authoringContentPath,
-    currentAuthoringEntryPath: authoringContentPath,
-    currentAuthoringProjectKind: authoringProjectKind,
-    currentAuthoringTitle: isWritingDraft ? currentTitle : null,
-    associatedPackageWorkspaceMode: text(params.editorAiWorkspaceMode.id),
-    associatedPackageWorkspaceModeLabel: text(params.editorAiWorkspaceMode.label),
-    associatedPackagePromptProfile: text(params.editorAiWorkspaceMode.id),
-    associatedPackageRequiredSkills: activeSkills,
-    activeSkills,
-    associatedPackageLayoutPresetId: draftType === 'longform' ? text(params.packageState?.longformLayoutPresetId) || null : null,
-    associatedPackageLayoutPresetLabel: draftType === 'longform' ? text(params.packageState?.longformLayoutPresetLabel) || null : null,
-    associatedPackageContentSource:
-      draftType === 'longform'
-        ? text(params.packageState?.manifest?.entry || 'content.md')
-        : editorFile,
-    associatedPackageStyleTargets:
-      draftType === 'longform'
-          ? ['manifest.longformLayoutPresetId', 'layout.html', 'wechat.html']
-          : [],
-    associatedPackageStyleEditRule:
-      draftType === 'longform'
-          ? '修改长文排版时，优先改 longformLayoutPresetId；需要细调时只改 layout/wechat HTML 资产，不能改正文 Markdown 内容。'
-          : null,
-    associatedPackageStructure:
-      draftType === 'longform'
-          ? {
-              contentSource: text(params.packageState?.manifest?.entry || 'content.md'),
-              masterSource: 'manifest.longformLayoutPresetId',
-              layoutTarget: 'layout.html',
-              wechatTarget: 'wechat.html',
-            }
-          : null,
-    associatedPackageAssetCount: packageAssets.length,
-    associatedPackageClipCount: isMediaDraft ? Number(params.packageState?.timelineSummary?.clipCount || timelineClips.length || 0) : 0,
-    associatedPackageScriptApprovalStatus: resolveScriptApprovalStatus(params),
-    associatedPackageTrackNames: isMediaDraft ? timelineTrackNames : [],
-    associatedPackageClips: isMediaDraft
+    sourceManuscriptPath: editorFile,
+    sourceManuscriptTitle: currentTitle,
+    sourceManuscriptDraftType: draftType,
+    currentAuthoringProjectPath: editorFile,
+    currentAuthoringContentPath: editorFile,
+    currentAuthoringEntryPath: editorFile,
+    currentAuthoringTitle: currentTitle,
+    editorWorkspaceMode: text(params.editorAiWorkspaceMode.id),
+    editorWorkspaceModeLabel: text(params.editorAiWorkspaceMode.label),
+    mediaAssetCount: packageAssets.length,
+    mediaClipCount: isMediaDraft ? Number(params.packageState?.timelineSummary?.clipCount || timelineClips.length || 0) : 0,
+    editorApprovalStatus: resolveScriptApprovalStatus(params),
+    mediaTrackNames: isMediaDraft ? timelineTrackNames : [],
+    mediaClips: isMediaDraft
       ? timelineClips.slice(0, 12).map((item) => ({
           assetId: item?.assetId,
           name: item?.name,
@@ -227,6 +176,18 @@ export function buildEditorSessionBinding(
         }))
       : [],
   };
+
+  if (isMediaDraft) {
+    metadata.associatedPackageFilePath = editorFile;
+    metadata.associatedPackageKind = draftType;
+    metadata.associatedPackageTitle = currentTitle;
+    metadata.associatedPackageWorkspaceMode = text(params.editorAiWorkspaceMode.id);
+    metadata.associatedPackageWorkspaceModeLabel = text(params.editorAiWorkspaceMode.label);
+    metadata.associatedPackageClipCount = metadata.mediaClipCount;
+    metadata.associatedPackageScriptApprovalStatus = metadata.editorApprovalStatus;
+    metadata.associatedPackageTrackNames = metadata.mediaTrackNames;
+    metadata.associatedPackageClips = metadata.mediaClips;
+  }
 
   return {
     session: {
