@@ -6,8 +6,6 @@
 
 - `article_refine.txt`
 - `content_extraction.txt`
-- `package_html_document_renderer.txt`
-- `package_html_renderer.txt`
 - `video_summary.txt`
 
 ## Rules

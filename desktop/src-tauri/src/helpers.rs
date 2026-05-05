@@ -401,20 +401,8 @@ pub(crate) fn package_layout_html_path(package_path: &Path) -> PathBuf {
     package_path.join("layout.html")
 }
 
-pub(crate) fn package_wechat_html_path(package_path: &Path) -> PathBuf {
-    package_path.join("wechat.html")
-}
-
 pub(crate) fn package_content_map_path(package_path: &Path) -> PathBuf {
     package_path.join("content-map.json")
-}
-
-pub(crate) fn package_layout_template_path(package_path: &Path) -> PathBuf {
-    package_path.join("layout.template.html")
-}
-
-pub(crate) fn package_wechat_template_path(package_path: &Path) -> PathBuf {
-    package_path.join("wechat.template.html")
 }
 
 pub(crate) fn package_layout_tokens_path(package_path: &Path) -> PathBuf {

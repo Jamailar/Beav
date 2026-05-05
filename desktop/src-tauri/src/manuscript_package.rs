@@ -12,7 +12,6 @@ use crate::{
         CliExecutionStatus, CliVerifyRule,
     },
     commands::manuscripts::{
-        longform_layout_preset_catalog_value, longform_layout_preset_state_value,
         richpost_theme_catalog_value_for_manifest, richpost_theme_state_value,
         timeline_clip_duration_ms,
     },
@@ -20,7 +19,7 @@ use crate::{
     get_package_kind_from_file_name, is_thrive_package_path, join_relative, make_id,
     normalize_relative_path, now_i64, now_iso, now_ms, package_assets_path,
     package_content_map_path, package_cover_path, package_editor_project_path, package_entry_path,
-    package_images_path, package_layout_html_path, package_layout_template_path,
+    package_images_path,
     package_layout_tokens_path, package_manifest_path, package_remotion_input_props_path,
     package_remotion_path, package_richpost_master_path, package_richpost_masters_dir,
     package_richpost_page_html_path, package_richpost_page_plan_path, package_richpost_pages_dir,
@@ -29,7 +28,7 @@ use crate::{
     package_richpost_theme_root_dir, package_richpost_theme_store_dir,
     package_richpost_theme_template_path, package_richpost_theme_tokens_path,
     package_richpost_themes_path, package_scene_ui_path, package_timeline_path,
-    package_track_ui_path, package_wechat_html_path, package_wechat_template_path,
+    package_track_ui_path,
     parse_json_value_from_text, read_json_value_or, read_thrive_json_entry_or, redbox_project_root,
     resolve_manuscript_path, title_from_relative_path, write_json_value, write_text_file,
     write_thrive_post_package, AppState,
@@ -2872,10 +2871,6 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             "richpostThemeCatalog": Value::Null,
             "richpostPages": [],
             "richpostPageCount": 0,
-            "hasLayoutHtml": false,
-            "layoutHtmlExists": false,
-            "layoutHtml": "",
-            "wechatHtml": ""
         }));
     }
     let manifest = read_json_value_or(package_manifest_path(package_path).as_path(), json!({}));
@@ -2903,19 +2898,10 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     } else {
         None
     };
-    let longform_layout_preset = if package_kind == Some("article") {
-        Some(longform_layout_preset_state_value(&manifest))
-    } else {
-        None
-    };
     let content_map_path = package_content_map_path(package_path);
     let content_map_exists = content_map_path.exists();
     let layout_tokens_path = package_layout_tokens_path(package_path);
     let layout_tokens_exists = layout_tokens_path.exists();
-    let layout_template_path = package_layout_template_path(package_path);
-    let layout_template_exists = layout_template_path.exists();
-    let wechat_template_path = package_wechat_template_path(package_path);
-    let wechat_template_exists = wechat_template_path.exists();
     let richpost_page_plan_path = package_richpost_page_plan_path(package_path);
     let richpost_page_plan_exists = richpost_page_plan_path.exists();
     let richpost_masters_dir = package_richpost_masters_dir(package_path);
@@ -3059,16 +3045,6 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     } else {
         Vec::new()
     };
-    let layout_html_path = package_layout_html_path(package_path);
-    let layout_html_exists = layout_html_path.exists();
-    let layout_html_has_content = fs::metadata(&layout_html_path)
-        .map(|metadata| metadata.len() > 0)
-        .unwrap_or(false);
-    let wechat_html_path = package_wechat_html_path(package_path);
-    let wechat_html_exists = wechat_html_path.exists();
-    let wechat_html_has_content = fs::metadata(&wechat_html_path)
-        .map(|metadata| metadata.len() > 0)
-        .unwrap_or(false);
     let editor_project = if package_kind == Some("video") {
         read_existing_editor_project(package_path)
     } else if package_kind == Some("audio") {
@@ -3247,27 +3223,6 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         } else {
             Value::Null
         },
-        "longformLayoutPreset": longform_layout_preset.clone().unwrap_or(Value::Null),
-        "longformLayoutPresetId": longform_layout_preset
-            .as_ref()
-            .and_then(|value| value.get("id"))
-            .cloned()
-            .unwrap_or(Value::Null),
-        "longformLayoutPresetLabel": longform_layout_preset
-            .as_ref()
-            .and_then(|value| value.get("label"))
-            .cloned()
-            .unwrap_or(Value::Null),
-        "longformLayoutPresetDescription": longform_layout_preset
-            .as_ref()
-            .and_then(|value| value.get("description"))
-            .cloned()
-            .unwrap_or(Value::Null),
-        "longformLayoutPresetCatalog": if package_kind == Some("article") {
-            longform_layout_preset_catalog_value()
-        } else {
-            Value::Null
-        },
         "richpostPagesDir": if richpost_pages_dir.exists() {
             json!(richpost_pages_dir.display().to_string())
         } else {
@@ -3327,48 +3282,6 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         "richpostMasters": richpost_masters,
         "richpostPageCount": richpost_pages.len(),
         "richpostPages": richpost_pages,
-        "layoutTemplateExists": layout_template_exists,
-        "wechatTemplateExists": wechat_template_exists,
-        "layoutTemplateFile": if layout_template_exists {
-            json!(layout_template_path.display().to_string())
-        } else {
-            Value::Null
-        },
-        "wechatTemplateFile": if wechat_template_exists {
-            json!(wechat_template_path.display().to_string())
-        } else {
-            Value::Null
-        },
-        "layoutTemplateUpdatedAt": file_modified_at_ms(&layout_template_path),
-        "wechatTemplateUpdatedAt": file_modified_at_ms(&wechat_template_path),
-        "hasLayoutHtml": layout_html_has_content,
-        "hasWechatHtml": wechat_html_has_content,
-        "layoutHtmlExists": layout_html_exists,
-        "wechatHtmlExists": wechat_html_exists,
-        "layoutHtmlFile": if layout_html_exists {
-            json!(layout_html_path.display().to_string())
-        } else {
-            Value::Null
-        },
-        "wechatHtmlFile": if wechat_html_exists {
-            json!(wechat_html_path.display().to_string())
-        } else {
-            Value::Null
-        },
-        "layoutHtmlFileUrl": if layout_html_exists {
-            json!(file_url_for_path(&layout_html_path))
-        } else {
-            Value::Null
-        },
-        "wechatHtmlFileUrl": if wechat_html_exists {
-            json!(file_url_for_path(&wechat_html_path))
-        } else {
-            Value::Null
-        },
-        "layoutHtmlUpdatedAt": file_modified_at_ms(&layout_html_path),
-        "wechatHtmlUpdatedAt": file_modified_at_ms(&wechat_html_path),
-        "layoutHtml": "",
-        "wechatHtml": ""
     }))
 }
 
@@ -3477,8 +3390,6 @@ pub(crate) fn create_manuscript_package(
         )?;
         write_json_value(&package_images_path(package_path), &json!({ "items": [] }))?;
         write_json_value(&package_assets_path(package_path), &json!({ "items": [] }))?;
-        write_text_file(&package_layout_html_path(package_path), "")?;
-        write_text_file(&package_wechat_html_path(package_path), "")?;
     } else if package_kind == "post" {
         write_json_value(&package_images_path(package_path), &json!({ "items": [] }))?;
         write_json_value(

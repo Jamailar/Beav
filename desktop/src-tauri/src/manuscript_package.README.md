@@ -5,7 +5,7 @@
 当前支持的文字稿件工程：
 
 - `*.thrive`：统一自定义单文件容器。当前已启用 `kind=post`，正文以 Markdown 为真相层，配图、平台、帖子和来源关系写入 `bindings.json`。
-- `*.redarticle`：面向长文稿件，正文以 Markdown 为真相层，并可生成阅读页或公众号适配结果。
+- `*.redarticle`：面向长文稿件，正文以 Markdown 为真相层。
 
 ## 工程文件结构
 
@@ -29,8 +29,6 @@
 
 - `manifest.json`
 - `content.md`
-- `layout.html`
-- `wechat.html`
 - `cover.json`
 - `images.json`
 - `assets.json`
@@ -47,10 +45,7 @@
 
 ### 长文工程 `*.redarticle`
 
-1. Markdown 仍然是正文源。
-2. 长文样式由 `manifest` 里的版式配置控制。
-3. `layout.html` / `wechat.html` 由宿主或对应渲染链路生成。
-4. 正文与最终渲染结果保持分层，避免把 HTML 当成正文真相层。
+1. Markdown 是唯一维护内容。
 
 ## 模块职责
 
@@ -63,17 +58,10 @@
 - `src-tauri/src/helpers.rs`
   负责稿件工程路径约定与宿主管理资产定位。
 
-### AI
-
-- 长文 HTML 渲染仍由对应模板与约束文件驱动。
-- Post AI 默认只改 Markdown 正文或指定平台 variant，不生成 HTML 排版资产。
-
 ### 前端
 
-- `src/pages/Manuscripts.tsx`
-  负责生成入口、保存联动和包状态刷新。
 - `src/components/manuscripts/WritingDraftWorkbench.tsx`
-  负责图文与长文预览容器。
+  负责正文编辑和当前稿件 AI 对话。
 
 ## 宿主命令
 
