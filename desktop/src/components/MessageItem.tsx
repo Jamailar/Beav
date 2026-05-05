@@ -1309,9 +1309,12 @@ export const MessageItem = memo(({
                 {showAttachments && renderKnowledgeReferenceCards(msg.knowledgeReferences)}
                 {showAttachments && msg.attachment?.type === 'wander-references' && renderWanderReferenceCards(msg.attachment)}
                 {showAttachments && msg.attachments && msg.attachments.length > 0 ? (
-                  <div className="mt-2 flex w-full max-w-[520px] flex-col gap-2">
+                  <div className="mt-2 flex w-full max-w-[520px] flex-col items-end gap-2">
                     {msg.attachments.map((attachment, index) => (
-                      <div key={String(attachment.attachmentId || attachment.workspaceRelativePath || attachment.name || index)}>
+                      <div
+                        key={String(attachment.attachmentId || attachment.workspaceRelativePath || attachment.name || index)}
+                        className="max-w-full self-end"
+                      >
                         {renderUploadedFileCard(attachment as Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>)}
                       </div>
                     ))}
