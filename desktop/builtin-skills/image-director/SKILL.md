@@ -257,7 +257,7 @@ Planning focus:
 - 产品外观、比例、材质、颜色不能漂移
 - 文字必须直接服务转化，不写空泛形容词
 - 要提前写清产品在画面中的位置、大小、出镜方式和陪衬物
-- 电商套图必须绑定具体商品主体。合法来源只有用户上传的商品图，或主体库里可读取的商品主体；没有具体商品时，禁止继续生成电商套图
+- 电商套图必须绑定具体商品资产。合法来源只有用户上传的商品图，或资产库里可读取的商品资产；没有具体商品时，禁止继续生成电商套图
 
 ## Default Workflow
 
@@ -435,7 +435,7 @@ When reference images exist, still pass them through `referenceImages` or `subje
 - If batch consistency is the main goal, prefer stable composition and repeatable visual language over flashy variation.
 - When there is a tradeoff, reduce style flourish before reducing subject consistency or text/layout precision.
 - Do not auto-bind generated card sets into any manuscript project unless the user explicitly requests that as a separate step.
-- If the task is 电商配图 / 电商套图, you must have a concrete product source first: either user-uploaded product images or a product subject from the subject library. Without that, stop and ask for the product material instead of inventing a generic product.
+- If the task is 电商配图 / 电商套图, you must have a concrete product source first: either user-uploaded product images or a product asset from the asset library. Without that, stop and ask for the product material instead of inventing a generic product.
 
 ## Execution Note
 

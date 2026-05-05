@@ -1,2 +1,2 @@
-pub const FAMILY: &str = "subjects";
-pub const NAMESPACE: &str = "subjects";
+pub const FAMILY: &str = "assets";
+pub const NAMESPACE: &str = "assets";

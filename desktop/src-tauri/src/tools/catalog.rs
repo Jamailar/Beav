@@ -56,9 +56,9 @@ const REDBOX_EDITOR_DESCRIPTION: &str =
 const READ_DESCRIPTION: &str =
     "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion. Do not use bash/curl for web pages.";
 const LIST_DESCRIPTION: &str =
-    "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, subjects:// for subjects, or media:// for media.";
+    "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, assets:// for asset library entries, or media:// for media.";
 const SEARCH_DESCRIPTION: &str =
-    "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and subjects:// for subject library lookup. This is not a web search tool.";
+    "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. This is not a web search tool.";
 const WRITE_DESCRIPTION: &str =
     "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
 const REDBOX_DESCRIPTION: &str =
@@ -665,7 +665,10 @@ fn manuscripts_output_schema() -> Value {
 fn subjects_search_input_schema() -> Value {
     object_schema(
         &[
-            ("query", string_schema("Free-text subject search query.")),
+            (
+                "query",
+                string_schema("Free-text asset library search query."),
+            ),
             ("categoryId", string_schema("Optional category filter.")),
         ],
         &["query"],
@@ -674,13 +677,15 @@ fn subjects_search_input_schema() -> Value {
 }
 
 fn subjects_get_input_schema() -> Value {
-    object_schema(&[("id", string_schema("Subject id."))], &["id"], None)
+    object_schema(&[("id", string_schema("Asset id."))], &["id"], None)
 }
 
 fn subjects_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
         "properties": {
+            "asset": { "type": "object" },
+            "assets": { "type": "array", "items": { "type": "object" } },
             "subject": { "type": "object" },
             "subjects": { "type": "array", "items": { "type": "object" } }
         },
@@ -1982,6 +1987,7 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "manuscript",
             "profile",
             "memory",
+            "asset",
             "subject",
             "image",
             "video",
@@ -2038,6 +2044,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
     match namespace {
         "manuscripts" => Some("manuscript"),
         "memory" => Some("memory"),
+        "assets" => Some("asset"),
         "subjects" => Some("subject"),
         "image" => Some("image"),
         "video" => Some("video"),
@@ -2443,9 +2450,9 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
-        action: "subjects.search",
-        namespace: "subjects",
-        description: "Search subjects in the subject library.",
+        action: "assets.search",
+        namespace: "assets",
+        description: "Search the asset library for person, product, scene, prop, brand, model, voice, or visual reference assets. Returns matching assets with reference image paths.",
         input_schema: subjects_search_input_schema,
         output_schema: subjects_output_schema,
         mutating: false,
@@ -2454,15 +2461,37 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
-        action: "subjects.get",
-        namespace: "subjects",
-        description: "Read one subject by id.",
+        action: "assets.get",
+        namespace: "assets",
+        description: "Read one asset library entry by id, including reference image paths and preview URLs when available.",
         input_schema: subjects_get_input_schema,
         output_schema: subjects_output_schema,
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "subjects.search",
+        namespace: "subjects",
+        description: "Legacy alias for assets.search.",
+        input_schema: subjects_search_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
+        action: "subjects.get",
+        namespace: "subjects",
+        description: "Legacy alias for assets.get.",
+        input_schema: subjects_get_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "runtime.query",
@@ -4114,6 +4143,7 @@ mod tests {
         let summary =
             tool_action_family_summary("workflow", Some("redclaw")).expect("summary should exist");
         assert!(summary.contains("memory"));
+        assert!(summary.contains("assets"));
         assert!(summary.contains("manuscripts"));
         assert!(summary.contains("team.session"));
         assert!(summary.contains("team.member"));
@@ -4122,6 +4152,20 @@ mod tests {
             tool_action_family_summary("resource", Some("team")).expect("summary should exist");
         assert!(fs_summary.contains("workspace"));
         assert!(fs_summary.contains("knowledge"));
+    }
+
+    #[test]
+    fn app_cli_model_actions_expose_assets_not_legacy_subjects() {
+        let actions =
+            action_descriptors_for_tool("workflow", Some("redclaw"), ActionVisibility::Model)
+                .into_iter()
+                .map(|descriptor| descriptor.action)
+                .collect::<Vec<_>>();
+
+        assert!(actions.contains(&"assets.search"));
+        assert!(actions.contains(&"assets.get"));
+        assert!(!actions.contains(&"subjects.search"));
+        assert!(!actions.contains(&"subjects.get"));
     }
 
     #[test]

@@ -365,6 +365,20 @@ fn normalize_read_call(arguments: &Value) -> NormalizedToolCall {
             Some("Read"),
             Some(path),
         ),
+        "assets" | "asset" if !resource_path.trim_matches('/').is_empty() => app_cli_action_call(
+            "assets.get",
+            json!({ "id": resource_path.trim_matches('/') }),
+            Some("Read"),
+            Some(path),
+        ),
+        "subjects" | "subject" if !resource_path.trim_matches('/').is_empty() => {
+            app_cli_action_call(
+                "assets.get",
+                json!({ "id": resource_path.trim_matches('/') }),
+                Some("Read"),
+                Some(path),
+            )
+        }
         _ => universal_fs_call("workspace.read", resource_path, &object, Some("Read")),
     }
 }
@@ -381,6 +395,12 @@ fn normalize_list_call(arguments: &Value) -> NormalizedToolCall {
         "manuscripts" => {
             app_cli_action_call("manuscripts.list", json!({}), Some("List"), Some(path))
         }
+        "assets" | "asset" | "subjects" | "subject" => app_cli_action_call(
+            "assets.search",
+            json!({ "query": "" }),
+            Some("List"),
+            Some(path),
+        ),
         "profiles" | "profile" => app_cli_action_call(
             "redclaw.profile.bundle",
             json!({}),
@@ -409,12 +429,12 @@ fn normalize_search_call(arguments: &Value) -> NormalizedToolCall {
         "knowledge" => {
             universal_fs_call("knowledge.search", resource_path, &object, Some("Search"))
         }
-        "subjects" | "subject" => {
+        "assets" | "asset" | "subjects" | "subject" => {
             let mut payload = Map::new();
             copy_universal(&mut payload, &object, "query");
             copy_universal_as(&mut payload, &object, "limit", "limit");
             app_cli_action_call(
-                "subjects.search",
+                "assets.search",
                 Value::Object(payload),
                 Some("Search"),
                 Some(path),
@@ -635,20 +655,15 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
                 Some("web.fetch"),
             )
         }
-        ("subject" | "subjects", "search" | "list") => app_cli_action_call(
-            "subjects.search",
+        ("asset" | "assets" | "subject" | "subjects", "search" | "list") => app_cli_action_call(
+            "assets.search",
             payload,
             Some("Operate"),
-            Some("subject.search"),
+            Some("assets.search"),
         ),
-        ("subject" | "subjects", "get") => {
+        ("asset" | "assets" | "subject" | "subjects", "get") => {
             let payload = normalize_id_payload(payload, "id");
-            app_cli_action_call(
-                "subjects.get",
-                payload,
-                Some("Operate"),
-                Some("subject.get"),
-            )
+            app_cli_action_call("assets.get", payload, Some("Operate"), Some("assets.get"))
         }
         ("image", "generate" | "create" | "run") => app_cli_action_call(
             "image.generate",
@@ -1416,17 +1431,17 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
             Some("manuscripts.createProject")
         }
         ["manuscripts", "write-current", ..] => Some("manuscripts.writeCurrent"),
-        ["subjects", "search", ..] => {
+        ["assets", "search", ..] | ["subjects", "search", ..] => {
             if let Some(query) = extract_flag_value(&tokens, &["--query", "-q"]) {
                 translated_payload.insert("query".to_string(), json!(query));
             }
-            Some("subjects.search")
+            Some("assets.search")
         }
-        ["subjects", "get", ..] => {
+        ["assets", "get", ..] | ["subjects", "get", ..] => {
             if let Some(id) = extract_flag_value(&tokens, &["--id"]) {
                 translated_payload.insert("id".to_string(), json!(id));
             }
-            Some("subjects.get")
+            Some("assets.get")
         }
         ["runtime", "query", ..] => Some("runtime.query"),
         ["runtime", "get-checkpoints", ..] => Some("runtime.getCheckpoints"),

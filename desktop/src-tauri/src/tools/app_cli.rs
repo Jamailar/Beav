@@ -750,6 +750,14 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["get".to_string()];
                 self.handle_subjects(&tokens, payload)
             }
+            "assetssearch" => {
+                let tokens = vec!["search".to_string()];
+                self.handle_subjects(&tokens, payload)
+            }
+            "assetsget" => {
+                let tokens = vec!["get".to_string()];
+                self.handle_subjects(&tokens, payload)
+            }
             "runtimequery" => {
                 let tokens = vec!["query".to_string()];
                 self.handle_runtime(&tokens, payload)
@@ -972,6 +980,7 @@ impl<'a> AppCliExecutor<'a> {
             "advisors" => self.handle_advisors(args, payload),
             "chat" => self.handle_chat(args, payload),
             "spaces" => self.handle_spaces(args),
+            "assets" => self.handle_subjects(args, payload),
             "subjects" => self.handle_subjects(args, payload),
             "manuscripts" => self.handle_manuscripts(args, payload),
             "media" => self.handle_media(args, payload),
@@ -3633,9 +3642,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             let draft_type = payload_string(metadata, "associatedPackageKind")
                 .or_else(|| payload_string(metadata, "draftType"))
                 .unwrap_or_else(|| get_draft_type_from_file_name(&file_path).to_string());
-            if file_path.trim().is_empty()
-                || !matches!(draft_type.as_str(), "longform")
-            {
+            if file_path.trim().is_empty() || !matches!(draft_type.as_str(), "longform") {
                 return Ok(None);
             }
             Ok(Some(BoundWritingSessionTarget {
@@ -5258,6 +5265,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "advisors list|get|list-templates|create|update|delete",
             "chat sessions list|get",
             "spaces list|get|create|rename|delete|switch",
+            "assets list|get|search|categories list|create|update|delete",
             "subjects list|get|search|categories list|create|update|delete",
             "manuscripts list|read|write|create|delete|theme apply|preview|create|save|delete|background-upload|previews|layout get|save",
             "media list|get|update|bind|delete",
@@ -5290,14 +5298,14 @@ fn help_response(namespace: Option<&str>) -> Value {
             "spaces delete --id <spaceId>",
             "spaces switch --id <spaceId>",
         ],
-        "subjects" => vec![
-            "subjects list",
-            "subjects get --id <subjectId>",
-            "subjects search --query \"keyword\"",
-            "subjects categories list",
-            "subjects categories create --name <name>",
-            "subjects categories update --id <categoryId> --name <name>",
-            "subjects categories delete --id <categoryId>",
+        "assets" | "subjects" => vec![
+            "assets list",
+            "assets get --id <assetId>",
+            "assets search --query \"keyword\"",
+            "assets categories list",
+            "assets categories create --name <name>",
+            "assets categories update --id <categoryId> --name <name>",
+            "assets categories delete --id <categoryId>",
         ],
         "manuscripts" => vec![
             "manuscripts list",

@@ -151,7 +151,7 @@ pub fn action_family_for_action(action: &str) -> Option<&'static str> {
         "video" => Some("video"),
         "manuscripts" => Some(manuscripts::FAMILY),
         "memory" => Some(memory::FAMILY),
-        "subjects" => Some(subjects::FAMILY),
+        "assets" | "subjects" => Some(subjects::FAMILY),
         "redclaw" => Some(redclaw::FAMILY),
         "team" => Some(team::FAMILY),
         "runtime" => Some(runtime::FAMILY),

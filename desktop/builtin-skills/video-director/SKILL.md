@@ -118,7 +118,7 @@ When storyboard-first is used, follow this exact process:
 2. Generate that image first.
 3. Then generate later keyframes one by one.
 4. Each later keyframe must use the core environment reference image as a reference image.
-5. If a character subject already exists in the subject library, the subject reference and the core environment reference should both be preserved across later keyframes.
+5. If a character asset already exists in the asset library, the asset reference and the core environment reference should both be preserved across later keyframes.
 6. Only after the keyframes are stable should video generation proceed.
 
 ## Core Environment Reference Image
@@ -231,7 +231,7 @@ If the script contains multiple shots, a named character, an important environme
   - `Audio 1: Jamba voice reference for tone and speaking rhythm`
 - Do this before the motion/camera description so the model does not confuse multiple references.
 - If a suitable subject voice reference exists and the chosen mode supports audio conditioning, treat it as a first-class reference asset instead of telling the user the platform cannot accept audio.
-- If the request uses a subject from the subject library and that subject has a saved voice reference, you should treat that voice as the default audio reference for the video unless the user explicitly asks to disable it or replace it.
+- If the request uses an asset from the asset library and that asset has a saved voice reference, you should treat that voice as the default audio reference for the video unless the user explicitly asks to disable it or replace it.
 - For `text-to-video`, describe subject, camera, motion, environment, pacing, and visual style.
 - For `reference-guided`, describe the desired movement and cinematic behavior while preserving and combining the important elements from the provided reference images.
 - For `first-last-frame`, describe the transition between the first and last frame; do not rewrite the full scene unless the transition requires it.
