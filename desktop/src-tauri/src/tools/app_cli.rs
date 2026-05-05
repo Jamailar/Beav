@@ -613,6 +613,18 @@ impl<'a> AppCliExecutor<'a> {
                     action_success_envelope(&action, data, compat_metadata(&normalized_arguments))
                 });
         }
+        if let Some(command) = payload_string(&normalized_arguments, "command")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return self.execute_legacy_command(&command, &payload).map(|data| {
+                action_success_envelope(
+                    "app_cli.command",
+                    data,
+                    compat_metadata(&normalized_arguments),
+                )
+            });
+        }
         Err(app_cli_error_json(
             None,
             "ACTION_REQUIRED",
@@ -947,6 +959,37 @@ impl<'a> AppCliExecutor<'a> {
         result.map_err(|message| {
             app_cli_error_json(Some(action), "ACTION_FAILED", &message, false, None)
         })
+    }
+
+    fn execute_legacy_command(&self, command: &str, payload: &Value) -> Result<Value, String> {
+        let tokens = tokenize_command(command);
+        let Some(namespace) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(None));
+        };
+        let args = &tokens[1..];
+        match namespace {
+            "help" => Ok(help_response(tokens.get(1).map(String::as_str))),
+            "advisors" => self.handle_advisors(args, payload),
+            "chat" => self.handle_chat(args, payload),
+            "spaces" => self.handle_spaces(args),
+            "subjects" => self.handle_subjects(args, payload),
+            "manuscripts" => self.handle_manuscripts(args, payload),
+            "media" => self.handle_media(args, payload),
+            "image" => self.handle_image(args, payload),
+            "video" => self.handle_video(args, payload),
+            "knowledge" => self.handle_knowledge(args, payload),
+            "work" => self.handle_work(args, payload),
+            "memory" => self.handle_memory(args, payload),
+            "web" => self.handle_web(args, payload),
+            "redclaw" => self.handle_redclaw(args, payload),
+            "runtime" => self.handle_runtime(args, payload),
+            "cli-runtime" | "cli_runtime" => self.handle_cli_runtime(args, payload),
+            "settings" => self.handle_settings(args, payload),
+            "skills" => self.handle_skills(args, payload),
+            "mcp" => self.handle_mcp(args, payload),
+            "ai" => self.handle_ai(args, payload),
+            other => Err(format!("unsupported app_cli command namespace: {other}")),
+        }
     }
 
     fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
