@@ -1549,9 +1549,9 @@ mod tests {
         build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
         decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
         interactive_base64_payload_size, interactive_execution_progress_observe_success,
-        interactive_skill_activation_continuation, interactive_skill_activations,
-        interactive_tool_panic_message, json_value_to_path_list, manuscript_save_result_path,
-        message_is_successful_manuscript_write_tool_result,
+        interactive_model_supports_direct_attachment, interactive_skill_activation_continuation,
+        interactive_skill_activations, interactive_tool_panic_message, json_value_to_path_list,
+        manuscript_save_result_path, message_is_successful_manuscript_write_tool_result,
         normalized_structured_payload_arguments, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
         validate_runtime_tool_message_sequence, GeneratedMediaPreview,
@@ -1581,6 +1581,16 @@ mod tests {
         assert_eq!(mime_type, "image/png");
         assert_eq!(base64_data, "aGVsbG8=");
         assert_eq!(interactive_base64_payload_size(&base64_data), 5);
+    }
+
+    #[test]
+    fn interactive_model_supports_qwen35_image_direct_input() {
+        assert!(interactive_model_supports_direct_attachment(
+            "openai",
+            "qwen3.5-plus",
+            "image",
+            "image/jpeg"
+        ));
     }
 
     #[test]
@@ -4680,6 +4690,8 @@ fn interactive_model_supports_direct_attachment(
                     || model.contains("gpt-5")
                     || model.contains("vision")
                     || model.contains("-vl")
+                    || model.contains("qwen3.5")
+                    || model.contains("qwen-3.5")
                     || model.contains("qwen-vl")
                     || model.contains("omni"))
         }
