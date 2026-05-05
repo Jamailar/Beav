@@ -25,8 +25,6 @@ mod tests {
                 "redbox-image-director",
                 "redbox-video-director",
                 "remotion-best-practices",
-                "richpost-layout-designer",
-                "richpost-theme-editor",
                 "skill-creator",
                 "writing-style",
             ])

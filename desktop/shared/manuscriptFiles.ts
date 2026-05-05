@@ -1,26 +1,23 @@
 export const MANUSCRIPT_MARKDOWN_EXTENSION = '.md';
 export const ARTICLE_DRAFT_EXTENSION = '.redarticle';
-export const POST_DRAFT_EXTENSION = '.redpost';
 export const VIDEO_DRAFT_EXTENSION = '.redvideo';
 export const AUDIO_DRAFT_EXTENSION = '.redaudio';
 
 export const SUPPORTED_MANUSCRIPT_EXTENSIONS = [
     MANUSCRIPT_MARKDOWN_EXTENSION,
     ARTICLE_DRAFT_EXTENSION,
-    POST_DRAFT_EXTENSION,
     VIDEO_DRAFT_EXTENSION,
     AUDIO_DRAFT_EXTENSION,
 ] as const;
 
 export const MANUSCRIPT_PACKAGE_EXTENSIONS = [
     ARTICLE_DRAFT_EXTENSION,
-    POST_DRAFT_EXTENSION,
     VIDEO_DRAFT_EXTENSION,
     AUDIO_DRAFT_EXTENSION,
 ] as const;
 
 export type ManuscriptExtension = typeof SUPPORTED_MANUSCRIPT_EXTENSIONS[number];
-export type ManuscriptPackageKind = 'article' | 'post' | 'video' | 'audio';
+export type ManuscriptPackageKind = 'article' | 'video' | 'audio';
 
 export function isSupportedManuscriptFile(fileName: string): boolean {
     return SUPPORTED_MANUSCRIPT_EXTENSIONS.some((extension) => fileName.endsWith(extension));
@@ -32,16 +29,14 @@ export function isManuscriptPackageName(fileName: string): boolean {
 
 export function getPackageKindFromFileName(fileName: string): ManuscriptPackageKind | null {
     if (fileName.endsWith(ARTICLE_DRAFT_EXTENSION)) return 'article';
-    if (fileName.endsWith(POST_DRAFT_EXTENSION)) return 'post';
     if (fileName.endsWith(VIDEO_DRAFT_EXTENSION)) return 'video';
     if (fileName.endsWith(AUDIO_DRAFT_EXTENSION)) return 'audio';
     return null;
 }
 
-export function getDraftTypeFromFileName(fileName: string): 'longform' | 'richpost' | 'video' | 'audio' | 'unknown' {
+export function getDraftTypeFromFileName(fileName: string): 'longform' | 'video' | 'audio' | 'unknown' {
     const packageKind = getPackageKindFromFileName(fileName);
     if (packageKind === 'article') return 'longform';
-    if (packageKind === 'post') return 'richpost';
     if (packageKind === 'video') return 'video';
     if (packageKind === 'audio') return 'audio';
     if (fileName.endsWith(MANUSCRIPT_MARKDOWN_EXTENSION)) return 'unknown';

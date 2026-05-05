@@ -275,7 +275,7 @@ After image generation:
 
 - Treat card generation and manuscript/project binding as two separate steps.
 - By default, stop after the image/card deliverable is complete.
-- Do not auto-create `.redpost` projects and do not auto-write card plans or generated card content into manuscript projects unless the user explicitly asks for project binding,稿件保存, or `.redpost` packaging as a second step.
+- Do not auto-create manuscript projects and do not auto-write card plans or generated card content into manuscript projects unless the user explicitly asks for project binding or 稿件保存 as a second step.
 
 ## Required Planning Output
 
@@ -434,7 +434,7 @@ When reference images exist, still pass them through `referenceImages` or `subje
 - Do not silently change the requested order.
 - If batch consistency is the main goal, prefer stable composition and repeatable visual language over flashy variation.
 - When there is a tradeoff, reduce style flourish before reducing subject consistency or text/layout precision.
-- Do not auto-bind generated card sets into `.redpost` or any manuscript project unless the user explicitly requests that as a separate step.
+- Do not auto-bind generated card sets into any manuscript project unless the user explicitly requests that as a separate step.
 - If the task is 电商配图 / 电商套图, you must have a concrete product source first: either user-uploaded product images or a product subject from the subject library. Without that, stop and ask for the product material instead of inventing a generic product.
 
 ## Execution Note

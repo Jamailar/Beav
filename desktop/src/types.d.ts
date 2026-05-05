@@ -1551,7 +1551,6 @@ declare global {
       openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
       clipboardReadText: () => Promise<string>;
       openKnowledgeApiGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
-      openRichpostThemeGuide: () => Promise<{ success: boolean; path?: string; error?: string }>;
       plugins: {
         list: () => Promise<{ success: boolean; schemaVersion: number; root: string; plugins: ThrivePluginSummary[]; error?: string }>;
         marketplace: (payload?: { url?: string }) => Promise<ThrivePluginMarketplaceResponse>;

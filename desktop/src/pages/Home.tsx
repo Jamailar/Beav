@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileImage, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, PenLine, RefreshCw, Send, Sparkles, Wand2, X } from 'lucide-react';
+import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, PenLine, RefreshCw, Send, Sparkles, Wand2, X } from 'lucide-react';
 import { ApprovalPanel } from './Approval';
 import { CreatorProfilesPanel } from './CreatorProfiles';
-import { resolveAssetUrl } from '../utils/pathManager';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHomeWidget } from '../types';
 
@@ -41,11 +40,9 @@ interface FileNode {
     isDirectory: boolean;
     children?: FileNode[];
     title?: string;
-    draftType?: 'longform' | 'richpost' | 'video' | 'audio' | 'unknown';
+    draftType?: 'longform' | 'video' | 'audio' | 'unknown';
     updatedAt?: number;
     summary?: string;
-    richpostPreviewFileUrl?: string;
-    richpostPreviewUpdatedAt?: number;
 }
 
 interface ReviewDocketStats {
@@ -65,10 +62,9 @@ interface RecentManuscript {
     path: string;
     name: string;
     title: string;
-    draftType: 'longform' | 'richpost' | 'video' | 'audio' | 'unknown';
+    draftType: 'longform' | 'video' | 'audio' | 'unknown';
     updatedAt: number;
     summary: string;
-    previewUrl: string;
 }
 
 type PluginHomeCommand = ThrivePluginHomeAction | ThrivePluginHomeWidget;
@@ -107,20 +103,17 @@ function isInternalPackageFile(filePath: string): boolean {
     const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
     if (parts.length <= 1) return false;
     return parts.slice(0, -1).some((part) => (
-        part.endsWith('.redpost')
-        || part.endsWith('.thrive')
-        || part.endsWith('.redarticle')
+        part.endsWith('.redarticle')
         || part.endsWith('.redvideo')
         || part.endsWith('.redaudio')
     ));
 }
 
 function stripDraftExtension(fileName: string): string {
-    return fileName.replace(/\.(thrive|redpost|redarticle|redvideo|redaudio|md)$/i, '');
+    return fileName.replace(/\.(redarticle|redvideo|redaudio|md)$/i, '');
 }
 
 function resolveDraftTypeLabel(type: RecentManuscript['draftType']): string {
-    if (type === 'richpost') return '图文';
     if (type === 'video') return '视频';
     if (type === 'audio') return '音频';
     if (type === 'longform') return '长文';
@@ -157,9 +150,6 @@ function buildRecentManuscripts(nodes: FileNode[]): RecentManuscript[] {
                 draftType,
                 updatedAt: Number(item.updatedAt || 0) || 0,
                 summary: String(item.summary || '').trim(),
-                previewUrl: item.richpostPreviewFileUrl
-                    ? `${item.richpostPreviewFileUrl}${item.richpostPreviewFileUrl.includes('?') ? '&' : '?'}v=${item.richpostPreviewUpdatedAt || item.updatedAt || 0}`
-                    : '',
             };
         })
         .sort((left, right) => {
@@ -225,23 +215,16 @@ function RecentManuscriptCard({
 }) {
     const Icon = manuscript.draftType === 'video'
         ? Clapperboard
-        : manuscript.draftType === 'richpost'
-            ? FileImage
-            : FileText;
-    const previewSrc = manuscript.previewUrl ? resolveAssetUrl(manuscript.previewUrl) : '';
+        : FileText;
 
     return (
         <div
             className="overflow-hidden rounded-xl border border-border bg-surface-primary text-left shadow-sm"
         >
             <div className="relative aspect-[16/7] overflow-hidden bg-surface-secondary">
-                {previewSrc ? (
-                    <img src={previewSrc} alt="" className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" />
-                ) : (
-                    <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,rgb(var(--color-accent-muted))_0%,rgb(var(--color-surface-secondary))_48%,rgb(var(--color-surface-primary))_100%)]">
-                        <Icon className="h-8 w-8 text-accent-primary/65" strokeWidth={1.6} />
-                    </div>
-                )}
+                <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,rgb(var(--color-accent-muted))_0%,rgb(var(--color-surface-secondary))_48%,rgb(var(--color-surface-primary))_100%)]">
+                    <Icon className="h-8 w-8 text-accent-primary/65" strokeWidth={1.6} />
+                </div>
                 <span className="absolute left-3 top-3 rounded-full border border-white/50 bg-white/80 px-2 py-0.5 text-[11px] font-medium text-text-secondary shadow-sm backdrop-blur">
                     {resolveDraftTypeLabel(manuscript.draftType)}
                 </span>
@@ -454,7 +437,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
             icon: Clapperboard,
             prompt: recentManuscripts[0]
                 ? `把最近稿件《${recentManuscripts[0].title}》改成一版短视频脚本，保留核心观点。`
-                : '帮我把一个图文主题设计成短视频脚本结构。',
+                : '帮我把一个长文选题设计成短视频脚本结构。',
         },
         {
             label: '生成封面方向',

@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(state.active_skills.len(), 1);
         assert_eq!(state.allowed_tools, vec!["workflow".to_string()]);
         assert!(state.skills_section.contains(
-            "call `workflow(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+            "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
         ));
         assert!(state.skills_section.contains("cover-builder [forked]"));
     }
@@ -272,7 +272,7 @@ mod tests {
             &["resource".to_string()],
         );
         assert!(!state.skills_section.contains(
-            "call `workflow(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+            "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
         ));
         assert!(state.skills_section.contains("- writing-style: desc"));
     }
@@ -318,7 +318,7 @@ mod tests {
             .skills_section
             .contains("redbox-image-director: image desc"));
         assert!(state.skills_section.contains(
-            "call `workflow(action=\"skills.invoke\", payload={ \"name\": \"skill-name\" })`"
+            "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
         ));
 
         let redclaw_state = build_skill_runtime_state(

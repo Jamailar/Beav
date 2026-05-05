@@ -5,8 +5,7 @@
 ## 职责
 
 - `catalog.rs`：工具 descriptor 与 OpenAI schema 定义（kind / approval / concurrency / budget）。
-- `compat.rs`：历史工具名兼容层，只在 session metadata 显式启用 legacy compat 时映射到内部 canonical 工具入口。
-  - 兼容层应优先继续收敛到 canonical tools，而不是给 legacy tool 保持完整独立语义面。
+- `compat.rs`：模型可见工具到内部 canonical action 的窄映射层，不再接受历史 legacy tool alias。
 - `packs.rs`：`runtimeMode -> tool pack` 映射，区分模型可见工具集合和内部执行工具集合。
 - `registry.rs`：按 mode 提供模型可见工具列表、schema 列表和提示词可读描述。
 - `guards.rs`：执行前工具准入校验与 `ToolResultBudget` 截断策略。
@@ -22,17 +21,13 @@
   - `Write`
   - `Operate`
   - `bash`
+  - `tool_search`
 - 内部执行工具继续收敛到：
   - `bash`
   - `resource`
   - `workflow`
   - `editor`（仅编辑器 runtime）
-- 兼容层仅在 `toolCompatMode=legacy` 或 `allowLegacyToolAliases=true` 时接受：
-  - `query`
-  - `profile_doc`
-  - `mcp`
-  - `skill`
-  - `runtime_control`
+- 兼容层不再接受 `query`、`profile_doc`、`mcp`、`skill`、`runtime_control` 等历史 alias。
 
 ## 治理规则
 
@@ -41,16 +36,17 @@
 - 文件和知识读取优先通过 `Read` / `List` / `Search`，内部再映射到 `resource`；不要继续保留或新增大量 `*_glob` / `*_grep` / `*_read` 一类模型可见工具。
 - 宿主业务能力优先通过 `Operate(resource, operation, input)`，内部再映射到 `workflow`；不要把查询、profile、MCP、skill、runtime control 再拆成独立产品级工具面。
 - 编辑器原生协议优先通过 `Read` / `Write` / `Operate(resource="editor", ...)`，内部再映射到 `editor`。编辑器内部可以有动作分组，但不要把 UI 面板或模板类型直接映射成新的模型可见工具。
-- compatibility alias 只用于迁移，不是长期治理边界。新 prompt、skill、pack、runtime metadata 一律使用 canonical tool names。新会话默认禁用 legacy alias；只有迁移/历史恢复 session 可以显式设置 `toolCompatMode=legacy` 或 `allowLegacyToolAliases=true`。
-- 任何新模型可见工具都必须先回答一个问题：`Read`、`List`、`Search`、`Write`、`Operate`、`bash` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。
+- compatibility alias 已从主执行路径硬切移除。新 prompt、skill、pack、runtime metadata 一律使用模型可见工具名或内部 canonical action。
+- 任何新模型可见工具都必须先回答一个问题：`Read`、`List`、`Search`、`Write`、`Operate`、`bash`、`tool_search` 为什么不能安全清晰地表达这件事；回答不出来，就不要新增。
 
 ## 当前 Canonical 规则
 
-- 模型可见 tool 固定为：`Read`、`List`、`Search`、`Write`、`Operate`、`bash`。
+- 模型可见 tool 固定为：`Read`、`List`、`Search`、`Write`、`Operate`、`bash`、`tool_search`。
 - 内部 canonical tool 固定为：`bash`、`resource`、`workflow`、`editor`。
 - LLM 优先选择熟悉的通用原语；业务动作只通过 `Operate(resource, operation, input)` 暴露。
+- `tool_search` 只用于查找 deferred action / MCP tool，不再通过 `Operate(resource="tools", operation="search")` 暴露重复入口。
 - 新能力优先新增内部 canonical action 或虚拟路径 resolver，不再新增 legacy tool alias。
-- prompt 优先引用模型可见工具名；runtime metadata 的 `allowedTools` 只写内部 canonical 名。不要再写 `workflow(command="...")`、`knowledge_read`、`knowledge_grep`、`runtime_control` 这类历史语法。
+- prompt 只引用模型可见工具名；runtime metadata 的 `allowedTools` 只写内部 canonical 名。不要再写 `workflow(command="...")`、`knowledge_read`、`knowledge_grep`、`runtime_control` 这类历史语法。
 
 ## Action Contract
 
@@ -84,4 +80,4 @@
 - 工具返回值默认使用结构化 envelope：成功返回 `ok=true`，失败返回 `ok=false` 和结构化 `error.code / error.message / error.retryable`。
 - 能补 `tool` 和 `action` 的结果，一律补齐，方便诊断和 UI 展示。
 - `compat.rs` 只做翻译，不承载新的产品语义。
-- legacy 调用只有在 session 显式启用兼容模式时才会被翻译；默认新会话应返回结构化错误，让模型改用 `Read` / `List` / `Search` / `Write` / `Operate`。
+- legacy 调用一律返回结构化错误，让模型改用 `Read` / `List` / `Search` / `Write` / `Operate`。

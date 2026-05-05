@@ -16,7 +16,7 @@ use crate::helpers::{
     compose_markdown_with_frontmatter, ensure_manuscript_file_name,
     extract_markdown_frontmatter_block, get_default_package_entry, get_draft_type_from_file_name,
     normalize_relative_path, storage_safe_file_stem, strip_markdown_frontmatter,
-    ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION, POST_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
+    ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
@@ -168,7 +168,7 @@ fn normalize_authoring_target_subdir(
 
 fn authoring_project_kind_from_value(value: Option<&str>) -> Option<AuthoringProjectKind> {
     match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
-        "redpost" | "post" | "richpost" | "xiaohongshu" => Some(AuthoringProjectKind::Redpost),
+        "redpost" | "post" | "richpost" | "xiaohongshu" => Some(AuthoringProjectKind::Redarticle),
         "redarticle" | "article" | "longform" | "wechat" | "wechat_official_account" => {
             Some(AuthoringProjectKind::Redarticle)
         }
@@ -178,16 +178,13 @@ fn authoring_project_kind_from_value(value: Option<&str>) -> Option<AuthoringPro
 
 fn authoring_project_extension(kind: AuthoringProjectKind) -> &'static str {
     match kind {
-        AuthoringProjectKind::Redpost => POST_DRAFT_EXTENSION,
+        AuthoringProjectKind::Redpost => ARTICLE_DRAFT_EXTENSION,
         AuthoringProjectKind::Redarticle => ARTICLE_DRAFT_EXTENSION,
     }
 }
 
 fn authoring_project_kind_from_target_path(path: &str) -> Option<AuthoringProjectKind> {
     let normalized = normalize_relative_path(path);
-    if normalized.ends_with(POST_DRAFT_EXTENSION) {
-        return Some(AuthoringProjectKind::Redpost);
-    }
     if normalized.ends_with(ARTICLE_DRAFT_EXTENSION) {
         return Some(AuthoringProjectKind::Redarticle);
     }
@@ -196,7 +193,7 @@ fn authoring_project_kind_from_target_path(path: &str) -> Option<AuthoringProjec
 
 fn authoring_project_kind_label(kind: AuthoringProjectKind) -> &'static str {
     match kind {
-        AuthoringProjectKind::Redpost => "redpost",
+        AuthoringProjectKind::Redpost => "redarticle",
         AuthoringProjectKind::Redarticle => "redarticle",
     }
 }
@@ -1331,83 +1328,8 @@ impl<'a> AppCliExecutor<'a> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("manuscripts")));
         };
-        let args = parse_cli_args(&tokens[1..])?;
-        let file_path = args
-            .string(&["path", "file-path", "filePath"])
-            .or_else(|| payload_string(payload, "path"))
-            .or_else(|| payload_string(payload, "filePath"));
-        match action {
-            "apply" => self.call_channel(
-                "manuscripts:set-richpost-theme",
-                json!({
-                    "filePath": file_path.ok_or_else(|| "manuscripts theme apply requires --path".to_string())?,
-                    "themeId": args
-                        .string(&["theme-id", "themeId"])
-                        .or_else(|| payload_string(payload, "themeId"))
-                        .ok_or_else(|| "manuscripts theme apply requires --theme-id".to_string())?,
-                }),
-            ),
-            "preview" => {
-                let mut merged = merge_payload(&args.options, payload);
-                if let Some(object) = merged.as_object_mut() {
-                    object.entry("filePath".to_string()).or_insert(json!(
-                        file_path.ok_or_else(|| "manuscripts theme preview requires --path".to_string())?
-                    ));
-                }
-                self.call_channel("manuscripts:preview-richpost-theme-draft", merged)
-            }
-            "create" => {
-                let mut merged = merge_payload(&args.options, payload);
-                if let Some(object) = merged.as_object_mut() {
-                    object.entry("filePath".to_string()).or_insert(json!(
-                        file_path.ok_or_else(|| "manuscripts theme create requires --path".to_string())?
-                    ));
-                }
-                self.call_channel("manuscripts:create-richpost-custom-theme", merged)
-            }
-            "save" => {
-                let mut merged = merge_payload(&args.options, payload);
-                if let Some(object) = merged.as_object_mut() {
-                    object.entry("filePath".to_string()).or_insert(json!(
-                        file_path.ok_or_else(|| "manuscripts theme save requires --path".to_string())?
-                    ));
-                }
-                self.call_channel("manuscripts:save-richpost-custom-theme", merged)
-            }
-            "delete" => self.call_channel(
-                "manuscripts:delete-richpost-custom-theme",
-                json!({
-                    "filePath": file_path.ok_or_else(|| "manuscripts theme delete requires --path".to_string())?,
-                    "themeId": args
-                        .string(&["theme-id", "themeId"])
-                        .or_else(|| payload_string(payload, "themeId"))
-                        .ok_or_else(|| "manuscripts theme delete requires --theme-id".to_string())?,
-                }),
-            ),
-            "background-upload" => self.call_channel(
-                "manuscripts:upload-richpost-theme-background",
-                json!({
-                    "filePath": file_path.ok_or_else(|| "manuscripts theme background-upload requires --path".to_string())?,
-                    "themeId": args
-                        .string(&["theme-id", "themeId"])
-                        .or_else(|| payload_string(payload, "themeId"))
-                        .ok_or_else(|| "manuscripts theme background-upload requires --theme-id".to_string())?,
-                    "role": args
-                        .string(&["role"])
-                        .or_else(|| payload_string(payload, "role")),
-                }),
-            ),
-            "previews" => {
-                let mut merged = merge_payload(&args.options, payload);
-                if let Some(object) = merged.as_object_mut() {
-                    object.entry("filePath".to_string()).or_insert(json!(
-                        file_path.ok_or_else(|| "manuscripts theme previews requires --path".to_string())?
-                    ));
-                }
-                self.call_channel("manuscripts:get-richpost-theme-previews", merged)
-            }
-            _ => Err(format!("unsupported manuscripts theme action: {action}")),
-        }
+        let _ = payload;
+        Err(format!("unsupported manuscripts theme action: {action}"))
     }
 
     fn handle_manuscript_layout(
@@ -3740,7 +3662,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 .or_else(|| payload_string(metadata, "draftType"))
                 .unwrap_or_else(|| get_draft_type_from_file_name(&file_path).to_string());
             if file_path.trim().is_empty()
-                || !matches!(draft_type.as_str(), "longform" | "richpost")
+                || !matches!(draft_type.as_str(), "longform")
             {
                 return Ok(None);
             }
@@ -3765,7 +3687,6 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             let draft_type = target.draft_type.to_ascii_lowercase();
             let preferred_extension = match draft_type.as_str() {
                 "longform" => ARTICLE_DRAFT_EXTENSION,
-                "richpost" => POST_DRAFT_EXTENSION,
                 _ => return None,
             };
             return Some(AuthoringTargetPreference {
@@ -3819,11 +3740,11 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                     preferred_subdir,
                 },
                 Some("xiaohongshu") => AuthoringTargetPreference {
-                    preferred_extension: POST_DRAFT_EXTENSION,
+                    preferred_extension: ARTICLE_DRAFT_EXTENSION,
                     preferred_subdir,
                 },
                 _ => AuthoringTargetPreference {
-                    preferred_extension: POST_DRAFT_EXTENSION,
+                    preferred_extension: ARTICLE_DRAFT_EXTENSION,
                     preferred_subdir,
                 },
             };
@@ -3994,7 +3915,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             metadata.insert(
                 "currentAuthoringProjectKind".to_string(),
                 json!(match project_kind {
-                    AuthoringProjectKind::Redpost => "redpost",
+                    AuthoringProjectKind::Redpost => "redarticle",
                     AuthoringProjectKind::Redarticle => "redarticle",
                 }),
             );
@@ -4014,7 +3935,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 "contentPath": content_path,
                 "entryPath": entry_path,
                 "kind": match project_kind {
-                    AuthoringProjectKind::Redpost => "redpost",
+                    AuthoringProjectKind::Redpost => "redarticle",
                     AuthoringProjectKind::Redarticle => "redarticle",
                 },
                 "title": title,
@@ -4025,12 +3946,12 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
 
     fn default_authoring_project_kind(&self) -> AuthoringProjectKind {
         let Some(preference) = self.current_authoring_target_preference() else {
-            return AuthoringProjectKind::Redpost;
+            return AuthoringProjectKind::Redarticle;
         };
         if preference.preferred_extension == ARTICLE_DRAFT_EXTENSION {
             AuthoringProjectKind::Redarticle
         } else {
-            AuthoringProjectKind::Redpost
+            AuthoringProjectKind::Redarticle
         }
     }
 
@@ -4096,7 +4017,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             "projectId": project_id,
             "title": title,
             "kind": match project_kind {
-                AuthoringProjectKind::Redpost => "redpost",
+                AuthoringProjectKind::Redpost => "redarticle",
                 AuthoringProjectKind::Redarticle => "redarticle",
             },
         }))
@@ -4177,7 +4098,6 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return normalized;
         }
         if normalized.ends_with(ARTICLE_DRAFT_EXTENSION)
-            || normalized.ends_with(POST_DRAFT_EXTENSION)
             || normalized.ends_with(VIDEO_DRAFT_EXTENSION)
             || normalized.ends_with(AUDIO_DRAFT_EXTENSION)
         {
