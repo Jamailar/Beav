@@ -1,7 +1,7 @@
 ---
 doc_type: plan
-execution_status: not_started
-last_updated: 2026-05-04
+execution_status: in_progress
+last_updated: 2026-05-05
 owner: redbox-platform
 scope: desktop
 target_files:
@@ -661,3 +661,20 @@ Team：
 3. RedClaw/team member 包装
 
 不要一开始就把完整 team UI、长任务面板和视频编辑工程全部接入。先把“主 agent 能稳定调用专用视频模型并拿到结构化结果”跑通，这是整个架构的最小稳定内核。
+
+## 13. 当前落地状态
+
+已完成最小可用闭环：
+
+- 设置页增加视频分析专用模型配置，可单独启用、选择来源和模型。
+- 工具目录注册 `video.analyze`，主 agent 通过 `Operate(resource="video", operation="analyze", input=...)` 调用。
+- `video.analyze` 锁定调用内部 `Video Analysis Agent`，不使用当前主聊天模型。
+- 系统提示词明确要求：涉及视频真实内容时必须调用 `video.analyze`，由 `Video Analysis Agent` 专用角色 / subagent 执行分析。
+- 视频附件的 runtime note 和聊天快捷按钮已经指向 `video.analyze`。
+- `video.analyze` 已增加文件哈希 + mode + model + instruction 维度的本地结果缓存，避免同一视频同一分析重复上传。
+- 当前直传 provider 先支持 Gemini 协议，后续再补 OpenAI 兼容视频输入和抽帧转写 fallback。
+
+尚未完成：
+
+- `ffmpeg` / `ffprobe` fallback。
+- RedClaw/team 成员 UI 包装。

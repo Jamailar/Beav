@@ -506,9 +506,9 @@ function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] 
   }
   if (attachmentKind === 'video' && (attachmentCapability(attachment, 'videoAnalyze') || attachmentCapability(attachment, 'videoEdit'))) {
     return [
-      { label: '剪口播', text: '请把这个视频剪成一条口播短视频，保留核心观点和最有传播力的表达。' },
-      { label: '智能剪辑', text: '请分析这个视频并给出智能剪辑方案，包括结构、节奏、删减点和成片脚本。' },
-      { label: '提取精彩切片', text: '请从这个视频中提取最精彩的短切片，按传播潜力排序并说明每段用途。' },
+      { label: '剪口播', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，然后把它剪成一条口播短视频，保留核心观点和最有传播力的表达。' },
+      { label: '智能剪辑', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，并给出智能剪辑方案，包括结构、节奏、删减点和成片脚本。' },
+      { label: '提取精彩切片', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，提取最精彩的短切片，按传播潜力排序并说明每段用途。' },
     ];
   }
   if (attachmentKind === 'file' && (

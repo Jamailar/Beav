@@ -732,6 +732,12 @@ export function Settings({
     visual_index_pdf_max_pages: '12',
     visual_index_pdf_render_dpi: '144',
     visual_index_concurrency: '1',
+    video_analysis_enabled: false,
+    video_analysis_endpoint: '',
+    video_analysis_api_key: '',
+    video_analysis_model: '',
+    video_analysis_protocol: 'gemini',
+    video_analysis_max_direct_video_bytes: String(64 * 1024 * 1024),
     docling_endpoint: '',
     tika_endpoint: '',
     unstructured_endpoint: '',
@@ -788,6 +794,7 @@ export function Settings({
   const [transcriptionSourceId, setTranscriptionSourceId] = useState('');
   const [embeddingSourceId, setEmbeddingSourceId] = useState('');
   const [visualIndexSourceId, setVisualIndexSourceId] = useState('');
+  const [videoAnalysisSourceId, setVideoAnalysisSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
   const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
   const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
@@ -1167,6 +1174,14 @@ export function Settings({
     return chatModels.length > 0 ? chatModels : models;
   }, []);
 
+  const filterVideoAnalysisModels = useCallback((models: AiModelDescriptor[]): AiModelDescriptor[] => {
+    const directVideoModels = models.filter((model) => (
+      model.capabilities.includes('chat') && model.inputCapabilities.includes('video')
+    ));
+    if (directVideoModels.length > 0) return directVideoModels;
+    return filterAiModelsByCapability(models, 'chat');
+  }, []);
+
   const pickBestVisualIndexModelForSource = useCallback((
     source: AiSourceConfig | null,
     preferredModel?: string,
@@ -1184,6 +1199,24 @@ export function Settings({
     }
     return String(visualModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
   }, [filterVisualIndexModels, getSourceModelList]);
+
+  const pickBestVideoAnalysisModelForSource = useCallback((
+    source: AiSourceConfig | null,
+    preferredModel?: string,
+  ): string => {
+    if (!source) return '';
+    const normalizedPreferredModel = String(preferredModel || '').trim();
+    const sourceModels = getSourceModelList(source);
+    const videoModels = filterVideoAnalysisModels(sourceModels);
+    if (normalizedPreferredModel && videoModels.some((item) => item.id === normalizedPreferredModel)) {
+      return normalizedPreferredModel;
+    }
+    const currentDefault = String(source.model || '').trim();
+    if (currentDefault && videoModels.some((item) => item.id === currentDefault)) {
+      return currentDefault;
+    }
+    return String(videoModels[0]?.id || currentDefault || sourceModels[0]?.id || '').trim();
+  }, [filterVideoAnalysisModels, getSourceModelList]);
 
   const resolveLinkedSourceId = useCallback((options: {
     endpoint?: string;
@@ -1238,13 +1271,14 @@ export function Settings({
     return { provider: 'openai-compatible', template: 'openai-images' };
   }, []);
 
-  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'visual' | 'image' | 'video', nextSourceId: string) => {
+  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'visual' | 'videoAnalysis' | 'image' | 'video', nextSourceId: string) => {
     const source = getAiSourceById(nextSourceId);
     if (!source) return;
 
     if (feature === 'transcription') setTranscriptionSourceId(nextSourceId);
     if (feature === 'embedding') setEmbeddingSourceId(nextSourceId);
     if (feature === 'visual') setVisualIndexSourceId(nextSourceId);
+    if (feature === 'videoAnalysis') setVideoAnalysisSourceId(nextSourceId);
     if (feature === 'image') setImageSourceId(nextSourceId);
     setFormData((prev) => {
       if (feature === 'transcription') {
@@ -1272,6 +1306,15 @@ export function Settings({
           visual_index_model: pickBestVisualIndexModelForSource(source, prev.visual_index_model),
         };
       }
+      if (feature === 'videoAnalysis') {
+        return {
+          ...prev,
+          video_analysis_endpoint: String(source.baseURL || '').trim(),
+          video_analysis_api_key: String(source.apiKey || '').trim(),
+          video_analysis_protocol: source.protocol || findAiPresetById(source.presetId)?.protocol || 'openai',
+          video_analysis_model: pickBestVideoAnalysisModelForSource(source, prev.video_analysis_model),
+        };
+      }
       if (feature === 'video') {
         return prev;
       }
@@ -1291,7 +1334,7 @@ export function Settings({
         image_model: nextModel,
       };
     });
-  }, [getAiSourceById, inferImageRoutingFromSource, pickBestModelForSource, pickBestVisualIndexModelForSource]);
+  }, [getAiSourceById, inferImageRoutingFromSource, pickBestModelForSource, pickBestVideoAnalysisModelForSource, pickBestVisualIndexModelForSource]);
 
   const selectedTranscriptionSource = useMemo(() => {
     return getAiSourceById(transcriptionSourceId);
@@ -1304,6 +1347,10 @@ export function Settings({
   const selectedVisualIndexSource = useMemo(() => {
     return getAiSourceById(visualIndexSourceId);
   }, [getAiSourceById, visualIndexSourceId]);
+
+  const selectedVideoAnalysisSource = useMemo(() => {
+    return getAiSourceById(videoAnalysisSourceId);
+  }, [getAiSourceById, videoAnalysisSourceId]);
 
   const selectedImageSource = useMemo(() => {
     return getAiSourceById(imageSourceId);
@@ -1320,6 +1367,10 @@ export function Settings({
   const visualIndexSourceModels = useMemo(() => {
     return selectedVisualIndexSource ? filterVisualIndexModels(getSourceModelList(selectedVisualIndexSource)) : [];
   }, [filterVisualIndexModels, getSourceModelList, selectedVisualIndexSource]);
+
+  const videoAnalysisSourceModels = useMemo(() => {
+    return selectedVideoAnalysisSource ? filterVideoAnalysisModels(getSourceModelList(selectedVideoAnalysisSource)) : [];
+  }, [filterVideoAnalysisModels, getSourceModelList, selectedVideoAnalysisSource]);
 
   const imageSourceModels = useMemo(() => {
     return selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
@@ -3475,6 +3526,12 @@ export function Settings({
           model: String(settings.visual_index_model || '').trim(),
           fallbackId: normalizedDefaultId,
         });
+        const resolvedVideoAnalysisSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.video_analysis_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.video_analysis_api_key || settings.api_key || '').trim(),
+          model: String(settings.video_analysis_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
         const resolvedImageSourceId = resolveLinkedSourceIdFromList({
           endpoint: String(settings.image_endpoint || settings.api_endpoint || '').trim(),
           apiKey: String(settings.image_api_key || settings.api_key || '').trim(),
@@ -3534,6 +3591,7 @@ export function Settings({
         setTranscriptionSourceId(resolvedTranscriptionSourceId);
         setEmbeddingSourceId(resolvedEmbeddingSourceId);
         setVisualIndexSourceId(resolvedVisualIndexSourceId);
+        setVideoAnalysisSourceId(resolvedVideoAnalysisSourceId);
         setImageSourceId(resolvedImageSourceId);
         setNotificationSettings(parseNotificationSettings(settings.notifications_json));
         clearAiSourceDraftDirty();
@@ -3543,6 +3601,7 @@ export function Settings({
           transcriptionSourceId: resolvedTranscriptionSourceId,
           embeddingSourceId: resolvedEmbeddingSourceId,
           visualIndexSourceId: resolvedVisualIndexSourceId,
+          videoAnalysisSourceId: resolvedVideoAnalysisSourceId,
           imageSourceId: resolvedImageSourceId,
         });
 
@@ -3569,6 +3628,12 @@ export function Settings({
           visual_index_pdf_max_pages: String(settings.visual_index_pdf_max_pages || 12),
           visual_index_pdf_render_dpi: String(settings.visual_index_pdf_render_dpi || 144),
           visual_index_concurrency: String(settings.visual_index_concurrency || 1),
+          video_analysis_enabled: Boolean(settings.video_analysis_enabled),
+          video_analysis_endpoint: settings.video_analysis_endpoint || '',
+          video_analysis_api_key: settings.video_analysis_api_key || '',
+          video_analysis_model: settings.video_analysis_model || '',
+          video_analysis_protocol: settings.video_analysis_protocol || 'gemini',
+          video_analysis_max_direct_video_bytes: String(settings.video_analysis_max_direct_video_bytes || 64 * 1024 * 1024),
           docling_endpoint: settings.docling_endpoint || settings.parser_docling_endpoint || '',
           tika_endpoint: settings.tika_endpoint || settings.parser_tika_endpoint || '',
           unstructured_endpoint: settings.unstructured_endpoint || settings.parser_unstructured_endpoint || '',
@@ -4964,10 +5029,12 @@ export function Settings({
       const resolvedTranscriptionSource = getAiSourceById(transcriptionSourceId) || defaultSource || null;
       const resolvedEmbeddingSource = getAiSourceById(embeddingSourceId) || defaultSource || null;
       const resolvedVisualIndexSource = getAiSourceById(visualIndexSourceId) || defaultSource || null;
+      const resolvedVideoAnalysisSource = getAiSourceById(videoAnalysisSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
       const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
+      const resolvedVideoAnalysisModel = String(formData.video_analysis_model || pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource) || '').trim();
       const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
       const resolvedVideoModel = REDBOX_OFFICIAL_VIDEO_MODEL_LIST.includes(String(formData.video_model || '').trim() as typeof REDBOX_OFFICIAL_VIDEO_MODEL_LIST[number])
         ? String(formData.video_model || '').trim()
@@ -5017,6 +5084,12 @@ export function Settings({
       if (formData.visual_index_enabled && normalizedVisualIndexProvider !== 'disabled' && (!normalizedVisualIndexEndpoint || !normalizedVisualIndexModel)) {
         throw new Error('启用知识库视觉索引时必须填写多模态 Endpoint 和模型名');
       }
+      const normalizedVideoAnalysisEndpoint = String(resolvedVideoAnalysisSource?.baseURL || formData.video_analysis_endpoint || resolvedApiEndpoint).trim();
+      const normalizedVideoAnalysisApiKey = String(resolvedVideoAnalysisSource?.apiKey || formData.video_analysis_api_key || '').trim();
+      const normalizedVideoAnalysisProtocol = String(resolvedVideoAnalysisSource?.protocol || formData.video_analysis_protocol || 'gemini').trim();
+      if (formData.video_analysis_enabled && (!normalizedVideoAnalysisEndpoint || !resolvedVideoAnalysisModel)) {
+        throw new Error('启用视频分析专用模型时必须填写 Endpoint 和模型名');
+      }
       const parsedParserTimeoutSeconds = Number(formData.parser_timeout_seconds);
       const parserTimeoutSeconds = Number.isFinite(parsedParserTimeoutSeconds)
         ? Math.min(300, Math.max(10, Math.floor(parsedParserTimeoutSeconds)))
@@ -5059,6 +5132,12 @@ export function Settings({
         visual_index_pdf_max_pages: visualIndexPdfMaxPages,
         visual_index_pdf_render_dpi: visualIndexPdfRenderDpi,
         visual_index_concurrency: visualIndexConcurrency,
+        video_analysis_enabled: Boolean(formData.video_analysis_enabled),
+        video_analysis_endpoint: normalizedVideoAnalysisEndpoint,
+        video_analysis_api_key: normalizedVideoAnalysisApiKey,
+        video_analysis_model: resolvedVideoAnalysisModel,
+        video_analysis_protocol: normalizedVideoAnalysisProtocol,
+        video_analysis_max_direct_video_bytes: Number(formData.video_analysis_max_direct_video_bytes || 64 * 1024 * 1024),
         docling_endpoint: String(formData.docling_endpoint || '').trim(),
         tika_endpoint: String(formData.tika_endpoint || '').trim(),
         unstructured_endpoint: String(formData.unstructured_endpoint || '').trim(),
@@ -6009,6 +6088,90 @@ export function Settings({
                         />
                         跳过 64px 以下的小图标
                       </label>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-medium text-text-primary">视频分析专用模型</h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const source = getAiSourceById(videoAnalysisSourceId);
+                          setFormData((d) => {
+                            const nextEnabled = !d.video_analysis_enabled;
+                            return {
+                              ...d,
+                              video_analysis_enabled: nextEnabled,
+                              video_analysis_endpoint: nextEnabled ? String(source?.baseURL || d.video_analysis_endpoint || '').trim() : d.video_analysis_endpoint,
+                              video_analysis_api_key: nextEnabled ? String(source?.apiKey || d.video_analysis_api_key || '').trim() : d.video_analysis_api_key,
+                              video_analysis_protocol: nextEnabled ? String(source?.protocol || d.video_analysis_protocol || 'gemini').trim() : d.video_analysis_protocol,
+                              video_analysis_model: nextEnabled ? String(d.video_analysis_model || pickBestVideoAnalysisModelForSource(source) || '').trim() : d.video_analysis_model,
+                            };
+                          });
+                        }}
+                        className="ui-switch-track shrink-0"
+                        data-size="md"
+                        data-state={formData.video_analysis_enabled ? 'on' : 'off'}
+                        aria-label="启用视频分析专用模型"
+                      >
+                        <span className="ui-switch-thumb" />
+                      </button>
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            视频分析 AI 源
+                          </label>
+                          <AiSourceSelect
+                            value={videoAnalysisSourceId}
+                            sources={aiSources}
+                            onChange={(nextSourceId) => handleLinkedSourceChange('videoAnalysis', nextSourceId)}
+                            className="w-full"
+                          />
+                        </div>
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            Video Analysis Agent 模型
+                          </label>
+                          <AiModelSelect
+                            value={formData.video_analysis_model}
+                            onChange={(modelId) => setFormData((d) => ({ ...d, video_analysis_model: modelId }))}
+                            className="w-full"
+                            disabled={!videoAnalysisSourceModels.length}
+                            placeholder="请先在该源中添加支持视频输入的模型"
+                            options={videoAnalysisSourceModels.map((model) => ({
+                              id: model.id,
+                              label: model.id,
+                              badges: buildModelCapabilityBadges(model.capabilities),
+                              inputIcons: buildModelInputIcons(model.inputCapabilities),
+                            }))}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">直传上限（bytes）</label>
+                          <input
+                            type="number"
+                            min={1048576}
+                            max={536870912}
+                            value={formData.video_analysis_max_direct_video_bytes}
+                            onChange={(e) => setFormData((d) => ({ ...d, video_analysis_max_direct_video_bytes: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">协议</label>
+                          <input
+                            value={formData.video_analysis_protocol}
+                            onChange={(e) => setFormData((d) => ({ ...d, video_analysis_protocol: e.target.value }))}
+                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
 

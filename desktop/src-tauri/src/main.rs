@@ -4168,7 +4168,7 @@ fn execute_interactive_tool_call(
                     "workspace.read" | "read" => {
                         if raw_path.trim().is_empty() {
                             return Err(
-                                "path is required for resource(action=workspace.read)".to_string()
+                                "path is required for Read(path=\"workspace://...\")".to_string()
                             );
                         }
                         let max_chars =
@@ -4784,8 +4784,9 @@ fn interactive_attachment_tool_read_note(
             .unwrap_or("workspace-tool");
         let tool_hint = match delivery_mode {
             "document-tool" => "优先使用文档解析/知识库导入工具抽取正文；如果只能使用 workspace.read，先读取并如实说明无法解析的格式边界。",
+            "media-tool" if kind == "video" => "必须优先调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary|shot_breakdown|speech_extract|highlight_clips|talking_head_cut|smart_edit\"})`，让专用 Video Analysis Agent 读取真实视频内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始视频。",
             "media-tool" => "优先使用对应的媒体、转写或视频处理工具读取真实媒体内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始媒体。",
-            _ => "先调用 `resource(action=\"workspace.read\", path=...)` 或相关 workspace 工具读取。",
+            _ => "先调用 `Read(path=\"workspace://...\")` 或相关 workspace 工具读取。",
         };
         return Some(format!(
             "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`，处理方式 `{delivery_mode}`。如果任务依赖它的真实内容，{tool_hint} 不要假装已经看过文件内容。"
@@ -6133,7 +6134,7 @@ fn interactive_authoring_continuation_instruction(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.project_path.as_str());
     Some(format!(
-        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `workflow(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
+        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `Operate(resource=\"manuscripts\", operation=\"writeCurrent\", input={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
     ))
 }
 
@@ -6147,15 +6148,12 @@ fn interactive_authoring_error_correction_instruction(
         return None;
     }
     let error_code = structured_tool_error_code(error);
-    if !matches!(
-        error_code.as_deref(),
-        Some("ACTION_REQUIRED") | Some("LEGACY_COMMAND_REQUIRED")
-    ) {
+    if !matches!(error_code.as_deref(), Some("ACTION_REQUIRED")) {
         return None;
     }
     let target = interactive_authoring_session_target(state, session_id)?;
     Some(format!(
-        "你刚才发送了空的 `workflow` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `workflow(action=\"manuscripts.writeCurrent\", payload={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容；不要再次发送空的 workflow，也不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
+        "你刚才发送了空的 `Operate` 调用，说明这次没有提供 `input.content`。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `Operate(resource=\"manuscripts\", operation=\"writeCurrent\", input={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容；不要再次发送空的 Operate，也不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
         target.project_path
     ))
 }

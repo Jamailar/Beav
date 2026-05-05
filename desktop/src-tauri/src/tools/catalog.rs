@@ -64,7 +64,7 @@ const WRITE_DESCRIPTION: &str =
 const REDBOX_DESCRIPTION: &str =
     "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
 const TOOL_SEARCH_DESCRIPTION: &str =
-    "Search deferred workflow actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
+    "Search deferred Operate actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "team",
     "default",
@@ -1605,6 +1605,37 @@ fn video_generate_input_schema() -> Value {
     )
 }
 
+fn video_analyze_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema("Workspace-relative or absolute video path."),
+            ),
+            (
+                "toolPath",
+                string_schema("Preferred workspace-relative tool path from the attachment."),
+            ),
+            ("attachmentId", string_schema("Optional attachment id.")),
+            ("mimeType", string_schema("Optional video MIME type.")),
+            (
+                "mode",
+                json!({
+                    "type": "string",
+                    "enum": ["summary", "shot_breakdown", "speech_extract", "highlight_clips", "talking_head_cut", "smart_edit"],
+                    "description": "Video analysis mode."
+                }),
+            ),
+            (
+                "instruction",
+                string_schema("Specific instruction for the Video Analysis Agent."),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
 fn media_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -1961,7 +1992,6 @@ fn redbox_resource_enum_for_actions(descriptors: &[ActionDescriptor]) -> Vec<&'s
             "mcp",
             "runtime",
             "cli_runtime",
-            "tools",
         ]
         .into_iter()
         .collect::<Vec<_>>()
@@ -2016,7 +2046,6 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "mcp" => Some("mcp"),
         "runtime" | "team" => Some("runtime"),
         "cli_runtime" => Some("cli_runtime"),
-        "tools" => Some("tools"),
         "redclaw" if action.starts_with("redclaw.profile.") => Some("profile"),
         "redclaw" if action.starts_with("redclaw.task.") => Some("task"),
         _ => None,
@@ -2127,17 +2156,6 @@ fn redbox_input_schema() -> Value {
 }
 
 const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
-    ActionDescriptor {
-        action: "tools.search",
-        namespace: "tools",
-        description: "Search deferred workflow actions available to the current session.",
-        input_schema: tools_search_input_schema,
-        output_schema: generic_state_output_schema,
-        mutating: false,
-        concurrency_safe: true,
-        runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
-    },
     ActionDescriptor {
         action: "web.fetch",
         namespace: "web",
@@ -3029,6 +3047,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
+    ActionDescriptor {
+        action: "video.analyze",
+        namespace: "video_analysis",
+        description: "Analyze an attached video by delegating to the locked Video Analysis Agent and return structured JSON.",
+        input_schema: video_analyze_input_schema,
+        output_schema: media_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
 ];
 
 const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
@@ -3456,7 +3485,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "bash" => Some(ToolDescriptor {
             name: "bash",
-            description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for real host CLI execution, PATH checks, curl, which, type, command -v, node, npm, pnpm, or tool-specific CLIs; use workflow(action=\"cli_runtime.inspect\"|\"cli_runtime.diagnose\"|\"cli_runtime.execute\") instead.",
+            description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for real host CLI execution, PATH checks, curl, which, type, command -v, node, npm, pnpm, or tool-specific CLIs; use Operate(resource=\"cli_runtime\", operation=\"inspect|diagnose|run\") instead.",
             kind: ToolKind::Bash,
             requires_approval: false,
             concurrency_safe: true,
@@ -3464,7 +3493,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "query" => Some(ToolDescriptor {
             name: "query",
-            description: "Legacy compatibility alias for app queries. Prefer workflow commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
+            description: "Disabled legacy alias for app queries. Use Read/List/Search/Write/Operate instead.",
             kind: ToolKind::AppQuery,
             requires_approval: false,
             concurrency_safe: true,
@@ -3480,7 +3509,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_glob" => Some(ToolDescriptor {
             name: "knowledge_glob",
-            description: "Legacy compatibility alias for advisor/member knowledge listing. Prefer resource(scope=knowledge, action=list).",
+            description: "Disabled legacy alias for advisor/member knowledge listing. Use List(path=\"knowledge://\") instead.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -3488,7 +3517,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_grep" => Some(ToolDescriptor {
             name: "knowledge_grep",
-            description: "Legacy compatibility alias for advisor/member knowledge search. Prefer resource(scope=knowledge, action=search).",
+            description: "Disabled legacy alias for advisor/member knowledge search. Use Search(path=\"knowledge://\", query=\"...\") instead.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -3496,7 +3525,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "knowledge_read" => Some(ToolDescriptor {
             name: "knowledge_read",
-            description: "Legacy compatibility alias for advisor/member knowledge read. Prefer resource(scope=knowledge, action=read).",
+            description: "Disabled legacy alias for advisor/member knowledge read. Use Read(path=\"knowledge://...\") instead.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -3504,7 +3533,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "profile_doc" => Some(ToolDescriptor {
             name: "profile_doc",
-            description: "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer workflow redclaw profile-bundle/profile-read/profile-update commands.",
+            description: "Disabled legacy alias for durable RedClaw profile doc operations. Use Operate(resource=\"profile\", operation=\"list|get|update\") instead.",
             kind: ToolKind::ProfileDoc,
             requires_approval: false,
             concurrency_safe: false,
@@ -3512,7 +3541,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "mcp" => Some(ToolDescriptor {
             name: "mcp",
-            description: "Legacy compatibility alias for MCP management. Prefer workflow mcp list/save/call/list-tools/list-resources/disconnect commands.",
+            description: "Disabled legacy alias for MCP management. Use Operate(resource=\"mcp\", operation=\"list|get|install|verify|run\") instead.",
             kind: ToolKind::Mcp,
             requires_approval: false,
             concurrency_safe: true,
@@ -3520,7 +3549,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "skill" => Some(ToolDescriptor {
             name: "skill",
-            description: "Legacy compatibility alias for skill runtime and AI-role management. Prefer workflow skills ... and ai ... commands.",
+            description: "Disabled legacy alias for skill runtime and AI-role management. Use Operate(resource=\"skills\", operation=\"list|run\") instead.",
             kind: ToolKind::Skill,
             requires_approval: false,
             concurrency_safe: false,
@@ -3528,7 +3557,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "runtime_control" => Some(ToolDescriptor {
             name: "runtime_control",
-            description: "Legacy compatibility alias for runtime/session/task/background control. Prefer workflow runtime ... commands.",
+            description: "Disabled legacy alias for runtime/session/task/background control. Use Operate(resource=\"runtime\", operation=\"list|get|create|resume|cancel\") instead.",
             kind: ToolKind::RuntimeControl,
             requires_approval: false,
             concurrency_safe: false,
@@ -3647,7 +3676,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "query",
-                "description": "Legacy compatibility alias for app queries. Prefer workflow commands such as spaces list, advisors list, knowledge search, work list, memory search, chat sessions list, settings summary, and redclaw profile-bundle.",
+                "description": "Disabled legacy alias for app queries. Use Read/List/Search/Write/Operate instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3683,7 +3712,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "knowledge_glob",
-                "description": "Legacy compatibility alias for advisor/member knowledge listing. Prefer resource(scope=knowledge, action=list).",
+                "description": "Disabled legacy alias for advisor/member knowledge listing. Use List(path=\"knowledge://\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3699,7 +3728,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "knowledge_grep",
-                "description": "Legacy compatibility alias for advisor/member knowledge search. Prefer resource(scope=knowledge, action=search).",
+                "description": "Disabled legacy alias for advisor/member knowledge search. Use Search(path=\"knowledge://\", query=\"...\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3718,7 +3747,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "knowledge_read",
-                "description": "Legacy compatibility alias for advisor/member knowledge read. Prefer resource(scope=knowledge, action=read).",
+                "description": "Disabled legacy alias for advisor/member knowledge read. Use Read(path=\"knowledge://...\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3737,7 +3766,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "profile_doc",
-                "description": "Legacy compatibility alias for durable RedClaw profile doc operations. Prefer workflow redclaw profile-bundle/profile-read/profile-update commands.",
+                "description": "Disabled legacy alias for durable RedClaw profile doc operations. Use Operate(resource=\"profile\", operation=\"list|get|update\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3755,7 +3784,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "mcp",
-                "description": "Legacy compatibility alias for MCP management. Prefer workflow mcp list/save/call/list-tools/list-resources/disconnect commands.",
+                "description": "Disabled legacy alias for MCP management. Use Operate(resource=\"mcp\", operation=\"list|get|install|verify|run\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3793,7 +3822,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "skill",
-                "description": "Legacy compatibility alias for skill runtime and AI-role management. Prefer workflow skills ... and ai ... commands.",
+                "description": "Disabled legacy alias for skill runtime and AI-role management. Use Operate(resource=\"skills\", operation=\"list|run\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3820,7 +3849,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "runtime_control",
-                "description": "Legacy compatibility alias for runtime/session/task/background control. Prefer workflow runtime ... commands.",
+                "description": "Disabled legacy alias for runtime/session/task/background control. Use Operate(resource=\"runtime\", operation=\"list|get|create|resume|cancel\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -3980,7 +4009,8 @@ mod tests {
 
         assert!(actions.contains(&"image.generate"));
         assert!(actions.contains(&"video.generate"));
-        assert!(actions.contains(&"tools.search"));
+        assert!(actions.contains(&"video.analyze"));
+        assert!(!actions.contains(&"tools.search"));
     }
 
     #[test]

@@ -1,5 +1,9 @@
+use base64::Engine;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 
@@ -21,14 +25,11 @@ use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
 };
-use crate::tools::plan::{
-    build_tool_registry_plan_for_session, build_tool_registry_plan_for_session_with_mcp,
-    legacy_tool_aliases_allowed,
-};
+use crate::tools::plan::build_tool_registry_plan_for_session;
 use crate::tools::registry::normalized_allowed_app_cli_actions;
-use crate::tools::tool_search::tool_search_payload;
 use crate::{
-    join_relative, make_id, now_iso, payload_field, payload_string, resolve_manuscript_path,
+    guess_mime_and_kind, infer_protocol, join_relative, make_id, now_iso,
+    parse_json_value_from_text, payload_field, payload_string, resolve_manuscript_path,
     workspace_root, AppState,
 };
 
@@ -43,6 +44,56 @@ pub struct AppCliExecutor<'a> {
 const IMAGE_DIRECTOR_SKILL_NAME: &str = "redbox-image-director";
 const MAX_IMAGE_BATCH_ITEMS: usize = 6;
 const IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED: &str = "user_confirmed";
+const DEFAULT_VIDEO_ANALYSIS_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+fn short_sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = format!("{:x}", hasher.finalize());
+    digest[..16].to_string()
+}
+
+fn video_analysis_cache_key(
+    file_hash: &str,
+    file_size: u64,
+    mode: &str,
+    model_name: &str,
+    instruction: &str,
+) -> String {
+    let seed = format!(
+        "{file_hash}\n{file_size}\n{}\n{}\n{}",
+        mode.trim(),
+        model_name.trim(),
+        instruction.trim()
+    );
+    short_sha256_hex(seed.as_bytes())
+}
+
+fn read_video_analysis_cache(path: &Path) -> Option<Value> {
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice::<Value>(&bytes).ok()
+}
+
+fn write_video_analysis_cache(path: &Path, value: &Value) {
+    if let Some(parent) = path.parent() {
+        if fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(value) {
+        let _ = fs::write(path, bytes);
+    }
+}
+
+fn video_analysis_agent_system_prompt() -> &'static str {
+    r#"你是 RedBox 内部专用 Video Analysis Agent。
+你只负责根据提供的视频和用户指令输出结构化视频理解结果，不写最终发布文案，不冒充主聊天 agent。
+必须输出严格 JSON，字段包括：success, summary, transcript, scenes, highlights, editingSuggestions, warnings。
+scenes 每项应尽量包含 startSec, endSec, title, description, visualNotes, speechNotes, importance。
+highlights 每项应尽量包含 startSec, endSec, reason, suggestedUse。
+如果无法确认时间戳、画面或声音，必须写入 warnings，不要编造。
+如果指令要求剪口播、智能剪辑或精彩切片，只输出分析依据和剪辑建议，最终成稿由主 agent 完成。"#
+}
 const IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE: &str = "redclaw_auto_execute";
 
 #[derive(Debug, Clone, Default)]
@@ -439,22 +490,6 @@ impl<'a> AppCliExecutor<'a> {
         .flatten()
     }
 
-    fn session_allows_legacy_tool_aliases(&self) -> bool {
-        let Some(session_id) = self.session_id else {
-            return false;
-        };
-        with_store(self.state, |store| {
-            Ok(store
-                .chat_sessions
-                .iter()
-                .find(|item| item.id == session_id)
-                .and_then(|item| item.metadata.as_ref())
-                .map(|metadata| legacy_tool_aliases_allowed(Some(metadata)))
-                .unwrap_or(false))
-        })
-        .unwrap_or(false)
-    }
-
     fn ensure_action_allowed(&self, action: &str) -> Result<(), String> {
         if action == "web.fetch" {
             return Ok(());
@@ -478,7 +513,7 @@ impl<'a> AppCliExecutor<'a> {
                 return Err(app_cli_error_json(
                     Some(action),
                     "ACTION_DEFERRED",
-                    "workflow action is available but not directly exposed in this turn; search actions first.",
+                    "Operate action is available but not directly exposed in this turn; search actions first.",
                     true,
                     Some(json!({
                         "suggestedAction": "tool_search",
@@ -487,15 +522,47 @@ impl<'a> AppCliExecutor<'a> {
                     })),
                 ));
             }
-            return Ok(());
+            return Err(app_cli_error_json(
+                Some(action),
+                "ACTION_NOT_AVAILABLE",
+                "Operate action is not available in this runtime",
+                false,
+                Some(json!({
+                    "runtimeMode": self.runtime_mode,
+                    "directActions": plan
+                        .direct_app_cli_actions
+                        .iter()
+                        .map(|descriptor| descriptor.action)
+                        .collect::<Vec<_>>(),
+                })),
+            ));
         };
         if allowed_actions.iter().any(|item| item == action) {
-            return Ok(());
+            let plan = with_store(self.state, |store| {
+                Ok::<_, String>(build_tool_registry_plan_for_session(
+                    &store,
+                    self.runtime_mode,
+                    self.session_id,
+                ))
+            })?;
+            if plan.has_direct_app_cli_action(action) {
+                return Ok(());
+            }
+            return Err(app_cli_error_json(
+                Some(action),
+                "ACTION_NOT_AVAILABLE",
+                "Operate action is not available in this runtime",
+                false,
+                Some(json!({
+                    "runtimeMode": self.runtime_mode,
+                    "allowedActions": allowed_actions,
+                })),
+            ));
         }
         Err(app_cli_error_json(
             Some(action),
             "ACTION_NOT_ALLOWED",
-            "workflow action is not allowed in this session",
+            "Operate action is not allowed in this session",
             false,
             Some(json!({
                 "allowedActions": allowed_actions,
@@ -549,86 +616,13 @@ impl<'a> AppCliExecutor<'a> {
                     action_success_envelope(&action, data, compat_metadata(&normalized_arguments))
                 });
         }
-        let compat = compat_metadata(&normalized_arguments);
-        if compat.is_none() {
-            return Err(app_cli_error_json(
-                None,
-                "ACTION_REQUIRED",
-                "workflow requires a structured action",
-                false,
-                None,
-            ));
-        }
-        if !self.session_allows_legacy_tool_aliases() {
-            return Err(app_cli_error_json(
-                None,
-                "LEGACY_COMMAND_DISABLED",
-                "legacy workflow command strings are disabled for this session",
-                false,
-                compat,
-            ));
-        }
-        let command = payload_string(&normalized_arguments, "command").ok_or_else(|| {
-            app_cli_error_json(
-                None,
-                "LEGACY_COMMAND_REQUIRED",
-                "compat workflow call requires a legacy command string",
-                false,
-                Some(json!({ "compatOnly": true })),
-            )
-        })?;
-        let result = self
-            .execute_legacy_command(&command, &payload)
-            .map_err(|message| {
-                app_cli_error_json(
-                    compat
-                        .as_ref()
-                        .and_then(|value| value.get("translatedAction"))
-                        .and_then(Value::as_str),
-                    "LEGACY_COMMAND_FAILED",
-                    &message,
-                    false,
-                    compat.clone(),
-                )
-            })?;
-        let compat_action = compat
-            .as_ref()
-            .and_then(|value| value.get("translatedAction"))
-            .and_then(Value::as_str)
-            .unwrap_or("workflow.legacyCommand")
-            .to_string();
-        Ok(action_success_envelope(&compat_action, result, compat))
-    }
-
-    fn execute_legacy_command(&self, command: &str, payload: &Value) -> Result<Value, String> {
-        let tokens = tokenize_command(&command);
-        if tokens.is_empty() {
-            return Err("legacy command is empty".to_string());
-        }
-
-        match tokens[0].as_str() {
-            "help" => Ok(help_response(tokens.get(1).map(String::as_str))),
-            "advisors" => self.handle_advisors(&tokens[1..], &payload),
-            "chat" => self.handle_chat(&tokens[1..], &payload),
-            "spaces" => self.handle_spaces(&tokens[1..]),
-            "subjects" => self.handle_subjects(&tokens[1..], &payload),
-            "manuscripts" => self.handle_manuscripts(&tokens[1..], &payload),
-            "media" => self.handle_media(&tokens[1..], &payload),
-            "image" => self.handle_image(&tokens[1..], &payload),
-            "video" => self.handle_video(&tokens[1..], &payload),
-            "knowledge" => self.handle_knowledge(&tokens[1..], &payload),
-            "work" => self.handle_work(&tokens[1..], &payload),
-            "memory" => self.handle_memory(&tokens[1..], &payload),
-            "web" => self.handle_web(&tokens[1..], &payload),
-            "redclaw" => self.handle_redclaw(&tokens[1..], &payload),
-            "runtime" => self.handle_runtime(&tokens[1..], &payload),
-            "cli-runtime" | "cli_runtime" => self.handle_cli_runtime(&tokens[1..], &payload),
-            "settings" => self.handle_settings(&tokens[1..], &payload),
-            "skills" => self.handle_skills(&tokens[1..], &payload),
-            "mcp" => self.handle_mcp(&tokens[1..], &payload),
-            "ai" => self.handle_ai(&tokens[1..], &payload),
-            other => Err(format!("unsupported workflow namespace: {other}")),
-        }
+        Err(app_cli_error_json(
+            None,
+            "ACTION_REQUIRED",
+            "Operate requires a structured action",
+            false,
+            None,
+        ))
     }
 
     fn execute_structured_action(&self, action: &str, payload: &Value) -> Result<Value, String> {
@@ -637,8 +631,8 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["list".to_string()];
                 self.handle_memory(&tokens, payload)
             }
-            "toolssearch" => self.handle_tools_search(payload),
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
+            "videoanalyze" => self.handle_video_analyze(payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
                 self.handle_memory(&tokens, payload)
@@ -947,7 +941,7 @@ impl<'a> AppCliExecutor<'a> {
                 return Err(app_cli_error_json(
                     Some(action),
                     "UNSUPPORTED_ACTION",
-                    &format!("unsupported structured workflow action: {other}"),
+                    &format!("unsupported structured Operate action: {other}"),
                     false,
                     None,
                 ))
@@ -956,20 +950,6 @@ impl<'a> AppCliExecutor<'a> {
         result.map_err(|message| {
             app_cli_error_json(Some(action), "ACTION_FAILED", &message, false, None)
         })
-    }
-
-    fn handle_tools_search(&self, payload: &Value) -> Result<Value, String> {
-        let mcp_servers = with_store(self.state, |store| Ok(store.mcp_servers.clone()))?;
-        let mcp_inventory = self.state.mcp_manager.list_all_tools(&mcp_servers).ok();
-        let plan = with_store(self.state, |store| {
-            Ok(build_tool_registry_plan_for_session_with_mcp(
-                &store,
-                self.runtime_mode,
-                self.session_id,
-                mcp_inventory.as_ref(),
-            ))
-        })?;
-        Ok(tool_search_payload(&plan, payload))
     }
 
     fn handle_advisors(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
@@ -1571,6 +1551,18 @@ impl<'a> AppCliExecutor<'a> {
         };
         let args = parse_cli_args(&tokens[1..])?;
         match action {
+            "analyze" => {
+                let mut merged = payload.clone();
+                if let Some(object) = merged.as_object_mut() {
+                    if let Some(path) = args.string(&["path", "tool-path", "toolPath"]) {
+                        object.insert("path".to_string(), json!(path));
+                    }
+                    if let Some(mode) = args.string(&["mode"]) {
+                        object.insert("mode".to_string(), json!(mode));
+                    }
+                }
+                self.handle_video_analyze(&merged)
+            }
             "generate" => self.handle_video_generate(&args, payload),
             "project-create" => self.handle_video_project_create(&args, payload),
             "project-list" => self.handle_video_project_list(),
@@ -1580,6 +1572,248 @@ impl<'a> AppCliExecutor<'a> {
             "project-asset-add" => self.handle_video_project_asset_add(&args, payload),
             _ => Err(format!("unsupported video action: {action}")),
         }
+    }
+
+    fn resolve_video_analysis_path(&self, raw_path: &str) -> Result<PathBuf, String> {
+        let normalized = raw_path.trim().replace('\\', "/");
+        if normalized.is_empty() {
+            return Err(app_cli_error_json(
+                Some("video.analyze"),
+                "FILE_UNAVAILABLE",
+                "video.analyze requires payload.path or payload.toolPath",
+                false,
+                None,
+            ));
+        }
+        let candidate = PathBuf::from(&normalized);
+        let resolved = if candidate.is_absolute() {
+            candidate
+        } else {
+            workspace_root(self.state)
+                .map_err(|error| error.to_string())?
+                .join(normalized)
+        };
+        if !resolved.is_file() {
+            return Err(app_cli_error_json(
+                Some("video.analyze"),
+                "FILE_UNAVAILABLE",
+                &format!("video file is not available: {}", resolved.display()),
+                false,
+                None,
+            ));
+        }
+        Ok(resolved)
+    }
+
+    fn video_analysis_model_config(&self) -> Result<Value, String> {
+        let settings = with_store(self.state, |store| Ok(store.settings.clone()))?;
+        if !settings
+            .get("video_analysis_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(app_cli_error_json(
+                Some("video.analyze"),
+                "MISSING_VIDEO_MODEL",
+                "视频分析专用模型未启用。请在设置里启用 Video Analysis Agent 的专用视频模型。",
+                false,
+                Some(json!({
+                    "agentRole": "Video Analysis Agent",
+                    "requiredSettings": ["video_analysis_enabled", "video_analysis_endpoint", "video_analysis_model"]
+                })),
+            ));
+        }
+        let base_url = payload_string(&settings, "video_analysis_endpoint")
+            .or_else(|| payload_string(&settings, "api_endpoint"))
+            .unwrap_or_default();
+        let model_name = payload_string(&settings, "video_analysis_model").unwrap_or_default();
+        if base_url.trim().is_empty() || model_name.trim().is_empty() {
+            return Err(app_cli_error_json(
+                Some("video.analyze"),
+                "MISSING_VIDEO_MODEL",
+                "Video Analysis Agent 缺少 endpoint 或模型名。",
+                false,
+                Some(json!({
+                    "agentRole": "Video Analysis Agent",
+                    "requiredSettings": ["video_analysis_endpoint", "video_analysis_model"]
+                })),
+            ));
+        }
+        let api_key = payload_string(&settings, "video_analysis_api_key")
+            .or_else(|| payload_string(&settings, "api_key"));
+        let protocol = payload_string(&settings, "video_analysis_protocol")
+            .unwrap_or_else(|| infer_protocol(&base_url, None, None));
+        Ok(json!({
+            "protocol": protocol,
+            "baseURL": base_url,
+            "apiKey": api_key,
+            "modelName": model_name,
+            "maxBytes": settings
+                .get("video_analysis_max_direct_video_bytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_VIDEO_ANALYSIS_MAX_BYTES),
+        }))
+    }
+
+    fn handle_video_analyze(&self, payload: &Value) -> Result<Value, String> {
+        let path = payload_string(payload, "toolPath")
+            .or_else(|| payload_string(payload, "path"))
+            .or_else(|| payload_string(payload, "workspaceRelativePath"))
+            .ok_or_else(|| {
+                app_cli_error_json(
+                    Some("video.analyze"),
+                    "FILE_UNAVAILABLE",
+                    "video.analyze requires payload.path or payload.toolPath",
+                    false,
+                    None,
+                )
+            })?;
+        let video_path = self.resolve_video_analysis_path(&path)?;
+        let metadata = fs::metadata(&video_path).map_err(|error| {
+            app_cli_error_json(
+                Some("video.analyze"),
+                "FILE_UNAVAILABLE",
+                &error.to_string(),
+                false,
+                None,
+            )
+        })?;
+        let model_config = self.video_analysis_model_config()?;
+        let max_bytes = model_config
+            .get("maxBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_VIDEO_ANALYSIS_MAX_BYTES);
+        if metadata.len() == 0 || metadata.len() > max_bytes {
+            return Err(app_cli_error_json(
+                Some("video.analyze"),
+                "FILE_TOO_LARGE",
+                &format!(
+                    "视频文件大小为 {} bytes，超过 Video Analysis Agent 直传上限 {} bytes。",
+                    metadata.len(),
+                    max_bytes
+                ),
+                false,
+                Some(json!({ "size": metadata.len(), "maxBytes": max_bytes })),
+            ));
+        }
+        let (_guessed_mime, kind, _) = guess_mime_and_kind(&video_path);
+        if kind != "video" {
+            return Err(app_cli_error_json(
+                Some("video.analyze"),
+                "UNSUPPORTED_MEDIA",
+                "video.analyze 只接受视频文件。",
+                false,
+                Some(json!({ "kind": kind, "path": video_path.display().to_string() })),
+            ));
+        }
+        let mime_type = payload_string(payload, "mimeType")
+            .unwrap_or_else(|| "video/*".to_string())
+            .replace("video/*", "video/mp4");
+        let bytes = fs::read(&video_path).map_err(|error| {
+            app_cli_error_json(
+                Some("video.analyze"),
+                "FILE_UNAVAILABLE",
+                &error.to_string(),
+                false,
+                None,
+            )
+        })?;
+        let mode = payload_string(payload, "mode").unwrap_or_else(|| "summary".to_string());
+        let instruction = payload_string(payload, "instruction").unwrap_or_default();
+        let attachment_id = payload_string(payload, "attachmentId");
+        let protocol = model_config
+            .get("protocol")
+            .and_then(Value::as_str)
+            .unwrap_or("openai");
+        let base_url = model_config
+            .get("baseURL")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let api_key = model_config.get("apiKey").and_then(Value::as_str);
+        let model_name = model_config
+            .get("modelName")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let file_hash = short_sha256_hex(&bytes);
+        let cache_key =
+            video_analysis_cache_key(&file_hash, metadata.len(), &mode, model_name, &instruction);
+        let cache_path = workspace_root(self.state)
+            .map_err(|error| error.to_string())?
+            .join(".redbox")
+            .join("video-analysis-cache")
+            .join(format!("{cache_key}.json"));
+        if let Some(mut cached) = read_video_analysis_cache(&cache_path) {
+            if let Some(object) = cached.as_object_mut() {
+                object.insert("cacheHit".to_string(), json!(true));
+                object.insert(
+                    "cachePath".to_string(),
+                    json!(cache_path.display().to_string()),
+                );
+            }
+            return Ok(cached);
+        }
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let system_prompt = video_analysis_agent_system_prompt();
+        let user_prompt = format!(
+            "请作为 Video Analysis Agent 分析这个视频。\n\nanalysisMode: {}\nattachmentId: {}\nvideoPath: {}\ninstruction: {}\n\n只输出 JSON。",
+            mode.trim(),
+            attachment_id.as_deref().unwrap_or(""),
+            video_path.display(),
+            instruction.trim()
+        );
+        let raw = crate::official_support::invoke_video_analysis_by_protocol(
+            protocol,
+            base_url,
+            api_key,
+            model_name,
+            system_prompt,
+            &user_prompt,
+            &mime_type,
+            &base64_data,
+        )
+        .map_err(|error| {
+            app_cli_error_json(
+                Some("video.analyze"),
+                "PROVIDER_ERROR",
+                &error,
+                true,
+                Some(json!({
+                    "agentRole": "Video Analysis Agent",
+                    "modelName": model_name,
+                    "protocol": protocol
+                })),
+            )
+        })?;
+        let parsed = parse_json_value_from_text(&raw).unwrap_or_else(|| {
+            json!({
+                "success": true,
+                "summary": raw,
+                "scenes": [],
+                "highlights": [],
+                "editingSuggestions": [],
+                "warnings": ["Video Analysis Agent returned non-JSON text; wrapped as summary."]
+            })
+        });
+        let output = json!({
+            "analysisId": make_id("video-analysis"),
+            "cacheHit": false,
+            "cacheKey": cache_key,
+            "cachePath": cache_path.display().to_string(),
+            "agentRole": "Video Analysis Agent",
+            "modelName": model_name,
+            "source": {
+                "attachmentId": attachment_id,
+                "path": video_path.display().to_string(),
+                "mimeType": mime_type,
+                "size": metadata.len(),
+                "fileHash": file_hash
+            },
+            "mode": mode,
+            "result": parsed,
+            "createdAt": now_iso(),
+        });
+        write_video_analysis_cache(&cache_path, &output);
+        Ok(output)
     }
 
     fn handle_knowledge(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
@@ -5196,6 +5430,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "image models",
         ],
         "video" => vec![
+            "video analyze --path <workspaceRelativePath> [--mode smart_edit] [payload.instruction]",
             "video generate --prompt \"...\" [--mode text-to-video] [--duration 8] [--resolution 1080p]",
             "video generate --prompt \"...\" --mode reference-guided --reference-images /abs/a.png,/abs/b.png",
             "video generate --prompt \"...\" --mode first-last-frame --reference-images /abs/first.png,/abs/last.png",

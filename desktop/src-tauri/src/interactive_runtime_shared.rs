@@ -139,6 +139,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         crate::memory::build_memory_prompt_section(state, runtime_mode, session_id, 8);
     let account_context_section = crate::accounts::build_account_prompt_section(state);
     let runtime_agent_overlay = runtime_agent_overlay_prompt(runtime_mode);
+    let video_analysis_section = video_analysis_prompt_section();
     if runtime_mode == "wander" {
         let mut sections = Vec::<String>::new();
         if !prompt_prefix.trim().is_empty() {
@@ -150,7 +151,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 "Your only job is to inspect the provided material folders/files, discover hidden connections, extract reusable viral-content patterns, and return strict JSON for a truly usable topic.",
                 "Use only the available inspection tools in this runtime.",
                 "When the host already preloaded a material bundle, use that bundle first and do not repeat exploratory file reads by default.",
-                "Keep the process lean: use resource(action=workspace.list|workspace.read|workspace.search) only when the preloaded material bundle is clearly insufficient.",
+                "Keep the process lean: use List/Search/Read on workspace paths only when the preloaded material bundle is clearly insufficient.",
                 "The output must be publication-grade, not placeholders.",
                 "Treat materials as inspiration and evidence candidates, not mandatory ingredients.",
                 "Do not force every material into the final topic; weak materials may be dropped, and strong materials may be used only for hook, angle, tension, structure, or tone learning.",
@@ -161,7 +162,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 "A valid result must include direction_frame.target_reader, direction_frame.core_tension, direction_frame.angle, and direction_frame.material_entry before you finalize title and content_direction.",
                 "A valid content_direction must state the target audience, the core conflict/tension, the angle, and how the inspected materials informed that angle or sharpened its hook.",
                 "Do not suggest pseudo tools or imaginary commands; call only the tools actually exposed in available_tools.",
-                "Do not invent fs aliases such as fs read, knowledge_read, or workflow fs ... when resource is available.",
+                "Do not invent fs aliases such as fs read, knowledge_read, workflow fs ..., or resource(...); use only the visible tools.",
             ]
             .join(" "),
         );
@@ -173,6 +174,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         if !subagent_role_overlay_section.trim().is_empty() {
             sections.push(subagent_role_overlay_section.trim().to_string());
         }
+        sections.push(video_analysis_section.to_string());
         if !available_tools.trim().is_empty() {
             sections.push(format!("Available tools:\n{available_tools}"));
         }
@@ -321,6 +323,8 @@ pub(crate) fn interactive_runtime_context_bundle(
             rendered.push_str("\n\n");
             rendered.push_str(runtime_agent_overlay.trim());
         }
+        rendered.push_str("\n\n");
+        rendered.push_str(video_analysis_section);
         if !subagent_role_overlay_section.trim().is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(subagent_role_overlay_section.trim());
@@ -366,8 +370,8 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("\n</redclaw_creator_profile_md>\n");
                 rendered.push_str("文档职责与更新规则：\n");
                 rendered.push_str("- 工作区相对路径：redclaw/profile/Agent.md | redclaw/profile/Soul.md | redclaw/profile/identity.md | redclaw/profile/user.md | redclaw/profile/CreatorProfile.md | memory/MEMORY.md\n");
-                rendered.push_str("- 查询长期档案优先使用 `workflow(action=\"redclaw.profile.read\"|\"redclaw.profile.bundle\")`，不要先用 bash/find/PowerShell 按文件名盲扫。\n");
-                rendered.push_str("- 查询长期记忆优先使用 `workflow(action=\"memory.list\"|\"memory.search\"|\"memory.recall\")`；写入/修订长期记忆使用 `memory.add` / `memory.update` / `memory.archive`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
+                rendered.push_str("- 查询长期档案优先使用 `Operate(resource=\"profile\", operation=\"get|list\")`，不要先用 bash/find/PowerShell 按文件名盲扫。\n");
+                rendered.push_str("- 查询长期记忆优先使用 `Operate(resource=\"memory\", operation=\"list|search|get\")`；写入/修订长期记忆使用 `Operate(resource=\"memory\", operation=\"create|update\")`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
                 rendered.push_str("- Agent.md：RedClaw 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n");
                 rendered.push_str("- Soul.md：RedClaw 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n");
                 rendered.push_str("- user.md：用户稳定画像与长期事实（目标、受众、赛道、节奏、指标）。用户明确给出新的长期事实时更新。\n");
@@ -406,9 +410,9 @@ pub(crate) fn interactive_runtime_context_bundle(
             }
         }
         rendered.push_str(
-            "\n\nRuntime compatibility note:\n- Only call the tools explicitly listed in available_tools.\n- `workflow` now uses structured `action` + optional `payload`; do not invent legacy command strings in normal runtime turns.\n- The available_tools section already lists the action families exposed for this runtime; prefer those families directly instead of exploratory help calls.\n- For a user-provided public URL, call `workflow(action=\"web.fetch\", payload={\"url\":\"https://...\"})`; do not use `bash` with curl/wget for web pages.\n- When diagnosing local CLI availability, prefer `workflow(action=\"cli_runtime.inspect\", payload={\"command\":\"<name>\"})` for a known command and `workflow(action=\"cli_runtime.discover\")` for PATH search. Preserve the exact executable string the user typed, including hyphens such as `lark-cli`; do not shorten it to a guessed alias like `lark`.\n- Do not infer “not installed” only because `cli_runtime.detect` did not list a command. `cli_runtime.inspect` includes host shell and shell resolve probe evidence; treat missing as final only after that evidence and install/retry options are exhausted. If the inspected CLI is missing and the user asked you to make it usable, continue with `workflow(action=\"cli_runtime.install\", payload={\"installMethod\":\"npm|pnpm|python|uv|cargo|go|binary|manual\",\"spec\":\"<package-or-url>\",\"toolName\":\"<exact-command>\"})` when an install spec is known, then inspect/execute again.\n- To actually run a local CLI command, use `workflow(action=\"cli_runtime.execute\", payload={\"argv\":[\"<command>\",\"--flag\"]})`; this response includes stdoutText/stderrText for short output. If more output is needed, call `workflow(action=\"cli_runtime.execution.get\", payload={\"executionId\":\"cli-exec-...\"})`.\n- Do not read CLI runtime log files directly and do not write temporary files just to capture command output.\n- Do not use `bash` for real CLI execution or PATH diagnosis such as `curl`, `which`, `command -v`, `type`, `npm`, `pnpm`, `node`, `lark-cli`, or `echo $PATH`; `bash` is read-only workspace inspection only and its allowlist does not model host CLI availability.\n- When `resource` is available, use it as the default structured file tool. For advisor/member knowledge, prefer `resource(scope=\"knowledge\", action=\"list|search|read\")` instead of broad `bash` scanning.\n- For workspace file discovery, prefer `resource(scope=\"workspace\", action=\"search\")` or exact relative paths instead of `bash find` when the path is known or can be narrowed.\n- When `bash` is available, use it only for read-only inspection inside currentSpaceRoot.\n- `editor` is the editor-only tool for bound video/audio manuscript packages and exposes only the script-first editing actions in normal runtime turns.\n",
+            "\n\nRuntime tool note:\n- Only call the tools explicitly listed in available_tools.\n- Use `Read`, `List`, `Search`, `Write`, `Operate`, `bash`, and `tool_search` exactly as exposed; do not call internal tools such as `workflow`, `resource`, or `editor`.\n- The available_tools section already lists the action families exposed for this runtime; prefer those families directly instead of exploratory help calls.\n- For a user-provided public URL, use `Read(path=\"https://...\")`; do not use `bash` with curl/wget for web pages.\n- When diagnosing local CLI availability, prefer `Operate(resource=\"cli_runtime\", operation=\"inspect\", input={\"command\":\"<name>\"})` for a known command and `Operate(resource=\"cli_runtime\", operation=\"discover\")` for PATH search. Preserve the exact executable string the user typed, including hyphens such as `lark-cli`; do not shorten it to a guessed alias like `lark`.\n- Do not infer “not installed” only because `cli_runtime.detect` did not list a command. `cli_runtime.inspect` includes host shell and shell resolve probe evidence; treat missing as final only after that evidence and install/retry options are exhausted. If the inspected CLI is missing and the user asked you to make it usable, continue with `Operate(resource=\"cli_runtime\", operation=\"install\", input={\"installMethod\":\"npm|pnpm|python|uv|cargo|go|binary|manual\",\"spec\":\"<package-or-url>\",\"toolName\":\"<exact-command>\"})` when an install spec is known, then inspect/execute again.\n- To actually run a local CLI command, use `Operate(resource=\"cli_runtime\", operation=\"run\", input={\"argv\":[\"<command>\",\"--flag\"]})`; this response includes stdoutText/stderrText for short output. If more output is needed, call `Operate(resource=\"cli_runtime\", operation=\"get\", input={\"executionId\":\"cli-exec-...\"})`.\n- Do not read CLI runtime log files directly and do not write temporary files just to capture command output.\n- Do not use `bash` for real CLI execution or PATH diagnosis such as `curl`, `which`, `command -v`, `type`, `npm`, `pnpm`, `node`, `lark-cli`, or `echo $PATH`; `bash` is read-only workspace inspection only and its allowlist does not model host CLI availability.\n- For advisor/member knowledge, prefer `List(path=\"knowledge://\")`, `Search(path=\"knowledge://\", query=\"...\")`, or `Read(path=\"knowledge://...\")` instead of broad `bash` scanning.\n- For workspace file discovery, prefer `Search(path=\"workspace://\", query=\"...\")` or exact relative paths instead of `bash find` when the path is known or can be narrowed.\n- When `bash` is available, use it only for read-only inspection inside currentSpaceRoot.\n- For bound video/audio manuscript packages, use `Read(path=\"editor://current/script\")`, `Write(path=\"editor://current/script\", content=\"...\")`, or `Operate(resource=\"editor\", operation=\"...\")`.\n",
         );
-        rendered.push_str("- For MCP setup or diagnostics, use `workflow(action=\"mcp.list\")`, `mcp.discoverLocal`, `mcp.importLocal`, `mcp.save`, `mcp.test`, and `mcp.listTools`; do not stop at written installation instructions when the user asked you to configure or test MCP. If an MCP package must be installed, use `cli_runtime.*` to inspect/install/run the host CLI, then save and test the server through `mcp.*`.\n");
+        rendered.push_str("- For MCP setup or diagnostics, use `Operate(resource=\"mcp\", operation=\"list|install|verify|get|run\")`; do not stop at written installation instructions when the user asked you to configure or test MCP. If an MCP package must be installed, use `Operate(resource=\"cli_runtime\", ...)` to inspect/install/run the host CLI, then save and test the server through `Operate(resource=\"mcp\", ...)`.\n");
         rendered.push_str("\n");
         rendered.push_str(team_coordinator_prompt());
         if !prompt_suffix.trim().is_empty() {
@@ -491,6 +495,10 @@ Host runtime context: {}\n{}",
             &fallback,
         ),
     )
+}
+
+fn video_analysis_prompt_section() -> &'static str {
+    "Video Analysis Specialist:\n- When a user attaches a video and the task depends on real video content, use `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"<attachment toolPath>\",\"mode\":\"summary|shot_breakdown|speech_extract|highlight_clips|talking_head_cut|smart_edit\",\"instruction\":\"...\"})` before making claims about the video's visual or audio content.\n- `video.analyze` is executed by the locked `Video Analysis Agent` specialist/subagent. The main chat model must not pretend to have watched the video and must not replace this specialist with ordinary `Read`.\n- The Video Analysis Agent only returns structured analysis JSON. Use that result as evidence for writing, editing, short-clip selection, or RedClaw/team follow-up work.\n- If `video.analyze` reports that the dedicated video model is missing or unsupported, tell the user to configure the Video Analysis Agent model instead of inventing video details."
 }
 
 fn effective_member_runtime_metadata(
@@ -698,7 +706,7 @@ fn active_speaker_prompt_section(
         slug_from_relative_path(&advisor_id)
     );
     format!(
-        "ActiveSpeakerProfile:\n- type: member\n- You are currently answering as: {} ({})\n- Member skill ref: {}\n- This single turn must use this member's role, voice, priorities, and decision style. Do not answer as RedClaw, a generic assistant, or another member.\n- This section has higher priority than RedClaw Soul.md when both are present.\n\nMember persona:\n{}\n\nMember system prompt:\n{}\n\nAdvisor knowledge retrieval:\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `resource(scope=\"knowledge\", action=\"list|search|read\")` to inspect this advisor's files.\n- Suggested order: `resource(scope=\"knowledge\", action=\"list\")` -> `resource(scope=\"knowledge\", action=\"search\")` -> `resource(scope=\"knowledge\", action=\"read\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's source materials unless you actually inspected them with tools or the user already provided them in chat.",
+        "ActiveSpeakerProfile:\n- type: member\n- You are currently answering as: {} ({})\n- Member skill ref: {}\n- This single turn must use this member's role, voice, priorities, and decision style. Do not answer as RedClaw, a generic assistant, or another member.\n- This section has higher priority than RedClaw Soul.md when both are present.\n\nMember persona:\n{}\n\nMember system prompt:\n{}\n\nAdvisor knowledge retrieval:\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `List(path=\"knowledge://\")`, `Search(path=\"knowledge://\", query=\"...\")`, or `Read(path=\"knowledge://...\")` to inspect this advisor's files.\n- Suggested order: `List(path=\"knowledge://\")` -> `Search(path=\"knowledge://\", query=\"...\")` -> `Read(path=\"knowledge://...\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's source materials unless you actually inspected them with tools or the user already provided them in chat.",
         advisor_name,
         advisor_id,
         member_skill_ref,
@@ -879,7 +887,7 @@ fn runtime_agent_overlay_prompt(runtime_mode: &str) -> String {
 }
 
 fn team_coordinator_prompt() -> &'static str {
-    "\nTeam coordinator rules:\n- When the user asks for team collaboration, multiple roles, project tracking, a Kanban board, or regular progress reports, use `workflow` team actions instead of only describing a plan.\n- Create the collaboration project with `team.session.create`, then create internal members with `team.member.spawn`, then create assignable tasks with `team.task.create`.\n- Team members are internal runtime members only. Do not create external ACP/CLI members and do not ask the user to install an external agent for team collaboration.\n- Use `team.message.send` for member-to-member/coordinator communication and `team.report.request` / `team.report.submit` for progress reporting.\n- After mutating team state, summarize the created session id, member names, task titles, and what the user can see on the Workboard."
+    "\nTeam coordinator rules:\n- When the user asks for team collaboration, multiple roles, project tracking, a Kanban board, or regular progress reports, use `Operate(resource=\"team\", ...)` actions instead of only describing a plan.\n- Create the collaboration project with `Operate(resource=\"team.session\", operation=\"create\", ...)`, then create internal members with `Operate(resource=\"team.member\", operation=\"spawn\", ...)`, then create assignable tasks with `Operate(resource=\"team.task\", operation=\"create\", ...)`.\n- Team members are internal runtime members only. Do not create external ACP/CLI members and do not ask the user to install an external agent for team collaboration.\n- Use `Operate(resource=\"team.message\", operation=\"send\", ...)` for member-to-member/coordinator communication and `Operate(resource=\"team.report\", operation=\"request|submit\", ...)` for progress reporting.\n- After mutating team state, summarize the created session id, member names, task titles, and what the user can see on the Workboard."
 }
 
 pub(crate) fn parse_usize_arg(arguments: &Value, key: &str, default: usize, max: usize) -> usize {
