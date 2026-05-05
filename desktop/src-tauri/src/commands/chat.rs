@@ -303,6 +303,80 @@ fn clear_stale_task_hints_from_session_metadata(
     })
 }
 
+fn text_contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn inferred_skill_names_from_chat_turn(message: &str, attachment: Option<&Value>) -> Vec<String> {
+    let normalized = message.trim().to_lowercase();
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let card_markers = [
+        "演示卡片",
+        "小红书演示卡片",
+        "图解卡片",
+        "文章卡片",
+        "图文卡片",
+        "知识卡片",
+        "电商套图",
+        "商品套图",
+        "商品详情图",
+        "产品详情图",
+        "轮播图",
+        "组图",
+        "多卡配图",
+    ];
+    if !text_contains_any(&normalized, &card_markers) {
+        return Vec::new();
+    }
+    let explicit_project_markers = [
+        "保存到工程",
+        "绑定工程",
+        "写入工程",
+        ".redpost",
+        "稿件工程",
+        "创建工程",
+        "保存成工程",
+        "入稿件",
+    ];
+    if text_contains_any(&normalized, &explicit_project_markers) {
+        return Vec::new();
+    }
+    let has_image_attachment = attachment
+        .map(attachment_value_has_image)
+        .unwrap_or(false);
+    let product_markers = ["电商", "商品", "产品", "书", "教材", "课程"];
+    if has_image_attachment || text_contains_any(&normalized, &product_markers) {
+        return vec!["image-director".to_string()];
+    }
+    Vec::new()
+}
+
+fn attachment_value_has_image(value: &Value) -> bool {
+    if let Some(items) = value.as_array() {
+        return items.iter().any(attachment_value_has_image);
+    }
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let kind = object
+        .get("kind")
+        .or_else(|| object.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let mime_type = object
+        .get("mimeType")
+        .or_else(|| object.get("mime_type"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    kind == "image" || mime_type.starts_with("image/")
+}
+
 fn collect_active_skill_items_for_session(
     state: &State<'_, AppState>,
     session_id: &str,
@@ -379,10 +453,41 @@ pub fn handle_send_channel(
                     .transpose()?
                     .unwrap_or_else(|| requested_skill_names_from_task_hints(task_hints)),
                 _ => {
+                    let inferred = inferred_skill_names_from_chat_turn(
+                        &message,
+                        payload_field(&payload, "attachments")
+                            .or_else(|| payload_field(&payload, "attachment")),
+                    );
                     if let Some(active_session_id) = session_id.as_deref() {
                         clear_stale_task_hints_from_session_metadata(state, active_session_id)?;
+                        if !inferred.is_empty() {
+                            with_store_mut(state, |store| {
+                                let Some(session) = store
+                                    .chat_sessions
+                                    .iter_mut()
+                                    .find(|item| item.id == active_session_id)
+                                else {
+                                    return Ok(());
+                                };
+                                let active_skills = merge_requested_skills_into_session(
+                                    session,
+                                    &inferred,
+                                    SkillActivationSource::RoutePolicy,
+                                    "chat.inferred_task",
+                                );
+                                if let Some(metadata) =
+                                    session.metadata.as_ref().and_then(Value::as_object)
+                                {
+                                    let mut metadata = metadata.clone();
+                                    metadata
+                                        .insert("activeSkills".to_string(), json!(active_skills));
+                                    session.metadata = Some(Value::Object(metadata));
+                                }
+                                Ok(())
+                            })?;
+                        }
                     }
-                    Vec::new()
+                    inferred
                 }
             };
             if !requested_skills.is_empty() {
@@ -591,7 +696,7 @@ pub fn handle_send_channel(
 
 #[cfg(test)]
 mod tests {
-    use super::clear_stale_task_hints_from_metadata;
+    use super::{clear_stale_task_hints_from_metadata, inferred_skill_names_from_chat_turn};
     use serde_json::json;
 
     #[test]
@@ -678,5 +783,32 @@ mod tests {
         });
 
         assert!(clear_stale_task_hints_from_metadata(&metadata).is_none());
+    }
+
+    #[test]
+    fn infers_image_director_for_ecommerce_image_set_turn() {
+        let attachment = json!({
+            "kind": "image",
+            "mimeType": "image/jpeg",
+        });
+
+        assert_eq!(
+            inferred_skill_names_from_chat_turn("这是一本书，帮我做个电商套图", Some(&attachment)),
+            vec!["image-director".to_string()]
+        );
+    }
+
+    #[test]
+    fn does_not_infer_image_director_for_project_bound_card_task() {
+        let attachment = json!({
+            "kind": "image",
+            "mimeType": "image/jpeg",
+        });
+
+        assert!(inferred_skill_names_from_chat_turn(
+            "帮我做个电商套图并保存到工程",
+            Some(&attachment)
+        )
+        .is_empty());
     }
 }
