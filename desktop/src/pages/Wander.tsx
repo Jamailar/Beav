@@ -5,7 +5,7 @@ import { WanderLoadingDice } from '../components/wander/WanderLoadingDice';
 import { resolveAssetUrl } from '../utils/pathManager';
 import type { PendingChatMessage } from '../App';
 import {
-  AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+  AUTHORING_ALLOWED_OPERATE_ACTIONS,
   AUTHORING_ALLOWED_TOOLS,
 } from '../utils/redclawAuthoring';
 import type { AuthoringTaskHints } from '../utils/redclawAuthoring';
@@ -591,14 +591,12 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
       '',
       '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材目录中的真实文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
-      '优先使用 `redbox_fs(action="workspace.list" | "workspace.read", payload={ ... })` 读取这些 workspace 相对路径；只有当 `redbox_fs` 无法表达该读取动作时，才回退到 `bash`。不要再尝试历史兼容别名或自造的 `fs read` / `app_cli fs ...`。',
+      '优先使用 `List(path="workspace://...")` 列出素材目录，再用 `Read(path="workspace://...")` 读取真实文件内容。不要使用历史兼容别名，也不要回退到 bash。',
       '',
       '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
       '',
-      '开始写作前必须先激活 `writing-style` 技能；不要假定它已经预加载。先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，然后再继续读取素材、读取档案和写正文。',
-      '再次强调：这是写作任务，不要跳过 `writing-style`。开始写作前必须先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`。',
-      '最后再强调一次：先激活 `writing-style`，再写作；先激活 `writing-style`，再写作；先调用 `app_cli(action="skills.invoke", payload={ "name": "writing-style" })`，再继续后续步骤。',
-      '需要参考用户的档案来进行创作 CreatorProfile.md 和 user.md，再基于素材完成最终标题和正文，避免模板化表达。',
+      '宿主会通过任务 metadata 预激活 `writing-style`。如果本轮上下文显示它尚未激活，只调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`，不要反复激活。',
+      '需要参考 RedClaw 用户档案来进行创作。优先用 `Operate(resource="redclaw.profile", operation="bundle", input={})` 或 `Operate(resource="redclaw.profile", operation="read", input={ "docType": "CreatorProfile" })` 读取档案，不要使用 `redclaw://profile/...`。',
       '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
       '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
       '写正文时不要插入控制字符、占位分隔线或额外格式标记；正文只保留正常段落结构。',
@@ -615,9 +613,9 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       '1. 只输出一个最终标题，不要再输出标题候选、备选标题或标题列表。',
       '2. 只输出一篇完整正文（可直接发布，结构清晰，优先保证成稿质量而不是素材覆盖率）。不要额外输出推荐 tag、标签建议、封面文案或其它附加栏目。',
       '3. 这是 post 类型图文任务，必须保存成 `.thrive` 工程。',
-      '4. 如目标工程不存在，先调用 `app_cli(action="manuscripts.createProject", payload={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 获取规范工程路径。不要把标题直接当成工程文件名。',
+      '4. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 获取规范工程路径。不要把标题直接当成工程文件名。',
       '5. 创建成功后，宿主会把该工程绑定为当前写稿目标；你只需要生成最终标题和完整正文，不要展开描述工程内部文件结构，也不要自己管理其他工程文件。',
-      '6. 完成后必须调用 `app_cli(action="manuscripts.writeCurrent", payload={ "content": "<完整正文>" })` 保存完整稿件；不要重新创建工程，也不要再重复传 path。',
+      '6. 完成后必须调用 `Write(path="manuscripts://current", content="<完整正文>")` 保存完整稿件；不要重新创建工程，也不要再重复传 path。',
       '7. 未收到工具成功返回前，禁止告诉我“已经保存”。如果保存失败，必须明确说“内容已生成但尚未保存”。',
     ].join('\n');
 
@@ -627,11 +625,19 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       sessionRouting: 'new',
       taskHints: {
         intent: 'manuscript_creation',
+        executionProfile: 'artifact-authoring',
+        artifactType: 'manuscript',
+        writeTarget: 'manuscripts://current',
+        requiredSkill: 'writing-style',
+        activeSkills: ['writing-style'],
         allowedTools: AUTHORING_ALLOWED_TOOLS,
-        allowedAppCliActions: AUTHORING_ALLOWED_APP_CLI_ACTIONS,
+        allowedOperateActions: AUTHORING_ALLOWED_OPERATE_ACTIONS,
+        allowedWriteTargets: ['manuscripts://current'],
         requireSourceRead: true,
         requireProfileRead: true,
         requireSave: true,
+        deferredDiscovery: false,
+        teamEscalation: 'disabled',
         saveArtifact: 'thrive',
         saveSubdir: 'wander',
         platform: 'xiaohongshu',

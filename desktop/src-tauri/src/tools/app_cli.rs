@@ -4108,6 +4108,19 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         })?;
         let mut merged = payload.clone();
         let content = payload_string(&merged, "content").unwrap_or_default();
+        if content.trim().is_empty() {
+            return Err(json!({
+                "ok": false,
+                "tool": "workflow",
+                "action": "manuscripts.writeCurrent",
+                "error": {
+                    "code": "EMPTY_CONTENT_REJECTED",
+                    "message": "manuscripts.writeCurrent requires non-empty content; use Write(path=\"manuscripts://current\", content=\"完整正文\")",
+                    "retryable": false
+                }
+            })
+            .to_string());
+        }
         let object = merged
             .as_object_mut()
             .ok_or_else(|| "manuscripts write-current payload must be an object".to_string())?;

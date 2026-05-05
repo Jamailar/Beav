@@ -1851,9 +1851,17 @@ mod tests {
             "platform": "xiaohongshu",
             "taskType": "direct_write",
             "formatTarget": "markdown",
+            "executionProfile": "artifact-authoring",
+            "artifactType": "manuscript",
+            "writeTarget": "manuscripts://current",
+            "requiredSkill": "writing-style",
             "allowedTools": ["resource", "workflow"],
             "allowedAppCliActions": ["manuscripts.writeCurrent", "skills.invoke"],
+            "allowedOperateActions": ["skills.invoke", "manuscripts.createProject"],
+            "allowedWriteTargets": ["manuscripts://current"],
             "saveSubdir": "wander",
+            "deferredDiscovery": false,
+            "teamEscalation": "disabled",
             "sourceMode": "knowledge",
             "currentAuthoringProjectPath": "wander/demo.thrive",
             "currentAuthoringContentPath": "wander/demo.thrive/content.md"
@@ -1870,9 +1878,17 @@ mod tests {
             "platform",
             "taskType",
             "formatTarget",
+            "executionProfile",
+            "artifactType",
+            "writeTarget",
+            "requiredSkill",
             "allowedTools",
             "allowedAppCliActions",
+            "allowedOperateActions",
+            "allowedWriteTargets",
             "saveSubdir",
+            "deferredDiscovery",
+            "teamEscalation",
             "sourceMode",
         ] {
             assert!(metadata.get(field).is_none(), "{field} should be cleared");
@@ -1902,10 +1918,26 @@ mod tests {
                 "tool": "workflow",
                 "action": "manuscripts.writeCurrent",
                 "data": {
-                    "projectPath": "wander/demo.thrive"
+                    "projectPath": "wander/demo.thrive",
+                    "savedBytes": 12
                 }
             }"#
         })));
+        assert!(!message_is_successful_manuscript_write_tool_result(
+            &json!({
+                "role": "tool",
+                "tool_name": "workflow",
+                "content": r#"{
+                "ok": true,
+                "tool": "workflow",
+                "action": "manuscripts.writeCurrent",
+                "data": {
+                    "projectPath": "wander/demo.thrive",
+                    "savedBytes": 0
+                }
+            }"#
+            })
+        ));
         assert!(!message_is_successful_manuscript_write_tool_result(
             &json!({
                 "role": "tool",
@@ -5707,7 +5739,7 @@ impl InteractiveExecutionContract {
             missing.push("读取 RedClaw 用户档案");
         }
         if self.require_save && !progress.save_completed {
-            missing.push("调用 manuscripts write-current 保存稿件");
+            missing.push("调用 Write(manuscripts://current) 保存稿件");
         }
         missing
     }
@@ -5755,6 +5787,42 @@ fn manuscript_save_result_path(result: &Value) -> Option<&str> {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
         })
+}
+
+fn manuscript_save_result_has_content(result: &Value) -> bool {
+    let data = tool_result_data(result);
+    let saved_bytes = data
+        .get("savedBytes")
+        .and_then(Value::as_i64)
+        .or_else(|| data.get("saved_bytes").and_then(Value::as_i64))
+        .unwrap_or(0);
+    if saved_bytes > 0 {
+        return true;
+    }
+    let string_paths = [
+        &["content"][..],
+        &["body"][..],
+        &["markdown"][..],
+        &["result", "content"][..],
+        &["result", "body"][..],
+        &["result", "markdown"][..],
+        &["result", "script", "body"][..],
+        &["result", "script", "content"][..],
+    ];
+    string_paths.iter().any(|path| {
+        let mut value = data;
+        for key in *path {
+            let Some(next) = value.get(*key) else {
+                return false;
+            };
+            value = next;
+        }
+        value
+            .as_str()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .is_some()
+    })
 }
 
 fn normalized_app_cli_action_key(arguments: &Value) -> String {
@@ -5813,9 +5881,17 @@ fn clear_interactive_execution_contract_metadata(
         "platform",
         "taskType",
         "formatTarget",
+        "executionProfile",
+        "artifactType",
+        "writeTarget",
+        "requiredSkill",
         "allowedTools",
         "allowedAppCliActions",
+        "allowedOperateActions",
+        "allowedWriteTargets",
         "saveSubdir",
+        "deferredDiscovery",
+        "teamEscalation",
         "sourcePlatform",
         "sourceNoteId",
         "sourceMode",
@@ -5897,6 +5973,7 @@ fn message_is_successful_manuscript_write_tool_result(message: &Value) -> bool {
     };
     payload.get("ok").and_then(Value::as_bool) == Some(true)
         && payload_string(&payload, "action").as_deref() == Some("manuscripts.writeCurrent")
+        && manuscript_save_result_has_content(&payload)
 }
 
 fn session_history_has_successful_manuscript_write(
@@ -6040,6 +6117,7 @@ fn interactive_execution_progress_observe_success(
             if contract.require_save
                 && (command.starts_with("manuscripts write")
                     || action_key == "manuscriptswritecurrent")
+                && manuscript_save_result_has_content(result)
             {
                 let artifact_suffix = contract
                     .save_artifact
@@ -6134,7 +6212,7 @@ fn interactive_authoring_continuation_instruction(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.project_path.as_str());
     Some(format!(
-        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `Operate(resource=\"manuscripts\", operation=\"writeCurrent\", input={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
+        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `Write(path=\"manuscripts://current\", content=\"<与刚生成正文完全一致的完整内容>\")` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
     ))
 }
 
@@ -6148,12 +6226,17 @@ fn interactive_authoring_error_correction_instruction(
         return None;
     }
     let error_code = structured_tool_error_code(error);
-    if !matches!(error_code.as_deref(), Some("ACTION_REQUIRED")) {
+    if !matches!(
+        error_code.as_deref(),
+        Some("ACTION_REQUIRED")
+            | Some("MISSING_OPERATE_FIELDS")
+            | Some("MANUSCRIPT_WRITE_REQUIRES_WRITE")
+    ) {
         return None;
     }
     let target = interactive_authoring_session_target(state, session_id)?;
     Some(format!(
-        "你刚才发送了空的 `Operate` 调用，说明这次没有提供 `input.content`。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `Operate(resource=\"manuscripts\", operation=\"writeCurrent\", input={{ \"content\": \"<与刚生成正文完全一致的完整内容>\" }})` 保存同样内容；不要再次发送空的 Operate，也不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
+        "你刚才没有完成有效保存。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `Write(path=\"manuscripts://current\", content=\"<与刚生成正文完全一致的完整内容>\")` 保存同样内容；不要再次发送空的 Operate，也不要用 Operate 写正文，不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
         target.project_path
     ))
 }

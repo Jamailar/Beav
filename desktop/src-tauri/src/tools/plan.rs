@@ -45,13 +45,13 @@ pub struct ToolRegistryPlan {
     pub runtime_mode: String,
     pub internal_tool_names: Vec<String>,
     pub visible_tools: Vec<ToolDescriptor>,
-    pub allow_legacy_tool_aliases: bool,
     pub direct_app_cli_actions: Vec<ActionDescriptor>,
     pub deferred_app_cli_actions: Vec<DeferredActionEntry>,
     pub deferred_action_namespaces: Vec<String>,
     pub direct_mcp_tools: Vec<McpToolInfo>,
     pub deferred_mcp_tools: Vec<McpToolInfo>,
     pub mcp_tool_namespaces: Vec<String>,
+    pub allowed_write_targets: Vec<String>,
     pub mcp_inventory_fingerprint: Option<String>,
     pub mcp_exposure_mode: String,
     pub fingerprint: String,
@@ -215,16 +215,23 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .unwrap_or_else(|| base_tool_names_for_metadata(&runtime_mode, params.session_metadata));
     let visible_tool_names =
         visible_tool_names_for_internal_tools(&runtime_mode, &internal_tool_names);
-    let allow_legacy_tool_aliases = legacy_tool_aliases_allowed(params.session_metadata);
+    let artifact_authoring_manuscript =
+        metadata_is_artifact_authoring_manuscript(params.session_metadata);
     let mut visible_tools = visible_tool_names
         .iter()
         .filter_map(|name| descriptor_by_name(name))
         .collect::<Vec<_>>();
-    let app_cli_descriptors = if internal_tool_names.iter().any(|name| name == "workflow") {
+    if artifact_authoring_manuscript {
+        visible_tools.retain(|tool| !matches!(tool.name, "Search" | "bash" | "tool_search"));
+    }
+    let mut app_cli_descriptors = if internal_tool_names.iter().any(|name| name == "workflow") {
         action_descriptors_for_tool("workflow", Some(&runtime_mode), ActionVisibility::Model)
     } else {
         Vec::new()
     };
+    if metadata_string(params.session_metadata, "teamEscalation").as_deref() == Some("disabled") {
+        app_cli_descriptors.retain(|descriptor| !is_team_escalation_action(descriptor.action));
+    }
     let direct_app_cli_actions = select_direct_app_cli_actions(
         &runtime_mode,
         params.session_metadata,
@@ -253,7 +260,10 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
     let mcp_exposure = build_mcp_tool_exposure(params.mcp_inventory, params.session_metadata);
     let can_discover_deferred_app_actions = !deferred_app_cli_actions.is_empty()
         && visible_tools.iter().any(|tool| tool.name == "Operate");
-    if (can_discover_deferred_app_actions || !mcp_exposure.deferred_tools.is_empty())
+    let deferred_discovery_enabled =
+        metadata_bool(params.session_metadata, "deferredDiscovery").unwrap_or(true);
+    if deferred_discovery_enabled
+        && (can_discover_deferred_app_actions || !mcp_exposure.deferred_tools.is_empty())
         && !visible_tools.iter().any(|tool| tool.name == "tool_search")
     {
         if let Some(tool) = descriptor_by_name("tool_search") {
@@ -287,37 +297,19 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         runtime_mode,
         internal_tool_names,
         visible_tools,
-        allow_legacy_tool_aliases,
         direct_app_cli_actions,
         deferred_app_cli_actions,
         deferred_action_namespaces,
         direct_mcp_tools: mcp_exposure.direct_tools,
         deferred_mcp_tools: mcp_exposure.deferred_tools,
         mcp_tool_namespaces: mcp_exposure.namespaces,
+        allowed_write_targets: metadata_string_list(params.session_metadata, "allowedWriteTargets"),
         mcp_inventory_fingerprint: params
             .mcp_inventory
             .map(|snapshot| snapshot.fingerprint.clone()),
         mcp_exposure_mode: mcp_exposure.mode,
         fingerprint,
     }
-}
-
-pub(crate) fn legacy_tool_aliases_allowed(metadata: Option<&Value>) -> bool {
-    let Some(metadata) = metadata else {
-        return false;
-    };
-    if metadata
-        .get("allowLegacyToolAliases")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return true;
-    }
-    metadata
-        .get("toolCompatMode")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| matches!(value, "legacy" | "compat" | "compatibility"))
 }
 
 pub fn base_tool_names_for_metadata(runtime_mode: &str, metadata: Option<&Value>) -> Vec<String> {
@@ -406,7 +398,7 @@ fn select_direct_app_cli_actions(
     let max_direct_actions = if pinned_actions.is_empty() {
         max_direct_actions
     } else {
-        max_direct_actions.max(22)
+        max_direct_actions.max(26)
     };
     let mut selected = Vec::<ActionDescriptor>::new();
     for action in pinned_actions {
@@ -525,6 +517,10 @@ fn deferred_action_entry(descriptor: &ActionDescriptor) -> DeferredActionEntry {
     }
 }
 
+fn is_team_escalation_action(action: &str) -> bool {
+    action.starts_with("team.") || action.starts_with("redclaw.task.")
+}
+
 fn session_metadata<'a>(store: &'a AppStore, session_id: Option<&str>) -> Option<&'a Value> {
     session_id.and_then(|id| {
         store
@@ -549,6 +545,26 @@ fn metadata_string_list(metadata: Option<&Value>, field: &str) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn metadata_string(metadata: Option<&Value>, field: &str) -> Option<String> {
+    metadata
+        .and_then(|item| item.get(field))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+}
+
+fn metadata_bool(metadata: Option<&Value>, field: &str) -> Option<bool> {
+    metadata
+        .and_then(|item| item.get(field))
+        .and_then(Value::as_bool)
+}
+
+fn metadata_is_artifact_authoring_manuscript(metadata: Option<&Value>) -> bool {
+    metadata_string(metadata, "executionProfile").as_deref() == Some("artifact-authoring")
+        && metadata_string(metadata, "artifactType").as_deref() == Some("manuscript")
 }
 
 fn normalize_runtime_mode(runtime_mode: &str) -> &str {
@@ -599,9 +615,15 @@ fn canonical_metadata_for_hash(metadata: Option<&Value>) -> String {
     for key in [
         "allowedTools",
         "allowedAppCliActions",
-        "allowLegacyToolAliases",
+        "allowedOperateActions",
+        "allowedWriteTargets",
+        "executionProfile",
+        "artifactType",
+        "writeTarget",
+        "requiredSkill",
+        "deferredDiscovery",
+        "teamEscalation",
         "taskIntent",
-        "toolCompatMode",
         "runtimeMode",
     ] {
         if let Some(value) = object.get(key) {
@@ -631,14 +653,14 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("image.generate"));
-        assert!(plan.has_direct_app_cli_action("tools.search"));
+        assert!(!plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.direct_app_cli_actions.len() <= DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS);
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
         assert!(plan
             .visible_tools
             .iter()
             .any(|tool| tool.name == "tool_search"));
-        assert!(plan.has_deferred_app_cli_action("memory.add"));
+        assert!(plan.has_direct_app_cli_action("memory.add"));
     }
 
     #[test]
@@ -649,7 +671,7 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("image.generate"));
-        assert!(plan.has_direct_app_cli_action("tools.search"));
+        assert!(!plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
         assert!(plan
             .visible_tools
@@ -687,6 +709,57 @@ mod tests {
             ]
         );
         assert!(plan.has_deferred_app_cli_action("redclaw.task.create"));
+    }
+
+    #[test]
+    fn artifact_authoring_manuscript_keeps_minimal_tool_surface() {
+        let metadata = json!({
+            "executionProfile": "artifact-authoring",
+            "artifactType": "manuscript",
+            "allowedTools": ["resource", "workflow"],
+            "allowedOperateActions": [
+                "skills.invoke",
+                "manuscripts.createProject",
+                "redclaw.profile.read",
+                "redclaw.profile.bundle"
+            ],
+            "allowedWriteTargets": ["manuscripts://current"],
+            "deferredDiscovery": false,
+            "teamEscalation": "disabled"
+        });
+
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let visible = plan
+            .visible_tools
+            .iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        let actions = plan
+            .direct_app_cli_actions
+            .iter()
+            .map(|descriptor| descriptor.action)
+            .collect::<Vec<_>>();
+
+        assert_eq!(visible, vec!["Read", "List", "Write", "Operate"]);
+        for action in [
+            "skills.invoke",
+            "manuscripts.createProject",
+            "redclaw.profile.read",
+            "redclaw.profile.bundle",
+        ] {
+            assert!(actions.contains(&action), "{action} should be direct");
+        }
+        assert_eq!(actions.len(), 4);
+        assert!(!plan.has_direct_app_cli_action("manuscripts.writeCurrent"));
+        assert!(!visible.contains(&"tool_search"));
+        assert!(!visible.contains(&"bash"));
+        assert!(!visible.contains(&"Search"));
+        assert!(!plan.has_deferred_app_cli_action("redclaw.task.create"));
+        assert!(!plan.has_deferred_app_cli_action("team.session.create"));
     }
 
     #[test]
@@ -735,23 +808,6 @@ mod tests {
 
         assert_eq!(names, vec!["Read", "List", "Search"]);
         assert!(plan.direct_app_cli_actions.is_empty());
-    }
-
-    #[test]
-    fn legacy_tool_aliases_are_opt_in() {
-        let default_plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "team",
-            ..ToolRegistryPlanParams::default()
-        });
-        assert!(!default_plan.allow_legacy_tool_aliases);
-
-        let metadata = json!({ "allowLegacyToolAliases": true });
-        let legacy_plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "team",
-            session_metadata: Some(&metadata),
-            ..ToolRegistryPlanParams::default()
-        });
-        assert!(legacy_plan.allow_legacy_tool_aliases);
     }
 
     #[test]

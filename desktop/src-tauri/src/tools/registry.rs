@@ -42,15 +42,38 @@ fn string_list(metadata: Option<&Value>, field: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn string_value(metadata: Option<&Value>, field: &str) -> Option<String> {
+    metadata
+        .and_then(|item| item.get(field))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+}
+
+fn is_artifact_authoring_manuscript(metadata: Option<&Value>) -> bool {
+    string_value(metadata, "executionProfile").as_deref() == Some("artifact-authoring")
+        && string_value(metadata, "artifactType").as_deref() == Some("manuscript")
+}
+
 pub fn normalized_allowed_app_cli_actions(metadata: Option<&Value>) -> Vec<String> {
+    let operate_actions = string_list(metadata, "allowedOperateActions");
+    if !operate_actions.is_empty() {
+        return operate_actions;
+    }
     let mut actions = string_list(metadata, "allowedAppCliActions");
+    if is_artifact_authoring_manuscript(metadata) {
+        actions.retain(|item| item != "manuscripts.writeCurrent");
+    }
     let looks_like_legacy_authoring_whitelist = actions.iter().any(|item| {
         matches!(
             item.as_str(),
             "manuscripts.createProject" | "manuscripts.writeCurrent"
         )
     });
-    if looks_like_legacy_authoring_whitelist && !actions.iter().any(|item| item == "image.generate")
+    if looks_like_legacy_authoring_whitelist
+        && !is_artifact_authoring_manuscript(metadata)
+        && !actions.iter().any(|item| item == "image.generate")
     {
         actions.push("image.generate".to_string());
     }
@@ -194,7 +217,6 @@ pub fn tool_plan_snapshot_for_session(
         "runtimeMode": plan.runtime_mode,
         "sessionId": session_id,
         "fingerprint": plan.fingerprint,
-        "allowLegacyToolAliases": plan.allow_legacy_tool_aliases,
         "internalTools": plan.internal_tool_names,
         "visibleTools": plan
             .visible_tools
@@ -239,7 +261,6 @@ pub fn tool_plan_snapshot_for_session_with_mcp(
         "runtimeMode": plan.runtime_mode,
         "sessionId": session_id,
         "fingerprint": plan.fingerprint,
-        "allowLegacyToolAliases": plan.allow_legacy_tool_aliases,
         "internalTools": plan.internal_tool_names,
         "visibleTools": plan
             .visible_tools

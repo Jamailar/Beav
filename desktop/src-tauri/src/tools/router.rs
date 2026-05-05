@@ -84,7 +84,7 @@ impl ToolRouter {
     }
 
     pub fn prepare(&self, name: &str, arguments: &Value) -> Result<PreparedToolCall, String> {
-        if is_legacy_tool_alias(name) && !self.plan.allow_legacy_tool_aliases {
+        if is_legacy_tool_alias(name) {
             return Err(self
                 .error(
                     "LEGACY_TOOL_ALIAS_DISABLED",
@@ -97,6 +97,12 @@ impl ToolRouter {
                     })),
                 )
                 .to_json_string(Some(name), None));
+        }
+        if name.trim() == "Operate" {
+            self.validate_operate_call(arguments)?;
+        }
+        if name.trim() == "Write" {
+            self.validate_write_call(arguments)?;
         }
         let raw_allowed = self.is_allowed_tool_name(name);
         if let Some(tool) = self.plan.direct_mcp_tool(name).cloned() {
@@ -143,7 +149,7 @@ impl ToolRouter {
             return Err(self
                 .error(
                     "LEGACY_COMMAND_DISABLED",
-                    "legacy workflow command strings are disabled for this session; call workflow with a structured action or use Operate".to_string(),
+                    "legacy workflow command strings are disabled for this session; use Operate with a structured resource and operation".to_string(),
                     false,
                     Some(json!({
                         "visibleTools": self.visible_tool_names(),
@@ -283,6 +289,9 @@ impl ToolRouter {
         let Some(action) = payload_string(arguments, "action") else {
             return Ok(());
         };
+        if action == "manuscripts.writeCurrent" && self.is_bound_manuscript_write(arguments) {
+            return Ok(());
+        }
         if self.plan.has_direct_app_cli_action(&action) {
             return Ok(());
         }
@@ -337,10 +346,124 @@ impl ToolRouter {
     }
 
     fn is_legacy_workflow_command(&self, name: &str, arguments: &Value) -> bool {
-        !self.plan.allow_legacy_tool_aliases
-            && matches!(name.trim(), "workflow")
+        matches!(name.trim(), "workflow")
             && arguments.get("action").and_then(Value::as_str).is_none()
             && arguments.get("command").and_then(Value::as_str).is_some()
+    }
+
+    fn validate_operate_call(&self, arguments: &Value) -> Result<(), String> {
+        let Some(object) = arguments.as_object() else {
+            return Err(self
+                .error(
+                    "MISSING_OPERATE_FIELDS",
+                    "Operate requires structured resource and operation fields".to_string(),
+                    false,
+                    Some(json!({
+                        "requiredFields": ["resource", "operation"],
+                        "visibleTools": self.visible_tool_names(),
+                    })),
+                )
+                .to_json_string(Some("Operate"), None));
+        };
+        let resource = object
+            .get("resource")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let operation = object
+            .get("operation")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if resource.is_empty() || operation.is_empty() {
+            return Err(self
+                .error(
+                    "MISSING_OPERATE_FIELDS",
+                    "Operate requires non-empty resource and operation fields".to_string(),
+                    false,
+                    Some(json!({
+                        "requiredFields": ["resource", "operation"],
+                        "receivedFields": object.keys().collect::<Vec<_>>(),
+                        "visibleTools": self.visible_tool_names(),
+                    })),
+                )
+                .to_json_string(Some("Operate"), None));
+        }
+        let resource_key = resource.trim().to_ascii_lowercase();
+        let operation_key = operation
+            .trim()
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .flat_map(|ch| ch.to_lowercase())
+            .collect::<String>();
+        if matches!(resource_key.as_str(), "manuscript" | "manuscripts")
+            && matches!(
+                operation_key.as_str(),
+                "write" | "writecurrent" | "update" | "run"
+            )
+        {
+            return Err(self
+                .error(
+                    "MANUSCRIPT_WRITE_REQUIRES_WRITE",
+                    "Use Write(path=\"manuscripts://current\", content=\"完整正文\") instead of Operate for manuscript body saves".to_string(),
+                    false,
+                    Some(json!({
+                        "suggestedTool": "Write",
+                        "suggestedArguments": {
+                            "path": "manuscripts://current",
+                            "content": "完整正文"
+                        },
+                    })),
+                )
+                .to_json_string(Some("Operate"), Some("manuscripts.writeCurrent")));
+        }
+        Ok(())
+    }
+
+    fn validate_write_call(&self, arguments: &Value) -> Result<(), String> {
+        if self.plan.allowed_write_targets.is_empty() {
+            return Ok(());
+        }
+        let path = arguments
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if self
+            .plan
+            .allowed_write_targets
+            .iter()
+            .any(|target| target == path)
+        {
+            return Ok(());
+        }
+        Err(self
+            .error(
+                "WRITE_TARGET_NOT_ALLOWED",
+                format!("Write target `{path}` is not available in this turn"),
+                false,
+                Some(json!({
+                    "allowedWriteTargets": self.plan.allowed_write_targets.clone(),
+                    "visibleTools": self.visible_tool_names(),
+                })),
+            )
+            .to_json_string(Some("Write"), None))
+    }
+
+    fn is_bound_manuscript_write(&self, arguments: &Value) -> bool {
+        let compat = arguments.get("__compat").and_then(Value::as_object);
+        let legacy_tool = compat
+            .and_then(|object| object.get("legacyToolName"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let legacy_command = compat
+            .and_then(|object| object.get("legacyCommand"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        legacy_tool == "Write"
+            && legacy_command
+                .trim()
+                .eq_ignore_ascii_case("manuscripts://current")
     }
 
     fn prepare_mcp_resource_tool(&self, name: &str) -> Option<McpResourcePreparedCall> {
@@ -441,33 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn router_allows_legacy_tool_aliases_when_session_opts_in() {
-        let metadata = json!({ "toolCompatMode": "legacy" });
-        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
-            runtime_mode: "image-generation",
-            session_metadata: Some(&metadata),
-            ..ToolRegistryPlanParams::default()
-        });
-        let router = ToolRouter::new(plan);
-        let prepared = router
-            .prepare(
-                "Redbox",
-                &json!({
-                    "resource": "image",
-                    "operation": "generate",
-                    "input": { "prompt": "cover" }
-                }),
-            )
-            .expect("legacy alias should be allowed in legacy compat mode");
-
-        assert_eq!(prepared.name, "workflow");
-        assert_eq!(
-            prepared.arguments.get("action"),
-            Some(&json!("image.generate"))
-        );
-    }
-
-    #[test]
     fn router_rejects_legacy_workflow_commands_by_default() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "team",
@@ -479,6 +575,79 @@ mod tests {
             .expect_err("legacy command should be disabled");
 
         assert!(error.contains("LEGACY_COMMAND_DISABLED"));
+    }
+
+    #[test]
+    fn router_rejects_empty_operate_with_missing_fields() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare("Operate", &json!({}))
+            .expect_err("empty Operate should fail");
+
+        assert!(error.contains("MISSING_OPERATE_FIELDS"));
+        assert!(error.contains("resource"));
+        assert!(error.contains("operation"));
+    }
+
+    #[test]
+    fn router_rejects_operate_manuscript_write_current_with_write_hint() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "manuscripts",
+                    "operation": "writeCurrent",
+                    "input": { "content": "body" }
+                }),
+            )
+            .expect_err("Operate writeCurrent should fail");
+
+        assert!(error.contains("MANUSCRIPT_WRITE_REQUIRES_WRITE"));
+        assert!(error.contains("manuscripts://current"));
+    }
+
+    #[test]
+    fn router_allows_write_current_via_write_without_direct_operate_action() {
+        let metadata = json!({
+            "executionProfile": "artifact-authoring",
+            "artifactType": "manuscript",
+            "allowedTools": ["resource", "workflow"],
+            "allowedOperateActions": [
+                "skills.invoke",
+                "manuscripts.createProject",
+                "redclaw.profile.read",
+                "redclaw.profile.bundle"
+            ],
+            "allowedWriteTargets": ["manuscripts://current"],
+            "deferredDiscovery": false
+        });
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            session_metadata: Some(&metadata),
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Write",
+                &json!({ "path": "manuscripts://current", "content": "body" }),
+            )
+            .expect("Write should route internally to manuscript save");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("manuscripts.writeCurrent"))
+        );
     }
 
     #[test]
