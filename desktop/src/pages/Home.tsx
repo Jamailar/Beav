@@ -100,17 +100,12 @@ function collectManuscriptFiles(nodes: FileNode[]): FileNode[] {
 }
 
 function isInternalPackageFile(filePath: string): boolean {
-    const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
-    if (parts.length <= 1) return false;
-    return parts.slice(0, -1).some((part) => (
-        part.endsWith('.redarticle')
-        || part.endsWith('.redvideo')
-        || part.endsWith('.redaudio')
-    ));
+    void filePath;
+    return false;
 }
 
 function stripDraftExtension(fileName: string): string {
-    return fileName.replace(/\.(redarticle|redvideo|redaudio|md)$/i, '');
+    return fileName.replace(/\.md$/i, '');
 }
 
 function resolveDraftTypeLabel(type: RecentManuscript['draftType']): string {

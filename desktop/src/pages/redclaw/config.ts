@@ -1,10 +1,10 @@
 import type { ChatShortcut, ChatShortcutContext } from '../Chat';
 import { APP_BRAND } from '../../config/brand';
-import type { LongDraft, LongTemplate, ScheduleDraft, ScheduleTemplate } from './types';
+import type { ScheduleDraft, ScheduleTemplate } from './types';
 
 export const REDCLAW_CONTEXT_ID = 'redclaw-singleton';
 export const REDCLAW_CONTEXT_TYPE = 'redclaw';
-export const REDCLAW_DISPLAY_NAME = APP_BRAND.redClawDisplayName;
+export const REDCLAW_DISPLAY_NAME = APP_BRAND.aiDisplayName;
 export const REDCLAW_CONTEXT = [
     `${REDCLAW_DISPLAY_NAME} 是一个面向自媒体内容生产与运营的 AI 工作台。`,
     '工作目标：基于用户目标推进选题、内容、配图、发布与复盘，并给出可执行的工作流建议。',
@@ -153,39 +153,6 @@ export const SCHEDULE_TEMPLATES: ScheduleTemplate[] = [
     },
 ];
 
-export const LONG_TEMPLATES: LongTemplate[] = [
-    {
-        id: 'growth-sprint',
-        label: '增长冲刺',
-        description: '围绕一个目标持续多轮优化',
-        name: '30天增长冲刺',
-        objective: '在 30 天内建立稳定的自媒体内容产出节奏并提升互动率。',
-        stepPrompt: '执行一轮增长冲刺：复盘上一轮结果、调整选题策略、产出新的内容动作并落地到稿件、素材或工作项。',
-        intervalMinutes: 720,
-        totalRounds: 30,
-    },
-    {
-        id: 'ip-building',
-        label: '个人IP构建',
-        description: '持续沉淀人设与内容母题',
-        name: '个人IP构建计划',
-        objective: '建立清晰的人设定位与可复用内容母题，形成稳定输出体系。',
-        stepPrompt: '推进一轮 IP 构建：提炼用户画像、选题母题和表达风格，并输出可执行内容任务。',
-        intervalMinutes: 1440,
-        totalRounds: 21,
-    },
-    {
-        id: 'topic-lab',
-        label: '选题实验室',
-        description: '持续验证高潜选题',
-        name: '选题实验室',
-        objective: '持续验证并筛选高潜选题，形成数据驱动的选题库。',
-        stepPrompt: '执行一轮选题实验：提出 3 个选题假设，评估优先级，并推进最优选题进入创作。',
-        intervalMinutes: 480,
-        totalRounds: 20,
-    },
-];
-
 export const WEEKDAY_OPTIONS = [
     { value: 1, label: '周一' },
     { value: 2, label: '周二' },
@@ -200,10 +167,6 @@ export function pickScheduleTemplate(templateId: string): ScheduleTemplate {
     return SCHEDULE_TEMPLATES.find((item) => item.id === templateId) || SCHEDULE_TEMPLATES[0];
 }
 
-export function pickLongTemplate(templateId: string): LongTemplate {
-    return LONG_TEMPLATES.find((item) => item.id === templateId) || LONG_TEMPLATES[0];
-}
-
 export function scheduleDraftFromTemplate(template: ScheduleTemplate): ScheduleDraft {
     return {
         templateId: template.id,
@@ -214,16 +177,5 @@ export function scheduleDraftFromTemplate(template: ScheduleTemplate): ScheduleD
         weekdays: template.weekdays || [1],
         runAtLocal: '',
         prompt: template.prompt,
-    };
-}
-
-export function longDraftFromTemplate(template: LongTemplate): LongDraft {
-    return {
-        templateId: template.id,
-        name: template.name,
-        objective: template.objective,
-        stepPrompt: template.stepPrompt,
-        intervalMinutes: template.intervalMinutes,
-        totalRounds: template.totalRounds,
     };
 }

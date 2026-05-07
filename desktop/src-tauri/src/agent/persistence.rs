@@ -375,7 +375,7 @@ fn build_post_exchange_maintenance_status(current: &Value, next_scheduled_at: i6
         "lastRunAt": current.get("lastRunAt").cloned().unwrap_or(Value::Null),
         "lastScanAt": now_i64(),
         "lastReason": "query-after",
-        "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("RedBox memory maintenance has not run yet.")),
+        "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("Memory maintenance has not run yet.")),
         "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
         "nextScheduledAt": next_scheduled_at,
     })

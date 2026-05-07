@@ -5,6 +5,7 @@ import type {
   NotificationSettings,
   NotificationSound,
 } from './types';
+import { APP_BRAND } from '../config/brand';
 
 type RuntimeDonePayload = {
   sessionId: string;
@@ -60,7 +61,7 @@ function makeNotificationId(source: string, entityId: string, eventKey: string, 
 }
 
 function summarizeRuntimeMode(runtimeMode: string): string {
-  if (runtimeMode === 'redclaw') return 'RedClaw';
+  if (runtimeMode === 'redclaw') return APP_BRAND.aiDisplayName;
   if (runtimeMode === 'team' || runtimeMode === 'chatroom') return '团队';
   if (runtimeMode === 'knowledge') return '知识库';
   if (runtimeMode === 'diagnostics') return '诊断';
@@ -400,11 +401,11 @@ export function mapRedclawTaskEventToNotification(
     eventKey,
     level,
     title: isCompleted
-      ? `RedClaw 任务已完成`
+      ? `${APP_BRAND.aiDisplayName} 任务已完成`
       : needsConfirmation
-        ? `RedClaw 任务需要确认`
-        : `RedClaw 任务失败`,
-    body: event.summary || event.taskName || 'RedClaw 后台任务状态发生变化。',
+        ? `${APP_BRAND.aiDisplayName} 任务需要确认`
+        : `${APP_BRAND.aiDisplayName} 任务失败`,
+    body: event.summary || event.taskName || `${APP_BRAND.aiDisplayName} 后台任务状态发生变化。`,
     sound: 'none',
     sticky: level !== 'success',
     createdAt,

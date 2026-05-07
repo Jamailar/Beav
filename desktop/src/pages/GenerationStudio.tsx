@@ -24,6 +24,7 @@ import {
 import clsx from 'clsx';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import { findAiPresetById, inferPresetIdByEndpoint, type AiSourceConfig } from '../config/aiSources';
+import { APP_BRAND } from '../config/brand';
 import type { GenerationIntent, PendingChatMessage } from '../App';
 import type { UploadedFileAttachment } from '../components/ChatComposer';
 import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
@@ -446,7 +447,7 @@ function buildGenerationAgentContextId(projectId: string, source?: GenerationInt
 
 function buildGenerationAgentInitialContext(projectId: string, sourceTitle?: string): string {
     return [
-        '你当前位于 RedBox 创作页的「套图制作」模式。',
+        `你当前位于 ${APP_BRAND.displayName} 创作页的「套图制作」模式。`,
         '这里是图片创作专用会话。用户只负责给目标、反馈和约束；具体图片生成相关工具调用由你负责。',
         sourceTitle ? `当前来源: ${sourceTitle}` : '',
         projectId ? `当前项目ID: ${projectId}` : '',

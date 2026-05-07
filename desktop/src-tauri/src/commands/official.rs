@@ -4,10 +4,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    append_debug_trace_state, auth, create_official_payment_form, emit_redbox_auth_data_updated,
-    emit_redbox_auth_session_updated, fetch_official_models_for_settings, make_id,
-    normalize_base_url, normalize_official_auth_session, now_iso, now_ms,
-    official_account_summary_local, official_ai_api_key_from_settings, official_base_url_for_realm,
+    app_brand_display_name, append_debug_trace_state, auth, create_official_payment_form,
+    emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
+    fetch_official_models_for_settings, make_id, normalize_base_url,
+    normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
+    official_ai_api_key_from_settings, official_base_url_for_realm,
     official_base_url_from_settings, official_fallback_products, official_points_snapshot,
     official_realm_from_settings, official_realms_payload, official_response_items,
     official_settings_api_keys, official_settings_call_records_list, official_settings_models,
@@ -331,7 +332,7 @@ fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option
             settings,
             "POST",
             "/users/me/api-keys",
-            Some(json!({ "name": format!("RedBox Desktop {}", now_iso()) })),
+            Some(json!({ "name": format!("{} Desktop {}", app_brand_display_name(), now_iso()) })),
         )?;
         resolved_key = extract_official_api_key_value(&created.body);
         merge_official_api_key_records(settings, normalize_official_api_key_record(&created.body));
@@ -745,7 +746,10 @@ fn clear_official_source_binding(settings: &mut Value, previous_official_token: 
             .to_string();
         if source_id == "redbox_official_auto" {
             if let Some(object) = source.as_object_mut() {
-                object.insert("name".to_string(), json!("RedBox Official"));
+                object.insert(
+                    "name".to_string(),
+                    json!(format!("{} Official", app_brand_display_name())),
+                );
                 object.insert("presetId".to_string(), json!("redbox-official"));
                 object.insert("baseURL".to_string(), json!(official_base_url.clone()));
                 object.insert("apiKey".to_string(), json!(""));
@@ -1683,7 +1687,7 @@ fn spawn_official_cached_data_refresh(app: AppHandle) -> bool {
         let state = app.state::<AppState>();
         if let Err(error) = refresh_official_cached_data(&app, &state) {
             if error != "官方账号未登录" {
-                eprintln!("[RedBox official refresh] {error}");
+                eprintln!("[{} official refresh] {error}", app_brand_display_name());
             }
         }
         state
@@ -3213,7 +3217,7 @@ mod tests {
             "ai_sources_json": serde_json::to_string(&vec![
                 json!({
                     "id": "redbox_official_auto",
-                    "name": "RedBox Official",
+                    "name": format!("{} Official", app_brand_display_name()),
                     "presetId": "redbox-official",
                     "baseURL": "https://api.ziz.hk/thrive/v1",
                     "apiKey": "",
@@ -3253,7 +3257,7 @@ mod tests {
             .unwrap(),
             "ai_sources_json": serde_json::to_string(&vec![json!({
                 "id": "redbox_official_auto",
-                "name": "RedBox Official",
+                "name": format!("{} Official", app_brand_display_name()),
                 "presetId": "redbox-official",
                 "baseURL": "https://api.ziz.hk/thrive/v1",
                 "apiKey": "official-key",
@@ -3350,7 +3354,7 @@ mod tests {
             "ai_sources_json": serde_json::to_string(&vec![
                 json!({
                     "id": "redbox_official_auto",
-                    "name": "RedBox Official",
+                    "name": format!("{} Official", app_brand_display_name()),
                     "presetId": "redbox-official",
                     "baseURL": "https://api.ziz.hk/thrive/v1",
                     "apiKey": "official-token",

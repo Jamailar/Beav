@@ -623,7 +623,7 @@ fn manuscripts_create_project_input_schema() -> Value {
                 "kind",
                 json!({
                     "type": "string",
-                    "enum": ["redpost", "redarticle"],
+                    "enum": ["post", "article"],
                 }),
             ),
             ("title", string_schema("User-visible manuscript title.")),
@@ -1525,13 +1525,6 @@ fn image_generate_input_schema() -> Value {
                 bool_schema("Whether the user has confirmed the multi-image plan."),
             ),
             (
-                "planExecutionMode",
-                json!({
-                    "type": "string",
-                    "description": "How a multi-image plan is allowed to proceed. Use `user_confirmed` by default. `redclaw_auto_execute` is only valid inside RedClaw for coordinated multi-image batches."
-                }),
-            ),
-            (
                 "sequenceGoal",
                 string_schema("Ordering goal for the multi-image batch."),
             ),
@@ -2140,7 +2133,6 @@ fn redbox_input_schema() -> Value {
                 "description": "Reference image URLs, data URLs, asset ids, or local paths."
             },
             "planConfirmed": { "type": "boolean", "description": "Whether the user approved a multi-image plan." },
-            "planExecutionMode": { "type": "string", "description": "Use user_confirmed by default; redclaw_auto_execute is only for controlled RedClaw batches." },
             "sequenceGoal": { "type": "string", "description": "Ordering goal for a multi-image batch." },
             "sharedStyleGuide": { "type": "string", "description": "Shared style anchor for a coordinated image batch." },
             "imagePlanItems": {
@@ -2265,7 +2257,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.profile.bundle",
         namespace: "redclaw.profile",
-        description: "Read the RedClaw profile bundle and onboarding state.",
+        description: "Read the AI profile bundle and onboarding state.",
         input_schema: redclaw_profile_bundle_input_schema,
         output_schema: redclaw_profile_output_schema,
         mutating: false,
@@ -2276,7 +2268,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.profile.read",
         namespace: "redclaw.profile",
-        description: "Read one durable RedClaw profile document.",
+        description: "Read one durable AI profile document.",
         input_schema: redclaw_profile_read_input_schema,
         output_schema: redclaw_profile_output_schema,
         mutating: false,
@@ -2287,7 +2279,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.profile.update",
         namespace: "redclaw.profile",
-        description: "Update one durable RedClaw profile document.",
+        description: "Update one durable AI profile document.",
         input_schema: redclaw_profile_update_input_schema,
         output_schema: redclaw_profile_output_schema,
         mutating: true,
@@ -2298,7 +2290,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.runner.status",
         namespace: "redclaw.runner",
-        description: "Inspect RedClaw runner and heartbeat state.",
+        description: "Inspect the automation runner and heartbeat state.",
         input_schema: redclaw_runner_status_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -2309,7 +2301,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.runner.start",
         namespace: "redclaw.runner",
-        description: "Start the RedClaw runner.",
+        description: "Start the automation runner.",
         input_schema: redclaw_runner_mutation_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2320,7 +2312,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.runner.stop",
         namespace: "redclaw.runner",
-        description: "Stop the RedClaw runner.",
+        description: "Stop the automation runner.",
         input_schema: no_payload_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2331,7 +2323,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.runner.setConfig",
         namespace: "redclaw.runner",
-        description: "Update RedClaw runner configuration.",
+        description: "Update automation runner configuration.",
         input_schema: redclaw_runner_mutation_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2342,7 +2334,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.preview",
         namespace: "redclaw.task",
-        description: "Preview a RedClaw business task definition before creation. Use this for scheduled or long-cycle user tasks, not internal runtime.tasks.*. Scheduled tasks should include cron plus prompt or goal.",
+        description: "Preview a user-facing task definition before creation. Use this for scheduled or long-cycle user tasks, not internal runtime.tasks.*. Scheduled tasks should include cron plus prompt or goal.",
         input_schema: redclaw_task_preview_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -2353,7 +2345,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.create",
         namespace: "redclaw.task",
-        description: "Create a pending RedClaw task draft from a validated preview token returned by redclaw.task.preview.",
+        description: "Create a pending task draft from a validated preview token returned by redclaw.task.preview.",
         input_schema: redclaw_task_create_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2364,7 +2356,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.confirm",
         namespace: "redclaw.task",
-        description: "Confirm or discard a pending RedClaw task draft. Use after redclaw.task.create.",
+        description: "Confirm or discard a pending task draft. Use after redclaw.task.create.",
         input_schema: redclaw_task_confirm_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2375,7 +2367,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.update",
         namespace: "redclaw.task",
-        description: "Update an existing RedClaw task definition with an explicit reason.",
+        description: "Update an existing task definition with an explicit reason.",
         input_schema: redclaw_task_update_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2386,7 +2378,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.cancel",
         namespace: "redclaw.task",
-        description: "Disable, discard, or delete a RedClaw task definition. Set deleteSource=true when the user explicitly asks to delete the task.",
+        description: "Disable, discard, or delete a task definition. Set deleteSource=true when the user explicitly asks to delete the task.",
         input_schema: redclaw_task_cancel_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
@@ -2397,7 +2389,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.list",
         namespace: "redclaw.task",
-        description: "List RedClaw task definitions with policy and latest execution state.",
+        description: "List task definitions with policy and latest execution state.",
         input_schema: redclaw_task_list_input_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -2408,7 +2400,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "redclaw.task.stats",
         namespace: "redclaw.task",
-        description: "Read RedClaw task definition and execution counters.",
+        description: "Read task definition and execution counters.",
         input_schema: no_payload_schema,
         output_schema: generic_state_output_schema,
         mutating: false,
@@ -3562,7 +3554,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "profile_doc" => Some(ToolDescriptor {
             name: "profile_doc",
-            description: "Disabled legacy alias for durable RedClaw profile doc operations. Use Operate(resource=\"profile\", operation=\"list|get|update\") instead.",
+            description: "Disabled legacy alias for durable AI profile doc operations. Use Operate(resource=\"profile\", operation=\"list|get|update\") instead.",
             kind: ToolKind::ProfileDoc,
             requires_approval: false,
             concurrency_safe: false,
@@ -3578,7 +3570,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "skill" => Some(ToolDescriptor {
             name: "skill",
-            description: "Disabled legacy alias for skill runtime and AI-role management. Use Operate(resource=\"skills\", operation=\"list|run\") instead.",
+            description: "Disabled legacy alias for skill runtime and AI-role management. Use Operate(resource=\"skills\", operation=\"list|invoke\") instead.",
             kind: ToolKind::Skill,
             requires_approval: false,
             concurrency_safe: false,
@@ -3795,7 +3787,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             "type": "function",
             "function": {
                 "name": "profile_doc",
-                "description": "Disabled legacy alias for durable RedClaw profile doc operations. Use Operate(resource=\"profile\", operation=\"list|get|update\") instead.",
+                "description": "Disabled legacy alias for durable AI profile doc operations. Use Operate(resource=\"profile\", operation=\"list|get|update\") instead.",
                 "parameters": {
                     "type": "object",
                     "properties": {

@@ -2796,7 +2796,10 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
                 .title
                 .clone()
                 .unwrap_or_else(|| "视频生成".to_string()),
-            Some("RedBox 已通过独立媒体 runtime 完成视频生成。".to_string()),
+            Some(format!(
+                "{} 已通过独立媒体 runtime 完成视频生成。",
+                app_brand_display_name()
+            )),
             media_asset.prompt.clone(),
             Some(json!({
                 "jobId": job_id,

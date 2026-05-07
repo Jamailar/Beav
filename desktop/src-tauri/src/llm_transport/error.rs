@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,22 @@ pub(crate) enum TransportErrorKind {
     Parse,
     Cancelled,
     Unknown,
+}
+
+impl TransportErrorKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Connect => "connect",
+            Self::Timeout => "timeout",
+            Self::PartialBody => "partial_body",
+            Self::Http2Framing => "http2_framing",
+            Self::EmptyReply => "empty_reply",
+            Self::Status => "status",
+            Self::Parse => "parse",
+            Self::Cancelled => "cancelled",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +103,36 @@ impl LlmTransportError {
                 | TransportErrorKind::EmptyReply
         ) && self.transport_mode == TransportMode::Auto
     }
+
+    pub(crate) fn reqwest_diagnostic(error: &reqwest::Error) -> String {
+        let mut parts = Vec::new();
+        parts.push(format!("message={}", error));
+        parts.push(format!(
+            "flags=timeout:{} connect:{} request:{} body:{} decode:{} status:{}",
+            error.is_timeout(),
+            error.is_connect(),
+            error.is_request(),
+            error.is_body(),
+            error.is_decode(),
+            error.is_status()
+        ));
+        if let Some(status) = error.status() {
+            parts.push(format!("http_status={}", status.as_u16()));
+        }
+        if let Some(url) = error.url() {
+            parts.push(format!("error_url={}", url));
+        }
+
+        let mut index = 0usize;
+        let mut source = error.source();
+        while let Some(cause) = source {
+            index += 1;
+            parts.push(format!("source[{index}]={cause}"));
+            source = cause.source();
+        }
+
+        parts.join(" | ")
+    }
 }
 
 impl Display for LlmTransportError {
@@ -137,17 +184,18 @@ impl From<(TransportMode, reqwest::Error)> for LlmTransportError {
     fn from(value: (TransportMode, reqwest::Error)) -> Self {
         let (transport_mode, error) = value;
         let raw = error.to_string();
+        let diagnostic = Self::reqwest_diagnostic(&error);
         let kind = if error.is_timeout() {
             TransportErrorKind::Timeout
         } else {
-            classify_raw_transport_message(&raw)
+            classify_raw_transport_message(&diagnostic)
         };
         Self {
             kind,
             transport_mode,
             message: raw.clone(),
             http_status: error.status().map(|status| status.as_u16()),
-            raw: Some(raw),
+            raw: Some(diagnostic),
         }
     }
 }

@@ -55,6 +55,9 @@ impl ProviderProfile {
 
     pub(crate) fn prefers_identity_encoding_for_streaming(&self) -> bool {
         self.is_minimax()
+            || self.key.contains("qwen")
+            || self.key.contains("dashscope")
+            || self.key.contains("api.ziz.hk")
     }
 
     pub(crate) fn prefers_curl_json_transport(&self) -> bool {
@@ -96,13 +99,12 @@ impl ProviderProfile {
         &self,
         runtime_mode: &str,
         tool_choice: InteractiveToolChoice,
-        saw_tool_call: bool,
+        _saw_tool_call: bool,
     ) -> ProviderTurnPolicy {
         ProviderTurnPolicy {
             disable_thinking: self
                 .should_disable_thinking(runtime_mode, tool_choice.requires_tool_choice()),
-            allow_text_fallback: !saw_tool_call
-                && runtime_mode != "wander"
+            allow_text_fallback: runtime_mode != "wander"
                 && self.capabilities.supports_text_fallback,
         }
     }

@@ -7,9 +7,10 @@ use super::index::rebuild_memory_index_from_store;
 use super::store::{memory_root, persist_memory_workspace_state};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    load_redbox_prompt, make_id, now_i64, now_iso, parse_json_value_from_text, payload_string,
-    render_redbox_prompt, run_model_structured_task_with_settings, truncate_chars,
-    value_to_i64_string, AppState, AppStore, MemoryHistoryRecord, UserMemoryRecord,
+    app_brand_display_name, load_redbox_prompt, make_id, now_i64, now_iso,
+    parse_json_value_from_text, payload_string, render_redbox_prompt,
+    run_model_structured_task_with_settings, truncate_chars, value_to_i64_string, AppState,
+    AppStore, MemoryHistoryRecord, UserMemoryRecord,
 };
 
 fn memory_maintenance_status_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -151,7 +152,7 @@ pub(crate) fn bump_memory_maintenance_mutation(
         "lastRunAt": current.get("lastRunAt").cloned().unwrap_or(Value::Null),
         "lastScanAt": current.get("lastScanAt").cloned().unwrap_or(Value::Null),
         "lastReason": reason,
-        "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!("RedBox memory maintenance has not run yet.")),
+        "lastSummary": current.get("lastSummary").cloned().unwrap_or_else(|| json!(format!("{} memory maintenance has not run yet.", app_brand_display_name()))),
         "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
         "nextScheduledAt": now_i64() + next_delay_ms,
     });
@@ -168,11 +169,14 @@ pub(crate) fn run_memory_maintenance_with_reason(
 ) -> Result<Value, String> {
     let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
     let prompt = with_store(state, |store| Ok(build_memory_maintenance_prompt(&store)))?;
-    let system_prompt = "You are the background long-term memory maintenance manager for RedBox. Output strict JSON only.";
+    let system_prompt = format!(
+        "You are the background long-term memory maintenance manager for {}. Output strict JSON only.",
+        app_brand_display_name()
+    );
     let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         None,
-        system_prompt,
+        &system_prompt,
         &prompt,
         true,
     )?;
@@ -406,7 +410,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
         "lastRunAt": now_i64(),
         "lastScanAt": now_i64(),
         "lastReason": reason,
-        "lastSummary": parsed.get("summary").and_then(|value| value.as_str()).unwrap_or("RedBox memory maintenance completed."),
+        "lastSummary": parsed.get("summary").and_then(|value| value.as_str()).unwrap_or("Memory maintenance completed."),
         "lastError": Value::Null,
         "nextScheduledAt": next_scheduled,
         "raw": parsed,
@@ -444,7 +448,7 @@ pub(crate) fn default_memory_maintenance_status() -> Value {
         "lastRunAt": Value::Null,
         "lastScanAt": Value::Null,
         "lastReason": Value::Null,
-        "lastSummary": "RedBox memory maintenance has not run yet.",
+        "lastSummary": format!("{} memory maintenance has not run yet.", app_brand_display_name()),
         "lastError": Value::Null,
         "nextScheduledAt": Value::Null,
     })

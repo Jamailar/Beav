@@ -10,7 +10,8 @@ use crate::skills::{
     write_skill_record_to_path,
 };
 use crate::{
-    now_iso, refresh_runtime_warm_state, slug_from_relative_path, workspace_root, AppState,
+    app_ai_display_name, app_brand_display_name, now_iso, refresh_runtime_warm_state,
+    slug_from_relative_path, workspace_root, AppState,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,43 +50,45 @@ pub(crate) fn read_text_if_exists(path: &Path) -> String {
 }
 
 fn build_default_agent_profile_doc() -> String {
-    [
-        "# Agent.md",
-        "",
-        "你是 RedClaw，服务于 RedBox 的多平台内容创作执行 Agent。",
-        "",
-        "## 启动顺序（每次会话）",
-        "1. 读取 Soul.md（你的行为风格）",
-        "2. 读取 user.md（用户画像和创作目标）",
-        "3. 读取 CreatorProfile.md（用户长期自媒体定位与策略档案）",
-        "4. 读取 identity.md（你的身份设定）",
-        "5. 读取 memory/MEMORY.md（长期记忆摘要）",
-        "",
-        "## RedClaw 规则",
-        "- 先执行再解释，优先给出可落地动作。",
-        "- 先判断工作形态：默认由 RedClaw 自己直接完成；只有任务明显需要研究、选题、文案、媒体、发布、质检等多角色接力时，才自动激活临时团队。",
-        "- 问候、确认、状态查询、简单改写、简单标题/标签/封面文案、小段创作、单一文件微调，都不要组队，直接在当前对话中完成。",
-        "- 用户明确要求端到端、多交付物、素材/知识检索、配图/视频、发布包、合规复核、复盘学习或多 Agent 协作时，先提出 team 成员和分工方案，等待用户明确确认后，才能创建 team/session 或添加 team 成员。",
-        "- 创建 team/session 时必须使用 `team.session.create`；不要把团队创建误当成 RedClaw 定时任务或 task draft。",
-        "- 用户确认 team 方案后，调用 team 创建/成员添加动作时必须携带 `userConfirmedTeamPlan=true`。",
-        "- 涉及本应用能力时优先调用 redbox_* 工具。",
-        "- 文件操作严格限制在 currentSpaceRoot。",
-        "- 对文件数量/列表/状态类事实，必须先工具验证。",
-        "",
-        "## 核心档案职责",
-        "- Soul.md：维护 RedClaw 的协作语气、反馈方式、执行风格。",
-        "- user.md：维护用户的稳定画像与长期事实。",
-        "- CreatorProfile.md：维护用户的长期自媒体定位、目标群体、风格、商业目标与运营边界。",
-        "- Agent.md：维护 RedClaw 的工作契约、流程和规则，不为一次性任务随意改写。",
-        "",
-        "## 创作流程",
-        "目标 -> 选题 -> 文案 -> 配图 -> 发布计划 -> 数据复盘 -> 下一轮假设",
+    let ai_name = app_ai_display_name();
+    let brand_name = app_brand_display_name();
+    vec![
+        "# Agent.md".to_string(),
+        String::new(),
+        format!("你是 {ai_name}，服务于 {brand_name} 的多平台内容创作执行 Agent。"),
+        String::new(),
+        "## 启动顺序（每次会话）".to_string(),
+        "1. 读取 Soul.md（你的行为风格）".to_string(),
+        "2. 读取 user.md（用户画像和创作目标）".to_string(),
+        "3. 读取 CreatorProfile.md（用户长期自媒体定位与策略档案）".to_string(),
+        "4. 读取 identity.md（你的身份设定）".to_string(),
+        "5. 读取 memory/MEMORY.md（长期记忆摘要）".to_string(),
+        String::new(),
+        format!("## {ai_name} 规则"),
+        "- 先执行再解释，优先给出可落地动作。".to_string(),
+        format!("- 先判断工作形态：默认由 {ai_name} 自己直接完成；只有任务明显需要研究、选题、文案、媒体、发布、质检等多角色接力时，才自动激活临时团队。"),
+        "- 问候、确认、状态查询、简单改写、简单标题/标签/封面文案、小段创作、单一文件微调，都不要组队，直接在当前对话中完成。".to_string(),
+        "- 用户明确要求端到端、多交付物、素材/知识检索、配图/视频、发布包、合规复核、复盘学习或多 Agent 协作时，先提出 team 成员和分工方案，等待用户明确确认后，才能创建 team/session 或添加 team 成员。".to_string(),
+        format!("- 创建 team/session 时必须使用 `team.session.create`；不要把团队创建误当成 {ai_name} 定时任务或 task draft。"),
+        "- 用户确认 team 方案后，调用 team 创建/成员添加动作时必须携带 `userConfirmedTeamPlan=true`。".to_string(),
+        "- 涉及本应用能力时优先调用当前工具面提供的结构化工具。".to_string(),
+        "- 文件操作严格限制在 currentSpaceRoot。".to_string(),
+        "- 对文件数量/列表/状态类事实，必须先工具验证。".to_string(),
+        String::new(),
+        "## 核心档案职责".to_string(),
+        format!("- Soul.md：维护 {ai_name} 的协作语气、反馈方式、执行风格。"),
+        "- user.md：维护用户的稳定画像与长期事实。".to_string(),
+        "- CreatorProfile.md：维护用户的长期自媒体定位、目标群体、风格、商业目标与运营边界。".to_string(),
+        format!("- Agent.md：维护 {ai_name} 的工作契约、流程和规则，不为一次性任务随意改写。"),
+        String::new(),
+        "## 创作流程".to_string(),
+        "目标 -> 选题 -> 文案 -> 配图 -> 发布计划 -> 数据复盘 -> 下一轮假设".to_string(),
     ]
     .join("\n")
 }
 
 fn runtime_team_confirmation_rules() -> &'static str {
-    "## Team 创建硬规则\n- 创建 team/session 前必须先向用户列出 team 成员和分工方案，并等待用户明确确认。\n- 未确认前只能提案和询问，不得调用 team.session.create、team.member.spawn 或 redclaw:orchestration-create-run。\n- 用户确认后，调用 team 创建或添加成员动作时必须传入 userConfirmedTeamPlan=true。\n- 创建团队必须使用 team.session.create；不要把团队创建误当成 RedClaw 定时任务、task draft 或 redclaw.task.preview。"
+    "## Team 创建硬规则\n- 创建 team/session 前必须先向用户列出 team 成员和分工方案，并等待用户明确确认。\n- 未确认前只能提案和询问，不得调用 team.session.create、team.member.spawn 或 redclaw:orchestration-create-run。\n- 用户确认后，调用 team 创建或添加成员动作时必须传入 userConfirmedTeamPlan=true。\n- 创建团队必须使用 team.session.create；不要把团队创建误当成品牌 AI 定时任务、task draft 或 redclaw.task.preview。"
 }
 
 fn agent_profile_with_runtime_rules(agent: String) -> String {
@@ -115,21 +118,22 @@ fn build_default_soul_profile_doc() -> String {
         "- 优先给 checklist、步骤和可执行命令。",
         "",
         "## 什么时候更新本文件",
-        "- 用户明确要求 RedClaw 改变沟通方式、反馈力度、协作氛围时更新。",
+        "- 用户明确要求当前 AI 改变沟通方式、反馈力度、协作氛围时更新。",
         "- 临时任务中的一句话语气要求，不默认升格为长期人格设定。",
     ]
     .join("\n")
 }
 
 fn build_default_identity_profile_doc() -> String {
+    let ai_name = app_ai_display_name();
     [
-        "# identity.md",
-        "",
-        "- Name: RedClaw",
-        "- Role: 多平台内容创作自动化 Agent",
-        "- Vibe: 执行型、结构化、结果导向",
-        "- Signature: 🦀",
-        &format!("- UpdatedAt: {}", now_iso()),
+        "# identity.md".to_string(),
+        String::new(),
+        format!("- Name: {ai_name}"),
+        "- Role: 多平台内容创作自动化 Agent".to_string(),
+        "- Vibe: 执行型、结构化、结果导向".to_string(),
+        format!("- Signature: {ai_name}"),
+        format!("- UpdatedAt: {}", now_iso()),
     ]
     .join("\n")
 }
@@ -155,52 +159,54 @@ fn build_default_user_profile_doc() -> String {
 }
 
 fn build_default_creator_profile_doc() -> String {
-    [
-        "# CreatorProfile.md",
-        "",
-        "## 定位总览",
-        "- 自媒体定位: （待填写，可包含小红书 / 公众号等平台）",
-        "- 核心目标: （待填写）",
-        "- 商业目标: （待填写）",
-        "",
-        "## 目标群体",
-        "- 核心受众: （待填写）",
-        "- 主要痛点: （待填写）",
-        "- 愿意付费的原因: （待填写）",
-        "",
-        "## 内容风格",
-        "- 内容赛道: （待填写）",
-        "- 结构偏好: （待填写）",
-        "- 文案风格: （待填写）",
-        "- 封面/视觉倾向: （待填写）",
-        "",
-        "## 运营策略",
-        "- 发布节奏: （待填写）",
-        "- 成功指标: （待填写）",
-        "- 禁区与边界: （待填写）",
-        "",
-        "## 维护规则",
-        "- 本文档是用户长期自媒体策略档案，每次 RedClaw 会话都应优先参考。",
-        "- 当用户明确给出新的定位、目标群体、风格、边界、商业目标时，应更新本文件。",
-        "- 临时任务要求不直接改写长期定位，除非用户明确表示要长期变更。",
-        "- 不记录 API Key、Token、账号密码等敏感信息。",
+    let ai_name = app_ai_display_name();
+    vec![
+        "# CreatorProfile.md".to_string(),
+        String::new(),
+        "## 定位总览".to_string(),
+        "- 自媒体定位: （待填写，可包含小红书 / 公众号等平台）".to_string(),
+        "- 核心目标: （待填写）".to_string(),
+        "- 商业目标: （待填写）".to_string(),
+        String::new(),
+        "## 目标群体".to_string(),
+        "- 核心受众: （待填写）".to_string(),
+        "- 主要痛点: （待填写）".to_string(),
+        "- 愿意付费的原因: （待填写）".to_string(),
+        String::new(),
+        "## 内容风格".to_string(),
+        "- 内容赛道: （待填写）".to_string(),
+        "- 结构偏好: （待填写）".to_string(),
+        "- 文案风格: （待填写）".to_string(),
+        "- 封面/视觉倾向: （待填写）".to_string(),
+        String::new(),
+        "## 运营策略".to_string(),
+        "- 发布节奏: （待填写）".to_string(),
+        "- 成功指标: （待填写）".to_string(),
+        "- 禁区与边界: （待填写）".to_string(),
+        String::new(),
+        "## 维护规则".to_string(),
+        format!("- 本文档是用户长期自媒体策略档案，每次 {ai_name} 会话都应优先参考。"),
+        "- 当用户明确给出新的定位、目标群体、风格、边界、商业目标时，应更新本文件。".to_string(),
+        "- 临时任务要求不直接改写长期定位，除非用户明确表示要长期变更。".to_string(),
+        "- 不记录 API Key、Token、账号密码等敏感信息。".to_string(),
     ]
     .join("\n")
 }
 
 fn build_default_bootstrap_profile_doc() -> String {
-    [
-        "# BOOTSTRAP.md",
-        "",
-        "这是 RedClaw 在当前空间的首次设定引导。",
-        "",
-        "目标：通过聊天收集用户偏好，完善以下文件：",
-        "- identity.md",
-        "- user.md",
-        "- Soul.md",
-        "- CreatorProfile.md",
-        "",
-        "完成后删除 BOOTSTRAP.md。",
+    let ai_name = app_ai_display_name();
+    vec![
+        "# BOOTSTRAP.md".to_string(),
+        String::new(),
+        format!("这是 {ai_name} 在当前空间的首次设定引导。"),
+        String::new(),
+        "目标：通过聊天收集用户偏好，完善以下文件：".to_string(),
+        "- identity.md".to_string(),
+        "- user.md".to_string(),
+        "- Soul.md".to_string(),
+        "- CreatorProfile.md".to_string(),
+        String::new(),
+        "完成后删除 BOOTSTRAP.md。".to_string(),
     ]
     .join("\n")
 }
@@ -271,7 +277,7 @@ fn default_onboarding_state_value() -> Value {
 const REDCLAW_ONBOARDING_STEPS: [(&str, &str, &str); 5] = [
     (
         "assistant_style",
-        "1/5 先定一下我的协作风格。你希望 RedClaw 在对话里更偏向哪种风格？例如：高执行、强结构、温和陪跑、直接批判。",
+        "1/5 先定一下我的协作风格。你希望当前 AI 在对话里更偏向哪种风格？例如：高执行、强结构、温和陪跑、直接批判。",
         "高执行 + 强结构 + 直接反馈",
     ),
     (
@@ -861,7 +867,7 @@ fn build_redclaw_initialization_artifact_prompt(
         "soul" => [
             "## 当前任务",
             "你现在只负责生成 `Soul.md`。",
-            "职责边界：只写 RedClaw 如何与用户协作、反馈、执行，不写标题策略、正文结构、CTA、禁用词等写作技法。",
+            "职责边界：只写当前 AI 如何与用户协作、反馈、执行，不写标题策略、正文结构、CTA、禁用词等写作技法。",
             "必须突出：高执行、强结构、直接反馈、先结论后细节、给验收标准。",
             "长度要求：控制在 6 条以内的高密度规则，不写长篇说明。",
             "输出要求：只返回完整 Markdown，不要解释，不要代码围栏。",
@@ -901,9 +907,10 @@ fn build_redclaw_initialization_artifact_prompt(
         _ => return Err(format!("unsupported onboarding artifact kind: {artifact_kind}")),
     };
     let existing_docs_context = build_existing_docs_context(existing_docs);
+    let ai_name = app_ai_display_name();
     Ok(format!(
         concat!(
-            "你是 RedClaw。当前正在执行空间风格初始化后的内部档案更新任务。\n",
+            "你是 {ai_name}。当前正在执行空间风格初始化后的内部档案更新任务。\n",
             "这不是和用户闲聊，也不是让你解释过程。你只需要生成目标文件的最终内容。\n\n",
             "{task_block}\n\n",
             "## 问卷原始答案\n{answers_json}\n\n",
@@ -921,7 +928,8 @@ fn build_redclaw_initialization_artifact_prompt(
         answers_json = answers_json,
         style_profile_json = style_profile_json,
         existing_docs_context = existing_docs_context,
-        fallback_skill = fallback_skill
+        fallback_skill = fallback_skill,
+        ai_name = ai_name
     ))
 }
 
@@ -960,7 +968,7 @@ fn generate_redclaw_initialization_artifact_via_agent(
         &format!("onboarding-{artifact_kind}"),
         session_id,
         prompt,
-        Some("RedClaw 初始化".to_string()),
+        Some(format!("{} 初始化", app_ai_display_name())),
     ));
     let execution = execute_prepared_session_agent_turn(Some(app), state, &turn)?;
     Ok(GeneratedRedclawInitializationArtifacts {
@@ -1224,10 +1232,10 @@ pub(crate) fn complete_redclaw_mvp_onboarding(
     let identity_markdown = [
         "# identity.md".to_string(),
         "".to_string(),
-        "- Name: RedClaw".to_string(),
+        format!("- Name: {}", app_ai_display_name()),
         "- Role: 多平台内容创作自动化 Agent".to_string(),
         format!("- Vibe: {}", label_authority(authority_posture)),
-        "- Signature: 🦀".to_string(),
+        format!("- Signature: {}", app_ai_display_name()),
         format!("- UpdatedAt: {}", now_iso()),
     ]
     .join("\n");
@@ -1516,10 +1524,10 @@ fn finalize_redclaw_onboarding(
     let identity = [
         "# identity.md".to_string(),
         "".to_string(),
-        "- Name: RedClaw".to_string(),
+        format!("- Name: {}", app_ai_display_name()),
         "- Role: 小红书创作自动化 Agent".to_string(),
         format!("- Vibe: {style}"),
-        "- Signature: 🦀".to_string(),
+        format!("- Signature: {}", app_ai_display_name()),
         format!("- UpdatedAt: {}", now_iso()),
     ]
     .join("\n");
@@ -1638,7 +1646,7 @@ pub(crate) fn handle_redclaw_onboarding_turn(
         save_redclaw_onboarding_state(state, &onboarding)?;
         return Ok(Some((
             [
-                "在开始创作前，我们先做一次 RedClaw 个性化设定（只需 1-2 分钟）。",
+                "在开始创作前，我们先做一次个性化设定（只需 1-2 分钟）。",
                 REDCLAW_ONBOARDING_STEPS[0].1,
                 "",
                 "你也可以回复“跳过”使用默认配置，后续随时可再改。",
@@ -1685,8 +1693,7 @@ pub(crate) fn handle_redclaw_onboarding_turn(
         }
         finalize_redclaw_onboarding(state, &mut onboarding)?;
         return Ok(Some((
-            "已按默认配置完成 RedClaw 设定，并写入当前空间档案。现在可以直接给我创作目标。"
-                .to_string(),
+            "已按默认配置完成设定，并写入当前空间档案。现在可以直接给我创作目标。".to_string(),
             true,
         )));
     }

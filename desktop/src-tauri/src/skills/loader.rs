@@ -343,7 +343,7 @@ pub fn discover_skill_records_from_root(
         records.push(SkillRecord {
             name: name.clone(),
             description,
-            location: format!("redbox://skills/{}", slug_from_relative_path(&name)),
+            location: format!("skills://{}", slug_from_relative_path(&name)),
             body: raw_body,
             source_scope: Some(source_scope.to_string()),
             is_builtin: Some(is_builtin),
@@ -519,7 +519,7 @@ mod tests {
         let loaded = load_skill_record(&SkillRecord {
             name: "legacy".to_string(),
             description: "Legacy".to_string(),
-            location: "redbox://skills/legacy".to_string(),
+            location: "skills://legacy".to_string(),
             body: "# Legacy\n\nBody".to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: Some(true),
@@ -539,7 +539,7 @@ mod tests {
         let loaded = load_skill_record(&SkillRecord {
             name: "writing-style".to_string(),
             description: "Writing style".to_string(),
-            location: "redbox://skills/writing-style".to_string(),
+            location: "skills://writing-style".to_string(),
             body: "# Writing Style\n\nBody".to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: Some(true),
@@ -556,7 +556,7 @@ mod tests {
         let loaded = load_skill_record(&SkillRecord {
             name: "writing-style".to_string(),
             description: "Writing style".to_string(),
-            location: "redbox://skills/writing-style".to_string(),
+            location: "skills://writing-style".to_string(),
             body: "---\nactionivationScope: session\nactivationScope: session\n---\n# Writing Style\n\nBody".to_string(),
             source_scope: Some("workspace".to_string()),
             is_builtin: Some(false),

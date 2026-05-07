@@ -74,7 +74,7 @@ const INTERNAL_PROTOCOL_BLOCKS = [
   /<local-command-caveat[\s\S]*?<\/local-command-caveat>/gi,
   /<task-notification[\s\S]*?<\/task-notification>/gi,
 
-  // --- RedClaw 配置注入标签（interactive_runtime_shared.rs）---
+  // --- 配置注入标签（interactive_runtime_shared.rs）---
   /<redclaw_agent_md[\s\S]*?<\/redclaw_agent_md>/gi,
   /<redclaw_soul_md\b[\s\S]*?<\/redclaw_soul_md>/gi,
   /<redclaw_identity_md[\s\S]*?<\/redclaw_identity_md>/gi,

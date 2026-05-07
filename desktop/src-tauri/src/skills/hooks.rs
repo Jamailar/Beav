@@ -73,7 +73,7 @@ mod tests {
         let output = build_skill_hook_output(&[LoadedSkillRecord {
             name: "writer".to_string(),
             description: "desc".to_string(),
-            location: "redbox://skills/writer".to_string(),
+            location: "skills://writer".to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: true,
             disabled: false,

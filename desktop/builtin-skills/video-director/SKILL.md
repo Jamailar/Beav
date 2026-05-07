@@ -33,7 +33,7 @@ A video project pack is not the default path.
 
 Create one only when:
 
-- the user explicitly asks for a 视频项目 / 视频工程 / 项目包 / `.redvideo`
+- the user explicitly asks for a 视频项目 / 视频工程 / 项目包
 - the user explicitly asks to continue later inside the video editor / project workbench
 - the task is already bound to an existing video project pack
 
@@ -43,9 +43,9 @@ When it is explicitly needed, create it with:
 
 - `Operate(resource="video", operation="create", input={ "explicitProjectWorkflow": true, "title": "...", "duration": "...", "aspectRatio": "...", "mode": "..." })`
 
-The project pack lives in:
+The project folder lives in:
 
-- `manuscripts/video/<timestamp>.redvideo/`
+- `manuscripts/video/<project-name>/`
 
 It should be used to keep these files together:
 
@@ -57,14 +57,14 @@ It should be used to keep these files together:
 
 After the pack is created:
 
-- write the user brief and approved script back into the `.redvideo` package
+- write the user brief and approved script back into the video project folder
 - keep later keyframes, clips, and outputs in the same pack whenever possible
 
 Otherwise keep the planning in chat, call `video generate` directly, and let the output live in the generated media library.
 
 ## Hard Rules
 
-- RedBox video generation is locked to the RedBox official video route.
+- Video generation is locked to the official video route configured by the app.
 - Do not choose arbitrary video endpoints or third-party video models.
 - Use only these official model mappings:
   - `text-to-video` -> `wan2.7-t2v-video`

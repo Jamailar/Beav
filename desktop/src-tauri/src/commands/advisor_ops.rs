@@ -876,8 +876,10 @@ pub fn handle_advisor_channel(
                             )
                         })
                         .unwrap_or_else(|| {
-                            "你是 RedBox 内部的智囊团角色研究代理，负责做角色研究并输出严格 JSON。"
-                                .to_string()
+                            format!(
+                                "你是 {} 内部的智囊团角色研究代理，负责做角色研究并输出严格 JSON。",
+                                app_brand_display_name()
+                            )
                         });
                 let research_user_template =
                     load_redbox_prompt("runtime/advisors/generate_persona_research_user.txt")
@@ -961,8 +963,10 @@ pub fn handle_advisor_channel(
                             )
                         })
                         .unwrap_or_else(|| {
-                            "你是 RedBox 内部的智囊团角色文档生成代理，只输出最终 Markdown 文档。"
-                                .to_string()
+                            format!(
+                                "你是 {} 内部的智囊团角色文档生成代理，只输出最终 Markdown 文档。",
+                                app_brand_display_name()
+                            )
                         });
                 let final_user_template =
                     load_redbox_prompt("runtime/advisors/generate_persona_final_user.txt")

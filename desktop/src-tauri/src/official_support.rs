@@ -3,9 +3,10 @@ use std::fs;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    append_debug_trace_global, escape_html, format_http_error_message, http_error_debug_line,
-    http_error_details_from_value, normalize_anthropic_base_url, normalize_base_url, now_ms,
-    payload_field, payload_string, run_curl_json, run_curl_json_response,
+    app_brand_display_name, append_debug_trace_global, escape_html, format_http_error_message,
+    http_error_debug_line, http_error_details_from_value, normalize_anthropic_base_url,
+    normalize_base_url, now_ms, payload_field, payload_string, run_curl_json,
+    run_curl_json_response,
 };
 
 pub(crate) const REDBOX_OFFICIAL_CN_BASE_URL: &str = "https://api.ziz.hk/thrive/v1";
@@ -971,7 +972,7 @@ pub(crate) fn official_account_summary_local(settings: &Value, models: &[Value])
         "displayName": user.get("displayName").cloned().or_else(|| user.get("name").cloned()).unwrap_or(Value::Null),
         "email": user.get("email").cloned().unwrap_or(Value::Null),
         "apiKeyPresent": official_ai_api_key_from_settings(settings).is_some(),
-        "planName": user.get("planName").cloned().unwrap_or(json!("RedBox Official")),
+        "planName": user.get("planName").cloned().unwrap_or_else(|| json!(format!("{} Official", app_brand_display_name()))),
         "pointsBalance": user.get("pointsBalance").cloned().unwrap_or(json!(0)),
         "officialBaseUrl": official_base_url_from_settings(settings),
         "modelCount": models.len(),
@@ -1144,7 +1145,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
     );
     let source = json!({
         "id": "redbox_official_auto",
-        "name": "RedBox Official",
+        "name": format!("{} Official", app_brand_display_name()),
         "presetId": "redbox-official",
         "baseURL": official_base_url,
         "apiKey": api_key,
@@ -1304,7 +1305,7 @@ mod tests {
     fn official_sync_updates_route_when_official_is_current_default() {
         let official_sources = vec![json!({
             "id": "redbox_official_auto",
-            "name": "RedBox Official",
+            "name": format!("{} Official", app_brand_display_name()),
             "presetId": "redbox-official",
             "baseURL": REDBOX_OFFICIAL_BASE_URL,
             "apiKey": "old-official-key",
@@ -1475,8 +1476,9 @@ pub(crate) fn emit_redbox_auth_data_updated(app: &AppHandle, payload: Value) {
 
 pub(crate) fn create_official_payment_form(order_no: &str, amount: f64, subject: &str) -> String {
     let safe_subject = escape_html(subject);
+    let brand_name = app_brand_display_name();
     format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>RedBox 支付</title></head><body><div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px;\"><h3>RedBox 充值订单</h3><p>订单号：{order_no}</p><p>金额：¥{amount:.2}</p><p>{safe_subject}</p><button style=\"padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#111;color:#fff;\">请在正式环境接入支付网关</button></div></body></html>"
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{brand_name} 支付</title></head><body><div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:24px;\"><h3>{brand_name} 充值订单</h3><p>订单号：{order_no}</p><p>金额：¥{amount:.2}</p><p>{safe_subject}</p><button style=\"padding:10px 16px;border-radius:10px;border:1px solid #ddd;background:#111;color:#fff;\">请在正式环境接入支付网关</button></div></body></html>"
     )
 }
 

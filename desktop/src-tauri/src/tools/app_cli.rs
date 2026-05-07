@@ -13,10 +13,8 @@ use crate::events::{
     emit_runtime_tool_result,
 };
 use crate::helpers::{
-    compose_markdown_with_frontmatter, ensure_manuscript_file_name,
-    extract_markdown_frontmatter_block, get_default_package_entry, get_draft_type_from_file_name,
-    normalize_relative_path, storage_safe_file_stem, strip_markdown_frontmatter,
-    ARTICLE_DRAFT_EXTENSION, AUDIO_DRAFT_EXTENSION, VIDEO_DRAFT_EXTENSION,
+    compose_markdown_with_frontmatter, extract_markdown_frontmatter_block, normalize_relative_path,
+    storage_safe_file_stem, strip_markdown_frontmatter,
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
@@ -43,7 +41,6 @@ pub struct AppCliExecutor<'a> {
 
 const IMAGE_DIRECTOR_SKILL_NAME: &str = "image-director";
 const MAX_IMAGE_BATCH_ITEMS: usize = 6;
-const IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED: &str = "user_confirmed";
 const DEFAULT_VIDEO_ANALYSIS_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 fn short_sha256_hex(bytes: &[u8]) -> String {
@@ -86,7 +83,7 @@ fn write_video_analysis_cache(path: &Path, value: &Value) {
 }
 
 fn video_analysis_agent_system_prompt() -> &'static str {
-    r#"你是 RedBox 内部专用 Video Analysis Agent。
+    r#"你是应用内部专用 Video Analysis Agent。
 你只负责根据提供的视频和用户指令输出结构化视频理解结果，不写最终发布文案，不冒充主聊天 agent。
 必须输出严格 JSON，字段包括：success, summary, transcript, scenes, highlights, editingSuggestions, warnings。
 scenes 每项应尽量包含 startSec, endSec, title, description, visualNotes, speechNotes, importance。
@@ -94,8 +91,6 @@ highlights 每项应尽量包含 startSec, endSec, reason, suggestedUse。
 如果无法确认时间戳、画面或声音，必须写入 warnings，不要编造。
 如果指令要求剪口播、智能剪辑或精彩切片，只输出分析依据和剪辑建议，最终成稿由主 agent 完成。"#
 }
-const IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE: &str = "redclaw_auto_execute";
-
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
     positionals: Vec<String>,
@@ -139,7 +134,7 @@ struct CurrentAuthoringSessionTarget {
 
 #[derive(Debug, Clone)]
 struct AuthoringTargetPreference {
-    preferred_extension: &'static str,
+    preferred_kind: AuthoringProjectKind,
     preferred_subdir: Option<String>,
 }
 
@@ -168,33 +163,27 @@ fn normalize_authoring_target_subdir(
 
 fn authoring_project_kind_from_value(value: Option<&str>) -> Option<AuthoringProjectKind> {
     match value.unwrap_or("").trim().to_ascii_lowercase().as_str() {
-        "redpost" | "post" | "richpost" | "xiaohongshu" => Some(AuthoringProjectKind::Redarticle),
-        "redarticle" | "article" | "longform" | "wechat" | "wechat_official_account" => {
+        "post" | "richpost" | "xiaohongshu" => Some(AuthoringProjectKind::Redpost),
+        "article" | "longform" | "wechat" | "wechat_official_account" => {
             Some(AuthoringProjectKind::Redarticle)
         }
         _ => None,
     }
 }
 
-fn authoring_project_extension(kind: AuthoringProjectKind) -> &'static str {
-    match kind {
-        AuthoringProjectKind::Redpost => ARTICLE_DRAFT_EXTENSION,
-        AuthoringProjectKind::Redarticle => ARTICLE_DRAFT_EXTENSION,
-    }
-}
-
 fn authoring_project_kind_from_target_path(path: &str) -> Option<AuthoringProjectKind> {
     let normalized = normalize_relative_path(path);
-    if normalized.ends_with(ARTICLE_DRAFT_EXTENSION) {
-        return Some(AuthoringProjectKind::Redarticle);
+    let file_name = normalized.rsplit('/').next().unwrap_or_default();
+    if file_name.contains('.') {
+        return None;
     }
-    None
+    Some(AuthoringProjectKind::Redpost)
 }
 
 fn authoring_project_kind_label(kind: AuthoringProjectKind) -> &'static str {
     match kind {
-        AuthoringProjectKind::Redpost => "redarticle",
-        AuthoringProjectKind::Redarticle => "redarticle",
+        AuthoringProjectKind::Redpost => "post",
+        AuthoringProjectKind::Redarticle => "article",
     }
 }
 
@@ -251,6 +240,22 @@ fn action_success_envelope(action: &str, data: Value, compat: Option<Value>) -> 
         object.insert("compat".to_string(), compat);
     }
     Value::Object(object)
+}
+
+fn is_bound_manuscript_write_call(arguments: &Value) -> bool {
+    let compat = arguments.get("__compat").and_then(Value::as_object);
+    let legacy_tool = compat
+        .and_then(|object| object.get("legacyToolName"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let legacy_command = compat
+        .and_then(|object| object.get("legacyCommand"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    legacy_tool == "Write"
+        && legacy_command
+            .trim()
+            .eq_ignore_ascii_case("manuscripts://current")
 }
 
 fn app_cli_error_json(
@@ -397,26 +402,18 @@ fn evaluate_skill_host_save_rule(rule: &SkillHostSaveRule, content: &str) -> boo
 fn build_authoring_project_relative_path(
     parent: Option<&str>,
     project_id: &str,
-    kind: AuthoringProjectKind,
+    _kind: AuthoringProjectKind,
 ) -> String {
     let normalized_parent = parent
         .map(normalize_relative_path)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_default();
-    normalize_relative_path(&join_relative(
-        &normalized_parent,
-        &ensure_manuscript_file_name(project_id, authoring_project_extension(kind)),
-    ))
+    normalize_relative_path(&join_relative(&normalized_parent, project_id))
 }
 
-fn build_authoring_project_id(title: &str, kind: AuthoringProjectKind) -> String {
-    match kind {
-        AuthoringProjectKind::Redpost => {
-            let stem = storage_safe_file_stem(title);
-            format!("{stem}-{}", crate::now_ms())
-        }
-        AuthoringProjectKind::Redarticle => make_id("redarticle"),
-    }
+fn build_authoring_project_id(title: &str, _kind: AuthoringProjectKind) -> String {
+    let stem = storage_safe_file_stem(title);
+    format!("{stem}-{}", crate::now_ms())
 }
 
 impl CliArgs {
@@ -487,8 +484,14 @@ impl<'a> AppCliExecutor<'a> {
         .flatten()
     }
 
-    fn ensure_action_allowed(&self, action: &str) -> Result<(), String> {
+    fn ensure_action_allowed(&self, action: &str, arguments: &Value) -> Result<(), String> {
         if action == "web.fetch" {
+            return Ok(());
+        }
+        if action == "manuscripts.writeCurrent"
+            && is_bound_manuscript_write_call(arguments)
+            && self.current_authoring_session_target().is_some()
+        {
             return Ok(());
         }
         let Some(allowed_actions) = self.session_allowed_structured_actions() else {
@@ -606,7 +609,7 @@ impl<'a> AppCliExecutor<'a> {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
         {
-            self.ensure_action_allowed(&action)?;
+            self.ensure_action_allowed(&action, &normalized_arguments)?;
             return self
                 .execute_structured_action(&action, &payload)
                 .map(|data| {
@@ -1248,9 +1251,6 @@ impl<'a> AppCliExecutor<'a> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("manuscripts")));
         };
-        if action == "theme" {
-            return self.handle_manuscript_theme(&tokens[1..], payload);
-        }
         if action == "layout" {
             return self.handle_manuscript_layout(&tokens[1..], payload);
         }
@@ -1332,14 +1332,6 @@ impl<'a> AppCliExecutor<'a> {
             ),
             _ => Err(format!("unsupported manuscripts action: {action}")),
         }
-    }
-
-    fn handle_manuscript_theme(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
-        let Some(action) = tokens.first().map(String::as_str) else {
-            return Ok(help_response(Some("manuscripts")));
-        };
-        let _ = payload;
-        Err(format!("unsupported manuscripts theme action: {action}"))
     }
 
     fn handle_manuscript_layout(
@@ -2773,7 +2765,7 @@ impl<'a> AppCliExecutor<'a> {
             return Err(
                 "video project-create requires explicit project workflow confirmation. \
 For one-off generation, use `video generate` and keep the output in media/. \
-Only create a `.redvideo` project when the user explicitly asks for a project/package/editor workflow. \
+Only create a video project folder when the user explicitly asks for a project/package/editor workflow. \
 Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true` after explicit confirmation."
                     .to_string(),
             );
@@ -2963,9 +2955,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             .or_else(|| payload_string(payload, "videoProjectPath"))
             .or_else(|| {
                 args.string(&["path"]).and_then(|value| {
-                    if value.ends_with(VIDEO_DRAFT_EXTENSION)
-                        || (!std::path::Path::new(&value).is_absolute() && value.contains('/'))
-                    {
+                    if !std::path::Path::new(&value).is_absolute() && value.contains('/') {
                         Some(value)
                     } else {
                         None
@@ -3022,13 +3012,6 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
         let requested_count = requested_image_generation_count(&merged, image_plan_items.len());
         let multi_image_agent_turn = requested_count > 1 && self.session_id.is_some();
         let plan_confirmed = payload_bool(&merged, &["planConfirmed"]).unwrap_or(false);
-        let plan_execution_mode = image_plan_execution_mode(&merged);
-        let redclaw_auto_execute = validate_redclaw_auto_image_plan_execution(
-            self.runtime_mode,
-            &merged,
-            requested_count,
-            &plan_execution_mode,
-        )?;
         let shared_style_guide =
             payload_string(&merged, "sharedStyleGuide").filter(|item| !item.trim().is_empty());
         let base_prompt = payload_string(&merged, "prompt").unwrap_or_default();
@@ -3061,20 +3044,16 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 ));
             }
             if !plan_confirmed {
-                if redclaw_auto_execute {
-                    // RedClaw multi-image automation is allowed to plan and submit in one turn.
-                } else {
-                    return Err(app_cli_error_json(
-                        Some("image.generate"),
-                        "IMAGE_PLAN_CONFIRMATION_REQUIRED",
-                        "multi-image generation requires explicit user confirmation",
-                        false,
-                        Some(json!({
-                            "count": image_plan_items.len(),
-                            "hint": "先向用户展示多图方案并等待确认；确认后传入 planConfirmed=true。RedClaw 受控多图批量自动执行时可改用 planExecutionMode=redclaw_auto_execute。"
-                        })),
-                    ));
-                }
+                return Err(app_cli_error_json(
+                    Some("image.generate"),
+                    "IMAGE_PLAN_CONFIRMATION_REQUIRED",
+                    "multi-image generation requires explicit user confirmation",
+                    false,
+                    Some(json!({
+                        "count": image_plan_items.len(),
+                        "hint": "先向用户展示多图方案并等待确认；确认后传入 planConfirmed=true。"
+                    })),
+                ));
             }
         }
 
@@ -3439,18 +3418,14 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return Err("video project locator is empty".to_string());
         }
         let normalized = normalize_relative_path(trimmed);
-        if normalized.contains('/') || normalized.ends_with(VIDEO_DRAFT_EXTENSION) {
-            return Ok(ensure_manuscript_file_name(
-                &normalized,
-                VIDEO_DRAFT_EXTENSION,
-            ));
+        if normalized.contains('/') {
+            return Ok(normalized.trim_end_matches(".md").to_string());
         }
-        let default_path =
-            ensure_manuscript_file_name(&format!("video/{normalized}"), VIDEO_DRAFT_EXTENSION);
+        let default_path = normalize_relative_path(&format!("video/{normalized}"));
         let tree = self.call_channel("manuscripts:list", json!({}))?;
         let mut projects = Vec::<Value>::new();
         collect_video_projects(&tree, &mut projects);
-        let target_file_name = format!("{normalized}{VIDEO_DRAFT_EXTENSION}");
+        let target_file_name = normalized.clone();
         let matches = projects
             .iter()
             .filter_map(|item| item.get("path").and_then(Value::as_str))
@@ -3641,7 +3616,14 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 .unwrap_or_default();
             let draft_type = payload_string(metadata, "associatedPackageKind")
                 .or_else(|| payload_string(metadata, "draftType"))
-                .unwrap_or_else(|| get_draft_type_from_file_name(&file_path).to_string());
+                .map(|value| {
+                    if value == "article" {
+                        "longform".to_string()
+                    } else {
+                        value
+                    }
+                })
+                .unwrap_or_else(|| "unknown".to_string());
             if file_path.trim().is_empty() || !matches!(draft_type.as_str(), "longform") {
                 return Ok(None);
             }
@@ -3658,18 +3640,18 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
     fn current_authoring_target_preference(&self) -> Option<AuthoringTargetPreference> {
         if let Some(target) = self.current_authoring_session_target() {
             return Some(AuthoringTargetPreference {
-                preferred_extension: authoring_project_extension(target.project_kind),
+                preferred_kind: target.project_kind,
                 preferred_subdir: Some(split_parent_and_name(&target.project_path).0),
             });
         }
         if let Some(target) = self.bound_writing_session_target() {
             let draft_type = target.draft_type.to_ascii_lowercase();
-            let preferred_extension = match draft_type.as_str() {
-                "longform" => ARTICLE_DRAFT_EXTENSION,
+            let preferred_kind = match draft_type.as_str() {
+                "longform" => AuthoringProjectKind::Redarticle,
                 _ => return None,
             };
             return Some(AuthoringTargetPreference {
-                preferred_extension,
+                preferred_kind,
                 preferred_subdir: None,
             });
         }
@@ -3715,15 +3697,15 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 });
             let preference = match platform.as_deref() {
                 Some("wechat_official_account") => AuthoringTargetPreference {
-                    preferred_extension: ARTICLE_DRAFT_EXTENSION,
+                    preferred_kind: AuthoringProjectKind::Redarticle,
                     preferred_subdir,
                 },
                 Some("xiaohongshu") => AuthoringTargetPreference {
-                    preferred_extension: ARTICLE_DRAFT_EXTENSION,
+                    preferred_kind: AuthoringProjectKind::Redpost,
                     preferred_subdir,
                 },
                 _ => AuthoringTargetPreference {
-                    preferred_extension: ARTICLE_DRAFT_EXTENSION,
+                    preferred_kind: AuthoringProjectKind::Redpost,
                     preferred_subdir,
                 },
             };
@@ -3754,13 +3736,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             let project_kind = authoring_project_kind_from_value(
                 payload_string(metadata, "currentAuthoringProjectKind").as_deref(),
             )
-            .unwrap_or_else(|| {
-                if project_path.ends_with(ARTICLE_DRAFT_EXTENSION) {
-                    AuthoringProjectKind::Redarticle
-                } else {
-                    AuthoringProjectKind::Redpost
-                }
-            });
+            .unwrap_or(AuthoringProjectKind::Redpost);
             Ok(Some(CurrentAuthoringSessionTarget {
                 project_path,
                 project_kind,
@@ -3893,10 +3869,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             metadata.insert("currentAuthoringEntryPath".to_string(), json!(entry_path));
             metadata.insert(
                 "currentAuthoringProjectKind".to_string(),
-                json!(match project_kind {
-                    AuthoringProjectKind::Redpost => "redarticle",
-                    AuthoringProjectKind::Redarticle => "redarticle",
-                }),
+                json!(authoring_project_kind_label(project_kind)),
             );
             metadata.insert("currentAuthoringTitle".to_string(), json!(title));
             session.metadata = Some(Value::Object(metadata));
@@ -3913,10 +3886,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
                 "projectPath": project_path,
                 "contentPath": content_path,
                 "entryPath": entry_path,
-                "kind": match project_kind {
-                    AuthoringProjectKind::Redpost => "redarticle",
-                    AuthoringProjectKind::Redarticle => "redarticle",
-                },
+                "kind": authoring_project_kind_label(project_kind),
                 "title": title,
             })),
         );
@@ -3925,13 +3895,9 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
 
     fn default_authoring_project_kind(&self) -> AuthoringProjectKind {
         let Some(preference) = self.current_authoring_target_preference() else {
-            return AuthoringProjectKind::Redarticle;
+            return AuthoringProjectKind::Redpost;
         };
-        if preference.preferred_extension == ARTICLE_DRAFT_EXTENSION {
-            AuthoringProjectKind::Redarticle
-        } else {
-            AuthoringProjectKind::Redarticle
-        }
+        preference.preferred_kind
     }
 
     fn handle_manuscript_create_project(
@@ -3974,11 +3940,14 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             json!({
                 "parentPath": parent_path,
                 "name": name,
+                "kind": authoring_project_kind_label(project_kind),
                 "title": title,
                 "content": ""
             }),
         )?;
-        let entry_name = get_default_package_entry(&relative);
+        let entry_name = match project_kind {
+            AuthoringProjectKind::Redpost | AuthoringProjectKind::Redarticle => "content.md",
+        };
         let content_path = join_relative(&relative, entry_name);
         self.persist_current_authoring_session_target(
             &relative,
@@ -3995,10 +3964,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             "entryPath": content_path,
             "projectId": project_id,
             "title": title,
-            "kind": match project_kind {
-                AuthoringProjectKind::Redpost => "redarticle",
-                AuthoringProjectKind::Redarticle => "redarticle",
-            },
+            "kind": authoring_project_kind_label(project_kind),
         }))
     }
 
@@ -4045,7 +4011,7 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             .map(|value| value.as_bytes().len() as i64)
             .unwrap_or(0);
         let project_path = target.project_path.clone();
-        let content_path = join_relative(&project_path, get_default_package_entry(&project_path));
+        let content_path = join_relative(&project_path, "content.md");
         Ok(json!({
             "projectPath": project_path,
             "contentPath": content_path,
@@ -4067,32 +4033,27 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return normalized;
         }
         let Some(preference) = self.current_authoring_target_preference() else {
-            return ensure_manuscript_file_name(&normalized, ".md");
+            return if normalized.ends_with(".md") {
+                normalized
+            } else {
+                format!("{normalized}.md")
+            };
         };
         let normalized =
             normalize_authoring_target_subdir(&normalized, preference.preferred_subdir.as_deref());
         let resolved = resolve_manuscript_path(self.state, &normalized).ok();
         let target_exists = resolved.as_ref().map(|path| path.exists()).unwrap_or(false);
-        if normalized.ends_with(preference.preferred_extension) {
-            return normalized;
-        }
-        if normalized.ends_with(ARTICLE_DRAFT_EXTENSION)
-            || normalized.ends_with(VIDEO_DRAFT_EXTENSION)
-            || normalized.ends_with(AUDIO_DRAFT_EXTENSION)
-        {
-            return normalized;
-        }
         if normalized.ends_with(".md") {
             if target_exists {
                 return normalized;
             }
             let stem = normalized.trim_end_matches(".md");
-            return format!("{stem}{}", preference.preferred_extension);
+            return stem.to_string();
         }
         if target_exists {
             return normalized;
         }
-        ensure_manuscript_file_name(&normalized, preference.preferred_extension)
+        normalized
     }
 
     fn maybe_queue_writing_manuscript_proposal(
@@ -4594,63 +4555,6 @@ fn requested_image_generation_count(payload: &Value, image_plan_len: usize) -> u
         .clamp(1, MAX_IMAGE_BATCH_ITEMS as i64) as usize
 }
 
-fn image_plan_execution_mode(payload: &Value) -> String {
-    payload_string(payload, "planExecutionMode")
-        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED.to_string())
-}
-
-fn validate_redclaw_auto_image_plan_execution(
-    runtime_mode: &str,
-    _payload: &Value,
-    requested_count: usize,
-    plan_execution_mode: &str,
-) -> Result<bool, String> {
-    if plan_execution_mode == IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED {
-        return Ok(false);
-    }
-    if plan_execution_mode != IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE {
-        return Err(app_cli_error_json(
-            Some("image.generate"),
-            "IMAGE_PLAN_EXECUTION_MODE_INVALID",
-            "unsupported planExecutionMode",
-            false,
-            Some(json!({
-                "received": plan_execution_mode,
-                "supported": [
-                    IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED,
-                    IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE
-                ]
-            })),
-        ));
-    }
-    if runtime_mode != "redclaw" {
-        return Err(app_cli_error_json(
-            Some("image.generate"),
-            "IMAGE_PLAN_EXECUTION_MODE_NOT_ALLOWED",
-            "redclaw_auto_execute is only allowed in RedClaw runtime",
-            false,
-            Some(json!({
-                "runtimeMode": runtime_mode,
-                "requiredRuntimeMode": "redclaw"
-            })),
-        ));
-    }
-    if requested_count <= 1 {
-        return Err(app_cli_error_json(
-            Some("image.generate"),
-            "IMAGE_PLAN_EXECUTION_MODE_BATCH_ONLY",
-            "redclaw_auto_execute only applies to coordinated multi-image batches",
-            false,
-            Some(json!({
-                "count": requested_count
-            })),
-        ));
-    }
-    Ok(true)
-}
-
 fn image_generation_delivery_mode(
     session_id: Option<&str>,
     payload: &Value,
@@ -5106,7 +5010,7 @@ fn build_video_project_relative_path(explicit_path: Option<String>) -> String {
     let parent = explicit_path
         .map(|value| normalize_relative_path(&value))
         .map(|normalized| {
-            if normalized.ends_with(VIDEO_DRAFT_EXTENSION) {
+            if normalized.rsplit('/').next().unwrap_or("").contains('.') {
                 split_parent_and_name(&normalized).0
             } else {
                 normalized
@@ -5114,10 +5018,7 @@ fn build_video_project_relative_path(explicit_path: Option<String>) -> String {
         })
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "video".to_string());
-    ensure_manuscript_file_name(
-        &format!("{parent}/{}", now_timestamp_millis()),
-        VIDEO_DRAFT_EXTENSION,
-    )
+    normalize_relative_path(&format!("{parent}/{}", now_timestamp_millis()))
 }
 
 fn video_project_stem_from_path(path: &str) -> String {
@@ -5126,7 +5027,7 @@ fn video_project_stem_from_path(path: &str) -> String {
         .rsplit('/')
         .next()
         .unwrap_or(normalized.as_str())
-        .trim_end_matches(VIDEO_DRAFT_EXTENSION)
+        .trim_end_matches(".md")
         .to_string()
 }
 
@@ -5228,7 +5129,7 @@ fn collect_video_projects(node: &Value, projects: &mut Vec<Value>) {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        if path.ends_with(VIDEO_DRAFT_EXTENSION) || draft_type == "video" {
+        if draft_type == "video" {
             projects.push(json!({
                 "path": path,
                 "name": node.get("name").cloned().unwrap_or(Value::Null),
@@ -5310,18 +5211,11 @@ fn help_response(namespace: Option<&str>) -> Value {
         "manuscripts" => vec![
             "manuscripts list",
             "manuscripts read --path <relativePath>",
-            "manuscripts create-project --title <title> [--kind post|redarticle] [--parent <folder>]",
+            "manuscripts create-project --title <title> [--kind post|article] [--parent <folder>]",
             "manuscripts write-current [payload.content]",
             "manuscripts write --path <relativePath> [payload.content]",
             "manuscripts create --path <relativePath>",
             "manuscripts delete --path <relativePath>",
-            "manuscripts theme apply --path <relativePath> --theme-id <themeId>",
-            "manuscripts theme preview --path <relativePath> [payload.theme]",
-            "manuscripts theme create --path <relativePath> [payload.theme]",
-            "manuscripts theme save --path <relativePath> [payload.theme]",
-            "manuscripts theme delete --path <relativePath> --theme-id <themeId>",
-            "manuscripts theme background-upload --path <relativePath> --theme-id <themeId> [--role body]",
-            "manuscripts theme previews --path <relativePath> [payload.themeIds]",
             "manuscripts layout get",
             "manuscripts layout save [payload]",
         ],
@@ -5469,10 +5363,8 @@ mod tests {
         let path = build_video_project_relative_path(None);
 
         assert!(path.starts_with("video/"));
-        assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
         assert!(path
             .trim_start_matches("video/")
-            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
             .chars()
             .all(|ch| ch.is_ascii_digit()));
     }
@@ -5480,14 +5372,12 @@ mod tests {
     #[test]
     fn build_video_project_relative_path_preserves_parent_but_replaces_file_name() {
         let path = build_video_project_relative_path(Some(
-            "video/custom/Jamba 戴森V8舞蹈视频.redvideo".to_string(),
+            "video/custom/Jamba 戴森V8舞蹈视频".to_string(),
         ));
 
         assert!(path.starts_with("video/custom/"));
-        assert!(path.ends_with(VIDEO_DRAFT_EXTENSION));
         assert!(path
             .trim_start_matches("video/custom/")
-            .trim_end_matches(VIDEO_DRAFT_EXTENSION)
             .chars()
             .all(|ch| ch.is_ascii_digit()));
     }
@@ -5495,32 +5385,32 @@ mod tests {
     #[test]
     fn normalize_authoring_target_subdir_prefixes_wander_folder() {
         assert_eq!(
-            normalize_authoring_target_subdir("第一篇稿子.thrive", Some("wander")),
-            "wander/第一篇稿子.thrive"
+            normalize_authoring_target_subdir("第一篇稿子", Some("wander")),
+            "wander/第一篇稿子"
         );
         assert_eq!(
-            normalize_authoring_target_subdir("wander/第一篇稿子.thrive", Some("wander")),
-            "wander/第一篇稿子.thrive"
+            normalize_authoring_target_subdir("wander/第一篇稿子", Some("wander")),
+            "wander/第一篇稿子"
         );
     }
 
     #[test]
-    fn build_authoring_project_relative_path_uses_stem_and_kind_extension() {
+    fn build_authoring_project_relative_path_uses_folder_name_without_extension() {
         assert_eq!(
             build_authoring_project_relative_path(
                 Some("wander"),
                 "测试标题-123",
                 AuthoringProjectKind::Redpost,
             ),
-            "wander/测试标题-123.thrive"
+            "wander/测试标题-123"
         );
         assert_eq!(
             build_authoring_project_relative_path(
                 Some("articles"),
-                "redarticle-456",
+                "article-456",
                 AuthoringProjectKind::Redarticle,
             ),
-            "articles/redarticle-456.redarticle"
+            "articles/article-456"
         );
     }
 
@@ -5530,7 +5420,7 @@ mod tests {
             build_authoring_project_id("测试标题:Redpost", AuthoringProjectKind::Redpost);
 
         assert!(project_id.starts_with("测试标题-Redpost-"));
-        assert!(!project_id.starts_with("redpost-"));
+        assert!(!project_id.starts_with("post-"));
     }
 
     #[test]
@@ -5807,60 +5697,6 @@ mod tests {
     }
 
     #[test]
-    fn image_plan_execution_mode_defaults_to_user_confirmed() {
-        assert_eq!(
-            image_plan_execution_mode(&json!({})),
-            IMAGE_PLAN_EXECUTION_MODE_USER_CONFIRMED
-        );
-        assert_eq!(
-            image_plan_execution_mode(&json!({ "planExecutionMode": "redclaw-auto-execute" })),
-            IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE
-        );
-    }
-
-    #[test]
-    fn validate_redclaw_auto_image_plan_execution_accepts_multi_image_batches_without_set_type() {
-        assert_eq!(
-            validate_redclaw_auto_image_plan_execution(
-                "redclaw",
-                &json!({}),
-                5,
-                IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
-            )
-            .expect("should allow redclaw auto execution"),
-            true
-        );
-        assert_eq!(
-            validate_redclaw_auto_image_plan_execution(
-                "redclaw",
-                &json!({ "setType": "product_model_showcase" }),
-                4,
-                IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
-            )
-            .expect("should allow product showcase batches"),
-            true
-        );
-    }
-
-    #[test]
-    fn validate_redclaw_auto_image_plan_execution_rejects_other_runtimes_and_single_images() {
-        assert!(validate_redclaw_auto_image_plan_execution(
-            "team",
-            &json!({}),
-            5,
-            IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
-        )
-        .is_err());
-        assert!(validate_redclaw_auto_image_plan_execution(
-            "redclaw",
-            &json!({}),
-            1,
-            IMAGE_PLAN_EXECUTION_MODE_REDCLAW_AUTO_EXECUTE,
-        )
-        .is_err());
-    }
-
-    #[test]
     fn skill_name_from_args_or_payload_accepts_structured_payload_name() {
         assert_eq!(
             skill_name_from_args_or_payload(
@@ -5919,7 +5755,7 @@ mod tests {
         let parsed: SkillHostSaveValidatorSet =
             serde_json::from_str(raw).expect("validator json should parse");
 
-        assert_eq!(parsed.applies_to, vec!["redpost", "redarticle"]);
+        assert_eq!(parsed.applies_to, vec!["article"]);
         assert_eq!(parsed.rules.len(), 3);
         assert!(parsed
             .rules
@@ -5960,6 +5796,32 @@ mod tests {
     }
 
     #[test]
+    fn bound_manuscript_write_call_requires_universal_write_compat() {
+        assert!(is_bound_manuscript_write_call(&json!({
+            "action": "manuscripts.writeCurrent",
+            "payload": { "content": "body" },
+            "__compat": {
+                "legacyToolName": "Write",
+                "legacyCommand": "manuscripts://current"
+            }
+        })));
+
+        assert!(!is_bound_manuscript_write_call(&json!({
+            "action": "manuscripts.writeCurrent",
+            "payload": { "content": "body" },
+            "__compat": {
+                "legacyToolName": "Operate",
+                "legacyCommand": "manuscripts.writeCurrent"
+            }
+        })));
+
+        assert!(!is_bound_manuscript_write_call(&json!({
+            "action": "manuscripts.writeCurrent",
+            "payload": { "content": "body" }
+        })));
+    }
+
+    #[test]
     fn normalized_structured_arguments_preserves_redclaw_task_cancel_draft_id() {
         let normalized = normalized_structured_arguments(&json!({
             "action": "redclaw.task.cancel",
@@ -5996,11 +5858,11 @@ mod tests {
     fn normalized_structured_arguments_lifts_flat_fields_into_payload() {
         let normalized = normalized_structured_arguments(&json!({
             "action": "manuscripts.createProject",
-            "kind": "redpost",
+            "kind": "post",
             "parent": "wander",
             "title": "测试标题"
         }));
-        assert_eq!(normalized.pointer("/payload/kind"), Some(&json!("redpost")));
+        assert_eq!(normalized.pointer("/payload/kind"), Some(&json!("post")));
         assert_eq!(
             normalized.pointer("/payload/parent"),
             Some(&json!("wander"))
@@ -6015,9 +5877,9 @@ mod tests {
     fn normalized_structured_arguments_parses_stringified_payload() {
         let normalized = normalized_structured_arguments(&json!({
             "action": "manuscripts.createProject",
-            "payload": "{\"kind\":\"redpost\",\"parent\":\"wander\",\"title\":\"测试标题\"}"
+            "payload": "{\"kind\":\"post\",\"parent\":\"wander\",\"title\":\"测试标题\"}"
         }));
-        assert_eq!(normalized.pointer("/payload/kind"), Some(&json!("redpost")));
+        assert_eq!(normalized.pointer("/payload/kind"), Some(&json!("post")));
         assert_eq!(
             normalized.pointer("/payload/parent"),
             Some(&json!("wander"))

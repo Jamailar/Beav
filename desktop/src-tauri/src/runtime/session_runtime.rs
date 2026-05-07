@@ -2245,7 +2245,7 @@ mod tests {
             }),
             json!({
                 "role": "user",
-                "content": "你刚才发送了空的 `workflow` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `wander/demo.redpost`。下一步先输出完整正文。"
+                "content": "你刚才发送了空的 `workflow` 调用，说明这次没有提供 `payload.content`。当前写稿工程已经绑定为 `wander/demo`。下一步先输出完整正文。"
             }),
             json!({
                 "role": "assistant",

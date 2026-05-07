@@ -16,12 +16,12 @@ use crate::workspace_loaders::{
     load_memory_history_from_fs,
 };
 use crate::{
-    active_space_workspace_root_from_store, load_advisors_from_fs, load_cover_assets_from_fs,
-    load_document_sources_from_fs, load_knowledge_authors_from_fs, load_knowledge_notes_from_fs,
-    load_media_assets_from_fs, load_redclaw_state_from_fs, load_subject_categories_from_fs,
-    load_subjects_from_fs, load_work_items_from_fs, load_youtube_videos_from_fs, now_iso,
-    storage_safe_file_stem, AppState, AppStore, AssistantStateRecord, RedclawStateRecord,
-    SpaceRecord,
+    active_space_workspace_root_from_store, app_brand_display_name, load_advisors_from_fs,
+    load_cover_assets_from_fs, load_document_sources_from_fs, load_knowledge_authors_from_fs,
+    load_knowledge_notes_from_fs, load_media_assets_from_fs, load_redclaw_state_from_fs,
+    load_subject_categories_from_fs, load_subjects_from_fs, load_work_items_from_fs,
+    load_youtube_videos_from_fs, now_iso, storage_safe_file_stem, AppState, AppStore,
+    AssistantStateRecord, RedclawStateRecord, SpaceRecord,
 };
 
 pub(crate) struct WorkspaceHydrationSnapshot {
@@ -251,7 +251,7 @@ pub fn build_store_path() -> PathBuf {
 fn store_root_from_store_path(store_path: &Path) -> Result<PathBuf, String> {
     let root = store_path
         .parent()
-        .ok_or_else(|| "RedBox store root is unavailable".to_string())?
+        .ok_or_else(|| format!("{} store root is unavailable", app_brand_display_name()))?
         .to_path_buf();
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
@@ -869,7 +869,10 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
         let mut snapshot = match store_handle.lock() {
             Ok(store) => store.clone(),
             Err(_) => {
-                eprintln!("[RedBox async persist] store lock poisoned");
+                eprintln!(
+                    "[{} async persist] store lock poisoned",
+                    app_brand_display_name()
+                );
                 scheduled.store(false, Ordering::SeqCst);
                 return;
             }
@@ -881,7 +884,10 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
         let serialized = match serde_json::to_string_pretty(&snapshot) {
             Ok(value) => value,
             Err(error) => {
-                eprintln!("[RedBox async persist] serialize failed: {error}");
+                eprintln!(
+                    "[{} async persist] serialize failed: {error}",
+                    app_brand_display_name()
+                );
                 scheduled.store(false, Ordering::SeqCst);
                 return;
             }
@@ -890,20 +896,29 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
             continue;
         }
         if let Err(error) = write_session_artifacts_to_disk(&path, &session_artifacts) {
-            eprintln!("[RedBox async persist] session artifact write failed: {error}");
+            eprintln!(
+                "[{} async persist] session artifact write failed: {error}",
+                app_brand_display_name()
+            );
             scheduled.store(false, Ordering::SeqCst);
             return;
         }
         if let Some(parent) = path.parent() {
             if let Err(error) = fs::create_dir_all(parent) {
-                eprintln!("[RedBox async persist] create dir failed: {error}");
+                eprintln!(
+                    "[{} async persist] create dir failed: {error}",
+                    app_brand_display_name()
+                );
                 scheduled.store(false, Ordering::SeqCst);
                 return;
             }
         }
         let tmp_path = path.with_extension(format!("json.tmp.{target_version}"));
         if let Err(error) = fs::write(&tmp_path, serialized) {
-            eprintln!("[RedBox async persist] temp write failed: {error}");
+            eprintln!(
+                "[{} async persist] temp write failed: {error}",
+                app_brand_display_name()
+            );
             scheduled.store(false, Ordering::SeqCst);
             return;
         }
@@ -913,7 +928,10 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
         }
         if let Err(error) = fs::rename(&tmp_path, &path) {
             let _ = fs::remove_file(&tmp_path);
-            eprintln!("[RedBox async persist] rename failed: {error}");
+            eprintln!(
+                "[{} async persist] rename failed: {error}",
+                app_brand_display_name()
+            );
             scheduled.store(false, Ordering::SeqCst);
             return;
         }

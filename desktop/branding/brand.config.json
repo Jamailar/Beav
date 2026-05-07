@@ -3,7 +3,7 @@
   "variants": {
     "redbox": {
       "displayName": "RedBox",
-      "redClawDisplayName": "RedClaw",
+      "aiDisplayName": "RedBox",
       "cargoPackageName": "redbox",
       "windowTitle": "RedBox",
       "identifier": "com.redconvert.redbox",
@@ -33,7 +33,7 @@
     },
     "thrive": {
       "displayName": "Thrive",
-      "redClawDisplayName": "Thrive",
+      "aiDisplayName": "Thrive",
       "cargoPackageName": "thrive",
       "windowTitle": "Thrive",
       "identifier": "com.redconvert.thrive",

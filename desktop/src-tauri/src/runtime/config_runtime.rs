@@ -37,7 +37,7 @@ pub fn session_title_from_message(message: &str) -> String {
     if trimmed.is_empty() {
         return "New Chat".to_string();
     }
-    trimmed.chars().take(24).collect()
+    trimmed.chars().take(15).collect()
 }
 
 pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static str {
@@ -46,8 +46,8 @@ pub fn resolve_runtime_mode_from_context_type(value: Option<&str>) -> &'static s
         "wander" => "wander",
         "redclaw" => "redclaw",
         "generation-agent" | "image-generation" | "image_generation" => "image-generation",
-        "video-editor" | "video_editor" | "video-draft" | "redvideo" => "video-editor",
-        "audio-editor" | "audio_editor" | "audio-draft" | "redaudio" => "audio-editor",
+        "video-editor" | "video_editor" | "video-draft" => "video-editor",
+        "audio-editor" | "audio_editor" | "audio-draft" => "audio-editor",
         "diagnostics" | "debug" | "debugger" => "diagnostics",
         "knowledge" | "note" | "video" | "youtube" | "document" | "link-article"
         | "wechat-article" | "xiaohongshu_note" | "xiaohongshu_video" | "youtube_video"

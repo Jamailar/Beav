@@ -361,9 +361,9 @@ function resolveBrand(config, requestedVariant) {
   }
   const windowTitle = assertNonEmptyString(variantConfig.windowTitle || displayName, `${variant}.windowTitle`);
   const htmlTitle = assertNonEmptyString(variantConfig.htmlTitle || windowTitle, `${variant}.htmlTitle`);
-  const redClawDisplayName = assertNonEmptyString(
-    variantConfig.redClawDisplayName || variantConfig.aiWorkspaceDisplayName || 'RedClaw',
-    `${variant}.redClawDisplayName`
+  const aiDisplayName = assertNonEmptyString(
+    variantConfig.aiDisplayName || variantConfig.aiWorkspaceDisplayName || displayName,
+    `${variant}.aiDisplayName`
   );
   const identifier = assertNonEmptyString(variantConfig.identifier, `${variant}.identifier`);
   const appIcon = variantConfig.appIcon || {};
@@ -375,7 +375,7 @@ function resolveBrand(config, requestedVariant) {
     cargoPackageName,
     windowTitle,
     htmlTitle,
-    redClawDisplayName,
+    aiDisplayName,
     identifier,
     appIcon,
     logo,
@@ -454,7 +454,7 @@ export async function syncBrand({ cwd = process.cwd(), variant: requestedVariant
     displayName: brand.displayName,
     windowTitle: brand.windowTitle,
     htmlTitle: brand.htmlTitle,
-    redClawDisplayName: brand.redClawDisplayName,
+    aiDisplayName: brand.aiDisplayName,
     logoSrc: '/branding/logo.png',
     theme: brand.theme,
   };

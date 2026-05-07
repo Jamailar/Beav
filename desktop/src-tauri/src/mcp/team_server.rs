@@ -27,7 +27,7 @@ pub fn team_mcp_tool_contracts() -> Vec<TeamMcpToolContract> {
     vec![
         TeamMcpToolContract {
             name: "team_list_members",
-            description: "List collaboration members in the current RedBox team session.",
+            description: "List collaboration members in the current team session.",
             host_action: "team.members.list",
             mutating: false,
             input_schema: object_schema(
@@ -87,7 +87,7 @@ pub fn team_mcp_tool_contracts() -> Vec<TeamMcpToolContract> {
         },
         TeamMcpToolContract {
             name: "team_list_work_items",
-            description: "List structured work items in the current RedBox team session.",
+            description: "List structured work items in the current team session.",
             host_action: "team.task.list",
             mutating: false,
             input_schema: object_schema(

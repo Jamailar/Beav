@@ -1,4 +1,3 @@
-use crate::commands::manuscripts::sync_manuscript_package_html_assets;
 use crate::knowledge;
 use crate::knowledge_index;
 use crate::knowledge_index::catalog::KnowledgeCatalogSummary;
@@ -1225,21 +1224,21 @@ pub fn handle_library_channel(
                         )
                         .unwrap_or_else(|_| {
                             format!(
-                                "RedBox transcript fallback\n\n标题：{}\n\n{}",
+                                "Transcript fallback\n\n标题：{}\n\n{}",
                                 note_snapshot.title,
                                 note_snapshot.content.chars().take(240).collect::<String>()
                             )
                         })
                     } else {
                         format!(
-                            "RedBox transcript fallback\n\n标题：{}\n\n{}",
+                            "Transcript fallback\n\n标题：{}\n\n{}",
                             note_snapshot.title,
                             note_snapshot.content.chars().take(240).collect::<String>()
                         )
                     }
                 } else {
                     format!(
-                        "RedBox transcript fallback\n\n标题：{}\n\n{}",
+                        "Transcript fallback\n\n标题：{}\n\n{}",
                         note_snapshot.title,
                         note_snapshot.content.chars().take(240).collect::<String>()
                     )
@@ -1390,9 +1389,11 @@ pub fn handle_library_channel(
                         (manuscript_path.as_deref(), role.as_deref())
                     {
                         let full_path = resolve_manuscript_path(state, file_path)?;
-                        if is_thrive_package_path(&full_path) && matches!(role, "cover" | "image") {
+                        if is_manuscript_package_path(&full_path)
+                            && matches!(role, "cover" | "image")
+                        {
                             let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                            let mut bindings = read_thrive_json_entry_or(
+                            let mut bindings = read_package_json_entry_or(
                                 &full_path,
                                 "bindings.json",
                                 json!({
@@ -1437,67 +1438,11 @@ pub fn handle_library_channel(
                                     "order": media_items.len()
                                 }));
                             }
-                            write_thrive_json_entry(&full_path, "bindings.json", &bindings)?;
+                            write_package_json_entry(&full_path, "bindings.json", &bindings)?;
                             return Ok(json!({
                                 "success": true,
                                 "asset": result.get("asset").cloned().unwrap_or(Value::Null),
                                 "state": get_manuscript_package_state(&full_path)?
-                            }));
-                        }
-                        if full_path.is_dir()
-                            && is_manuscript_package_name(
-                                full_path
-                                    .file_name()
-                                    .and_then(|value| value.to_str())
-                                    .unwrap_or(""),
-                            )
-                            && matches!(role, "cover" | "image")
-                        {
-                            let asset_id = payload_string(payload, "assetId").unwrap_or_default();
-                            if role == "cover" {
-                                write_json_value(
-                                    &package_cover_path(&full_path),
-                                    &json!({ "assetId": asset_id }),
-                                )?;
-                            } else {
-                                let mut images = read_json_value_or(
-                                    &package_images_path(&full_path),
-                                    json!({ "items": [] }),
-                                );
-                                let items = images
-                                    .as_object_mut()
-                                    .and_then(|object| object.get_mut("items"))
-                                    .and_then(Value::as_array_mut)
-                                    .ok_or_else(|| "工程配图列表损坏".to_string())?;
-                                let exists = items.iter().any(|item| {
-                                    item.get("assetId").and_then(Value::as_str)
-                                        == Some(asset_id.as_str())
-                                });
-                                if !exists {
-                                    items.push(json!({ "assetId": asset_id }));
-                                }
-                                write_json_value(&package_images_path(&full_path), &images)?;
-                            }
-                            let file_name = full_path
-                                .file_name()
-                                .and_then(|value| value.to_str())
-                                .unwrap_or("Untitled");
-                            let rendered_state =
-                                if get_package_kind_from_file_name(file_name) == Some("post") {
-                                    sync_manuscript_package_html_assets(
-                                        Some(state),
-                                        &full_path,
-                                        file_name,
-                                        None,
-                                        None,
-                                    )?
-                                } else {
-                                    get_manuscript_package_state(&full_path)?
-                                };
-                            return Ok(json!({
-                                "success": true,
-                                "asset": result.get("asset").cloned().unwrap_or(Value::Null),
-                                "state": rendered_state
                             }));
                         }
                     }
@@ -1845,9 +1790,7 @@ pub fn handle_library_channel(
                     let file_name = format!("cover-{}-{}.png", now_ms(), index + 1);
                     let relative_path = format!("generated/{}", file_name);
                     let absolute_path = cover_root(state)?.join(&relative_path);
-                    let base_title = template_name
-                        .clone()
-                        .unwrap_or_else(|| "RedBox Cover".to_string());
+                    let base_title = template_name.clone().unwrap_or_else(|| "Cover".to_string());
                     let asset_title = if count > 1 {
                         format!("{base_title} {}", index + 1)
                     } else {
@@ -2007,9 +1950,9 @@ pub fn handle_library_channel(
                         "cover-generation",
                         template_name.clone().unwrap_or_else(|| "封面生成".to_string()),
                         normalize_optional_string(Some(if real_image_config.is_some() {
-                            "RedBox 已通过已配置图片 endpoint 生成封面。".to_string()
+                            format!("{} 已通过已配置图片 endpoint 生成封面。", app_brand_display_name())
                         } else {
-                            "RedBox 已保存封面生成请求；当前缺少图片 endpoint 配置，仅生成了本地占位方案。".to_string()
+                            format!("{} 已保存封面生成请求；当前缺少图片 endpoint 配置，仅生成了本地占位方案。", app_brand_display_name())
                         })),
                         normalize_optional_string(Some(prompt.clone())),
                         None,

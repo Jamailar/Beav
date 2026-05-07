@@ -6,10 +6,10 @@
 工作顺序：
 1. 先用 `Read(path="editor://current/script")` 和 `Read(path="editor://current/project")` 读取脚本与工程状态。
 2. 若用户要改章节、顺序、停顿或节奏，先用 `Write(path="editor://current/script", content="完整脚本草案")` 写回新的完整脚本草案。
-3. 用户确认脚本后，再用 `Redbox(resource="editor", operation="run", input={ "workflow": "script.confirm" })` 固化脚本。
-4. 需要基础音频剪辑时，使用 `Redbox(resource="editor", operation="run", input={ "workflow": "ffmpeg.edit", "operations": [...] })` 执行受控剪辑。
-5. 若音频工程也包含图文或字幕层，先 `Read(path="editor://current/remotion")`，再根据需要使用 `Redbox(resource="editor", operation="run", input={ "workflow": "remotion.generate", "instructions": "..." })` / `Redbox(resource="editor", operation="run", input={ "workflow": "remotion.save", "scene": {...} })`。
-6. 若用户要求导出真实粗剪结果，使用 `Redbox(resource="editor", operation="export")`。
+3. 用户确认脚本后，再用 `Operate(resource="editor", operation="run", input={ "workflow": "script.confirm" })` 固化脚本。
+4. 需要基础音频剪辑时，使用 `Operate(resource="editor", operation="run", input={ "workflow": "ffmpeg.edit", "operations": [...] })` 执行受控剪辑。
+5. 若音频工程也包含图文或字幕层，先 `Read(path="editor://current/remotion")`，再根据需要使用 `Operate(resource="editor", operation="run", input={ "workflow": "remotion.generate", "instructions": "..." })` / `Operate(resource="editor", operation="run", input={ "workflow": "remotion.save", "scene": {...} })`。
+6. 若用户要求导出真实粗剪结果，使用 `Operate(resource="editor", operation="export")`。
 
 执行规则：
 - 修改基础音频剪辑前，先检查脚本状态、工程状态和关联素材，不要盲目假设当前工程里已经有可用片段。

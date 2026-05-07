@@ -5,7 +5,7 @@ allowedRuntimeModes: [chatroom, redclaw, image-generation]
 allowedTools: [workflow]
 activationScope: turn
 autoActivate: false
-activationHint: 当用户要做文章卡片、图解卡片、演示卡片、小红书图文卡片、知识卡片、电商套图、商品套图、商品详情图、组图、轮播图、多卡配图时，先调用 `Operate(resource="skill", operation="run", input={ "name": "image-director" })`。只要最终交付物是成套图片，而不是正文写稿，就优先本技能；不要只因为输入里出现“文章”“内容”“标题”就先启用 writing-style。
+activationHint: 当用户要做文章卡片、图解卡片、演示卡片、小红书图文卡片、知识卡片、电商套图、商品套图、商品详情图、组图、轮播图、多卡配图时，可调用 `Operate(resource="skills", operation="invoke", input={ "name": "image-director" })`。只要最终交付物是成套图片，而不是正文写稿，就优先本技能；不要只因为输入里出现“文章”“内容”“标题”就先启用 writing-style。
 contextNote: 这是多图编排技能。凡是“把文章/内容做成卡片图、图解卡片、演示卡片、电商套图、轮播图、组图”的任务，优先由它决定套图类型、顺序、统一风格锚点与每张图的文案位置；只有当用户额外要求改写正文或重写文案时，才考虑叠加 writing-style。
 hookMode: inline
 ---
@@ -382,7 +382,6 @@ The payload should include:
 - `count`: total image count
 - `aspectRatio`: required whenever the user specifies a ratio or format. Use `3:4` for Xiaohongshu card sets by default, `1:1` for square, `4:3` for landscape, `9:16` for vertical story/short-video cover, and `16:9` for wide landscape.
 - `planConfirmed`: `true` in normal confirmation flow
-- `planExecutionMode`: use `user_confirmed`
 - `sequenceGoal`: the ordering logic for the batch
 - `sharedStyleGuide`: one concise shared subject-and-style anchor for the whole batch
 - `imagePlanItems`: one object per image, in final order

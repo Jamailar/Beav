@@ -38,8 +38,6 @@ const RICHPOST_LINE_HEIGHT_SCALE_MIN: f64 = 0.8;
 const RICHPOST_LINE_HEIGHT_SCALE_MAX: f64 = 1.4;
 const RICHPOST_PAGINATION_CANVAS_WIDTH_PX: f64 = 560.0;
 const RICHPOST_PAGINATION_CANVAS_HEIGHT_PX: f64 = 560.0 * 4.0 / 3.0;
-const RICHPOST_THEME_PREVIEW_TITLE: &str = "RedBox";
-const RICHPOST_THEME_PREVIEW_BODY: &str = "用 AI 生产高质量内容。";
 const RICHPOST_MASTER_COVER: &str = "cover";
 const RICHPOST_MASTER_BODY: &str = "body";
 const RICHPOST_MASTER_ENDING: &str = "ending";
@@ -162,106 +160,6 @@ struct RichpostThemeSpec {
     source: String,
 }
 
-fn blank_richpost_theme_spec() -> RichpostThemeSpec {
-    RichpostThemeSpec {
-        id: "blank-template".to_string(),
-        label: "空白主题模板".to_string(),
-        description: "用于新建 richpost 主题的空白起点，不继承当前稿件样式。".to_string(),
-        shell_bg: "#f6f1e8".to_string(),
-        preview_card_bg: "rgba(255,255,255,.82)".to_string(),
-        preview_card_border: "rgba(34,24,18,.08)".to_string(),
-        preview_card_shadow: "0 18px 48px rgba(88,59,36,.08)".to_string(),
-        page_bg: "#ffffff".to_string(),
-        surface_bg: "#ffffff".to_string(),
-        surface_border: "rgba(34,24,18,.08)".to_string(),
-        surface_shadow: "0 14px 34px rgba(17,17,17,.06)".to_string(),
-        surface_radius: "0px".to_string(),
-        image_radius: "0px".to_string(),
-        heading_color: "#111111".to_string(),
-        body_color: "#111111".to_string(),
-        text: "#111111".to_string(),
-        muted: "#6b625a".to_string(),
-        accent: "#111111".to_string(),
-        heading_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif"
-            .to_string(),
-        body_font: "\"PingFang SC\",\"Hiragino Sans GB\",\"Microsoft YaHei\",sans-serif"
-            .to_string(),
-        cover_frame: default_richpost_zone_frame(RICHPOST_MASTER_COVER),
-        body_frame: default_richpost_zone_frame(RICHPOST_MASTER_BODY),
-        ending_frame: default_richpost_zone_frame(RICHPOST_MASTER_ENDING),
-        cover_background_path: String::new(),
-        body_background_path: String::new(),
-        ending_background_path: String::new(),
-        source: "template".to_string(),
-    }
-}
-
-fn default_richpost_theme_template_guide() -> String {
-    r#"# Richpost Blank Theme Template
-
-这个文件是 richpost 主题编辑的空白模板说明，供 AI 和开发者读取。
-
-## 当前主题的真实编辑目标
-
-- `richpost-themes.json`
-  - 当前主题记录保存在这里
-  - 重点字段：
-    - `coverBackgroundPath` / `bodyBackgroundPath` / `endingBackgroundPath`
-    - `headingColor` / `bodyColor` / `accentColor` / `mutedColor`
-    - `headingFont` / `bodyFont`
-- `layout.tokens.json`
-  - 负责页面级 token，例如颜色、字号、行高、边距、圆角、阴影
-- `masters/cover.master.html`
-  - 首页母版
-- `masters/body.master.html`
-  - 内容页母版
-- `masters/ending.master.html`
-  - 尾页母版
-- `richpost-page-plan.json`
-  - 稿件自己的分页方案文件
-  - 主题不要把它当成可移植模板去改写
-
-## 规则
-
-1. 不要改 `content.md`
-2. 不要把正文直接硬编码进母版 HTML
-3. 背景图必须落在背景层，文字在其上
-4. 分页和文字真实区域由宿主固定规则控制，不跟随主题变化
-5. 首页、内容页、尾页可以各自有不同背景、容器和颜色，但不要改内容流的可用区域
-
-## 推荐做法
-
-- 想改颜色、字体、基础视觉：优先改 `richpost-themes.json` 和 `layout.tokens.json`
-- 想改背景层、容器、遮罩、装饰：优先改 `masters/*.master.html`
-- 不要在主题里持久化稿件自己的 `richpost-page-plan.json`
-
-## 兼容性边界
-
-- 可以自由调整：
-  - 背景色
-  - 背景图
-  - 容器
-  - 圆角
-  - 边框
-  - 阴影
-  - 标题/正文颜色
-  - 标题/正文字体
-  - 文字区域大小和位置
-- 不要引入外部字体 URL、远程 CSS 或远程 JS
-"#
-    .to_string()
-}
-
-pub(crate) fn ensure_richpost_theme_template_file(
-    package_path: &std::path::Path,
-) -> Result<(), String> {
-    let path = package_richpost_theme_template_path(package_path);
-    if path.exists() {
-        return Ok(());
-    }
-    write_text_file(&path, &default_richpost_theme_template_guide())
-}
-
 fn richpost_theme_catalog() -> &'static [RichpostThemePreset] {
     &[]
 }
@@ -339,42 +237,6 @@ fn richpost_theme_catalog_specs() -> Vec<RichpostThemeSpec> {
         .collect::<Vec<_>>()
 }
 
-fn sanitize_richpost_theme_text(raw: Option<&str>, fallback: &str) -> String {
-    let sanitized = raw.unwrap_or("").trim().replace(['<', '>', '{', '}'], "");
-    if sanitized.is_empty() {
-        fallback.to_string()
-    } else {
-        sanitized
-    }
-}
-
-fn sanitize_richpost_theme_label(raw: Option<&str>, fallback: &str) -> String {
-    let normalized = raw
-        .unwrap_or("")
-        .trim()
-        .replace(['\r', '\n'], " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if normalized.is_empty() {
-        fallback.to_string()
-    } else {
-        normalized.chars().take(32).collect::<String>()
-    }
-}
-
-fn sanitize_richpost_theme_description(raw: Option<&str>) -> String {
-    raw.unwrap_or("")
-        .trim()
-        .replace(['\r', '\n'], " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(120)
-        .collect::<String>()
-}
-
 fn sanitize_richpost_theme_id_fragment(raw: &str) -> String {
     sanitize_richpost_master_name(raw).unwrap_or_else(|| "theme".to_string())
 }
@@ -402,74 +264,9 @@ fn default_richpost_zone_frame(role: &str) -> RichpostZoneFrame {
     }
 }
 
-fn normalize_richpost_zone_frame(
-    raw: Option<&Value>,
-    fallback: RichpostZoneFrame,
-) -> RichpostZoneFrame {
-    let raw_x = raw
-        .and_then(|value| value.get("x"))
-        .and_then(Value::as_f64)
-        .unwrap_or(fallback.x);
-    let raw_y = raw
-        .and_then(|value| value.get("y"))
-        .and_then(Value::as_f64)
-        .unwrap_or(fallback.y);
-    let raw_w = raw
-        .and_then(|value| value.get("w"))
-        .or_else(|| raw.and_then(|value| value.get("width")))
-        .and_then(Value::as_f64)
-        .unwrap_or(fallback.w);
-    let raw_h = raw
-        .and_then(|value| value.get("h"))
-        .or_else(|| raw.and_then(|value| value.get("height")))
-        .and_then(Value::as_f64)
-        .unwrap_or(fallback.h);
-
-    let mut x = raw_x.clamp(0.0, 0.92);
-    let mut y = raw_y.clamp(0.0, 0.92);
-    let mut w = raw_w.clamp(0.08, 1.0);
-    let mut h = raw_h.clamp(0.08, 1.0);
-
-    if x + w > 1.0 {
-        if w >= 1.0 {
-            x = 0.0;
-            w = 1.0;
-        } else {
-            x = (1.0 - w).max(0.0);
-        }
-    }
-    if y + h > 1.0 {
-        if h >= 1.0 {
-            y = 0.0;
-            h = 1.0;
-        } else {
-            y = (1.0 - h).max(0.0);
-        }
-    }
-
-    RichpostZoneFrame {
-        x: ((x * 1000.0).round() / 1000.0),
-        y: ((y * 1000.0).round() / 1000.0),
-        w: ((w * 1000.0).round() / 1000.0),
-        h: ((h * 1000.0).round() / 1000.0),
-    }
-}
-
 fn richpost_theme_has_custom_cover_role(theme: &RichpostThemeSpec) -> bool {
     !theme.cover_background_path.trim().is_empty()
         || theme.cover_frame != default_richpost_zone_frame(RICHPOST_MASTER_COVER)
-}
-
-fn richpost_theme_preview_master(theme: &RichpostThemeSpec) -> &'static str {
-    if !theme.cover_background_path.trim().is_empty() {
-        RICHPOST_MASTER_COVER
-    } else if !theme.body_background_path.trim().is_empty() {
-        RICHPOST_MASTER_BODY
-    } else if !theme.ending_background_path.trim().is_empty() {
-        RICHPOST_MASTER_ENDING
-    } else {
-        RICHPOST_MASTER_BODY
-    }
 }
 
 fn richpost_zone_frame_css_vars(frame: &RichpostZoneFrame) -> serde_json::Map<String, Value> {
@@ -493,13 +290,6 @@ fn richpost_zone_frame_css_vars(frame: &RichpostZoneFrame) -> serde_json::Map<St
     ])
 }
 
-fn sanitize_richpost_theme_background_path(raw: Option<&str>) -> String {
-    normalize_relative_path(raw.unwrap_or(""))
-        .chars()
-        .take(240)
-        .collect::<String>()
-}
-
 fn richpost_theme_background_relative_path(theme: &RichpostThemeSpec, role: &str) -> String {
     match role {
         RICHPOST_MASTER_COVER => theme.cover_background_path.clone(),
@@ -508,86 +298,8 @@ fn richpost_theme_background_relative_path(theme: &RichpostThemeSpec, role: &str
     }
 }
 
-fn richpost_theme_background_storage_dir(
-    package_path: &std::path::Path,
-    theme_id: &str,
-) -> std::path::PathBuf {
-    theme::store::richpost_theme_background_storage_dir(package_path, theme_id)
-}
-
-fn resolve_richpost_theme_background_absolute_path(
-    package_path: &std::path::Path,
-    relative_path: &str,
-) -> Option<std::path::PathBuf> {
-    theme::store::resolve_richpost_theme_background_absolute_path(package_path, relative_path)
-}
-
-fn global_richpost_theme_background_relative_path(
-    package_path: &std::path::Path,
-    theme_id: &str,
-    file_name: &str,
-) -> String {
-    theme::store::global_richpost_theme_background_relative_path(package_path, theme_id, file_name)
-}
-
-fn richpost_theme_background_relative_file_name(
-    theme_id: &str,
-    role: &str,
-    extension: &str,
-) -> String {
-    let role_fragment = sanitize_richpost_master_name(role).unwrap_or_else(|| "body".to_string());
-    let theme_fragment = sanitize_richpost_theme_id_fragment(theme_id);
-    let timestamp = now_i64();
-    if extension.trim().is_empty() {
-        format!("{timestamp}-{theme_fragment}-{role_fragment}")
-    } else {
-        format!(
-            "{timestamp}-{theme_fragment}-{role_fragment}.{}",
-            extension.trim_matches('.')
-        )
-    }
-}
-
-fn next_richpost_custom_theme_label(package_path: &std::path::Path) -> String {
-    theme::store::next_richpost_custom_theme_label(package_path)
-}
-
-fn read_custom_richpost_theme_specs(package_path: &std::path::Path) -> Vec<RichpostThemeSpec> {
-    theme::store::read_custom_richpost_theme_specs(package_path)
-}
-
-fn write_custom_richpost_theme_specs(
-    package_path: &std::path::Path,
-    themes: &[RichpostThemeSpec],
-) -> Result<(), String> {
-    theme::store::write_custom_richpost_theme_specs(package_path, themes)
-}
-
 fn richpost_theme_spec_storage_value(theme: &RichpostThemeSpec) -> Value {
     theme::store::richpost_theme_spec_storage_value(theme)
-}
-
-fn write_applied_richpost_theme_to_manifest(manifest: &mut Value, theme: &RichpostThemeSpec) {
-    theme::store::write_applied_richpost_theme_to_manifest(manifest, theme);
-}
-
-fn richpost_theme_spec_payload_value(theme: &RichpostThemeSpec) -> Value {
-    theme::store::richpost_theme_spec_payload_value(theme)
-}
-
-fn sync_richpost_theme_root_from_package(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-    create_from_blank: bool,
-) -> Result<(), String> {
-    theme::store::sync_richpost_theme_root_from_package(package_path, theme, create_from_blank)
-}
-
-fn sync_package_from_richpost_theme_root(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-) -> Result<(), String> {
-    theme::store::sync_package_from_richpost_theme_root(package_path, theme)
 }
 
 fn richpost_theme_root_master_path_for_theme(
@@ -598,33 +310,11 @@ fn richpost_theme_root_master_path_for_theme(
     theme::store::richpost_theme_root_master_path_for_theme(package_path, theme, master_name)
 }
 
-fn richpost_theme_catalog_for_package(
-    package_path: Option<&std::path::Path>,
-) -> Vec<RichpostThemeSpec> {
-    theme::store::richpost_theme_catalog_for_package(package_path)
-}
-
 fn richpost_theme_spec_from_manifest(
     package_path: Option<&std::path::Path>,
     manifest: &Value,
 ) -> RichpostThemeSpec {
     theme::store::richpost_theme_spec_from_manifest(package_path, manifest)
-}
-
-fn richpost_theme_spec_by_id(
-    package_path: Option<&std::path::Path>,
-    theme_id: &str,
-) -> RichpostThemeSpec {
-    theme::store::richpost_theme_spec_by_id(package_path, theme_id)
-}
-
-fn normalize_richpost_theme_draft(
-    raw: &Value,
-    base_theme: &RichpostThemeSpec,
-    existing_theme_id: Option<&str>,
-    package_path: &std::path::Path,
-) -> RichpostThemeSpec {
-    theme::store::normalize_richpost_theme_draft(raw, base_theme, existing_theme_id, package_path)
 }
 
 fn clamp_richpost_font_scale(value: f64) -> f64 {
@@ -923,39 +613,12 @@ fn build_manuscript_renamed_relative_path(
             .map(|(parent, _)| parent)
             .unwrap_or(""),
     );
-    let mut target_relative = join_relative(&parent_rel, next_stem);
-    if !target_relative.contains('.') {
-        if current_file_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
-            target_relative = format!(
-                "{}{}",
-                normalize_relative_path(&target_relative),
-                ARTICLE_DRAFT_EXTENSION
-            );
-        } else if current_file_name.ends_with(POST_DRAFT_EXTENSION) {
-            target_relative = format!(
-                "{}{}",
-                normalize_relative_path(&target_relative),
-                POST_DRAFT_EXTENSION
-            );
-        } else if current_file_name.ends_with(VIDEO_DRAFT_EXTENSION) {
-            target_relative = format!(
-                "{}{}",
-                normalize_relative_path(&target_relative),
-                VIDEO_DRAFT_EXTENSION
-            );
-        } else if current_file_name.ends_with(AUDIO_DRAFT_EXTENSION) {
-            target_relative = format!(
-                "{}{}",
-                normalize_relative_path(&target_relative),
-                AUDIO_DRAFT_EXTENSION
-            );
-        } else {
-            target_relative = ensure_markdown_extension(&target_relative);
-        }
+    let target_relative = join_relative(&parent_rel, next_stem);
+    if current_file_name.ends_with(".md") && !target_relative.contains('.') {
+        ensure_markdown_extension(&target_relative)
     } else {
-        target_relative = normalize_relative_path(&target_relative);
+        normalize_relative_path(&target_relative)
     }
-    target_relative
 }
 
 fn choose_auto_named_manuscript_relative(
@@ -3686,303 +3349,6 @@ fn render_richpost_preview_shell(
     )
 }
 
-fn render_richpost_theme_preview_html(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-    typography: RichpostTypographySettings,
-) -> String {
-    render_richpost_theme_preview_page_html(
-        package_path,
-        theme,
-        typography,
-        richpost_theme_preview_master(theme),
-    )
-}
-
-fn read_richpost_preview_layout_tokens_value_for_theme(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-) -> Value {
-    let default_tokens = theme::scaffold::default_richpost_layout_tokens(Some(package_path), theme);
-    let raw = theme::store::richpost_theme_root_tokens_path_for_theme(package_path, theme)
-        .map(|path| read_json_value_or(&path, default_tokens.clone()))
-        .unwrap_or(default_tokens);
-    theme::scaffold::normalize_richpost_layout_tokens_value(&raw, theme, Some(package_path))
-}
-
-fn read_richpost_preview_master_fragment(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-    master_name: &str,
-    template: &str,
-) -> String {
-    let sanitized = sanitize_richpost_master_name(master_name)
-        .unwrap_or_else(|| richpost_master_name_from_template(template));
-    let role = richpost_master_role(&sanitized, template);
-    if let Some(theme_path) =
-        theme::store::richpost_theme_root_master_path_for_theme(package_path, theme, &sanitized)
-    {
-        if let Some(content) = fs::read_to_string(&theme_path)
-            .ok()
-            .map(|content| content.trim().to_string())
-            .filter(|content| !content.is_empty())
-        {
-            return content;
-        }
-    }
-    default_richpost_master_fragment(role).to_string()
-}
-
-fn render_richpost_isolated_preview_page_html(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-    title: &str,
-    page: &Value,
-    page_index: usize,
-    blocks_by_id: &BTreeMap<String, PackageContentBlock>,
-    assets_by_id: &BTreeMap<String, PackageBoundAsset>,
-    tokens: &Value,
-    typography: RichpostTypographySettings,
-) -> String {
-    let template = normalize_richpost_template(
-        page.get("template")
-            .and_then(Value::as_str)
-            .unwrap_or("text-stack"),
-    );
-    let master_name = page
-        .get("master")
-        .and_then(Value::as_str)
-        .and_then(sanitize_richpost_master_name)
-        .unwrap_or_else(|| richpost_master_name_from_template(template));
-    let master_role = richpost_master_role(&master_name, template);
-    let page_css_vars =
-        richpost_css_var_map_from_tokens(tokens, master_role, page.get("styleOverrides"));
-    let page_style_attr = richpost_css_var_style_attr(&page_css_vars);
-    let page_id = page
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| format!("preview-page-{:03}", page_index + 1));
-    let page_title = page
-        .get("title")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| format!("{title} - 第 {} 页", page_index + 1));
-    let master_fragment =
-        read_richpost_preview_master_fragment(package_path, theme, &master_name, template);
-    let page_markup =
-        render_richpost_master_fragment(&master_fragment, page, blocks_by_id, assets_by_id);
-
-    format!(
-        r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{}</title>
-  <style>
-    :root {{ --rb-font-scale: 1; --rb-line-height-scale: 1; }}
-    html, body {{ width: 100%; height: 100%; margin: 0; }}
-    body {{
-      background: transparent;
-      overflow: hidden;
-    }}
-    .rb-page-host {{
-      position: relative;
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      overflow: hidden;
-      color: var(--rb-text, #111111);
-      font-family: var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif);
-      font-size: var(--rb-body-font-size, calc(clamp(17px, 3.2vw, 34px) * var(--rb-font-scale)));
-      line-height: var(--rb-runtime-body-line-height, calc(var(--rb-body-line-height, 1.9) * var(--rb-line-height-scale)));
-      -webkit-font-smoothing: antialiased;
-      text-rendering: optimizeLegibility;
-    }}
-    .rb-page-host *, .rb-page-host *::before, .rb-page-host *::after {{ box-sizing: border-box; }}
-    .rb-page-host h1, .rb-page-host h2, .rb-page-host h3, .rb-page-host h4, .rb-page-host h5, .rb-page-host h6 {{
-      margin: 0;
-      color: var(--rb-heading-text, var(--rb-text, #111111));
-      font-family: var(--rb-heading-font, var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif));
-      line-height: 1.18;
-      letter-spacing: -0.03em;
-    }}
-    .rb-page-host h1 {{ font-size: var(--rb-heading-h1-size, calc(clamp(28px, 5.4vw, 58px) * var(--rb-font-scale))); }}
-    .rb-page-host h2 {{ font-size: var(--rb-heading-h2-size, calc(clamp(24px, 4.5vw, 48px) * var(--rb-font-scale))); }}
-    .rb-page-host h3 {{ font-size: var(--rb-heading-h3-size, calc(clamp(21px, 3.8vw, 40px) * var(--rb-font-scale))); }}
-    .rb-page-host h4 {{ font-size: var(--rb-heading-h4-size, calc(clamp(18px, 3.2vw, 34px) * var(--rb-font-scale))); }}
-    .rb-page-host h5 {{ font-size: var(--rb-heading-h5-size, calc(clamp(17px, 2.7vw, 28px) * var(--rb-font-scale))); }}
-    .rb-page-host h6 {{ font-size: var(--rb-heading-h6-size, calc(clamp(16px, 2.4vw, 24px) * var(--rb-font-scale))); }}
-    .rb-page-host p {{
-      margin: 0;
-      color: var(--rb-body-text, var(--rb-text, #111111));
-      font-family: var(--rb-body-font, "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif);
-      font-size: inherit;
-      line-height: inherit;
-      word-break: break-word;
-      white-space: pre-wrap;
-    }}
-    .rb-page-host a {{
-      color: var(--rb-accent, #111111);
-      text-decoration: var(--rb-link-decoration, underline);
-    }}
-    .rb-page-host strong {{
-      font-weight: var(--rb-strong-weight, 700);
-    }}
-    .rb-page-host img {{
-      max-width: 100%;
-      display: block;
-      border-radius: var(--rb-image-radius, 0px);
-    }}
-    .rb-page-host ul, .rb-page-host ol {{
-      margin: 0;
-      padding-left: 1.25em;
-    }}
-    .rb-page-host blockquote {{
-      margin: 0;
-      padding-left: 1em;
-      border-left: 3px solid var(--rb-accent, #111111);
-      color: var(--rb-muted, #666666);
-    }}
-    .rb-page-host table {{
-      margin: 0;
-      border-collapse: collapse;
-    }}
-    .rb-page-host hr {{
-      border: 0;
-      border-top: 1px solid var(--rb-surface-border, rgba(17,17,17,0.08));
-      margin: calc(var(--rb-zone-gap, 16px) * 1.1) 0;
-    }}
-  </style>
-  <script>
-    (() => {{
-      const applyRuntimeTypography = (fontScale, lineHeightScale) => {{
-        document.documentElement.style.setProperty('--rb-font-scale', String(fontScale));
-        document.documentElement.style.setProperty('--rb-line-height-scale', String(lineHeightScale));
-        const host = document.querySelector('.rb-page-host');
-        if (!host) return;
-        const computed = window.getComputedStyle(host);
-        const rawBaseLineHeight = Number.parseFloat(computed.getPropertyValue('--rb-body-line-height').trim() || '1.9');
-        const baseLineHeight = Number.isFinite(rawBaseLineHeight) ? rawBaseLineHeight : 1.9;
-        host.style.setProperty('--rb-runtime-body-line-height', String((baseLineHeight * lineHeightScale).toFixed(3)));
-      }};
-      const params = new URLSearchParams(window.location.search);
-      const defaultFontScale = {};
-      const defaultLineHeightScale = {};
-      const rawFontScale = Number(params.get('fontScale') || String(defaultFontScale));
-      const fontScale = Number.isFinite(rawFontScale) ? Math.min(1.6, Math.max(0.8, rawFontScale)) : defaultFontScale;
-      const rawLineHeightScale = Number(params.get('lineHeightScale') || String(defaultLineHeightScale));
-      const lineHeightScale = Number.isFinite(rawLineHeightScale) ? Math.min(1.4, Math.max(0.8, rawLineHeightScale)) : defaultLineHeightScale;
-      const run = () => applyRuntimeTypography(fontScale, lineHeightScale);
-      if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', run, {{ once: true }});
-      }} else {{
-        run();
-      }}
-    }})();
-  </script>
-</head>
-<body>
-  <section class="rb-page-host" data-page-id="{}" data-master="{}" data-template="{}" style="{}">
-    {}
-  </section>
-</body>
-</html>"#,
-        escape_html(&page_title),
-        typography.font_scale,
-        typography.line_height_scale,
-        escape_html(&page_id),
-        escape_html(master_role),
-        escape_html(template),
-        page_style_attr,
-        page_markup,
-    )
-}
-
-fn render_richpost_theme_preview_page_html(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-    typography: RichpostTypographySettings,
-    master_id: &str,
-) -> String {
-    let blocks = vec![
-        PackageContentBlock {
-            id: "preview_h1".to_string(),
-            slot: "preview_h1".to_string(),
-            kind: "heading".to_string(),
-            level: Some(1),
-            text: RICHPOST_THEME_PREVIEW_TITLE.to_string(),
-            order: 0,
-            char_count: RICHPOST_THEME_PREVIEW_TITLE.chars().count(),
-        },
-        PackageContentBlock {
-            id: "preview_p1".to_string(),
-            slot: "preview_p1".to_string(),
-            kind: "paragraph".to_string(),
-            level: None,
-            text: RICHPOST_THEME_PREVIEW_BODY.to_string(),
-            order: 1,
-            char_count: RICHPOST_THEME_PREVIEW_BODY.chars().count(),
-        },
-    ];
-    let blocks_by_id = blocks
-        .into_iter()
-        .map(|block| (block.id.clone(), block))
-        .collect::<BTreeMap<_, _>>();
-    let preview_page = json!({
-        "id": "preview-page",
-        "master": master_id,
-        "template": "text-stack",
-        "blockIds": ["preview_h1", "preview_p1"],
-        "assetIds": [],
-        "zones": {
-            "title": {
-                "blockIds": ["preview_h1"]
-            },
-            "body": {
-                "blockIds": ["preview_p1"]
-            }
-        },
-        "styleOverrides": {}
-    });
-    let tokens = read_richpost_preview_layout_tokens_value_for_theme(package_path, theme);
-    render_richpost_isolated_preview_page_html(
-        package_path,
-        theme,
-        RICHPOST_THEME_PREVIEW_TITLE,
-        &preview_page,
-        0,
-        &blocks_by_id,
-        &BTreeMap::new(),
-        &tokens,
-        typography,
-    )
-}
-
-fn render_richpost_theme_preview_pages(
-    package_path: &std::path::Path,
-    theme: &RichpostThemeSpec,
-    typography: RichpostTypographySettings,
-) -> Vec<Value> {
-    [
-        (RICHPOST_MASTER_COVER, "首页"),
-        (RICHPOST_MASTER_BODY, "内容页"),
-        (RICHPOST_MASTER_ENDING, "尾页"),
-    ]
-    .into_iter()
-    .map(|(master_id, label)| {
-        json!({
-            "id": master_id,
-            "label": label,
-            "html": render_richpost_theme_preview_page_html(package_path, theme, typography, master_id),
-        })
-    })
-    .collect::<Vec<_>>()
-}
-
 fn persist_richpost_pages_from_plan(
     package_path: &std::path::Path,
     title: &str,
@@ -4096,8 +3462,8 @@ pub(crate) fn sync_manuscript_package_html_assets(
     content_override: Option<&str>,
     target_override: Option<&str>,
 ) -> Result<Value, String> {
-    let package_kind =
-        get_package_kind_from_file_name(file_name).ok_or_else(|| "未识别的工程类型".to_string())?;
+    let package_kind = get_package_kind_from_manifest(package_path)
+        .ok_or_else(|| "未识别的工程类型".to_string())?;
     if package_kind != "post" {
         return get_manuscript_package_state(package_path);
     }
@@ -4106,7 +3472,7 @@ pub(crate) fn sync_manuscript_package_html_assets(
         .get("entry")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| get_default_package_entry(file_name));
+        .unwrap_or_else(|| default_package_entry_for_kind(Some(&package_kind)));
     let title = manifest
         .get("title")
         .and_then(Value::as_str)
@@ -4127,7 +3493,7 @@ pub(crate) fn sync_manuscript_package_html_assets(
     let blocks = build_package_content_blocks(&content_map_path, &content);
     write_json_value(
         &content_map_path,
-        &package_content_map_value(package_kind, &title, entry, &blocks),
+        &package_content_map_value(&package_kind, &title, entry, &blocks),
     )?;
     let (cover_asset, image_assets) = collect_package_bound_assets(state, package_path)?;
     let has_manual_page_breaks = blocks
@@ -4170,6 +3536,17 @@ fn persist_package_script_body(
     source: &str,
 ) -> Result<(Value, Value), String> {
     let mut manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
+    let package_kind = payload_string(&manifest, "packageKind")
+        .or_else(|| payload_string(&manifest, "kind"))
+        .or_else(|| get_package_kind_from_manifest(package_path))
+        .unwrap_or_else(|| "article".to_string());
+    let draft_type =
+        payload_string(&manifest, "draftType").unwrap_or_else(|| match package_kind.as_str() {
+            "post" => "richpost".to_string(),
+            "video" => "video".to_string(),
+            "audio" => "audio".to_string(),
+            _ => "longform".to_string(),
+        });
     if let Some(object) = manifest.as_object_mut() {
         if let Some(metadata_object) = metadata {
             for (key, value) in metadata_object {
@@ -4182,14 +3559,20 @@ fn persist_package_script_body(
             .or_insert(json!(title_from_relative_path(file_name)));
         object
             .entry("entry".to_string())
-            .or_insert(json!(get_default_package_entry(file_name)));
+            .or_insert(json!(
+                if matches!(package_kind.as_str(), "video" | "audio") {
+                    "script.md"
+                } else {
+                    "content.md"
+                }
+            ));
         object
             .entry("draftType".to_string())
-            .or_insert(json!(get_draft_type_from_file_name(file_name)));
+            .or_insert(json!(draft_type));
         object
             .entry("packageKind".to_string())
-            .or_insert(json!(get_package_kind_from_file_name(file_name)));
-        if matches!(get_package_kind_from_file_name(file_name), Some("post")) {
+            .or_insert(json!(package_kind.clone()));
+        if package_kind == "post" {
             let default_theme = default_richpost_theme_spec();
             object
                 .entry("richpostThemeId".to_string())
@@ -4205,7 +3588,7 @@ fn persist_package_script_body(
         content,
     )?;
 
-    if matches!(get_package_kind_from_file_name(file_name), Some("video")) {
+    if package_kind == "video" {
         mark_manifest_video_script_pending(&mut manifest, source)?;
         write_json_value(&package_manifest_path(package_path), &manifest)?;
         return Ok((
@@ -4214,7 +3597,7 @@ fn persist_package_script_body(
         ));
     }
 
-    if matches!(get_package_kind_from_file_name(file_name), Some("audio")) {
+    if package_kind == "audio" {
         let mut project = ensure_editor_project(package_path)?;
         mark_editor_project_script_pending(&mut project, content, source)?;
         write_json_value(&package_editor_project_path(package_path), &project)?;
@@ -4267,7 +3650,7 @@ pub(crate) fn save_manuscript_content(
         .unwrap_or("")
         .to_string();
     let current_stem = title_from_relative_path(&current_relative);
-    let should_auto_name = !is_manuscript_package_name(&current_file_name)
+    let should_auto_name = !is_manuscript_package_path(&path)
         && (active_title
             .as_deref()
             .map(is_untitled_manuscript_label)
@@ -4303,50 +3686,21 @@ pub(crate) fn save_manuscript_content(
         }
         items
     };
-    let path_file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("")
-        .to_string();
-    if !path.exists() && is_manuscript_package_name(&path_file_name) {
+    if !path.exists()
+        && merged_metadata
+            .get("packageKind")
+            .or_else(|| merged_metadata.get("kind"))
+            .is_some()
+    {
         let package_title = active_title
             .clone()
             .unwrap_or_else(|| title_from_relative_path(&active_relative));
-        create_manuscript_package(&path, content, &active_relative, &package_title)?;
+        let kind = payload_string(&Value::Object(merged_metadata.clone()), "packageKind")
+            .or_else(|| payload_string(&Value::Object(merged_metadata.clone()), "kind"))
+            .unwrap_or_else(|| "post".to_string());
+        create_manuscript_package(&path, content, &kind, &package_title)?;
     }
-    if is_thrive_package_path(&path)
-        && is_manuscript_package_name(
-            path.file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or(""),
-        )
-    {
-        let manifest = update_thrive_post_content(&path, content, Some(&merged_metadata))?;
-        return Ok(json!({
-            "success": true,
-            "newPath": active_relative,
-            "title": active_title,
-            "state": get_manuscript_package_state(&path)?,
-            "script": {
-                "body": content,
-                "approval": {
-                    "status": "pending",
-                    "lastScriptUpdateAt": Value::Null,
-                    "lastScriptUpdateSource": source,
-                    "confirmedAt": Value::Null
-                }
-            },
-            "content": content,
-            "metadata": manifest,
-        }));
-    }
-    if path.is_dir()
-        && is_manuscript_package_name(
-            path.file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or(""),
-        )
-    {
+    if is_manuscript_package_path(&path) {
         let file_name = path
             .file_name()
             .and_then(|value| value.to_str())
@@ -4380,7 +3734,7 @@ pub(crate) fn save_manuscript_content(
     }))
 }
 
-fn default_thrive_post_bindings() -> Value {
+fn default_post_bindings() -> Value {
     json!({
         "media": [],
         "targets": [],
@@ -4390,18 +3744,18 @@ fn default_thrive_post_bindings() -> Value {
     })
 }
 
-fn require_thrive_post_package(path: &std::path::Path) -> Result<(), String> {
-    if !is_thrive_package_path(path) {
-        return Err("Not a .thrive post package".to_string());
+fn require_post_package(path: &std::path::Path) -> Result<(), String> {
+    if !is_manuscript_package_path(path) {
+        return Err("Not a manuscript package".to_string());
     }
-    let manifest = read_thrive_json_entry_or(path, "manifest.json", json!({}));
+    let manifest = read_json_value_or(&package_manifest_path(path), json!({}));
     let kind = manifest
         .get("kind")
         .or_else(|| manifest.get("packageKind"))
         .and_then(Value::as_str)
         .unwrap_or("");
     if kind != "post" {
-        return Err("Only post .thrive packages are supported".to_string());
+        return Err("Only post packages are supported".to_string());
     }
     Ok(())
 }
@@ -4429,34 +3783,27 @@ fn normalize_post_platform(value: &str) -> Result<String, String> {
     }
 }
 
-fn thrive_post_variant_path(platform: &str) -> String {
+fn post_variant_path(platform: &str) -> String {
     format!("variants/{platform}.md")
 }
 
-fn read_thrive_post_bindings(package_path: &std::path::Path) -> Value {
-    read_thrive_json_entry_or(
-        package_path,
-        "bindings.json",
-        default_thrive_post_bindings(),
-    )
+fn read_post_bindings(package_path: &std::path::Path) -> Value {
+    read_package_json_entry_or(package_path, "bindings.json", default_post_bindings())
 }
 
-fn write_thrive_post_bindings(
-    package_path: &std::path::Path,
-    bindings: &Value,
-) -> Result<Value, String> {
-    write_thrive_json_entry(package_path, "bindings.json", bindings)?;
-    let mut manifest = read_thrive_json_entry_or(package_path, "manifest.json", json!({}));
+fn write_post_bindings(package_path: &std::path::Path, bindings: &Value) -> Result<Value, String> {
+    write_package_json_entry(package_path, "bindings.json", bindings)?;
+    let mut manifest = read_package_json_entry_or(package_path, "manifest.json", json!({}));
     if let Some(object) = manifest.as_object_mut() {
         object.insert("updatedAt".to_string(), json!(now_i64()));
-        write_thrive_json_entry(package_path, "manifest.json", &manifest)?;
+        write_package_json_entry(package_path, "manifest.json", &manifest)?;
     }
     Ok(bindings.clone())
 }
 
-fn upsert_thrive_post_target(bindings: &mut Value, platform: &str, variant_path: &str) {
+fn upsert_post_target(bindings: &mut Value, platform: &str, variant_path: &str) {
     if !bindings.is_object() {
-        *bindings = default_thrive_post_bindings();
+        *bindings = default_post_bindings();
     }
     let object = bindings.as_object_mut().expect("bindings should be object");
     let targets_value = object
@@ -4938,7 +4285,7 @@ fn remotion_context_value(
     let composition = package_state
         .get("remotion")
         .cloned()
-        .unwrap_or_else(|| build_default_remotion_scene("RedBox Motion", &[]));
+        .unwrap_or_else(|| build_default_remotion_scene("Motion", &[]));
     let asset_container = package_state
         .pointer("/videoProject/assets")
         .cloned()
@@ -5035,7 +4382,7 @@ fn remotion_context_value(
             "transitionCount": transitions.len(),
             "render": normalized_remotion_render_config(
                 composition.get("render"),
-                composition.get("title").and_then(Value::as_str).unwrap_or("RedBox Motion"),
+                composition.get("title").and_then(Value::as_str).unwrap_or("Motion"),
                 composition.get("renderMode").and_then(Value::as_str).unwrap_or("motion-layer"),
             )
         },
@@ -5769,7 +5116,7 @@ fn generate_motion_items_for_project(
     let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
-        "你是 RedClaw 的短视频动画导演。只输出严格 JSON。",
+        "你是当前品牌 AI 的短视频动画导演。只输出严格 JSON。",
         &user_prompt,
         true,
     )?;
@@ -5903,7 +5250,7 @@ fn generate_editor_commands_for_project(
     let raw = run_model_structured_task_with_settings(
         &settings_snapshot,
         model_config,
-        "你是 RedClaw 的视频编辑命令规划器。只输出严格 JSON。",
+        "你是当前品牌 AI 的视频编辑命令规划器。只输出严格 JSON。",
         &user_prompt,
         true,
     )?;
@@ -6628,16 +5975,12 @@ fn ensure_package_asset_entry(
             write_json_value(&editor_project_path, &editor_project)?;
         }
     }
-    let file_name = package_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("Untitled");
-    if get_package_kind_from_file_name(file_name) == Some("video") {
+    if get_package_kind_from_manifest(package_path).as_deref() == Some("video") {
         let manifest = read_json_value_or(&package_manifest_path(package_path), json!({}));
         let title = manifest
             .get("title")
             .and_then(|value| value.as_str())
-            .unwrap_or("RedBox Motion");
+            .unwrap_or("Motion");
         let mut remotion = read_json_value_or(
             &package_remotion_path(package_path),
             build_default_remotion_scene(title, &[]),
@@ -7230,35 +6573,15 @@ pub fn handle_manuscripts_channel(
                 } else {
                     resolve_manuscript_path(state, &relative)?
                 };
-                if (path.is_dir() || is_thrive_package_path(&path))
-                    && is_manuscript_package_name(
-                        path.file_name()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(""),
-                    )
-                {
+                if is_manuscript_package_path(&path) {
                     let file_name = path
                         .file_name()
                         .and_then(|value| value.to_str())
                         .unwrap_or("");
-                    let manifest = if is_thrive_package_path(&path) {
-                        read_thrive_json_entry_or(&path, "manifest.json", json!({}))
-                    } else {
-                        read_json_value_or(&package_manifest_path(&path), json!({}))
-                    };
-                    let content = if is_thrive_package_path(&path) {
-                        read_thrive_text_entry(
-                            &path,
-                            manifest
-                                .get("entry")
-                                .and_then(Value::as_str)
-                                .unwrap_or_else(|| get_default_package_entry(file_name)),
-                        )
-                        .unwrap_or_default()
-                    } else {
+                    let manifest = read_json_value_or(&package_manifest_path(&path), json!({}));
+                    let content =
                         fs::read_to_string(package_entry_path(&path, file_name, Some(&manifest)))
-                            .unwrap_or_default()
-                    };
+                            .unwrap_or_default();
                     return Ok(json!({
                         "content": content,
                         "metadata": manifest
@@ -7270,7 +6593,7 @@ pub fn handle_manuscripts_channel(
                     "metadata": {
                         "id": slug_from_relative_path(&relative),
                         "title": title_from_relative_path(&relative),
-                        "draftType": get_draft_type_from_file_name(&relative),
+                        "draftType": "unknown",
                     }
                 }))
             }
@@ -7326,39 +6649,39 @@ pub fn handle_manuscripts_channel(
                 let name =
                     payload_string(&payload, "name").unwrap_or_else(|| "Untitled.md".to_string());
                 let content = payload_string(&payload, "content").unwrap_or_default();
-                let fallback_extension = if is_manuscript_package_name(&name) {
-                    ""
-                } else {
-                    ".md"
-                };
-                let relative = normalize_relative_path(&join_relative(
-                    &parent_path,
-                    &ensure_manuscript_file_name(&name, fallback_extension),
-                ));
-                let path = resolve_manuscript_path(state, &relative)?;
-                if is_manuscript_package_name(&relative) {
+                let project_kind = payload_string(&payload, "kind")
+                    .map(|value| value.trim().to_ascii_lowercase())
+                    .filter(|value| {
+                        matches!(
+                            value.as_str(),
+                            "post" | "richpost" | "article" | "longform" | "video" | "audio"
+                        )
+                    });
+                if let Some(project_kind) = project_kind {
+                    let relative = normalize_relative_path(&join_relative(&parent_path, &name));
+                    let path = resolve_manuscript_path(state, &relative)?;
                     let title = payload_string(&payload, "title")
                         .unwrap_or_else(|| title_from_relative_path(&relative));
-                    create_manuscript_package(&path, &content, &relative, &title)?;
-                } else {
-                    if let Some(parent) = path.parent() {
-                        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-                    }
-                    fs::write(&path, content).map_err(|error| error.to_string())?;
+                    create_manuscript_package(&path, &content, &project_kind, &title)?;
+                    return Ok(json!({ "success": true, "path": relative }));
                 }
+                let relative = normalize_relative_path(&join_relative(
+                    &parent_path,
+                    &ensure_markdown_extension(&name),
+                ));
+                let path = resolve_manuscript_path(state, &relative)?;
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                fs::write(&path, content).map_err(|error| error.to_string())?;
                 Ok(json!({ "success": true, "path": normalize_relative_path(&relative) }))
             }
             "manuscripts:upgrade-to-package" => {
                 let source_path = payload_string(&payload, "sourcePath").unwrap_or_default();
                 let target_kind =
                     payload_string(&payload, "targetKind").unwrap_or_else(|| "article".to_string());
-                let target_extension = if target_kind == "post" {
-                    POST_DRAFT_EXTENSION
-                } else {
-                    ARTICLE_DRAFT_EXTENSION
-                };
                 let new_path =
-                    upgrade_markdown_manuscript_to_package(state, &source_path, target_extension)?;
+                    upgrade_markdown_manuscript_to_package(state, &source_path, &target_kind)?;
                 Ok(json!({ "success": true, "newPath": new_path }))
             }
             "manuscripts:delete" => {
@@ -7382,14 +6705,9 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("");
-                if is_manuscript_package_name(source_name)
-                    && (source.is_dir() || is_thrive_package_path(&source))
-                {
-                    let mut manifest = if is_thrive_package_path(&source) {
-                        read_thrive_json_entry_or(&source, "manifest.json", json!({}))
-                    } else {
-                        read_json_value_or(&package_manifest_path(&source), json!({}))
-                    };
+                if is_manuscript_package_path(&source) {
+                    let mut manifest =
+                        read_json_value_or(&package_manifest_path(&source), json!({}));
                     let next_title = new_name.trim();
                     if next_title.is_empty() {
                         return Ok(json!({ "success": false, "error": "缺少新名称" }));
@@ -7403,30 +6721,7 @@ pub fn handle_manuscripts_channel(
                             "updatedAt": now_i64(),
                         });
                     }
-                    if is_thrive_package_path(&source) {
-                        let content = read_thrive_text_entry(
-                            &source,
-                            manifest
-                                .get("entry")
-                                .and_then(Value::as_str)
-                                .unwrap_or("content.md"),
-                        )
-                        .unwrap_or_default();
-                        let bindings = read_thrive_json_entry_or(
-                            &source,
-                            "bindings.json",
-                            json!({
-                                "media": [],
-                                "targets": [],
-                                "publishedPosts": [],
-                                "sources": [],
-                                "inspirations": []
-                            }),
-                        );
-                        write_thrive_post_package(&source, &manifest, &content, &bindings)?;
-                    } else {
-                        write_json_value(&package_manifest_path(&source), &manifest)?;
-                    }
+                    write_json_value(&package_manifest_path(&source), &manifest)?;
                     return Ok(
                         json!({ "success": true, "newPath": normalize_relative_path(&old_path) }),
                     );
@@ -7439,31 +6734,7 @@ pub fn handle_manuscripts_channel(
                 );
                 let mut target_relative = join_relative(&parent_rel, &new_name);
                 if !target_relative.contains('.') {
-                    if source_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
-                        target_relative = format!(
-                            "{}{}",
-                            normalize_relative_path(&target_relative),
-                            ARTICLE_DRAFT_EXTENSION
-                        );
-                    } else if source_name.ends_with(POST_DRAFT_EXTENSION) {
-                        target_relative = format!(
-                            "{}{}",
-                            normalize_relative_path(&target_relative),
-                            POST_DRAFT_EXTENSION
-                        );
-                    } else if source_name.ends_with(VIDEO_DRAFT_EXTENSION) {
-                        target_relative = format!(
-                            "{}{}",
-                            normalize_relative_path(&target_relative),
-                            VIDEO_DRAFT_EXTENSION
-                        );
-                    } else if source_name.ends_with(AUDIO_DRAFT_EXTENSION) {
-                        target_relative = format!(
-                            "{}{}",
-                            normalize_relative_path(&target_relative),
-                            AUDIO_DRAFT_EXTENSION
-                        );
-                    } else if source.is_file() {
+                    if source.is_file() {
                         target_relative = ensure_markdown_extension(&target_relative);
                     } else {
                         target_relative = normalize_relative_path(&target_relative);
@@ -7513,7 +6784,9 @@ pub fn handle_manuscripts_channel(
                 }
                 let target = resolve_manuscript_path(state, &target_relative)?;
                 if target.exists() {
-                    return Ok(json!({ "success": false, "error": "目标位置已存在同名文件或文件夹" }));
+                    return Ok(
+                        json!({ "success": false, "error": "目标位置已存在同名文件或文件夹" }),
+                    );
                 }
                 if let Some(parent) = target.parent() {
                     if parent.exists() && !parent.is_dir() {
@@ -7530,14 +6803,7 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !(full_path.is_dir() || is_thrive_package_path(&full_path))
-                    || !is_manuscript_package_name(
-                        full_path
-                            .file_name()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(""),
-                    )
-                {
+                if !is_manuscript_package_path(&full_path) {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
                 Ok(json!({ "success": true, "state": get_manuscript_package_state(&full_path)? }))
@@ -7551,10 +6817,10 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                require_thrive_post_package(&full_path)?;
+                require_post_package(&full_path)?;
                 Ok(json!({
                     "success": true,
-                    "bindings": read_thrive_post_bindings(&full_path)
+                    "bindings": read_post_bindings(&full_path)
                 }))
             }
             "manuscripts:update-post-bindings" => {
@@ -7566,13 +6832,13 @@ pub fn handle_manuscripts_channel(
                 }
                 let bindings = payload_field(&payload, "bindings")
                     .cloned()
-                    .unwrap_or_else(default_thrive_post_bindings);
+                    .unwrap_or_else(default_post_bindings);
                 if !bindings.is_object() {
                     return Ok(json!({ "success": false, "error": "bindings must be an object" }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                require_thrive_post_package(&full_path)?;
-                let bindings = write_thrive_post_bindings(&full_path, &bindings)?;
+                require_post_package(&full_path)?;
+                let bindings = write_post_bindings(&full_path, &bindings)?;
                 Ok(json!({
                     "success": true,
                     "bindings": bindings,
@@ -7590,13 +6856,13 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                require_thrive_post_package(&full_path)?;
-                let variant_path = thrive_post_variant_path(&platform);
+                require_post_package(&full_path)?;
+                let variant_path = post_variant_path(&platform);
                 Ok(json!({
                     "success": true,
                     "platform": platform,
                     "variantPath": variant_path,
-                    "content": read_thrive_text_entry(&full_path, &variant_path).unwrap_or_default()
+                    "content": read_package_text_entry(&full_path, &variant_path).unwrap_or_default()
                 }))
             }
             "manuscripts:save-post-variant" => {
@@ -7611,12 +6877,12 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                require_thrive_post_package(&full_path)?;
-                let variant_path = thrive_post_variant_path(&platform);
-                write_thrive_text_entry(&full_path, &variant_path, &content)?;
-                let mut bindings = read_thrive_post_bindings(&full_path);
-                upsert_thrive_post_target(&mut bindings, &platform, &variant_path);
-                let bindings = write_thrive_post_bindings(&full_path, &bindings)?;
+                require_post_package(&full_path)?;
+                let variant_path = post_variant_path(&platform);
+                write_package_text_entry(&full_path, &variant_path, &content)?;
+                let mut bindings = read_post_bindings(&full_path);
+                upsert_post_target(&mut bindings, &platform, &variant_path);
+                let bindings = write_post_bindings(&full_path, &bindings)?;
                 Ok(json!({
                     "success": true,
                     "platform": platform,
@@ -7640,7 +6906,7 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
+                if get_package_kind_from_manifest(&full_path).as_deref() != Some("post") {
                     return Ok(
                         json!({ "success": false, "error": "Only richpost packages support page plans" }),
                     );
@@ -7702,7 +6968,7 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
+                if get_package_kind_from_manifest(&full_path).as_deref() != Some("post") {
                     return Ok(
                         json!({ "success": false, "error": "Only richpost packages support page plans" }),
                     );
@@ -7738,480 +7004,6 @@ pub fn handle_manuscripts_channel(
                     "state": next_state,
                 }))
             }
-            "manuscripts:set-richpost-theme" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let theme_id = payload_string(&payload, "themeId").unwrap_or_default();
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
-                    return Ok(
-                        json!({ "success": false, "error": "Only richpost packages support themes" }),
-                    );
-                }
-                let theme = richpost_theme_spec_by_id(Some(&full_path), &theme_id);
-                let mut manifest =
-                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                write_applied_richpost_theme_to_manifest(&mut manifest, &theme);
-                write_json_value(&package_manifest_path(&full_path), &manifest)?;
-                sync_package_from_richpost_theme_root(&full_path, &theme)?;
-                Ok(json!({
-                    "success": true,
-                    "themeId": theme.id,
-                    "state": sync_manuscript_package_html_assets(Some(state), &full_path, file_name, None, None)?,
-                }))
-            }
-            "manuscripts:preview-richpost-theme-draft" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only richpost packages support richpost theme previews"
-                    }));
-                }
-                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                let typography = richpost_typography_settings_from_manifest(&manifest);
-                let _ = ensure_richpost_layout_scaffold(&full_path, &manifest)?;
-                let base_theme_id = payload_string(&payload, "baseThemeId")
-                    .or_else(|| {
-                        manifest
-                            .get("richpostThemeId")
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string)
-                    })
-                    .unwrap_or_default();
-                let base_theme = richpost_theme_spec_by_id(Some(&full_path), &base_theme_id);
-                let draft_theme = normalize_richpost_theme_draft(
-                    payload_field(&payload, "theme").unwrap_or(&Value::Null),
-                    &base_theme,
-                    payload_string(&payload, "existingThemeId").as_deref(),
-                    &full_path,
-                );
-                Ok(json!({
-                    "success": true,
-                    "theme": richpost_theme_spec_payload_value(&draft_theme),
-                    "previews": render_richpost_theme_preview_pages(&full_path, &draft_theme, typography),
-                    "html": render_richpost_theme_preview_html(&full_path, &draft_theme, typography),
-                }))
-            }
-            "manuscripts:create-richpost-custom-theme" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only richpost packages support custom themes"
-                    }));
-                }
-                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                let create_from_blank = payload_field(&payload, "createFromBlank")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let base_theme_id = if create_from_blank {
-                    String::new()
-                } else {
-                    payload_string(&payload, "baseThemeId")
-                        .or_else(|| {
-                            manifest
-                                .get("richpostThemeId")
-                                .and_then(Value::as_str)
-                                .map(ToString::to_string)
-                        })
-                        .unwrap_or_default()
-                };
-                let base_theme = if create_from_blank {
-                    blank_richpost_theme_spec()
-                } else {
-                    richpost_theme_spec_by_id(Some(&full_path), &base_theme_id)
-                };
-                let default_label = next_richpost_custom_theme_label(&full_path);
-                let requested_theme = payload_field(&payload, "theme")
-                    .cloned()
-                    .unwrap_or_else(|| json!({ "label": default_label }));
-                let theme =
-                    normalize_richpost_theme_draft(&requested_theme, &base_theme, None, &full_path);
-                let mut custom_themes = read_custom_richpost_theme_specs(&full_path);
-                custom_themes.retain(|item| item.id != theme.id);
-                custom_themes.push(theme.clone());
-                custom_themes.sort_by(|left, right| {
-                    left.label.cmp(&right.label).then(left.id.cmp(&right.id))
-                });
-                write_custom_richpost_theme_specs(&full_path, &custom_themes)?;
-                sync_richpost_theme_root_from_package(&full_path, &theme, create_from_blank)?;
-                let package_state =
-                    crate::manuscript_package::get_manuscript_package_state(&full_path)?;
-                let theme_id = sanitize_richpost_theme_id_fragment(&theme.id);
-                Ok(json!({
-                    "success": true,
-                    "themeId": theme.id,
-                    "themeRoot": package_richpost_theme_root_dir(&full_path, &theme_id).display().to_string(),
-                    "themeFile": package_richpost_theme_config_path(&full_path, &theme_id).display().to_string(),
-                    "themeIndexFile": package_richpost_themes_path(&full_path).display().to_string(),
-                    "themeTemplateFile": package_richpost_theme_template_path(&full_path).display().to_string(),
-                    "theme": richpost_theme_spec_payload_value(&theme),
-                    "state": package_state,
-                }))
-            }
-            "manuscripts:save-richpost-custom-theme" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only richpost packages support custom themes"
-                    }));
-                }
-                let mut manifest =
-                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                let base_theme_id = payload_string(&payload, "baseThemeId")
-                    .or_else(|| {
-                        manifest
-                            .get("richpostThemeId")
-                            .and_then(Value::as_str)
-                            .map(ToString::to_string)
-                    })
-                    .unwrap_or_default();
-                let base_theme = richpost_theme_spec_by_id(Some(&full_path), &base_theme_id);
-                let theme = normalize_richpost_theme_draft(
-                    payload_field(&payload, "theme").unwrap_or(&Value::Null),
-                    &base_theme,
-                    payload_string(&payload, "existingThemeId").as_deref(),
-                    &full_path,
-                );
-                let mut custom_themes = read_custom_richpost_theme_specs(&full_path);
-                custom_themes.retain(|item| item.id != theme.id);
-                custom_themes.push(theme.clone());
-                custom_themes.sort_by(|left, right| {
-                    left.label.cmp(&right.label).then(left.id.cmp(&right.id))
-                });
-                write_custom_richpost_theme_specs(&full_path, &custom_themes)?;
-                sync_richpost_theme_root_from_package(&full_path, &theme, false)?;
-                let apply_immediately = payload_field(&payload, "apply")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true);
-                let state = if apply_immediately {
-                    write_applied_richpost_theme_to_manifest(&mut manifest, &theme);
-                    write_json_value(&package_manifest_path(&full_path), &manifest)?;
-                    sync_package_from_richpost_theme_root(&full_path, &theme)?;
-                    sync_manuscript_package_html_assets(
-                        Some(state),
-                        &full_path,
-                        file_name,
-                        None,
-                        None,
-                    )?
-                } else {
-                    if manifest
-                        .get("richpostThemeId")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        == Some(theme.id.as_str())
-                    {
-                        write_applied_richpost_theme_to_manifest(&mut manifest, &theme);
-                        write_json_value(&package_manifest_path(&full_path), &manifest)?;
-                    }
-                    crate::manuscript_package::get_manuscript_package_state(&full_path)?
-                };
-                Ok(json!({
-                    "success": true,
-                    "themeId": theme.id,
-                    "themeRoot": package_richpost_theme_root_dir(&full_path, &sanitize_richpost_theme_id_fragment(&theme.id)).display().to_string(),
-                    "themeFile": package_richpost_theme_config_path(&full_path, &sanitize_richpost_theme_id_fragment(&theme.id)).display().to_string(),
-                    "theme": richpost_theme_spec_payload_value(&theme),
-                    "state": state,
-                }))
-            }
-            "manuscripts:upload-richpost-theme-background" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only richpost packages support theme backgrounds"
-                    }));
-                }
-                let theme_id = payload_string(&payload, "themeId").unwrap_or_default();
-                if theme_id.trim().is_empty() {
-                    return Ok(json!({ "success": false, "error": "themeId is required" }));
-                }
-                let role = payload_string(&payload, "role")
-                    .unwrap_or_else(|| RICHPOST_MASTER_BODY.to_string());
-                let Some(role) = sanitize_richpost_master_name(&role) else {
-                    return Ok(json!({ "success": false, "error": "role is invalid" }));
-                };
-                if !RICHPOST_DEFAULT_MASTER_NAMES
-                    .iter()
-                    .any(|item| *item == role)
-                {
-                    return Ok(json!({ "success": false, "error": "role is invalid" }));
-                }
-                let picked = pick_files_native("选择背景图片", false, false)?;
-                let Some(selected) = picked.first() else {
-                    return Ok(json!({ "success": true, "canceled": true }));
-                };
-                let (_mime_type, kind, _) = guess_mime_and_kind(selected);
-                if kind != "image" {
-                    return Ok(json!({ "success": false, "error": "只能选择图片文件" }));
-                }
-                let mut custom_themes = read_custom_richpost_theme_specs(&full_path);
-                let Some(theme_index) = custom_themes
-                    .iter()
-                    .position(|theme| theme.id == theme_id && theme.source == "custom")
-                else {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only custom themes support background uploads"
-                    }));
-                };
-                let extension = selected
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("png");
-                let backgrounds_dir = richpost_theme_background_storage_dir(&full_path, &theme_id);
-                fs::create_dir_all(&backgrounds_dir).map_err(|error| error.to_string())?;
-                let background_file_name =
-                    richpost_theme_background_relative_file_name(&theme_id, &role, extension);
-                let relative_path = global_richpost_theme_background_relative_path(
-                    &full_path,
-                    &theme_id,
-                    &background_file_name,
-                );
-                let target_path = backgrounds_dir.join(&background_file_name);
-                fs::copy(selected, &target_path).map_err(|error| error.to_string())?;
-                let current_background =
-                    richpost_theme_background_relative_path(&custom_themes[theme_index], &role);
-                if !current_background.trim().is_empty() && current_background != relative_path {
-                    if let Some(stale_path) = resolve_richpost_theme_background_absolute_path(
-                        &full_path,
-                        &current_background,
-                    ) {
-                        let _ = fs::remove_file(stale_path);
-                    }
-                }
-                match role.as_str() {
-                    RICHPOST_MASTER_COVER => {
-                        custom_themes[theme_index].cover_background_path = relative_path.clone()
-                    }
-                    RICHPOST_MASTER_ENDING => {
-                        custom_themes[theme_index].ending_background_path = relative_path.clone()
-                    }
-                    _ => custom_themes[theme_index].body_background_path = relative_path.clone(),
-                }
-                let theme = custom_themes[theme_index].clone();
-                custom_themes.sort_by(|left, right| {
-                    left.label.cmp(&right.label).then(left.id.cmp(&right.id))
-                });
-                write_custom_richpost_theme_specs(&full_path, &custom_themes)?;
-                sync_richpost_theme_root_from_package(&full_path, &theme, false)?;
-                let mut manifest =
-                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                write_applied_richpost_theme_to_manifest(&mut manifest, &theme);
-                write_json_value(&package_manifest_path(&full_path), &manifest)?;
-                sync_package_from_richpost_theme_root(&full_path, &theme)?;
-                Ok(json!({
-                    "success": true,
-                    "themeId": theme.id,
-                    "theme": richpost_theme_spec_payload_value(&theme),
-                    "state": sync_manuscript_package_html_assets(Some(state), &full_path, file_name, None, None)?,
-                }))
-            }
-            "manuscripts:delete-richpost-custom-theme" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let theme_id = payload_string(&payload, "themeId").unwrap_or_default();
-                if theme_id.trim().is_empty() {
-                    return Ok(json!({ "success": false, "error": "themeId is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only richpost packages support custom themes"
-                    }));
-                }
-                let mut custom_themes = read_custom_richpost_theme_specs(&full_path);
-                let removed_theme = custom_themes
-                    .iter()
-                    .find(|theme| theme.id == theme_id && theme.source == "custom")
-                    .cloned();
-                if removed_theme.is_none() {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only custom themes can be deleted"
-                    }));
-                }
-                if let Some(theme) = removed_theme.as_ref() {
-                    let _ = fs::remove_dir_all(package_richpost_theme_root_dir(
-                        &full_path,
-                        &sanitize_richpost_theme_id_fragment(&theme.id),
-                    ));
-                }
-                custom_themes.retain(|theme| theme.id != theme_id);
-                write_custom_richpost_theme_specs(&full_path, &custom_themes)?;
-                let mut manifest =
-                    read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                let was_applied = manifest
-                    .get("richpostThemeId")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    == Some(theme_id.trim());
-                let state = if was_applied {
-                    let fallback_theme = custom_themes
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(default_richpost_theme_spec);
-                    write_applied_richpost_theme_to_manifest(&mut manifest, &fallback_theme);
-                    write_json_value(&package_manifest_path(&full_path), &manifest)?;
-                    sync_package_from_richpost_theme_root(&full_path, &fallback_theme)?;
-                    sync_manuscript_package_html_assets(
-                        Some(state),
-                        &full_path,
-                        file_name,
-                        None,
-                        None,
-                    )?
-                } else {
-                    crate::manuscript_package::get_manuscript_package_state(&full_path)?
-                };
-                Ok(json!({
-                    "success": true,
-                    "deletedThemeId": theme_id,
-                    "state": state,
-                }))
-            }
-            "manuscripts:get-richpost-theme-previews" => {
-                let file_path = payload_string(&payload, "filePath")
-                    .or_else(|| payload_string(&payload, "path"))
-                    .unwrap_or_default();
-                if file_path.is_empty() {
-                    return Ok(json!({ "success": false, "error": "filePath is required" }));
-                }
-                let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir() {
-                    return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
-                }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
-                    return Ok(json!({
-                        "success": false,
-                        "error": "Only richpost packages support richpost theme previews"
-                    }));
-                }
-                let manifest = read_json_value_or(&package_manifest_path(&full_path), json!({}));
-                let typography = richpost_typography_settings_from_manifest(&manifest);
-                let _ = ensure_richpost_layout_scaffold(&full_path, &manifest)?;
-                let requested_ids = payload_field(&payload, "themeIds")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_else(|| {
-                        richpost_theme_catalog_for_package(Some(&full_path))
-                            .into_iter()
-                            .map(|theme| theme.id)
-                            .collect::<Vec<_>>()
-                    });
-                let catalog = richpost_theme_catalog_for_package(Some(&full_path));
-                let previews = requested_ids
-                    .into_iter()
-                    .filter_map(|theme_id| {
-                        catalog
-                            .iter()
-                            .find(|theme| theme.id == theme_id)
-                            .cloned()
-                            .map(|theme| {
-                                json!({
-                                    "id": theme.id,
-                                    "label": theme.label,
-                                    "html": render_richpost_theme_preview_html(&full_path, &theme, typography),
-                                })
-                            })
-                    })
-                    .collect::<Vec<_>>();
-                Ok(json!({
-                    "success": true,
-                    "previews": previews,
-                }))
-            }
             "manuscripts:render-richpost-pages" => {
                 let file_path = payload_string(&payload, "filePath")
                     .or_else(|| payload_string(&payload, "path"))
@@ -8227,7 +7019,7 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
+                if get_package_kind_from_manifest(&full_path).as_deref() != Some("post") {
                     return Ok(
                         json!({ "success": false, "error": "Only richpost packages support page plans" }),
                     );
@@ -8266,15 +7058,15 @@ pub fn handle_manuscripts_channel(
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("video") {
+                if get_package_kind_from_manifest(&full_path).as_deref() != Some("video") {
                     return Ok(
                         json!({ "success": false, "error": "Not a video manuscript package" }),
                     );
                 }
+                let file_name = full_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("Untitled");
                 let package_state = get_manuscript_package_state(&full_path)?;
                 let manifest = package_state
                     .get("manifest")
@@ -8332,11 +7124,7 @@ pub fn handle_manuscripts_channel(
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("video") {
+                if get_package_kind_from_manifest(&full_path).as_deref() != Some("video") {
                     return Ok(
                         json!({ "success": false, "error": "Not a video manuscript package" }),
                     );
@@ -8364,11 +7152,7 @@ pub fn handle_manuscripts_channel(
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("video") {
+                if get_package_kind_from_manifest(&full_path).as_deref() != Some("video") {
                     return Ok(json!({ "success": false, "error": "ffmpeg_edit 仅支持视频稿件" }));
                 }
                 let operations = payload
@@ -8388,7 +7172,7 @@ pub fn handle_manuscripts_channel(
                         package_state
                             .pointer("/manifest/title")
                             .and_then(Value::as_str)
-                            .unwrap_or("RedBox Motion"),
+                            .unwrap_or("Motion"),
                         &[],
                     )
                 });
@@ -8849,7 +7633,7 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) == Some("video") {
+                if get_package_kind_from_manifest(&full_path).as_deref() == Some("video") {
                     let manifest =
                         read_json_value_or(&package_manifest_path(&full_path), json!({}));
                     return Ok(json!({
@@ -8929,7 +7713,7 @@ pub fn handle_manuscripts_channel(
                     .file_name()
                     .and_then(|value| value.to_str())
                     .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) == Some("video") {
+                if get_package_kind_from_manifest(&full_path).as_deref() == Some("video") {
                     let mut manifest =
                         read_json_value_or(&package_manifest_path(&full_path), json!({}));
                     let approval = confirm_manifest_video_script(&mut manifest)?;
@@ -9606,14 +8390,7 @@ pub fn handle_manuscripts_channel(
                     }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir()
-                    || !is_manuscript_package_name(
-                        full_path
-                            .file_name()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(""),
-                    )
-                {
+                if !is_manuscript_package_path(&full_path) {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
                 let source = std::path::PathBuf::from(source_path.trim());
@@ -10006,21 +8783,11 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "filePath is required" }));
                 }
                 let full_path = resolve_manuscript_path(state, &file_path)?;
-                if !full_path.is_dir()
-                    || !is_manuscript_package_name(
-                        full_path
-                            .file_name()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or(""),
-                    )
-                {
+                if !is_manuscript_package_path(&full_path) {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
-                let package_kind = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .and_then(get_package_kind_from_file_name)
-                    .unwrap_or("article");
+                let package_kind = get_package_kind_from_manifest(&full_path)
+                    .unwrap_or_else(|| "article".to_string());
                 let picked = pick_files_native("选择要导入的素材文件", false, true)?;
                 if picked.is_empty() {
                     return Ok(json!({ "success": true, "canceled": true, "imported": [] }));
@@ -10333,7 +9100,7 @@ pub fn handle_manuscripts_channel(
                 let title = package_state
                     .pointer("/manifest/title")
                     .and_then(|value| value.as_str())
-                    .unwrap_or("RedBox Motion")
+                    .unwrap_or("Motion")
                     .to_string();
                 let clips = package_state
                     .pointer("/timelineSummary/clips")
@@ -10364,7 +9131,7 @@ pub fn handle_manuscripts_channel(
                 let title = package_state
                     .pointer("/manifest/title")
                     .and_then(|value| value.as_str())
-                    .unwrap_or("RedBox Motion")
+                    .unwrap_or("Motion")
                     .to_string();
                 let clips = package_state
                     .pointer("/timelineSummary/clips")
@@ -10377,7 +9144,7 @@ pub fn handle_manuscripts_channel(
                     .cloned()
                     .unwrap_or_else(|| build_default_remotion_scene(&title, &clips));
                 let prompt = format!(
-                    "请基于当前视频脚本、时间线和当前 Remotion 工程状态，为 RedBox 设计一份 Remotion JSON 动画方案。\n\
+                    "请基于当前视频脚本、时间线和当前 Remotion 工程状态，为当前视频工程设计一份 Remotion JSON 动画方案。\n\
 要求：\n\
 1. 一个视频工程对应一个 Remotion 工程文件；默认只维护一个主 scene（通常就是 scene-1），后续动画默认都加到这个 scene 里，而不是按底层片段数量机械拆多个场景。\n\
 2. 先确定动画主体元素，再设计动画表达。像“苹果下落”必须先落成一个 element，例如 `shape=apple`，再给它配置 `fall-bounce` 等动画；不要退化成说明性文字。\n\
@@ -10552,11 +9319,7 @@ Remotion 读取结果 JSON：{}\n\
                 if !full_path.is_dir() {
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
-                let file_name = full_path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("Untitled");
-                if get_package_kind_from_file_name(file_name) != Some("post") {
+                if get_package_kind_from_manifest(&full_path).as_deref() != Some("post") {
                     return Ok(
                         json!({ "success": false, "error": "Only richpost packages support image export" }),
                     );
@@ -10712,7 +9475,7 @@ Remotion 读取结果 JSON：{}\n\
                 let mut scene = package_state
                     .get("remotion")
                     .cloned()
-                    .unwrap_or_else(|| build_default_remotion_scene("RedBox Motion", &[]));
+                    .unwrap_or_else(|| build_default_remotion_scene("Motion", &[]));
                 let render_mode = payload_string(&payload, "renderMode")
                     .filter(|value| value == "full" || value == "motion-layer")
                     .unwrap_or_else(|| {
@@ -10770,7 +9533,7 @@ Remotion 读取结果 JSON：{}\n\
                 let scene_title = scene
                     .get("title")
                     .and_then(Value::as_str)
-                    .unwrap_or("RedBox Motion")
+                    .unwrap_or("Motion")
                     .to_string();
                 if let Some(object) = scene.as_object_mut() {
                     object.insert(
@@ -10824,7 +9587,8 @@ Remotion 读取结果 JSON：{}\n\
                 Ok(json!({ "success": true }))
             }
             _ => Err(format!(
-                "RedBox host does not recognize channel `{channel}`."
+                "{} host does not recognize channel `{channel}`.",
+                app_brand_display_name()
             )),
         }
     })())

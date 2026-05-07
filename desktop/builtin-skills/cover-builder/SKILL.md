@@ -2,7 +2,7 @@
 description: 封面生成辅助技能。
 allowedRuntimeModes: [redclaw]
 allowedToolPack: redclaw
-allowedTools: [bash, app_cli]
+allowedTools: [bash, workflow]
 hookMode: inline
 autoActivate: false
 activationScope: turn

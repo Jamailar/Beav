@@ -1,15 +1,15 @@
 ---
 name: member-skill-distiller
-description: Distill RedBox team members from profile, files, and YouTube subtitles into session-activated member skills.
+description: Distill team members from profile, files, and YouTube subtitles into session-activated member skills.
 allowedRuntimeModes: [advisor-discussion, chatroom, wander, redclaw]
-allowedTools: [knowledge_search, redbox_fs]
+allowedTools: [resource]
 autoActivate: false
 activationScope: turn
 hookMode: inline
 ---
 # Member Skill Distiller
 
-Use this skill when RedBox needs to compile a team member into a durable skill package.
+Use this skill when the app needs to compile a team member into a durable skill package.
 
 ## Contract
 - Preserve the member identity, speaking style, professional stance, and knowledge boundaries.

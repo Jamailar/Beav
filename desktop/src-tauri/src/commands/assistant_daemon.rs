@@ -227,7 +227,7 @@ pub fn handle_assistant_daemon_channel(
                         "success": true,
                         "sessionKey": session_key,
                         "qrcodeUrl": format!("redbox://assistant/weixin-login/{}", session_key),
-                        "message": "RedBox 已生成本地微信登录会话。若已配置 sidecar，请使用 sidecar 日志中的真实二维码完成登录。",
+                        "message": format!("{} 已生成本地微信登录会话。若已配置 sidecar，请使用 sidecar 日志中的真实二维码完成登录。", app_brand_display_name()),
                         "stateDir": state_dir
                     }))
                 })?;

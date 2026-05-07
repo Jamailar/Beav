@@ -4,8 +4,8 @@ use tauri::{AppHandle, Manager};
 use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    now_iso, parse_json_value_from_text, payload_string, run_model_structured_task_with_settings,
-    session_title_from_message, AppState,
+    app_brand_display_name, now_iso, parse_json_value_from_text, payload_string,
+    run_model_structured_task_with_settings, session_title_from_message, AppState,
 };
 
 const NEW_CHAT_TITLE: &str = "New Chat";
@@ -128,7 +128,7 @@ fn generate_session_title(
     let raw = run_model_structured_task_with_settings(
         settings,
         model_config,
-        "你是 RedBox 的会话命名器。请根据用户首条消息生成一个简短自然的中文会话标题。要求：1. 只输出严格 JSON。2. JSON 只有 title 字段。3. 标题突出任务目标或对象。4. 不要使用引号、句号、emoji、序号、前缀。5. 长度尽量控制在 8 到 18 个中文字符内，必要时可以更短。",
+        &format!("你是 {} 的会话命名器。请根据用户首条消息生成一个简短自然的中文会话标题。要求：1. 只输出严格 JSON。2. JSON 只有 title 字段。3. 标题突出任务目标或对象。4. 不要使用引号、句号、emoji、序号、前缀。5. 长度尽量控制在 8 到 18 个中文字符内，必要时可以更短。", app_brand_display_name()),
         &user_prompt,
         true,
     )?;

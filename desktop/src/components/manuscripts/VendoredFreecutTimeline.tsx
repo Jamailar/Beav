@@ -14,6 +14,7 @@ import { syncRedBoxMediaLibrary } from '@/features/timeline/deps/media-library-c
 import { syncRedBoxTimelineProject } from '@/features/timeline/deps/projects-contract';
 import { syncRedBoxTimelineSettings } from '@/features/timeline/deps/settings-contract';
 import type { VideoEditorTrackUiState, VideoEditorViewportMetrics } from '../../features/video-editor/store/useVideoEditorStore';
+import { APP_BRAND } from '../../config/brand';
 import type { EditorProjectFile } from './editorProject';
 import {
     buildOptimisticPackageState,
@@ -111,7 +112,7 @@ function normalizeProject(
         version: 1,
         project: {
             id: 'redbox-vendored-timeline',
-            title: 'RedBox Timeline',
+            title: `${APP_BRAND.displayName} Timeline`,
             width: 1080,
             height: 1920,
             fps,

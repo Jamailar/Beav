@@ -5,6 +5,7 @@ import {
   preflightGenerationMediaPayload,
   preflightInlineAttachmentPayload,
 } from '../utils/mediaReferencePreflight';
+import { APP_BRAND } from '../config/brand';
 
 type Listener = (...args: any[]) => void;
 type GuardedFallbackValue<T> = T | null | (() => T | null);
@@ -90,7 +91,7 @@ async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
     }
     return await invoke('ipc_invoke', { channel, payload: payload ?? null });
   } catch (error) {
-    console.warn(`[RedBox] invoke failed for ${channel}:`, error);
+    console.warn(`[] invoke failed for ${channel}:`, error);
     return buildFallbackResponse(channel, error, payload);
   }
 }
@@ -98,12 +99,12 @@ async function invokeChannel(channel: string, payload?: unknown): Promise<any> {
 function sendChannel(channel: string, payload?: unknown): void {
   if (!isTauriRuntime()) {
     void invokeBrowserHost(channel, payload).catch((error) => {
-      console.warn(`[RedBox] browser send failed for ${channel}:`, error);
+      console.warn(`[] browser send failed for ${channel}:`, error);
     });
     return;
   }
   void invoke('ipc_send', { channel, payload: payload ?? null }).catch((error) => {
-    console.warn(`[RedBox] send failed for ${channel}:`, error);
+    console.warn(`[] send failed for ${channel}:`, error);
   });
 }
 
@@ -118,7 +119,7 @@ async function invokeCommand(command: string, args?: unknown): Promise<any> {
     }
     return await invoke(command, args as Record<string, unknown> | undefined);
   } catch (error) {
-    console.warn(`[RedBox] command invoke failed for ${command}:`, error);
+    console.warn(`[] command invoke failed for ${command}:`, error);
     throw error;
   }
 }
@@ -152,7 +153,7 @@ async function invokeChannelGuarded<T = unknown>(
 
     if (value === Symbol.for('__redbox_ipc_timeout__')) {
       const timeoutError = new Error(`Timed out after ${timeoutMs}ms`);
-      console.warn(`[RedBox] invoke timed out for ${channel}:`, timeoutError.message);
+      console.warn(`[] invoke timed out for ${channel}:`, timeoutError.message);
       return resolveGuardFallback(channel, timeoutError, options?.fallback);
     }
 
@@ -160,14 +161,14 @@ async function invokeChannelGuarded<T = unknown>(
       try {
         return options.normalize(value);
       } catch (error) {
-        console.warn(`[RedBox] invoke normalization failed for ${channel}:`, error);
+        console.warn(`[] invoke normalization failed for ${channel}:`, error);
         return resolveGuardFallback(channel, error, options?.fallback);
       }
     }
 
     return value as T;
   } catch (error) {
-    console.warn(`[RedBox] guarded invoke failed for ${channel}:`, error);
+    console.warn(`[] guarded invoke failed for ${channel}:`, error);
     return resolveGuardFallback(channel, error, options?.fallback);
   }
 }
@@ -192,7 +193,7 @@ async function invokeCommandGuarded<T = unknown>(
 
     if (value === Symbol.for('__redbox_ipc_timeout__')) {
       const timeoutError = new Error(`Timed out after ${timeoutMs}ms`);
-      console.warn(`[RedBox] command invoke timed out for ${command}:`, timeoutError.message);
+      console.warn(`[] command invoke timed out for ${command}:`, timeoutError.message);
       return resolveGuardFallback(fallbackKey, timeoutError, options?.fallback);
     }
 
@@ -200,7 +201,7 @@ async function invokeCommandGuarded<T = unknown>(
       try {
         return options.normalize(value);
       } catch (error) {
-        console.warn(`[RedBox] command normalization failed for ${command}:`, error);
+        console.warn(`[] command normalization failed for ${command}:`, error);
         return resolveGuardFallback(fallbackKey, error, options?.fallback);
       }
     }
@@ -234,7 +235,7 @@ function inlineAttachmentFallback(payload: unknown): any {
     : {};
   const dataUrl = String(record.dataUrl || '').trim();
   if (!dataUrl.startsWith('data:')) {
-    return { success: false, error: 'RedBox inline attachment fallback missing dataUrl' };
+    return { success: false, error: `${APP_BRAND.displayName} inline attachment fallback missing dataUrl` };
   }
   const fileName = String(record.fileName || '').trim() || `inline-image-${Date.now()}.png`;
   const mimeType = dataUrlMimeType(dataUrl) || 'application/octet-stream';
@@ -300,7 +301,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     return { success: true, assets: [] };
   }
   if (channel.startsWith('videoEditorV2:')) {
-    return { success: false, error: `RedBox video editor V2 action failed: ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} video editor V2 action failed: ${message}` };
   }
   if (channel === 'cover:list') {
     return { success: true, assets: [] };
@@ -375,7 +376,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     return [];
   }
   if (channel.startsWith('review:dockets:')) {
-    return { success: false, error: `RedBox review docket action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} review docket action failed for "${channel}": ${message}` };
   }
   if (channel === 'collab:sessions:get' || channel === 'team-runtime:get-session') {
     return {
@@ -387,10 +388,10 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     };
   }
   if (channel.startsWith('collab:')) {
-    return { success: false, error: `RedBox collaboration action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} collaboration action failed for "${channel}": ${message}` };
   }
   if (channel.startsWith('team-runtime:')) {
-    return { success: false, error: `RedBox team runtime action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} team runtime action failed for "${channel}": ${message}` };
   }
   if (channel === 'chat:get-context-usage') {
     return {
@@ -410,13 +411,13 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     return inlineAttachmentFallback(payload);
   }
   if (channel === 'chat:create-path-attachment') {
-    return { success: false, error: `RedBox path attachment unavailable: ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} path attachment unavailable: ${message}` };
   }
   if (channel === 'chat:discard-attachments') {
     return { success: true };
   }
   if (channel === 'chat:transcribe-audio') {
-    return { success: false, error: `RedBox audio transcription failed: ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} audio transcription failed: ${message}` };
   }
   if (channel === 'audio:get-capture-capability') {
     return {
@@ -424,7 +425,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
       available: false,
       activeRecording: false,
       reason: 'host_unavailable',
-      message: `RedBox audio capture unavailable: ${message}`,
+      message: `${APP_BRAND.displayName} audio capture unavailable: ${message}`,
     };
   }
   if (
@@ -433,10 +434,10 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     || channel === 'audio:cancel-recording'
     || channel === 'audio:open-microphone-settings'
   ) {
-    return { success: false, error: `RedBox audio action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} audio action failed for "${channel}": ${message}` };
   }
   if (channel === 'file:show-in-folder' || channel === 'file:copy-image' || channel === 'file:save-as' || channel === 'file:preview-resolve') {
-    return { success: false, error: `RedBox file action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} file action failed for "${channel}": ${message}` };
   }
   if (channel === 'plugins:list') {
     return {
@@ -497,7 +498,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     || channel === 'cli-runtime:approve-escalation'
     || channel === 'cli-runtime:deny-escalation'
   ) {
-    return { success: false, error: `RedBox CLI runtime action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} CLI runtime action failed for "${channel}": ${message}` };
   }
   if (channel === 'indexing:get-stats') {
     return { totalStats: { vectors: 0, documents: 0 }, queue: [] };
@@ -566,7 +567,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     || channel === 'logs:set-upload-consent'
     || channel === 'logs:append-renderer'
   ) {
-    return { success: false, error: `RedBox diagnostics action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} diagnostics action failed for "${channel}": ${message}` };
   }
   if (
     channel.endsWith(':list')
@@ -590,7 +591,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
 
   return {
     success: false,
-    error: `RedBox host request failed for "${channel}": ${message}`
+    error: `${APP_BRAND.displayName} host request failed for "${channel}": ${message}`
   };
 }
 

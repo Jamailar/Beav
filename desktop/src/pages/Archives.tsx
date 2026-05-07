@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { appConfirm } from '../utils/appDialogs';
 import { clsx } from 'clsx';
+import { APP_BRAND } from '../config/brand';
 
 interface ArchiveProfileRecord {
     id: string;
@@ -533,7 +534,7 @@ export function Archives({ isActive = true }: { isActive?: boolean }) {
                                     运营账号学习
                                 </div>
                                 <div className="mt-1 text-xs text-text-tertiary">
-                                    通过浏览器插件绑定账号后，RedBox 会自动更新创作档案、写作风格和待确认长期偏好。
+                                    通过浏览器插件绑定账号后，{APP_BRAND.displayName} 会自动更新创作档案、写作风格和待确认长期偏好。
                                 </div>
                             </div>
                             <button

@@ -7,10 +7,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::{
     auth, compatible_workspace_base_dir, create_manuscript_package, detect_best_legacy_db,
-    emit_space_changed, is_legacy_workspace_base, is_manuscript_package_name, join_relative,
+    emit_space_changed, is_legacy_workspace_base, is_manuscript_package_path, join_relative,
     legacy_workspace_dir, maybe_import_legacy_store, normalize_relative_path, now_iso,
     persist_store, preferred_workspace_dir, title_from_relative_path, AppState, AppStore,
-    POST_DRAFT_EXTENSION,
 };
 
 pub(crate) const STARTUP_MIGRATION_EVENT: &str = "app:startup-migration-status";
@@ -139,9 +138,8 @@ fn collect_legacy_markdown_manuscripts(
             continue;
         }
 
-        let file_name = entry.file_name().to_string_lossy().to_string();
         if file_type.is_dir() {
-            if is_manuscript_package_name(&file_name) {
+            if is_manuscript_package_path(&path) {
                 continue;
             }
             collect_legacy_markdown_manuscripts(manuscripts_root, &path, out)?;
@@ -201,10 +199,7 @@ fn migrate_legacy_markdown_manuscripts(workspace_root: &Path) -> Result<Value, S
             .rsplit_once('/')
             .map(|(parent, _)| parent)
             .unwrap_or("");
-        let target_relative = normalize_relative_path(&join_relative(
-            parent_rel,
-            &format!("{stem}{POST_DRAFT_EXTENSION}"),
-        ));
+        let target_relative = normalize_relative_path(&join_relative(parent_rel, stem));
         let target_path = manuscripts_root.join(&target_relative);
         if target_path.exists() {
             skipped += 1;
@@ -213,7 +208,7 @@ fn migrate_legacy_markdown_manuscripts(workspace_root: &Path) -> Result<Value, S
 
         let content = fs::read_to_string(&source_path).map_err(|error| error.to_string())?;
         let title = title_from_relative_path(&source_relative);
-        create_manuscript_package(&target_path, &content, &target_relative, &title)?;
+        create_manuscript_package(&target_path, &content, "post", &title)?;
         fs::remove_file(&source_path).map_err(|error| error.to_string())?;
         upgraded += 1;
     }
@@ -224,14 +219,14 @@ fn migrate_legacy_markdown_manuscripts(workspace_root: &Path) -> Result<Value, S
 fn startup_pending_message(needs_db_import: bool, legacy_markdown_count: usize) -> String {
     match (needs_db_import, legacy_markdown_count > 0) {
         (true, true) => format!(
-            "检测到旧版数据库，同时发现 {legacy_markdown_count} 个旧版 Markdown 稿件。需要把数据库导入到新版状态，并把这些 `.md` 自动升级成 `.redpost` 图文工程。"
+            "检测到旧版数据库，同时发现 {legacy_markdown_count} 个旧版 Markdown 稿件。需要把数据库导入到新版状态，并把这些 `.md` 自动升级成稿件文件夹。"
         ),
         (true, false) => {
             "检测到旧版数据库，需要导入到新版数据格式。文件目录会继续直接使用旧版位置。"
                 .to_string()
         }
         (false, true) => format!(
-            "检测到 {legacy_markdown_count} 个旧版 Markdown 稿件，需要自动升级成 `.redpost` 图文工程。"
+            "检测到 {legacy_markdown_count} 个旧版 Markdown 稿件，需要自动升级成稿件文件夹。"
         ),
         (false, false) => "当前不需要启动迁移。".to_string(),
     }
@@ -583,7 +578,7 @@ fn execute_startup_migration(app: AppHandle) -> Result<AppStore, String> {
     let project_upgrade_counts = if needs_project_upgrade {
         let _ = set_status(&app, &state, |status| {
             status.current_step = Some("升级工程文件".to_string());
-            status.message = Some("正在把旧 `.md` 稿件升级成 `.redpost` 图文工程。".to_string());
+            status.message = Some("正在把旧 `.md` 稿件升级成稿件文件夹。".to_string());
             status.progress = if needs_db_import { 0.78 } else { 0.62 };
         })?;
         let counts = migrate_legacy_markdown_manuscripts(&workspace_root)?;
@@ -727,13 +722,17 @@ mod tests {
         let workspace_root = temp_workspace_path("project-upgrade");
         let manuscripts_root = workspace_root.join("manuscripts");
         fs::create_dir_all(manuscripts_root.join("nested")).expect("should create nested dir");
-        fs::create_dir_all(manuscripts_root.join("existing.redpost"))
-            .expect("should create package dir");
+        fs::create_dir_all(manuscripts_root.join("existing")).expect("should create package dir");
+        fs::write(
+            manuscripts_root.join("existing").join("manifest.json"),
+            r#"{"packageKind":"post","entry":"content.md"}"#,
+        )
+        .expect("should write package manifest");
         fs::write(manuscripts_root.join("draft.md"), "# Draft").expect("should write markdown");
         fs::write(manuscripts_root.join("nested").join("deep.md"), "Deep body")
             .expect("should write nested markdown");
         fs::write(
-            manuscripts_root.join("existing.redpost").join("content.md"),
+            manuscripts_root.join("existing").join("content.md"),
             "package content",
         )
         .expect("should write package markdown");
@@ -744,15 +743,12 @@ mod tests {
         assert_eq!(counts.get("found").and_then(Value::as_u64), Some(2));
         assert_eq!(counts.get("upgraded").and_then(Value::as_u64), Some(2));
         assert_eq!(counts.get("skipped").and_then(Value::as_u64), Some(0));
-        assert!(manuscripts_root.join("draft.redpost").exists());
-        assert!(manuscripts_root
-            .join("nested")
-            .join("deep.redpost")
-            .exists());
+        assert!(manuscripts_root.join("draft").exists());
+        assert!(manuscripts_root.join("nested").join("deep").exists());
         assert!(!manuscripts_root.join("draft.md").exists());
         assert!(!manuscripts_root.join("nested").join("deep.md").exists());
         assert!(manuscripts_root
-            .join("existing.redpost")
+            .join("existing")
             .join("content.md")
             .exists());
 
@@ -763,8 +759,12 @@ mod tests {
     fn markdown_migration_skips_when_same_name_package_already_exists() {
         let workspace_root = temp_workspace_path("project-skip");
         let manuscripts_root = workspace_root.join("manuscripts");
-        fs::create_dir_all(manuscripts_root.join("conflict.redpost"))
-            .expect("should create package dir");
+        fs::create_dir_all(manuscripts_root.join("conflict")).expect("should create package dir");
+        fs::write(
+            manuscripts_root.join("conflict").join("manifest.json"),
+            r#"{"packageKind":"post","entry":"content.md"}"#,
+        )
+        .expect("should write package manifest");
         fs::write(manuscripts_root.join("conflict.md"), "legacy").expect("should write markdown");
 
         let counts =

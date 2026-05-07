@@ -2,12 +2,13 @@ import React from 'react';
 import { Composition } from 'remotion';
 import { VideoMotionComposition } from '../components/manuscripts/remotion/VideoMotionComposition';
 import type { RemotionCompositionConfig } from '../components/manuscripts/remotion/types';
+import { APP_BRAND } from '../config/brand';
 
 export const REDBOX_REMOTION_COMPOSITION_ID = 'RedBoxVideoMotion';
 
 const DEFAULT_COMPOSITION: RemotionCompositionConfig = {
     version: 1,
-    title: 'RedBox Motion',
+    title: `${APP_BRAND.displayName} Motion`,
     entryCompositionId: REDBOX_REMOTION_COMPOSITION_ID,
     width: 1080,
     height: 1920,

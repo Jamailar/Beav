@@ -194,7 +194,7 @@ fn execute_planned_image_generation_item(
             if placeholder_fallback_allowed {
                 write_placeholder_svg(
                     &absolute_path,
-                    request_title.as_deref().unwrap_or("RedBox Image"),
+                    request_title.as_deref().unwrap_or("Generated Image"),
                     &request_prompt.chars().take(48).collect::<String>(),
                     "#E76F51",
                 )?;
@@ -212,7 +212,7 @@ fn execute_planned_image_generation_item(
         } else if placeholder_fallback_allowed {
             write_placeholder_svg(
                 &absolute_path,
-                request_title.as_deref().unwrap_or("RedBox Image"),
+                request_title.as_deref().unwrap_or("Generated Image"),
                 &request_prompt.chars().take(48).collect::<String>(),
                 "#E76F51",
             )?;
@@ -366,7 +366,7 @@ fn generate_planned_image_batch(
             let absolute_path = media_root_path.join(&relative_path);
             write_placeholder_svg(
                 &absolute_path,
-                asset_title.as_deref().unwrap_or("RedBox Image"),
+                asset_title.as_deref().unwrap_or("Generated Image"),
                 &item.prompt.chars().take(48).collect::<String>(),
                 "#E76F51",
             )?;
@@ -552,7 +552,9 @@ pub(crate) fn generate_image_assets(
                     if placeholder_fallback_allowed {
                         write_placeholder_svg(
                             &absolute_path,
-                            &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                            &title
+                                .clone()
+                                .unwrap_or_else(|| "Generated Image".to_string()),
                             &effective_image_prompt
                                 .clone()
                                 .unwrap_or_default()
@@ -594,7 +596,9 @@ pub(crate) fn generate_image_assets(
                         if placeholder_fallback_allowed {
                             write_placeholder_svg(
                                 &absolute_path,
-                                &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                                &title
+                                    .clone()
+                                    .unwrap_or_else(|| "Generated Image".to_string()),
                                 &effective_image_prompt
                                     .clone()
                                     .unwrap_or_default()
@@ -628,7 +632,9 @@ pub(crate) fn generate_image_assets(
                     );
                     write_placeholder_svg(
                         &absolute_path,
-                        &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                        &title
+                            .clone()
+                            .unwrap_or_else(|| "Generated Image".to_string()),
                         &effective_image_prompt
                             .clone()
                             .unwrap_or_default()
@@ -661,7 +667,9 @@ pub(crate) fn generate_image_assets(
         } else if placeholder_fallback_allowed {
             write_placeholder_svg(
                 &absolute_path,
-                &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                &title
+                    .clone()
+                    .unwrap_or_else(|| "Generated Image".to_string()),
                 &effective_image_prompt
                     .clone()
                     .unwrap_or_default()
@@ -824,10 +832,15 @@ pub fn handle_generation_channel(
                         .clone()
                         .unwrap_or_else(|| "图片生成".to_string()),
                     normalize_optional_string(Some(if execution.used_configured_endpoint {
-                        "RedBox 已通过已配置 endpoint 执行真实生成。".to_string()
+                        format!(
+                            "{} 已通过已配置 endpoint 执行真实生成。",
+                            app_brand_display_name()
+                        )
                     } else {
-                        "RedBox 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。"
-                            .to_string()
+                        format!(
+                            "{} 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。",
+                            app_brand_display_name()
+                        )
                     })),
                     execution.prompt.clone(),
                     execution.project_id.clone().map(|value| {
@@ -959,10 +972,9 @@ pub fn handle_generation_channel(
                     "image-generation",
                     title.clone().unwrap_or_else(|| "图片生成".to_string()),
                     normalize_optional_string(Some(if used_configured_endpoint {
-                        "RedBox 已通过已配置 endpoint 并发执行多图生成。".to_string()
+                        format!("{} 已通过已配置 endpoint 并发执行多图生成。", app_brand_display_name())
                     } else {
-                        "RedBox 已保存多图生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。"
-                            .to_string()
+                        format!("{} 已保存多图生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。", app_brand_display_name())
                     })),
                     prompt.clone(),
                     project_id.clone().map(|value| {
@@ -1215,7 +1227,9 @@ pub fn handle_generation_channel(
                         if placeholder_fallback_allowed {
                             write_placeholder_svg(
                                 &absolute_path,
-                                &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                                &title
+                                    .clone()
+                                    .unwrap_or_else(|| "Generated Image".to_string()),
                                 &effective_image_prompt
                                     .clone()
                                     .unwrap_or_default()
@@ -1257,7 +1271,9 @@ pub fn handle_generation_channel(
                             if placeholder_fallback_allowed {
                                 write_placeholder_svg(
                                     &absolute_path,
-                                    &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                                    &title
+                                        .clone()
+                                        .unwrap_or_else(|| "Generated Image".to_string()),
                                     &effective_image_prompt
                                         .clone()
                                         .unwrap_or_default()
@@ -1291,7 +1307,9 @@ pub fn handle_generation_channel(
                         );
                         write_placeholder_svg(
                             &absolute_path,
-                            &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                            &title
+                                .clone()
+                                .unwrap_or_else(|| "Generated Image".to_string()),
                             &effective_image_prompt
                                 .clone()
                                 .unwrap_or_default()
@@ -1324,7 +1342,9 @@ pub fn handle_generation_channel(
             } else if placeholder_fallback_allowed {
                 write_placeholder_svg(
                     &absolute_path,
-                    &title.clone().unwrap_or_else(|| "RedBox Image".to_string()),
+                    &title
+                        .clone()
+                        .unwrap_or_else(|| "Generated Image".to_string()),
                     &effective_image_prompt
                         .clone()
                         .unwrap_or_default()
@@ -1409,10 +1429,15 @@ pub fn handle_generation_channel(
                     .to_string()
                 }),
                 normalize_optional_string(Some(if used_configured_endpoint {
-                    "RedBox 已通过已配置 endpoint 执行真实生成。".to_string()
+                    format!(
+                        "{} 已通过已配置 endpoint 执行真实生成。",
+                        app_brand_display_name()
+                    )
                 } else {
-                    "RedBox 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。"
-                        .to_string()
+                    format!(
+                        "{} 已保存生成请求；当前缺少可用 provider 配置，仅生成了本地占位产物。",
+                        app_brand_display_name()
+                    )
                 })),
                 if channel == "image-gen:generate" {
                     effective_image_prompt.clone()

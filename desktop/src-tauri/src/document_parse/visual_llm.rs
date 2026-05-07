@@ -451,7 +451,7 @@ fn visual_payload_for_model(
 
 fn visual_manifest_system_prompt(prompt_version: &str) -> String {
     format!(
-        r#"你是 RedBox 的视觉索引编制器。只返回严格 JSON，schemaVersion 必须是 redbox.visual_manifest.v1。
+        r#"你是视觉索引编制器。只返回严格 JSON，schemaVersion 必须是 redbox.visual_manifest.v1。
 你需要用多模态视觉理解来描述图片、扫描型 PDF 页面、截图、图表、海报、商品图、UI、表格和其他视觉内容。
 
 语言规则非常重要：

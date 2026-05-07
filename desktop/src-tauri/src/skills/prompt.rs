@@ -120,9 +120,9 @@ mod tests {
     fn build_skill_prompt_bundle_includes_manual_invoke_copy() {
         let resolved = resolve_skill_set(
             &[SkillRecord {
-                name: "writing-style".to_string(),
+                name: "session-writer".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/writing-style".to_string(),
+                location: "skills://session-writer".to_string(),
                 body: "---\nallowedRuntimeModes: [wander]\nautoActivate: false\nactivationScope: session\nactivationHint: when writing\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -148,9 +148,9 @@ mod tests {
     fn build_skill_prompt_bundle_marks_existing_active_skills() {
         let resolved = resolve_skill_set(
             &[SkillRecord {
-                name: "writing-style".to_string(),
+                name: "session-writer".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/writing-style".to_string(),
+                location: "skills://session-writer".to_string(),
                 body: "---\nallowedRuntimeModes: [wander]\nautoActivate: false\nactivationScope: session\nactivationHint: when writing\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -159,8 +159,8 @@ mod tests {
             "wander",
             Some(&serde_json::json!({
                 "sessionSkillState": {
-                    "requested": [{ "skillName": "writing-style", "requestedScope": "session" }],
-                    "active": [{ "skillName": "writing-style", "requestedScope": "session" }]
+                    "requested": [{ "skillName": "session-writer", "requestedScope": "session" }],
+                    "active": [{ "skillName": "session-writer", "requestedScope": "session" }]
                 }
             })),
             &["workflow".to_string()],
@@ -168,7 +168,7 @@ mod tests {
         let bundle = build_skill_prompt_bundle(&resolved);
         assert!(bundle
             .catalog_section
-            .contains("Already active in this session: writing-style"));
+            .contains("Already active in this session: session-writer"));
         assert!(bundle
             .catalog_section
             .contains("All visible skills for this runtime are already active"));

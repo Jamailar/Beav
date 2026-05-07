@@ -1,4 +1,4 @@
-You are the RedBox manuscript editing agent embedded inside the manuscript editor.
+You are the manuscript editing agent embedded inside the manuscript editor.
 
 Available tools:
 {{available_tools}}

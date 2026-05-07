@@ -26,6 +26,22 @@ static OPENAI_TRANSPORT_CLIENT_AUTO: OnceLock<Client> = OnceLock::new();
 static OPENAI_TRANSPORT_CLIENT_HTTP11: OnceLock<Client> = OnceLock::new();
 static OPENAI_TRANSPORT_PREFERENCES: OnceLock<Mutex<HashMap<String, TransportMode>>> =
     OnceLock::new();
+const OPENAI_JSON_MAX_ATTEMPTS: usize = 3;
+const OPENAI_STREAM_MAX_ATTEMPTS: usize = 3;
+
+struct OpenaiStreamAttemptError {
+    error: LlmTransportError,
+    had_visible_output: bool,
+}
+
+impl OpenaiStreamAttemptError {
+    fn new(error: LlmTransportError, had_visible_output: bool) -> Self {
+        Self {
+            error,
+            had_visible_output,
+        }
+    }
+}
 
 fn openai_client(mode: TransportMode) -> Result<&'static Client, String> {
     let slot = match mode {
@@ -97,7 +113,91 @@ where
     tauri::async_runtime::block_on(future)
 }
 
+fn is_retryable_json_error(error: &LlmTransportError) -> bool {
+    if matches!(error.http_status, Some(429) | Some(500..=599)) {
+        return true;
+    }
+    matches!(
+        error.kind,
+        TransportErrorKind::Connect
+            | TransportErrorKind::Timeout
+            | TransportErrorKind::PartialBody
+            | TransportErrorKind::Http2Framing
+            | TransportErrorKind::EmptyReply
+            | TransportErrorKind::Unknown
+    )
+}
+
+fn is_retryable_stream_error(error: &LlmTransportError) -> bool {
+    if matches!(error.http_status, Some(429) | Some(500..=599)) {
+        return true;
+    }
+    matches!(
+        error.kind,
+        TransportErrorKind::Connect
+            | TransportErrorKind::Timeout
+            | TransportErrorKind::PartialBody
+            | TransportErrorKind::Http2Framing
+            | TransportErrorKind::EmptyReply
+            | TransportErrorKind::Unknown
+    )
+}
+
+fn json_retry_delay(attempt: usize) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(4) as u32;
+    let base_ms = 350u64.saturating_mul(2u64.saturating_pow(exponent));
+    let jitter_ms = (now_ms() as u64) % 120;
+    Duration::from_millis(base_ms.saturating_add(jitter_ms))
+}
+
+fn stream_retry_delay(attempt: usize) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(3) as u32;
+    let base_ms = 450u64.saturating_mul(2u64.saturating_pow(exponent));
+    let jitter_ms = (now_ms() as u64) % 160;
+    Duration::from_millis(base_ms.saturating_add(jitter_ms))
+}
+
+fn run_json_attempt_with_retry<F>(
+    state: &State<'_, AppState>,
+    trace_label: &str,
+    transport_mode: TransportMode,
+    mut attempt: F,
+) -> Result<Value, LlmTransportError>
+where
+    F: FnMut() -> Result<Value, LlmTransportError>,
+{
+    let mut current_attempt = 1usize;
+    loop {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if current_attempt < OPENAI_JSON_MAX_ATTEMPTS
+                    && is_retryable_json_error(&error) =>
+            {
+                let delay = json_retry_delay(current_attempt);
+                append_debug_trace_state(
+                    state,
+                    format!(
+                        "[runtime][transport][openai][json] retry attempt={}/{} transport={} delay_ms={} label={} reason={}",
+                        current_attempt + 1,
+                        OPENAI_JSON_MAX_ATTEMPTS,
+                        transport_mode.as_str(),
+                        delay.as_millis(),
+                        trace_label,
+                        text_snippet(&error.to_string(), 240),
+                    ),
+                );
+                std::thread::sleep(delay);
+                current_attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 async fn send_openai_request(
+    state: &State<'_, AppState>,
+    trace_label: &str,
     config: &ResolvedChatConfig,
     body: &Value,
     transport_mode: TransportMode,
@@ -106,11 +206,16 @@ async fn send_openai_request(
     let url = format!("{}/chat/completions", normalize_base_url(&config.base_url));
     let provider_profile = openai_provider_profile(config);
     let streaming = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let timeout_label = max_time_seconds
+        .filter(|value| *value > 0)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "client-default".to_string());
+    let started_at = now_ms();
     let client = openai_client(transport_mode).map_err(|error| {
         LlmTransportError::new(TransportErrorKind::Unknown, transport_mode, error)
     })?;
     let mut request = client
-        .post(url)
+        .post(url.clone())
         .header(CONTENT_TYPE, "application/json")
         .json(body);
     request = request.header(
@@ -140,7 +245,24 @@ async fn send_openai_request(
     request
         .send()
         .await
-        .map_err(|error| (transport_mode, error).into())
+        .map_err(|error| {
+            let diagnostic = LlmTransportError::reqwest_diagnostic(&error);
+            append_debug_trace_state(
+                state,
+                format!(
+                    "[runtime][transport][openai][{}] request-error model={} transport={} stream={} elapsed={}ms timeout={} url={} diagnostic={}",
+                    trace_label,
+                    config.model_name,
+                    transport_mode.as_str(),
+                    streaming,
+                    now_ms().saturating_sub(started_at),
+                    timeout_label,
+                    url,
+                    text_snippet(&diagnostic, 1200)
+                ),
+            );
+            (transport_mode, error).into()
+        })
 }
 
 fn curl_headers_for_openai_request(
@@ -412,9 +534,18 @@ async fn run_stream_attempt(
     max_time_seconds: Option<u64>,
     allow_official_reauth_retry: bool,
     transport_mode: TransportMode,
-) -> Result<StreamingChatCompletion, LlmTransportError> {
+) -> Result<StreamingChatCompletion, OpenaiStreamAttemptError> {
     let mut config = config.clone();
-    let response = send_openai_request(&config, body, transport_mode, max_time_seconds).await?;
+    let response = send_openai_request(
+        state,
+        session_id.unwrap_or("no-session"),
+        &config,
+        body,
+        transport_mode,
+        max_time_seconds,
+    )
+    .await
+    .map_err(|error| OpenaiStreamAttemptError::new(error, false))?;
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
         if allow_official_reauth_retry && status == 401 {
@@ -424,7 +555,10 @@ async fn run_stream_attempt(
                 "streaming-http-401",
             )
             .map_err(|error| {
-                LlmTransportError::new(TransportErrorKind::Unknown, transport_mode, error)
+                OpenaiStreamAttemptError::new(
+                    LlmTransportError::new(TransportErrorKind::Unknown, transport_mode, error),
+                    false,
+                )
             })? {
                 config.api_key = Some(refreshed_api_key);
                 return Box::pin(run_stream_attempt(
@@ -441,9 +575,10 @@ async fn run_stream_attempt(
                 .await;
             }
         }
-        return Err(
+        return Err(OpenaiStreamAttemptError::new(
             parse_error_response(response, transport_mode, &config, runtime_mode, state).await,
-        );
+            false,
+        ));
     }
 
     let mut stream = response.bytes_stream();
@@ -465,10 +600,13 @@ async fn run_stream_attempt(
             .map(|value| is_chat_runtime_cancel_requested(state, value))
             .unwrap_or(false)
         {
-            return Err(LlmTransportError::new(
-                TransportErrorKind::Cancelled,
-                transport_mode,
-                "chat generation cancelled",
+            return Err(OpenaiStreamAttemptError::new(
+                LlmTransportError::new(
+                    TransportErrorKind::Cancelled,
+                    transport_mode,
+                    "chat generation cancelled",
+                ),
+                responding_started || saw_reasoning,
             ));
         }
         match tokio::time::timeout(Duration::from_millis(250), stream.next()).await {
@@ -513,10 +651,13 @@ async fn run_stream_attempt(
                                         event_data_lines.join("\n"),
                                     ),
                                 );
-                                LlmTransportError::new(
-                                    TransportErrorKind::Parse,
-                                    transport_mode,
-                                    error,
+                                OpenaiStreamAttemptError::new(
+                                    LlmTransportError::new(
+                                        TransportErrorKind::Parse,
+                                        transport_mode,
+                                        error,
+                                    ),
+                                    responding_started || saw_reasoning,
                                 )
                             })?;
                             event_data_lines.clear();
@@ -574,6 +715,7 @@ async fn run_stream_attempt(
                 }
             }
             Ok(Some(Err(error))) => {
+                let had_visible_output = responding_started || saw_reasoning;
                 append_debug_trace_state(
                     state,
                     format!(
@@ -590,7 +732,10 @@ async fn run_stream_attempt(
                         text_snippet(&error.to_string(), 240),
                     ),
                 );
-                return Err((transport_mode, error).into());
+                return Err(OpenaiStreamAttemptError::new(
+                    (transport_mode, error).into(),
+                    had_visible_output,
+                ));
             }
             Ok(None) => {
                 result.saw_eof = true;
@@ -634,8 +779,39 @@ async fn run_stream_attempt(
                     event_data_lines.join("\n"),
                 ),
             );
-            LlmTransportError::new(TransportErrorKind::Parse, transport_mode, error)
+            OpenaiStreamAttemptError::new(
+                LlmTransportError::new(TransportErrorKind::Parse, transport_mode, error),
+                responding_started || saw_reasoning,
+            )
         })?;
+    }
+
+    if result.terminal_reason.is_none() && !result.saw_done {
+        let had_visible_output = responding_started || saw_reasoning;
+        append_debug_trace_state(
+            state,
+            format!(
+                "[runtime][stream][openai][{}] incomplete_eof transport={} first_chunk_ms={} chunk_count={} chunk_bytes={} content_chars={} reasoning_seen={} elapsed={}ms",
+                session_id.unwrap_or("no-session"),
+                transport_mode.as_str(),
+                first_chunk_at_ms
+                    .map(|ts| (ts - stream_started_at).to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                chunk_count,
+                chunk_bytes,
+                result.content.chars().count(),
+                saw_reasoning,
+                now_ms() - stream_started_at,
+            ),
+        );
+        return Err(OpenaiStreamAttemptError::new(
+            LlmTransportError::new(
+                TransportErrorKind::PartialBody,
+                transport_mode,
+                "stream closed before a terminal chat completion event",
+            ),
+            had_visible_output,
+        ));
     }
 
     if saw_tool_calls && !thought_closed {
@@ -719,7 +895,15 @@ async fn run_json_attempt(
     transport_mode: TransportMode,
 ) -> Result<Value, LlmTransportError> {
     let mut config = config.clone();
-    let response = send_openai_request(&config, body, transport_mode, max_time_seconds).await?;
+    let response = send_openai_request(
+        state,
+        "json",
+        &config,
+        body,
+        transport_mode,
+        max_time_seconds,
+    )
+    .await?;
     let status = response.status().as_u16();
     let raw = response
         .text()
@@ -803,7 +987,7 @@ pub(crate) fn run_openai_streaming_chat_completion_transport(
     allow_official_reauth_retry: bool,
 ) -> Result<StreamingChatCompletion, LlmTransportError> {
     let trace_session_id = session_id.unwrap_or("no-session");
-    let attempt = |mode| {
+    let attempt_once = |mode| {
         run_transport_future(run_stream_attempt(
             app,
             state,
@@ -815,6 +999,52 @@ pub(crate) fn run_openai_streaming_chat_completion_transport(
             allow_official_reauth_retry,
             mode,
         ))
+    };
+    let attempt = |mode| {
+        let mut current_attempt = 1usize;
+        loop {
+            match attempt_once(mode) {
+                Ok(result) => return Ok(result),
+                Err(error)
+                    if current_attempt < OPENAI_STREAM_MAX_ATTEMPTS
+                        && !error.had_visible_output
+                        && is_retryable_stream_error(&error.error) =>
+                {
+                    let delay = stream_retry_delay(current_attempt);
+                    append_debug_trace_state(
+                        state,
+                        format!(
+                            "[runtime][stream][openai][{}] retry attempt={}/{} transport={} delay_ms={} reason={}",
+                            trace_session_id,
+                            current_attempt + 1,
+                            OPENAI_STREAM_MAX_ATTEMPTS,
+                            mode.as_str(),
+                            delay.as_millis(),
+                            text_snippet(&error.error.to_string(), 240),
+                        ),
+                    );
+                    if let Some(current_session_id) = session_id {
+                        emit_runtime_task_checkpoint_saved(
+                            app,
+                            None,
+                            Some(current_session_id),
+                            "chat.stream_retry",
+                            "stream interrupted; retrying model turn",
+                            Some(json!({
+                                "attempt": current_attempt + 1,
+                                "maxAttempts": OPENAI_STREAM_MAX_ATTEMPTS,
+                                "transport": mode.as_str(),
+                                "reason": error.error.kind.as_str(),
+                            })),
+                        );
+                    }
+                    std::thread::sleep(delay);
+                    current_attempt += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     };
 
     let preferred_mode = preferred_transport_mode(config);
@@ -840,29 +1070,30 @@ pub(crate) fn run_openai_streaming_chat_completion_transport(
             Ok(result)
         }
         Err(error)
-            if error.should_retry_with_http1()
+            if error.error.should_retry_with_http1()
                 && matches!(preferred_mode, TransportMode::Auto)
-                && error.kind != TransportErrorKind::Cancelled =>
+                && error.error.kind != TransportErrorKind::Cancelled
+                && !error.had_visible_output =>
         {
             append_debug_trace_state(
                 state,
                 format!(
                     "[runtime][transport][openai][{}] retry upgrade=http1.1 reason={}",
                     trace_session_id,
-                    text_snippet(&error.to_string(), 200),
+                    text_snippet(&error.error.to_string(), 200),
                 ),
             );
             let retry_result = attempt(TransportMode::Http11).map_err(|retry_error| {
                 LlmTransportError::new(
-                    retry_error.kind,
-                    retry_error.transport_mode,
-                    format!("{error}; fallback failed: {retry_error}"),
+                    retry_error.error.kind,
+                    retry_error.error.transport_mode,
+                    format!("{}; fallback failed: {}", error.error, retry_error.error),
                 )
             })?;
             remember_transport_mode(config, TransportMode::Http11);
             Ok(retry_result)
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.error),
     }
 }
 
@@ -877,7 +1108,7 @@ pub(crate) fn run_openai_json_chat_completion_transport(
     if provider_profile.prefers_curl_json_transport() {
         return run_openai_json_attempt_via_curl(state, config, body, max_time_seconds);
     }
-    let attempt = |mode| {
+    let attempt_once = |mode| {
         run_transport_future(run_json_attempt(
             state,
             config,
@@ -887,6 +1118,7 @@ pub(crate) fn run_openai_json_chat_completion_transport(
             mode,
         ))
     };
+    let attempt = |mode| run_json_attempt_with_retry(state, "json", mode, || attempt_once(mode));
 
     let preferred_mode = preferred_transport_mode(config);
     match attempt(preferred_mode) {
@@ -920,8 +1152,11 @@ pub(crate) fn run_openai_json_chat_completion_transport(
 
 #[cfg(test)]
 mod tests {
-    use super::{openai_provider_profile, openai_reasoning_fragments, preferred_transport_mode};
-    use crate::llm_transport::TransportMode;
+    use super::{
+        is_retryable_json_error, openai_provider_profile, openai_reasoning_fragments,
+        preferred_transport_mode,
+    };
+    use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::provider_compat::ProviderFamily;
     use crate::runtime::ResolvedChatConfig;
     use serde_json::json;
@@ -952,5 +1187,38 @@ mod tests {
             "reasoning_content": "step zero"
         }));
         assert_eq!(fragments, vec!["step zero", "step one", "step two"]);
+    }
+
+    #[test]
+    fn json_retry_policy_keeps_protocol_errors_terminal() {
+        assert!(is_retryable_json_error(&LlmTransportError::new(
+            TransportErrorKind::PartialBody,
+            TransportMode::Http11,
+            "error decoding response body",
+        )));
+        assert!(is_retryable_json_error(&LlmTransportError::with_status(
+            TransportMode::Http11,
+            429,
+            "rate limited",
+            None,
+        )));
+        assert!(is_retryable_json_error(&LlmTransportError::with_status(
+            TransportMode::Http11,
+            502,
+            "bad gateway",
+            None,
+        )));
+        assert!(!is_retryable_json_error(&LlmTransportError::with_status(
+            TransportMode::Http11,
+            400,
+            "invalid request",
+            None,
+        )));
+        assert!(!is_retryable_json_error(&LlmTransportError::with_status(
+            TransportMode::Http11,
+            401,
+            "unauthorized",
+            None,
+        )));
     }
 }

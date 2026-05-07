@@ -52,7 +52,7 @@ mod tests {
         SkillRecord {
             name: name.to_string(),
             description: description.to_string(),
-            location: format!("redbox://skills/{name}"),
+            location: format!("skills://{name}"),
             body: body.to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: Some(true),
@@ -86,20 +86,6 @@ mod tests {
         assert_eq!(
             found.as_ref().map(|item| item.name.as_str()),
             Some("writing-style")
-        );
-    }
-
-    #[test]
-    fn find_skill_catalog_entry_by_name_accepts_legacy_redbox_prefix() {
-        let snapshot = build_skill_catalog_snapshot(&[skill(
-            "image-director",
-            "desc",
-            "---\nallowedRuntimeModes: [redclaw]\n---\n# Image Director\n\nBody",
-        )]);
-        let found = find_skill_catalog_entry_by_name(&snapshot, "redbox-image-director");
-        assert_eq!(
-            found.as_ref().map(|item| item.name.as_str()),
-            Some("image-director")
         );
     }
 }

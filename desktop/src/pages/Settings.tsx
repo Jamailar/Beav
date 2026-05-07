@@ -95,6 +95,7 @@ import {
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import { playTestNotificationSound } from '../notifications/audio';
 import { DEFAULT_NOTIFICATION_SETTINGS, parseNotificationSettings } from '../notifications/types';
+import { APP_BRAND } from '../config/brand';
 
 const MIN_CHAT_MAX_TOKENS = 1024;
 const DEFAULT_CHAT_MAX_TOKENS = 262144;
@@ -208,7 +209,7 @@ function TeamSettingsSection({
     <section className="space-y-4">
       <div>
         <h2 className="text-lg font-medium text-text-primary">团队</h2>
-        <p className="mt-1 text-sm text-text-tertiary">管理 RedClaw 新对话里出现的成员和顺序。</p>
+        <p className="mt-1 text-sm text-text-tertiary">管理 {APP_BRAND.aiDisplayName} 新对话里出现的成员和顺序。</p>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-surface-primary">
@@ -288,7 +289,7 @@ function TeamSettingsSection({
                       visible ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
                     )}
                     title={visible ? '已展示' : '已隐藏'}
-                    aria-label={visible ? '在 RedClaw 展示' : '不在 RedClaw 展示'}
+                    aria-label={visible ? `在 ${APP_BRAND.aiDisplayName} 展示` : `不在 ${APP_BRAND.aiDisplayName} 展示`}
                   >
                     <span
                       className={clsx(
@@ -1004,7 +1005,7 @@ export function Settings({
       setRedclawProfileMessage(null);
     } catch (error) {
       if (requestId !== redclawProfileLoadRequestRef.current) return;
-      console.error('Failed to load RedClaw profile bundle', error);
+      console.error('Failed to load AI profile bundle', error);
       setRedclawProfileMessage({
         tone: 'error',
         text: `加载用户档案失败：${error instanceof Error ? error.message : String(error)}`,
@@ -1554,7 +1555,7 @@ export function Settings({
     const sourceId = String(source.id || '').trim().toLowerCase();
     const sourceName = String(source.name || '').trim().toLowerCase();
     const presetId = String(source.presetId || '').trim().toLowerCase();
-    return sourceId === 'redbox_official_auto' || sourceName === 'redbox official' || presetId === 'redbox-official';
+    return sourceId === 'redbox_official_auto' || sourceName === 'redbox official' || sourceName === `${APP_BRAND.displayName} official`.toLowerCase() || presetId === 'redbox-official';
   }, []);
 
   const hasOfficialManagedSource = useMemo(
@@ -1569,7 +1570,7 @@ export function Settings({
     return [
       {
         id: 'redbox_official_auto',
-        name: 'RedBox Official',
+        name: `${APP_BRAND.displayName} Official`,
         presetId: 'redbox-official',
         baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL,
         apiKey: '',
@@ -4911,6 +4912,7 @@ export function Settings({
   }, [
     activeTab,
     backgroundTasks.length,
+    baseSettingsLoadedRevision,
     ensureTabResourcesLoaded,
     formData.developer_mode_enabled,
     isActive,
@@ -5002,7 +5004,7 @@ export function Settings({
         setRedclawProfileMessage({
           tone: 'success',
           text: savedDocCount === 2
-            ? '用户档案已保存，RedClaw 后续会直接读取这两份长期档案。'
+            ? `用户档案已保存，${APP_BRAND.aiDisplayName} 后续会直接读取这两份长期档案。`
             : '用户档案已保存。',
         });
         tabWarmRef.current.profile = true;
@@ -5432,7 +5434,7 @@ export function Settings({
                       {showScopedModelOverrides && (
                         <div className="px-3 pb-3 space-y-3 border-t border-border/70">
                           <p className="text-[11px] text-text-tertiary pt-3">
-                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、Team、知识库、RedClaw。
+                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、Team、知识库、{APP_BRAND.aiDisplayName}。
                           </p>
                           <datalist id="scoped-model-candidates">
                             {allConfiguredModels.map((modelId) => (
@@ -5474,7 +5476,7 @@ export function Settings({
                               />
                             </div>
                             <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">RedClaw 默认模型</label>
+                              <label className="text-[11px] text-text-secondary">{APP_BRAND.aiDisplayName} 默认模型</label>
                               <input
                                 type="text"
                                 list="scoped-model-candidates"
@@ -6180,7 +6182,7 @@ export function Settings({
 
                     <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
                       <div className="rounded-lg border border-border bg-surface-primary/70 p-3 text-xs text-text-secondary">
-                        由于各家视频api差异巨大，AI智能选择效果不佳，暂时仅支持RedBox官方源，其他厂商模型适配陆续开发中。
+                        由于各家视频 api 差异巨大，AI 智能选择效果不佳，暂时仅支持{APP_BRAND.displayName}官方源，其他厂商模型适配陆续开发中。
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
@@ -6247,7 +6249,7 @@ export function Settings({
                   </div>
 
                   <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">RedClaw 上下文压缩策略</h3>
+                    <h3 className="text-sm font-medium text-text-primary mb-4">{APP_BRAND.aiDisplayName} 上下文压缩策略</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="group">
                         <label className="block text-xs font-medium text-text-secondary mb-1.5">
@@ -6262,7 +6264,7 @@ export function Settings({
                           className="w-full bg-surface-secondary/30 rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
                         />
                         <p className="mt-1 text-[11px] text-text-tertiary">
-                          默认 256000。RedClaw 对话预计上下文超过该值时会自动 compact。
+                          默认 256000。{APP_BRAND.aiDisplayName} 对话预计上下文超过该值时会自动 compact。
                         </p>
                       </div>
                     </div>

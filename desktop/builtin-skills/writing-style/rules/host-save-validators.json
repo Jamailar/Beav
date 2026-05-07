@@ -1,5 +1,5 @@
 {
-  "appliesTo": ["redarticle"],
+  "appliesTo": ["article"],
   "rules": [
     {
       "ruleType": "contains_any",

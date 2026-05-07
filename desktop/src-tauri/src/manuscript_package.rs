@@ -15,23 +15,21 @@ use crate::{
         richpost_theme_catalog_value_for_manifest, richpost_theme_state_value,
         timeline_clip_duration_ms,
     },
-    file_url_for_path, get_default_package_entry, get_draft_type_from_file_name,
-    get_package_kind_from_file_name, is_thrive_package_path, join_relative, make_id,
+    default_package_entry_for_kind, draft_type_from_package_kind, file_url_for_path,
+    get_package_kind_from_manifest, is_manuscript_package_path, join_relative, make_id,
     normalize_relative_path, now_i64, now_iso, now_ms, package_assets_path,
     package_content_map_path, package_cover_path, package_editor_project_path, package_entry_path,
-    package_images_path,
-    package_layout_tokens_path, package_manifest_path, package_remotion_input_props_path,
-    package_remotion_path, package_richpost_master_path, package_richpost_masters_dir,
-    package_richpost_page_html_path, package_richpost_page_plan_path, package_richpost_pages_dir,
-    package_richpost_theme_assets_dir, package_richpost_theme_config_path,
-    package_richpost_theme_master_path, package_richpost_theme_masters_dir,
-    package_richpost_theme_root_dir, package_richpost_theme_store_dir,
-    package_richpost_theme_template_path, package_richpost_theme_tokens_path,
-    package_richpost_themes_path, package_scene_ui_path, package_timeline_path,
-    package_track_ui_path,
-    parse_json_value_from_text, read_json_value_or, read_thrive_json_entry_or, redbox_project_root,
-    resolve_manuscript_path, title_from_relative_path, write_json_value, write_text_file,
-    write_thrive_post_package, AppState,
+    package_images_path, package_layout_tokens_path, package_manifest_path,
+    package_remotion_input_props_path, package_remotion_path, package_richpost_master_path,
+    package_richpost_masters_dir, package_richpost_page_html_path, package_richpost_page_plan_path,
+    package_richpost_pages_dir, package_richpost_theme_assets_dir,
+    package_richpost_theme_config_path, package_richpost_theme_master_path,
+    package_richpost_theme_masters_dir, package_richpost_theme_root_dir,
+    package_richpost_theme_store_dir, package_richpost_theme_template_path,
+    package_richpost_theme_tokens_path, package_richpost_themes_path, package_scene_ui_path,
+    package_timeline_path, package_track_ui_path, parse_json_value_from_text, read_json_value_or,
+    read_package_json_entry_or, redbox_project_root, resolve_manuscript_path,
+    title_from_relative_path, write_json_value, write_text_file, AppState,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {
@@ -2837,9 +2835,9 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("");
-    if is_thrive_package_path(package_path) {
-        let manifest = read_thrive_json_entry_or(package_path, "manifest.json", json!({}));
-        let bindings = read_thrive_json_entry_or(
+    if is_manuscript_package_path(package_path) {
+        let manifest = read_package_json_entry_or(package_path, "manifest.json", json!({}));
+        let bindings = read_package_json_entry_or(
             package_path,
             "bindings.json",
             json!({
@@ -2892,8 +2890,14 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         .and_then(|value| value.as_str())
         .unwrap_or(fallback_title.as_str())
         .to_string();
-    let package_kind = get_package_kind_from_file_name(file_name);
-    let richpost_theme = if package_kind == Some("post") {
+    let package_kind = manifest
+        .get("packageKind")
+        .or_else(|| manifest.get("kind"))
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .or_else(|| get_package_kind_from_manifest(package_path))
+        .unwrap_or_else(|| "article".to_string());
+    let richpost_theme = if package_kind == "post" {
         Some(richpost_theme_state_value(package_path, &manifest))
     } else {
         None
@@ -2930,7 +2934,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     let active_richpost_theme_masters_dir = active_richpost_theme_id
         .as_ref()
         .map(|theme_id| package_richpost_theme_masters_dir(package_path, theme_id));
-    let richpost_theme_root_masters = if package_kind == Some("post") {
+    let richpost_theme_root_masters = if package_kind == "post" {
         active_richpost_theme_id
             .as_ref()
             .map(|theme_id| {
@@ -2960,7 +2964,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     } else {
         Vec::new()
     };
-    let richpost_page_plan = if package_kind == Some("post") {
+    let richpost_page_plan = if package_kind == "post" {
         Some(read_json_value_or(
             richpost_page_plan_path.as_path(),
             json!({ "pages": [] }),
@@ -2968,7 +2972,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     } else {
         None
     };
-    let richpost_masters = if package_kind == Some("post") && richpost_masters_dir.exists() {
+    let richpost_masters = if package_kind == "post" && richpost_masters_dir.exists() {
         let mut masters = fs::read_dir(&richpost_masters_dir)
             .ok()
             .into_iter()
@@ -3002,7 +3006,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     } else {
         Vec::new()
     };
-    let richpost_pages = if package_kind == Some("post") {
+    let richpost_pages = if package_kind == "post" {
         richpost_page_plan
             .as_ref()
             .and_then(|plan| plan.get("pages"))
@@ -3045,9 +3049,9 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
     } else {
         Vec::new()
     };
-    let editor_project = if package_kind == Some("video") {
+    let editor_project = if package_kind == "video" {
         read_existing_editor_project(package_path)
-    } else if package_kind == Some("audio") {
+    } else if package_kind == "audio" {
         Some(ensure_editor_project(package_path)?)
     } else {
         None
@@ -3093,7 +3097,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         package_remotion_path(package_path).as_path(),
         remotion_fallback,
     );
-    let remotion = if package_kind == Some("video") {
+    let remotion = if package_kind == "video" {
         normalize_video_remotion_scene(
             &title,
             &manifest,
@@ -3120,7 +3124,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             }),
         )
     };
-    let video_project = if package_kind == Some("video") {
+    let video_project = if package_kind == "video" {
         get_video_project_state(
             package_path,
             file_name,
@@ -3144,10 +3148,10 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         });
     Ok(json!({
         "manifest": {
-            "packageKind": get_package_kind_from_file_name(file_name),
-            "draftType": get_draft_type_from_file_name(file_name),
+            "packageKind": package_kind.clone(),
+            "draftType": manifest.get("draftType").cloned().unwrap_or_else(|| json!(draft_type_from_package_kind(&package_kind))),
             "title": manifest.get("title").cloned().unwrap_or(json!(title)),
-            "entry": manifest.get("entry").cloned().unwrap_or(json!(get_default_package_entry(file_name))),
+            "entry": manifest.get("entry").cloned().unwrap_or_else(|| json!(default_package_entry_for_kind(Some(&package_kind)))),
             "updatedAt": manifest.get("updatedAt").cloned().unwrap_or(json!(now_i64())),
             "videoEngine": manifest.get("videoEngine").cloned().unwrap_or(Value::Null),
             "videoAi": manifest.get("videoAi").cloned().unwrap_or(Value::Null)
@@ -3197,12 +3201,12 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
             .and_then(|value| value.get("description"))
             .cloned()
             .unwrap_or(Value::Null),
-        "richpostTypography": if package_kind == Some("post") {
+        "richpostTypography": if package_kind == "post" {
             richpost_typography.clone()
         } else {
             Value::Null
         },
-        "richpostFontScale": if package_kind == Some("post") {
+        "richpostFontScale": if package_kind == "post" {
             richpost_typography
                 .get("fontScale")
                 .cloned()
@@ -3210,7 +3214,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         } else {
             Value::Null
         },
-        "richpostLineHeightScale": if package_kind == Some("post") {
+        "richpostLineHeightScale": if package_kind == "post" {
             richpost_typography
                 .get("lineHeightScale")
                 .cloned()
@@ -3218,7 +3222,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         } else {
             Value::Null
         },
-        "richpostThemeCatalog": if package_kind == Some("post") {
+        "richpostThemeCatalog": if package_kind == "post" {
             richpost_theme_catalog_value_for_manifest(Some(package_path), &manifest)
         } else {
             Value::Null
@@ -3238,7 +3242,7 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
         } else {
             Value::Null
         },
-        "richpostThemesDir": if package_kind == Some("post") {
+        "richpostThemesDir": if package_kind == "post" {
             json!(package_richpost_theme_store_dir(package_path).display().to_string())
         } else {
             Value::Null
@@ -3288,39 +3292,17 @@ pub(crate) fn get_manuscript_package_state(package_path: &Path) -> Result<Value,
 pub(crate) fn create_manuscript_package(
     package_path: &Path,
     content: &str,
-    file_name: &str,
+    package_kind: &str,
     title: &str,
 ) -> Result<(), String> {
-    let package_kind = get_package_kind_from_file_name(file_name).unwrap_or("article");
-    let draft_type = get_draft_type_from_file_name(file_name);
-    let entry = get_default_package_entry(file_name);
-    if package_kind == "post" && is_thrive_package_path(package_path) {
-        write_thrive_post_package(
-            package_path,
-            &json!({
-                "id": make_id("thrive-post"),
-                "type": "thrive-package",
-                "schemaVersion": 1,
-                "kind": "post",
-                "packageKind": "post",
-                "draftType": draft_type,
-                "title": title,
-                "status": "writing",
-                "createdAt": now_i64(),
-                "updatedAt": now_i64(),
-                "entry": "content.md"
-            }),
-            content,
-            &json!({
-                "media": [],
-                "targets": [],
-                "publishedPosts": [],
-                "sources": [],
-                "inspirations": []
-            }),
-        )?;
-        return Ok(());
-    }
+    let package_kind = match package_kind {
+        "post" | "richpost" => "post",
+        "video" => "video",
+        "audio" => "audio",
+        _ => "article",
+    };
+    let draft_type = draft_type_from_package_kind(package_kind);
+    let entry = default_package_entry_for_kind(Some(package_kind));
     fs::create_dir_all(package_path).map_err(|error| error.to_string())?;
     write_json_value(
         &package_manifest_path(package_path),
@@ -3355,7 +3337,7 @@ pub(crate) fn create_manuscript_package(
         }),
     )?;
     write_text_file(
-        &package_entry_path(package_path, file_name, Some(&json!({ "entry": entry }))),
+        &package_entry_path(package_path, "", Some(&json!({ "entry": entry }))),
         content,
     )?;
     if package_kind == "video" {
@@ -3404,7 +3386,6 @@ pub(crate) fn create_manuscript_package(
 fn choose_generated_manuscript_package_relative(
     state: &State<'_, AppState>,
     parent_rel: &str,
-    target_extension: &str,
 ) -> Result<String, String> {
     let normalized_parent = normalize_relative_path(parent_rel);
     let base_id = make_id("manuscript");
@@ -3415,10 +3396,7 @@ fn choose_generated_manuscript_package_relative(
         } else {
             format!("{base_id}-{}", attempt + 1)
         };
-        let candidate_relative = normalize_relative_path(&join_relative(
-            &normalized_parent,
-            &format!("{stem}{target_extension}"),
-        ));
+        let candidate_relative = normalize_relative_path(&join_relative(&normalized_parent, &stem));
         let candidate_path = resolve_manuscript_path(state, &candidate_relative)?;
         if !candidate_path.exists() {
             return Ok(candidate_relative);
@@ -3430,7 +3408,7 @@ fn choose_generated_manuscript_package_relative(
 pub(crate) fn upgrade_markdown_manuscript_to_package(
     state: &State<'_, AppState>,
     source_path: &str,
-    target_extension: &str,
+    package_kind: &str,
 ) -> Result<String, String> {
     let source_relative = normalize_relative_path(source_path);
     if source_relative.is_empty() {
@@ -3444,15 +3422,14 @@ pub(crate) fn upgrade_markdown_manuscript_to_package(
         .rsplit_once('/')
         .map(|(parent, _)| parent)
         .unwrap_or("");
-    let target_relative =
-        choose_generated_manuscript_package_relative(state, parent_rel, target_extension)?;
+    let target_relative = choose_generated_manuscript_package_relative(state, parent_rel)?;
     let target = resolve_manuscript_path(state, &target_relative)?;
     if target.exists() {
         return Err("Target package already exists".to_string());
     }
     let content = fs::read_to_string(&source).map_err(|error| error.to_string())?;
     let title = title_from_relative_path(&source_relative);
-    create_manuscript_package(&target, &content, &target_relative, &title)?;
+    create_manuscript_package(&target, &content, package_kind, &title)?;
     fs::remove_file(&source).map_err(|error| error.to_string())?;
     Ok(target_relative)
 }

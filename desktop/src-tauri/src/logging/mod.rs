@@ -349,7 +349,7 @@ pub fn upload_pending_report(
         "createdAt": report.created_at,
         "summary": report.summary,
         "metadata": report.metadata,
-        "app": "RedBox",
+        "app": crate::app_brand_display_name(),
         "version": env!("CARGO_PKG_VERSION"),
         "platform": std::env::consts::OS,
         "channel": if cfg!(debug_assertions) { "debug" } else { "release" },

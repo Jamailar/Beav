@@ -1,6 +1,6 @@
 # `prompts/library/runtime/redclaw/`
 
-这里放 RedClaw 的运行时 prompt，包括定时任务、长周期任务和平台内容生成。
+这里放创作运行时 prompt，包括定时任务、长周期任务和平台内容生成。
 
 ## Main Groups
 

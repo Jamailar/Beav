@@ -16,7 +16,6 @@ import { uiMeasure, uiTraceInteraction } from '../utils/uiDebug';
 import { subscribeRuntimeEventStream } from '../runtime/runtimeEventStream';
 import {
     HEARTBEAT_INTERVAL_OPTIONS,
-    LONG_TEMPLATES,
     REDCLAW_CONTEXT_TYPE,
     REDCLAW_DISPLAY_NAME,
     REDCLAW_WELCOME_ICON_SRC,
@@ -25,8 +24,6 @@ import {
     SCHEDULE_TEMPLATES,
     createRedClawComposerShortcuts,
     createRedClawComposerShortcutsForContext,
-    longDraftFromTemplate,
-    pickLongTemplate,
     pickScheduleTemplate,
     scheduleDraftFromTemplate,
     type RedClawComposerShortcutInput,
@@ -47,8 +44,6 @@ import {
 } from './redclaw/onboardingState';
 import { RedClawSidebar } from './redclaw/RedClawSidebar';
 import type {
-    LongDraft,
-    RunnerLongCycleTask,
     RunnerScheduledTask,
     RunnerStatus,
     ScheduleDraft,
@@ -191,109 +186,9 @@ const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
     'unknown',
 ]);
 
-const REDCLAW_DIRECT_GOALS = new Set([
-    'hi',
-    'hello',
-    'hey',
-    '你好',
-    '嗨',
-    '哈喽',
-    '在吗',
-    'ok',
-    '好的',
-    '收到',
-    '谢谢',
-    'thanks',
-    '辛苦了',
-    '嗯',
-    '啊',
-]);
-
-const REDCLAW_TEAM_TRIGGER_TERMS = [
-    '团队',
-    '组队',
-    '协作',
-    '多agent',
-    'multi-agent',
-    '全流程',
-    '端到端',
-    '一站式',
-    '工作流',
-    '发布包',
-    '复盘',
-    '质检',
-    '合规',
-    '知识库',
-    '研究',
-    '资料',
-    '素材匹配',
-    '分镜',
-    '粗剪',
-    '剪辑计划',
-];
-
-const REDCLAW_DELIVERABLE_TERMS = [
-    '选题',
-    '标题',
-    '封面',
-    '正文',
-    '脚本',
-    '文案',
-    '标签',
-    '配图',
-    '图片',
-    '分镜',
-    '素材',
-    '发布',
-    '质检',
-    '复盘',
-];
-
-const REDCLAW_SIMPLE_DIRECT_PATTERNS = [
-    '改一下',
-    '润色',
-    '优化',
-    '缩短',
-    '扩写',
-    '翻译',
-    '总结',
-    '起个标题',
-    '写个标题',
-    '给我标题',
-    '写一句',
-    '写一段',
-    '简单写',
-    '帮我看看',
-];
-
-const normalizeRedClawRoutingText = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
-
-const shouldUseRedClawTeam = (goal: string): boolean => {
-    const normalized = normalizeRedClawRoutingText(goal);
-    if (!normalized) return false;
-
-    const compact = normalized.replace(/[,.!?;:'"`~，。！？；：、“”‘’（）()\[\]【】\s]/g, '');
-    if (REDCLAW_DIRECT_GOALS.has(compact)) return false;
-    if (compact.length <= 8 && !compact.includes('全流程') && !compact.includes('发布包')) return false;
-
-    const hasExplicitTeamTrigger = REDCLAW_TEAM_TRIGGER_TERMS.some((term) => normalized.includes(term));
-    const hasEndToEndShape = /从.+到/.test(normalized) || /包含.+(发布|质检|复盘|配图|分镜|素材)/.test(normalized);
-    const deliverableCount = REDCLAW_DELIVERABLE_TERMS.filter((term) => normalized.includes(term)).length;
-    const hasSourceGrounding = /(基于|根据|结合).+(收藏|知识库|资料|素材|文章|笔记|链接|文件)/.test(normalized);
-    const hasComplexCreationTarget = /(小红书|视频|图文|文章|笔记|发布)/.test(normalized)
-        && /(完整|一套|一条|生成|创作|策划|制作|发布)/.test(normalized);
-
-    if (hasExplicitTeamTrigger || hasEndToEndShape || hasSourceGrounding) return true;
-    if (deliverableCount >= 3) return true;
-    if (hasComplexCreationTarget && deliverableCount >= 2) return true;
-    if (normalized.length >= 120 && deliverableCount >= 2) return true;
-
-    const isSimpleDirect = normalized.length <= 80
-        && REDCLAW_SIMPLE_DIRECT_PATTERNS.some((term) => normalized.includes(term))
-        && deliverableCount <= 1;
-    if (isSimpleDirect) return false;
-
-    return false;
+const defaultSessionTitleFromPendingMessage = (message: PendingChatMessage | null | undefined): string => {
+    const titleSource = String(message?.displayContent || message?.content || '').trim();
+    return Array.from(titleSource).slice(0, 15).join('');
 };
 
 const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): ChatMessageLinkKind => {
@@ -316,6 +211,7 @@ interface RedClawProps {
     onTitleBarActionsChange?: (content: ReactNode | null) => void;
     onOpenChatSurface?: () => void;
     onOpenManuscriptEditor?: (filePath: string) => void;
+    activeManuscriptPath?: string | null;
     titleBarActive?: boolean;
 }
 
@@ -623,6 +519,7 @@ export function RedClaw({
     onTitleBarActionsChange,
     onOpenChatSurface,
     onOpenManuscriptEditor,
+    activeManuscriptPath = null,
     titleBarActive = false,
 }: RedClawProps) {
     const debugUi = useCallback((event: string, extra?: Record<string, unknown>) => {
@@ -722,9 +619,6 @@ export function RedClaw({
     const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraft>(() => scheduleDraftFromTemplate(SCHEDULE_TEMPLATES[0]));
     const [isAddingSchedule, setIsAddingSchedule] = useState(false);
 
-    const [longAdvanced, setLongAdvanced] = useState(false);
-    const [longDraft, setLongDraft] = useState<LongDraft>(() => longDraftFromTemplate(LONG_TEMPLATES[0]));
-    const [isAddingLong, setIsAddingLong] = useState(false);
     const shouldSyncGlobalHistory = Boolean(onGlobalSidebarContentChange);
     const shouldLoadHistory = isActive || shouldSyncGlobalHistory;
     const sessionRequestIdRef = useRef(0);
@@ -1033,12 +927,13 @@ export function RedClaw({
             const nextActiveSpaceId = activeSpaceId || 'default';
             const nextSpaceName = activeSpaceName || nextActiveSpaceId;
             const contextId = buildRedClawContextId(nextActiveSpaceId);
+            const sessionTitle = defaultSessionTitleFromPendingMessage(pendingMessage) || buildRedClawSessionTitle(nextSpaceName);
             try {
                 const session = await uiMeasure('redclaw', 'sessions:create_for_pending_message', async () => (
                     window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
                         contextId,
                         contextType: REDCLAW_CONTEXT_TYPE,
-                        title: buildRedClawSessionTitle(nextSpaceName),
+                        title: sessionTitle,
                         initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
                     }, {
                         timeoutMs: 3200,
@@ -1451,26 +1346,18 @@ export function RedClaw({
         });
     }, [runnerStatus]);
 
-    const longTasks = useMemo(() => {
-        const list = Object.values(runnerStatus?.longCycleTasks || {}) as RunnerLongCycleTask[];
-        return list.sort((a, b) => {
-            const aTime = a.nextRunAt ? new Date(a.nextRunAt).getTime() : Number.MAX_SAFE_INTEGER;
-            const bTime = b.nextRunAt ? new Date(b.nextRunAt).getTime() : Number.MAX_SAFE_INTEGER;
-            return aTime - bTime;
-        });
-    }, [runnerStatus]);
-
-    const createNewSession = useCallback(async (): Promise<string | null> => {
+    const createNewSession = useCallback(async (defaultTitle?: string): Promise<string | null> => {
         const nextActiveSpaceId = activeSpaceId || 'default';
         const nextSpaceName = activeSpaceName || nextActiveSpaceId;
         const contextId = buildRedClawContextId(nextActiveSpaceId);
+        const sessionTitle = String(defaultTitle || '').trim() || buildRedClawSessionTitle(nextSpaceName);
         setHistoryLoading(true);
         try {
             const session = await uiMeasure('redclaw', 'sessions:create_manual', async () => (
                 window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
                     contextId,
                     contextType: REDCLAW_CONTEXT_TYPE,
-                    title: buildRedClawSessionTitle(nextSpaceName),
+                    title: sessionTitle,
                     initialContext: buildRedClawInitialContext(nextSpaceName, nextActiveSpaceId),
                 }, {
                     timeoutMs: 3200,
@@ -1653,7 +1540,7 @@ export function RedClaw({
         }
     }, []);
 
-    const ensureActiveSpeakerSessionForSend = useCallback(async (): Promise<string | null> => {
+    const ensureActiveSpeakerSessionForSend = useCallback(async (defaultTitle?: string): Promise<string | null> => {
         if (activeAiSurface === 'advisor') {
             if (!selectedAdvisor) return null;
             const existing = advisorSessionIds[selectedAdvisor.id];
@@ -1661,7 +1548,7 @@ export function RedClaw({
             return createAdvisorSession(selectedAdvisor);
         }
         if (activeSessionIdRef.current) return activeSessionIdRef.current;
-        return createNewSession();
+        return createNewSession(defaultTitle);
     }, [activeAiSurface, advisorSessionIds, createAdvisorSession, createNewSession, selectedAdvisor]);
 
     const switchRoom = useCallback((roomId: string) => {
@@ -2181,101 +2068,6 @@ export function RedClaw({
         }
     }, [loadRunnerStatus]);
 
-    const applyLongTemplate = useCallback((templateId: string) => {
-        const template = pickLongTemplate(templateId);
-        setLongDraft(longDraftFromTemplate(template));
-    }, []);
-
-    const addLongTask = useCallback(async () => {
-        if (isAddingLong) return;
-        const draft = longDraft;
-        if (!draft.objective.trim() || !draft.stepPrompt.trim()) {
-            setAutomationMessage('请填写长期目标与每轮指令');
-            return;
-        }
-
-        setIsAddingLong(true);
-        try {
-            const result = await window.ipcRenderer.redclawRunner.addLongCycle({
-                name: draft.name.trim() || '长周期任务',
-                objective: draft.objective.trim(),
-                stepPrompt: draft.stepPrompt.trim(),
-                intervalMinutes: draft.intervalMinutes,
-                totalRounds: draft.totalRounds,
-                enabled: true,
-            });
-            if (!result?.success) {
-                setAutomationMessage(result?.error || '新增长周期任务失败');
-                return;
-            }
-            setAutomationMessage('已新增长周期任务');
-            applyLongTemplate(draft.templateId);
-            await loadRunnerStatus(false);
-        } catch (error) {
-            console.error('Failed to add long task:', error);
-            setAutomationMessage('新增长周期任务失败');
-        } finally {
-            setIsAddingLong(false);
-        }
-    }, [applyLongTemplate, isAddingLong, loadRunnerStatus, longDraft]);
-
-    const toggleLongTask = useCallback(async (task: RunnerLongCycleTask) => {
-        setAutomationLoading(true);
-        try {
-            const result = await window.ipcRenderer.redclawRunner.setLongCycleEnabled({
-                taskId: task.id,
-                enabled: !task.enabled,
-            });
-            if (!result?.success) {
-                setAutomationMessage(result?.error || '更新长周期任务失败');
-                return;
-            }
-            setAutomationMessage(task.enabled ? '长周期任务已暂停' : '长周期任务已启用');
-            await loadRunnerStatus(false);
-        } catch (error) {
-            console.error('Failed to toggle long task:', error);
-            setAutomationMessage('更新长周期任务失败');
-        } finally {
-            setAutomationLoading(false);
-        }
-    }, [loadRunnerStatus]);
-
-    const runLongTaskNow = useCallback(async (taskId: string) => {
-        setAutomationLoading(true);
-        try {
-            const result = await window.ipcRenderer.redclawRunner.runLongCycleNow({ taskId });
-            if (!result?.success) {
-                setAutomationMessage(result?.error || '触发执行失败');
-                return;
-            }
-            setAutomationMessage('已触发长周期任务执行');
-            await loadRunnerStatus(false);
-        } catch (error) {
-            console.error('Failed to run long task now:', error);
-            setAutomationMessage('触发执行失败');
-        } finally {
-            setAutomationLoading(false);
-        }
-    }, [loadRunnerStatus]);
-
-    const removeLongTask = useCallback(async (taskId: string) => {
-        setAutomationLoading(true);
-        try {
-            const result = await window.ipcRenderer.redclawRunner.removeLongCycle({ taskId });
-            if (!result?.success) {
-                setAutomationMessage(result?.error || '删除长周期任务失败');
-                return;
-            }
-            setAutomationMessage('长周期任务已删除');
-            await loadRunnerStatus(false);
-        } catch (error) {
-            console.error('Failed to remove long task:', error);
-            setAutomationMessage('删除长周期任务失败');
-        } finally {
-            setAutomationLoading(false);
-        }
-    }, [loadRunnerStatus]);
-
     const onboardingKnown = onboardingState !== undefined;
     const onboardingCompleted = useMemo(
         () => onboardingState !== undefined && isRedClawOnboardingCompleted(onboardingState),
@@ -2369,11 +2161,11 @@ export function RedClaw({
         handlePreviewLink({
             href: `manuscripts://${normalizedPath}`,
             label: normalizedPath.split('/').filter(Boolean).pop() || normalizedPath,
-            kind: normalizedPath.toLowerCase().endsWith('.thrive') ? 'manuscript' : 'text',
+            kind: normalizedPath.toLowerCase().endsWith('.md') ? 'text' : 'manuscript',
             resolvedUrl: '',
             isLocal: true,
             localPathCandidate: `manuscripts://${normalizedPath}`,
-            extension: normalizedPath.toLowerCase().endsWith('.thrive') ? 'thrive' : undefined,
+            extension: normalizedPath.toLowerCase().endsWith('.md') ? 'md' : undefined,
             sourceMessageId: 'redclaw-manuscript-list',
         });
     }, [handlePreviewLink, onOpenManuscriptEditor]);
@@ -2416,39 +2208,6 @@ export function RedClaw({
         }
     }, []);
 
-    const handleRedClawDispatchOverride = useCallback(async (payload: {
-        sessionId?: string;
-        message: string;
-        displayContent: string;
-    }) => {
-        const goal = String(payload.message || payload.displayContent || '').trim();
-        if (!goal) return false;
-        if (!shouldUseRedClawTeam(goal)) return false;
-        const result = await window.ipcRenderer.redclawOrchestration.createRun({
-            goal,
-            sessionId: payload.sessionId || activeSessionId || undefined,
-        });
-        if (!result?.success || !result.runtimeTaskId) {
-            throw new Error(String(result?.error || `${REDCLAW_DISPLAY_NAME} 自动组队失败`));
-        }
-        const resumeResult = await window.ipcRenderer.tasks.resume({ taskId: result.runtimeTaskId }) as {
-            success?: boolean;
-            error?: string;
-        };
-        if (resumeResult && resumeResult.success === false) {
-            throw new Error(resumeResult.error || `${REDCLAW_DISPLAY_NAME} 自动执行失败`);
-        }
-        const roleCount = Array.isArray(result.graph?.nodes) ? result.graph.nodes.length : 0;
-        return {
-            handled: true,
-            assistantContent: [
-                `${REDCLAW_DISPLAY_NAME} 已自动组建创作团队，开始执行：${goal}`,
-                roleCount > 0 ? `本次会由 ${roleCount} 个岗位接力完成，进度和交付物会回到当前消息流。` : '进度和交付物会回到当前消息流。',
-                result.runtimeTaskId ? `任务 ID：${result.runtimeTaskId}` : '',
-            ].filter(Boolean).join('\n\n'),
-        };
-    }, [activeSessionId]);
-
     useEffect(() => {
         if (!onGlobalSidebarContentChange) return;
         onGlobalSidebarContentChange(
@@ -2467,6 +2226,7 @@ export function RedClaw({
                 onDeleteSession={(session) => void deleteUnifiedHistorySession(session)}
                 onRenameSession={renameUnifiedHistorySession}
                 onOpenManuscript={handleOpenManuscript}
+                activeManuscriptPath={activeManuscriptPath}
             />
         );
     }, [
@@ -2477,6 +2237,7 @@ export function RedClaw({
         deleteUnifiedHistorySession,
         historyLoading,
         handleOpenManuscript,
+        activeManuscriptPath,
         onGlobalSidebarContentChange,
         renameUnifiedHistorySession,
         selectedRoomId,
@@ -2604,7 +2365,7 @@ export function RedClaw({
                                     <Chat
                                         isActive={isActive}
                                         onExecutionStateChange={setIsRedClawChatExecuting}
-                                        key={`redclaw:${activeAiSurface}:${activeAiSurface === 'advisor' ? selectedAdvisorId || 'advisor' : 'redclaw'}:${chatRefreshKey}`}
+                                        key={`redclaw:${activeAiSurface}:${activeAiSurface === 'advisor' ? selectedAdvisorId || 'advisor' : 'redclaw'}:${activeSpeakerSessionId || 'draft'}:${chatRefreshKey}`}
                                         fixedSessionId={activeSpeakerSessionId}
                                         fixedSessionDraft={!activeSpeakerSessionId}
                                         onEnsureSessionForSend={ensureActiveSpeakerSessionForSend}
@@ -2647,10 +2408,9 @@ export function RedClaw({
                                         onMessageLinkPreview={handlePreviewLink}
                                         activePreviewHref={previewTarget?.href || null}
                                         keepComposerInputActive={true}
-                                        placeholder={`描述创作目标，${REDCLAW_DISPLAY_NAME} 会判断是否需要组队\n使用 # 调用知识库`}
+                                        placeholder="描述创作目标，使用 # 调用知识库"
                                         fixedMemberMention={activeSpeakerMention}
                                         onSessionActivity={markHistorySessionActivity}
-                                        onDispatchOverride={activeAiSurface === 'redclaw' ? handleRedClawDispatchOverride : undefined}
                                         messageListHeader={<RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />}
                                     />
                                 )}

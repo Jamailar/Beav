@@ -59,7 +59,7 @@ fn real_main() -> Result<(), String> {
         return Err(format!("no probe cases for suite {}", config.suite_name));
     }
 
-    println!("== RedBox Image API Probe ==");
+    println!("== Image API Probe ==");
     println!("state_path={}", config.state_path.display());
     println!("endpoint={}", config.endpoint);
     println!("provider={}", config.provider);

@@ -24,7 +24,7 @@ interface RedClawOnboardingFlowProps {
 
 const COMPLETION_STAGES = [
   '正在保存问卷结果',
-  '正在启动 RedClaw 初始化 agent',
+  `正在启动 ${APP_BRAND.aiDisplayName} 初始化 agent`,
   '正在更新空间长期档案',
   '正在更新空间写作风格技能',
   '正在刷新当前空间上下文',
@@ -70,13 +70,13 @@ function CompletionView({
           <Loader2 className="h-7 w-7 animate-spin text-amber-700" />
         </div>
         <div className="mt-6 text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-600/70">
-          RedClaw · {activeSpaceName || '当前空间'}
+          {APP_BRAND.aiDisplayName} · {activeSpaceName || '当前空间'}
         </div>
         <h2 className="mt-3 text-3xl font-semibold leading-tight text-stone-950 sm:text-[38px]">
           正在完成这个空间的风格初始化
         </h2>
         <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-stone-700/80 sm:text-[15px]">
-          我正在把这份问卷结果交给 RedClaw 初始化 agent，顺序更新空间档案和写作风格技能。这个页面会一直停留到初始化全部完成。
+          我正在把这份问卷结果交给 {APP_BRAND.aiDisplayName} 初始化 agent，顺序更新空间档案和写作风格技能。这个页面会一直停留到初始化全部完成。
         </p>
 
         <div className="mt-8 space-y-3 text-left">
@@ -356,11 +356,11 @@ export function RedClawOnboardingFlow({
         setModelConfigMessage(
           configured
             ? ''
-            : '请先在“设置 -> AI 模型”里设置默认模型，再继续风格初始化。没有默认模型，RedClaw 无法完成后续档案和技能生成。'
+            : `请先在“设置 -> AI 模型”里设置默认模型，再继续风格初始化。没有默认模型，${APP_BRAND.aiDisplayName} 无法完成后续档案和技能生成。`
         );
       } catch (error) {
         if (cancelled) return;
-        console.error('Failed to load settings for RedClaw onboarding:', error);
+        console.error('Failed to load settings for AI onboarding:', error);
         setHasDefaultModelConfigured(false);
         setModelConfigMessage('当前无法读取模型配置，请先在“设置 -> AI 模型”确认默认模型已设置，再重新打开风格初始化。');
       }
@@ -426,7 +426,7 @@ export function RedClawOnboardingFlow({
       try {
         await onComplete(answersRef.current);
       } catch (error) {
-        console.error('Failed to complete RedClaw onboarding:', error);
+        console.error('Failed to complete AI onboarding:', error);
         setSubmissionError('风格初始化失败，请重试。');
       } finally {
         setSubmitting(false);
@@ -458,7 +458,7 @@ export function RedClawOnboardingFlow({
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 pb-4 pt-6 sm:px-8">
           <div className="space-y-1">
             <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-600/75">
-              RedClaw · {activeSpaceName || '当前空间'}
+              {APP_BRAND.aiDisplayName} · {activeSpaceName || '当前空间'}
             </div>
             <div className="text-lg font-semibold text-stone-950">定义这个空间的经营方向和写作风格</div>
           </div>

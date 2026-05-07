@@ -1,6 +1,6 @@
 ---
 allowedRuntimeModes: [video-editor]
-allowedTools: [redbox_editor, redbox_fs, app_cli]
+allowedTools: [editor, resource, workflow]
 hookMode: inline
 autoActivate: true
 activationScope: turn
