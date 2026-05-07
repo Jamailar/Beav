@@ -26,7 +26,7 @@ success_metrics:
 - 模型：`qwen3.5-plus`
 - 任务类型：`manuscript_creation`
 - 来源：`Wander -> RedClaw` 创作跳转
-- 目标：读取素材与用户档案，创建 `.redpost` 工程，写入完整稿件并保存
+- 目标：读取素材与用户档案，创建 稿件文件夹 工程，写入完整稿件并保存
 
 核心 session：
 
@@ -54,17 +54,17 @@ success_metrics:
 - `requireSourceRead` 已满足
 - 问题不在素材读取阶段
 
-### 2.2 `.redpost` 工程创建成功
+### 2.2 稿件文件夹 工程创建成功
 
 工具调用：
 
-- `app_cli(command="manuscripts create-project --kind redpost --parent wander --title 我做AI副项目第45周才想明白：省钱不是第一原则")`
+- `app_cli(command="manuscripts create-project --kind post --parent wander --title 我做AI副项目第45周才想明白：省钱不是第一原则")`
 
 返回结果包含：
 
-- `projectPath = wander/redpost-1776780906630.redpost`
-- `contentPath = wander/redpost-1776780906630.redpost/content.md`
-- `entryPath = wander/redpost-1776780906630.redpost/content.md`
+- `projectPath = wander/post-1776780906630稿件文件夹`
+- `contentPath = wander/post-1776780906630稿件文件夹/content.md`
+- `entryPath = wander/post-1776780906630稿件文件夹/content.md`
 
 所以：
 
@@ -396,7 +396,7 @@ checkpoint，而不是等整轮任务结束后才补记。
 
 - 素材目录读取失败
 - RedClaw 用户档案读取失败
-- `.redpost` 工程创建失败
+- 稿件文件夹 工程创建失败
 - API Key / 鉴权失败
 - transport partial body / HTTP2 framing
 - 数据库存不住 `activeSkills`

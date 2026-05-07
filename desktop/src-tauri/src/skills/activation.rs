@@ -23,6 +23,9 @@ fn resolve_active_skills(
     metadata: Option<&Value>,
 ) -> Vec<LoadedSkillRecord> {
     let requested = requested_session_skill_names(metadata);
+    let task_hint_requested = metadata
+        .and_then(|value| value.get("taskHints"))
+        .map(|value| requested_session_skill_names(Some(value)));
     let mut active = Vec::new();
     for skill in catalog {
         if !skill_allows_runtime_mode(skill, runtime_mode) {
@@ -31,6 +34,10 @@ fn resolve_active_skills(
         let requested_match = requested.iter().any(|item| item == &skill.name);
         if requested_match
             && normalized_activation_scope(skill.metadata.activation_scope.as_deref()) == "turn"
+            && !task_hint_requested
+                .as_ref()
+                .map(|items| items.iter().any(|item| item == &skill.name))
+                .unwrap_or(false)
         {
             continue;
         }
@@ -82,9 +89,23 @@ mod tests {
         SkillRecord {
             name: name.to_string(),
             description: "desc".to_string(),
-            location: format!("redbox://skills/{name}"),
+            location: format!("skills://{name}"),
             body: format!(
-                "---\nallowedRuntimeModes: {runtime_modes}\nautoActivate: {auto_activate}\nhookMode: inline\n---\n# Skill\n\nBody"
+                "---\nallowedRuntimeModes: {runtime_modes}\nautoActivate: {auto_activate}\nactivationScope: session\nhookMode: inline\n---\n# Skill\n\nBody"
+            ),
+            source_scope: Some("builtin".to_string()),
+            is_builtin: Some(true),
+            disabled: Some(false),
+        }
+    }
+
+    fn turn_scoped_skill(name: &str, runtime_modes: &str) -> SkillRecord {
+        SkillRecord {
+            name: name.to_string(),
+            description: "desc".to_string(),
+            location: format!("skills://{name}"),
+            body: format!(
+                "---\nallowedRuntimeModes: {runtime_modes}\nautoActivate: false\nactivationScope: turn\nhookMode: inline\n---\n# Skill\n\nBody"
             ),
             source_scope: Some("builtin".to_string()),
             is_builtin: Some(true),
@@ -118,7 +139,7 @@ mod tests {
     #[test]
     fn resolve_skill_set_does_not_persist_turn_scoped_skill_requests() {
         let resolved = resolve_skill_set(
-            &[skill("writing-style", "[redclaw, wander]", false)],
+            &[turn_scoped_skill("writing-style", "[redclaw, wander]")],
             "redclaw",
             Some(&serde_json::json!({
                 "activeSkills": ["writing-style"]
@@ -126,6 +147,25 @@ mod tests {
             &["workflow".to_string()],
         );
         assert!(resolved.active_skills.is_empty());
+    }
+
+    #[test]
+    fn resolve_skill_set_activates_turn_scoped_task_hint_skill() {
+        let resolved = resolve_skill_set(
+            &[turn_scoped_skill("writing-style", "[redclaw, wander]")],
+            "redclaw",
+            Some(&serde_json::json!({
+                "activeSkills": ["writing-style"],
+                "taskHints": {
+                    "activeSkills": ["writing-style"],
+                    "requiredSkill": "writing-style"
+                }
+            })),
+            &["workflow".to_string()],
+        );
+
+        assert_eq!(resolved.active_skills.len(), 1);
+        assert_eq!(resolved.active_skills[0].name, "writing-style");
     }
 
     #[test]

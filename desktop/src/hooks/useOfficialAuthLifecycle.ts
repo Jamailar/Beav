@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { APP_BRAND } from '../config/brand';
 
 const FOREGROUND_RECHECK_THROTTLE_MS = 15_000;
 
@@ -22,11 +23,11 @@ export function useOfficialAuthLifecycle(): void {
     const request = (window.ipcRenderer.officialAuth.bootstrap({ reason }) as Promise<OfficialAuthBootstrapResult | null>)
       .then((result) => {
         if (result?.success === false && result.error && result.error !== '官方账号未登录') {
-          console.warn('[RedBox official auth bootstrap] failed:', result.error);
+          console.warn(`[${APP_BRAND.displayName} official auth bootstrap] failed:`, result.error);
         }
       })
       .catch((error) => {
-        console.warn('[RedBox official auth bootstrap] invoke failed:', error);
+        console.warn(`[${APP_BRAND.displayName} official auth bootstrap] invoke failed:`, error);
       });
     const tracked = request.finally(() => {
       if (inFlightRef.current === tracked) {

@@ -1,4 +1,5 @@
 import type { ViewType } from '../App';
+import { APP_BRAND } from './brand';
 
 export interface StartupAnnouncementStep {
   id: string;
@@ -42,7 +43,7 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
     id: 'release-1.10.3-runtime-collaboration',
     version: '1.10.3',
     badge: 'v1.10.3 更新',
-    title: 'RedBox 更新了',
+    title: `${APP_BRAND.displayName} 更新了`,
     summary: '自动化、审批和全局聊天记录现在更集中。',
     highlights: [
       'MCP 工具目录、执行计划和权限边界更清晰。',
@@ -54,7 +55,7 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
     ],
     shortcuts: [
       { id: 'automation', label: '去自动化', view: 'automation' },
-      { id: 'redclaw', label: '去 RedClaw', view: 'redclaw' },
+      { id: 'redclaw', label: `去 ${APP_BRAND.aiDisplayName}`, view: 'redclaw' },
       { id: 'skills', label: '去技能', view: 'skills' },
     ],
   },
@@ -62,7 +63,7 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
     id: 'release-1.9.4-product-workflow',
     version: '1.9.4',
     badge: 'v1.9.4 新功能',
-    title: 'RedBox 有新功能',
+    title: `${APP_BRAND.displayName} 有新功能`,
     summary: '更新提醒更轻，入口更清楚。',
     highlights: [
       '默认只展示简短摘要，不再堆很多说明文字。',
@@ -74,7 +75,7 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
     ],
     shortcuts: [
       { id: 'generation-studio', label: '去创作', view: 'generation-studio' },
-      { id: 'redclaw', label: '去 RedClaw', view: 'redclaw' },
+      { id: 'redclaw', label: `去 ${APP_BRAND.aiDisplayName}`, view: 'redclaw' },
     ],
     steps: [
       {
@@ -88,8 +89,8 @@ export const STARTUP_ANNOUNCEMENTS: StartupAnnouncement[] = [
       {
         id: 'redclaw',
         selector: '[data-guide-id="nav-redclaw"]',
-        title: '2/2 RedClaw 负责持续执行',
-        description: '自动执行、工具串联和值守任务继续交给 RedClaw。',
+        title: `2/2 ${APP_BRAND.aiDisplayName} 负责持续执行`,
+        description: `自动执行、工具串联和值守任务继续交给 ${APP_BRAND.aiDisplayName}。`,
         placement: 'right',
         view: 'redclaw',
       },

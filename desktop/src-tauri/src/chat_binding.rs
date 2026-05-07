@@ -221,18 +221,18 @@ mod tests {
     fn derive_initial_context_uses_binding_fields() {
         let binding = EditorChatSessionBinding {
             scope: "file".to_string(),
-            file_path: Some("manuscripts/demo.redpost".to_string()),
+            file_path: Some("manuscripts/demo".to_string()),
             context_type: "file".to_string(),
-            context_id: "manuscripts/demo.redpost".to_string(),
+            context_id: "manuscripts/demo".to_string(),
             title: Some("Demo".to_string()),
             mode_label: Some("稿件编辑".to_string()),
             target_type_label: Some("图文稿件".to_string()),
-            target_path: Some("manuscripts/demo.redpost".to_string()),
+            target_path: Some("manuscripts/demo".to_string()),
             initial_context: None,
         };
         assert_eq!(
             derive_initial_context(&binding, binding.target_path.as_deref(), None).as_deref(),
-            Some("当前聊天窗口正处于稿件编辑模式，正在编辑的图文稿件文件路径是manuscripts/demo.redpost")
+            Some("当前聊天窗口正处于稿件编辑模式，正在编辑的图文稿件文件路径是manuscripts/demo")
         );
     }
 
@@ -244,17 +244,17 @@ mod tests {
             EditorChatBindingRequest {
                 session: EditorChatSessionBinding {
                     scope: "file".to_string(),
-                    file_path: Some("manuscripts/demo.redpost".to_string()),
+                    file_path: Some("manuscripts/demo".to_string()),
                     context_type: "file".to_string(),
-                    context_id: "manuscripts/demo.redpost".to_string(),
+                    context_id: "manuscripts/demo".to_string(),
                     title: Some("Demo".to_string()),
                     mode_label: Some("稿件编辑".to_string()),
                     target_type_label: Some("图文稿件".to_string()),
-                    target_path: Some("manuscripts/demo.redpost".to_string()),
+                    target_path: Some("manuscripts/demo".to_string()),
                     initial_context: None,
                 },
                 metadata: json!({
-                    "associatedFilePath": "manuscripts/demo.redpost",
+                    "associatedFilePath": "manuscripts/demo",
                     "associatedPackageKind": "richpost"
                 }),
             },
@@ -264,7 +264,7 @@ mod tests {
         let metadata = result.metadata.expect("metadata");
         assert_eq!(
             metadata.get("initialContext").and_then(Value::as_str),
-            Some("当前聊天窗口正处于稿件编辑模式，正在编辑的图文稿件文件路径是manuscripts/demo.redpost")
+            Some("当前聊天窗口正处于稿件编辑模式，正在编辑的图文稿件文件路径是manuscripts/demo")
         );
         assert_eq!(
             metadata.get("editorBindingScope").and_then(Value::as_str),

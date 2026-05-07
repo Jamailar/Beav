@@ -1729,7 +1729,7 @@ declare global {
           requireSave?: boolean;
           deferredDiscovery?: boolean;
           teamEscalation?: 'disabled' | 'allowed';
-          saveArtifact?: 'thrive' | 'redarticle';
+          saveArtifact?: 'folder';
           saveSubdir?: string;
           platform?: 'xiaohongshu' | 'wechat_official_account';
           taskType?: 'direct_write' | 'expand_from_xhs';

@@ -11,6 +11,7 @@ import { buildRedClawAuthoringMessage } from '../utils/redclawAuthoring';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { formatTimestampDateTime } from '../utils/time';
 import { SelectMenu } from '../components/ui/SelectMenu';
+import { APP_BRAND } from '../config/brand';
 
 const GLOBAL_KNOWLEDGE_SEARCH_EVENT = 'redbox:global-knowledge-search';
 const GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY = 'redbox:global-knowledge-search-query';
@@ -744,7 +745,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
 
     const navigateToRedClawWithKnowledge = useCallback((message: PendingChatMessage) => {
         if (!onNavigateToRedClaw) {
-            void appAlert('RedClaw 页面暂不可用，请稍后重试。', { title: '无法打开 RedClaw' });
+            void appAlert(`${APP_BRAND.aiDisplayName} 页面暂不可用，请稍后重试。`, { title: `无法打开 ${APP_BRAND.aiDisplayName}` });
             return;
         }
         onNavigateToRedClaw(message);
@@ -1999,7 +2000,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                             }}
                             className="text-xs px-2 py-1 bg-surface-secondary border border-border rounded hover:bg-surface-hover"
                         >
-                            RedClaw 总结
+                            {APP_BRAND.aiDisplayName} 总结
                         </button>
                     )}
                 </div>
@@ -2684,7 +2685,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     className="inline-flex h-10 px-4 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
                                     <MessageCircle className="w-4 h-4" />
-                                    RedClaw
+                                    {APP_BRAND.aiDisplayName}
                                 </button>
                                 <button
                                     onClick={() => void handleSaveNoteCoverAsTemplate(selectedNote)}
@@ -2991,7 +2992,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                     className="inline-flex h-11 px-5 items-center gap-2 rounded-xl bg-accent-primary text-white text-[13px] font-extrabold shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95"
                                 >
                                     <MessageCircle className="w-4.5 h-4.5" />
-                                    RedClaw
+                                    {APP_BRAND.aiDisplayName}
                                 </button>
                                 <button
                                     onClick={() => setSelectedVideo(null)}

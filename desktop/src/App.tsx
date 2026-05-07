@@ -296,11 +296,6 @@ function ViewLoadingFallback() {
   );
 }
 
-function shouldUseMacOverlayTitleBar(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /\bMac\b/i.test(navigator.platform || '') || /\bMac OS X\b/i.test(navigator.userAgent || '');
-}
-
 function computeMountedViews(history: ViewType[]): Set<ViewType> {
   const next = new Set<ViewType>();
   const recent = history.slice(-MAX_CACHED_VIEWS);
@@ -368,7 +363,6 @@ function AuthenticatedApp() {
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
-  const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -398,6 +392,8 @@ function AuthenticatedApp() {
       openSubjectsModal();
       return;
     }
+    setActiveManuscriptEditorFile(null);
+    setImmersiveMode(false);
     setCurrentView(view);
   }, [openSubjectsModal]);
 
@@ -476,12 +472,14 @@ function AuthenticatedApp() {
         });
       }
       if (nextView === 'redclaw' && detail.redclawAction === 'new') {
+        setActiveManuscriptEditorFile(null);
         setRedClawNavigationAction({
           action: 'new',
           nonce: Date.now(),
         });
       }
       if (nextView === 'redclaw' && detail.redclawAction === 'open-team' && detail.teamSessionId) {
+        setActiveManuscriptEditorFile(null);
         setRedClawNavigationAction({
           action: 'open-team',
           sessionId: detail.teamSessionId,
@@ -561,12 +559,19 @@ function AuthenticatedApp() {
   const navigateToManuscript = (filePath: string) => {
     uiTraceInteraction('app', 'open_manuscript_editor', { sourceView: currentView });
     setActiveManuscriptEditorFile(filePath);
+    setCurrentView('redclaw');
   };
 
   const closeManuscriptEditor = () => {
     setActiveManuscriptEditorFile(null);
     setImmersiveMode(false);
   };
+
+  const openRedClawChatSurface = useCallback(() => {
+    setActiveManuscriptEditorFile(null);
+    setImmersiveMode(false);
+    setCurrentView('redclaw');
+  }, []);
 
   const navigateToGenerationStudio = (intent: GenerationIntent) => {
     uiTraceInteraction('app', 'nav_to_generation_studio', { to: 'generation-studio', mode: intent.mode, source: intent.source });
@@ -757,7 +762,8 @@ function AuthenticatedApp() {
         || startupMigration.status === 'pending'
       ),
   );
-  const effectiveImmersiveMode: ImmersiveMode = immersiveMode;
+  const isManuscriptEditorActive = currentView === 'redclaw' && Boolean(activeManuscriptEditorFile);
+  const effectiveImmersiveMode: ImmersiveMode = isManuscriptEditorActive ? false : immersiveMode;
 
   const handleStartStartupMigration = useCallback(async () => {
     setStartupMigrationBusy(true);
@@ -795,7 +801,7 @@ function AuthenticatedApp() {
         globalSidebarContent={redClawGlobalSidebarContent}
         activeModalView={subjectsModalOpen ? 'subjects' : undefined}
         renderTitleBarContent={({ currentView }) => {
-          if (activeManuscriptEditorFile) {
+          if (isManuscriptEditorActive) {
             return (
               <div className="inline-flex min-w-0 items-center gap-2 text-[12px] font-semibold text-text-secondary">
                 <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
@@ -808,9 +814,23 @@ function AuthenticatedApp() {
           return null;
         }}
         renderTitleBarActions={({ currentView }) => (
-          currentView === 'redclaw' ? redClawTitleBarActions : null
+          currentView === 'redclaw' && !isManuscriptEditorActive ? redClawTitleBarActions : null
         )}
       >
+        {isManuscriptEditorActive && activeManuscriptEditorFile && (
+          <div className="h-full min-h-0 flex flex-col overflow-hidden">
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <ManuscriptEditorHost
+                filePath={activeManuscriptEditorFile}
+                onNavigateToRedClaw={navigateToRedClaw}
+                onNavigateToGenerationStudio={navigateToGenerationStudio}
+                isActive={true}
+                onClose={closeManuscriptEditor}
+                onImmersiveModeChange={setImmersiveMode}
+              />
+            </Suspense>
+          </div>
+        )}
         {shouldRenderView(mountedViews, currentView, persistentViews, 'home') && (
           <div className={currentView === 'home' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'home' ? <ViewLoadingFallback /> : null}>
@@ -874,7 +894,7 @@ function AuthenticatedApp() {
           </div>
         )}
         {(currentView !== 'redclaw' || shouldRenderView(mountedViews, currentView, persistentViews, 'redclaw')) && (
-          <div className={currentView === 'redclaw' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+          <div className={currentView === 'redclaw' && !isManuscriptEditorActive ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'redclaw' ? <ViewLoadingFallback /> : null}>
               <RedClawPage
                 pendingMessage={pendingRedClawMessage}
@@ -887,9 +907,10 @@ function AuthenticatedApp() {
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 onGlobalSidebarContentChange={setRedClawGlobalSidebarContent}
                 onTitleBarActionsChange={setRedClawTitleBarActions}
-                onOpenChatSurface={() => setCurrentView('redclaw')}
+                onOpenChatSurface={openRedClawChatSurface}
                 onOpenManuscriptEditor={navigateToManuscript}
-                titleBarActive={currentView === 'redclaw'}
+                activeManuscriptPath={activeManuscriptEditorFile}
+                titleBarActive={currentView === 'redclaw' && !isManuscriptEditorActive}
               />
             </Suspense>
           </div>
@@ -936,23 +957,6 @@ function AuthenticatedApp() {
           </div>
         )}
       </Layout>
-      {activeManuscriptEditorFile && (
-        <div
-          className="fixed inset-x-0 bottom-0 z-[60] bg-background"
-          style={{ top: usesMacOverlayTitleBar ? 'var(--app-titlebar-height)' : 0 }}
-        >
-          <Suspense fallback={<ViewLoadingFallback />}>
-            <ManuscriptEditorHost
-              filePath={activeManuscriptEditorFile}
-              onNavigateToRedClaw={navigateToRedClaw}
-              onNavigateToGenerationStudio={navigateToGenerationStudio}
-              isActive={true}
-              onClose={closeManuscriptEditor}
-              onImmersiveModeChange={setImmersiveMode}
-            />
-          </Suspense>
-        </div>
-      )}
       {isCapturePromptOpen && clipboardCandidate && (
         <div className="fixed inset-0 z-[10000] bg-black/35 flex items-center justify-center px-4">
           <div className="w-full max-w-[560px] rounded-xl border border-border bg-surface-primary shadow-2xl p-5">

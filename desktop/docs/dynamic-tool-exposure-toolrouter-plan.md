@@ -917,7 +917,7 @@ Run one real turn for each runtime:
 1. Image card generation:
    - User asks for 4 Xiaohongshu cards.
    - Direct actions include `image.generate` and `skill.run`.
-   - `manuscripts.createProject` deferred unless user asks to save as `.redpost`.
+   - `manuscripts.createProject` deferred unless user asks to save as 稿件文件夹.
 
 2. Writing task:
    - User asks for manuscript.

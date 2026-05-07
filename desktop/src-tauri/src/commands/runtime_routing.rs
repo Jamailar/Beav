@@ -39,7 +39,7 @@ fn explicit_card_image_route(user_input: &str) -> Option<RuntimeRouteRecord> {
         "保存到工程",
         "绑定工程",
         "写入工程",
-        ".redpost",
+        "稿件文件夹",
         "稿件工程",
         "创建工程",
         "保存成工程",
@@ -149,6 +149,6 @@ mod tests {
 
     #[test]
     fn explicit_card_image_route_does_not_override_when_project_binding_is_explicit() {
-        assert!(explicit_card_image_route("帮我生成小红书演示卡片并写入.redpost工程").is_none());
+        assert!(explicit_card_image_route("帮我生成小红书演示卡片并写入稿件工程").is_none());
     }
 }

@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
-    ArrowLeft,
     AudioLines,
     Clapperboard,
     ExternalLink,
@@ -41,12 +40,9 @@ import type { EditorProjectFile } from './editorProject';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel, LiquidGlassMenuSeparator } from '@/components/ui/liquid-glass-menu';
 import { buildEditorSessionBinding, type EditorAiWorkspaceMode } from '../../features/chat/editorSessionBinding';
 import {
-    ARTICLE_DRAFT_EXTENSION,
-    AUDIO_DRAFT_EXTENSION,
     ensureManuscriptFileName,
     renameManuscriptKeepingExtension,
     stripManuscriptExtension,
-    VIDEO_DRAFT_EXTENSION,
 } from '../../../shared/manuscriptFiles';
 
 const VideoDraftWorkbench = lazy(async () => ({
@@ -264,9 +260,7 @@ type ExportVideoResolution = 'source' | '1080p' | '720p';
 
 const DEFAULT_UNTITLED_DRAFT_TITLE = '未命名';
 function resolveDraftExtension(kind: CreateKind | 'unknown'): string {
-    if (kind === 'longform') return ARTICLE_DRAFT_EXTENSION;
-    if (kind === 'video') return VIDEO_DRAFT_EXTENSION;
-    if (kind === 'audio') return AUDIO_DRAFT_EXTENSION;
+    if (kind === 'longform' || kind === 'video' || kind === 'audio') return '';
     return '.md';
 }
 
@@ -306,10 +300,7 @@ function exportResolutionDimensions(
 
 function ensureDraftFileName(baseName: string, kind: CreateKind | 'unknown'): string {
     const extension = resolveDraftExtension(kind);
-    return ensureManuscriptFileName(
-        baseName,
-        extension as typeof ARTICLE_DRAFT_EXTENSION | typeof VIDEO_DRAFT_EXTENSION | typeof AUDIO_DRAFT_EXTENSION | '.md',
-    );
+    return extension ? ensureManuscriptFileName(baseName, extension as '.md') : baseName;
 }
 
 interface ManuscriptEditorHostProps {
@@ -405,19 +396,11 @@ function collectNestedFiles(items: FileNode[]): FileNode[] {
 }
 
 function isInternalPackageFile(filePath: string): boolean {
-    const parts = String(filePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
-    if (parts.length <= 1) return false;
-    return parts.slice(0, -1).some((part) => (
-        part.endsWith(ARTICLE_DRAFT_EXTENSION)
-        || part.endsWith(VIDEO_DRAFT_EXTENSION)
-        || part.endsWith(AUDIO_DRAFT_EXTENSION)
-    ));
+    return String(filePath || '').replace(/\\/g, '/').split('/').some((part) => part === 'manifest.json');
 }
 
 function isPackageDraftPath(filePath: string): boolean {
-    return filePath.endsWith(ARTICLE_DRAFT_EXTENSION)
-        || filePath.endsWith(VIDEO_DRAFT_EXTENSION)
-        || filePath.endsWith(AUDIO_DRAFT_EXTENSION);
+    return !filePath.endsWith('.md');
 }
 
 function getFolderTrail(folderPath: string): Array<{ label: string; path: string }> {
@@ -1679,9 +1662,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     }, []);
 
     const refreshPackageState = useCallback(async (targetPath: string) => {
-        const isPackage = targetPath.endsWith(ARTICLE_DRAFT_EXTENSION)
-            || targetPath.endsWith(VIDEO_DRAFT_EXTENSION)
-            || targetPath.endsWith(AUDIO_DRAFT_EXTENSION);
+        const isPackage = isPackageDraftPath(targetPath);
         if (!isPackage) {
             setPackageState(null);
             return;
@@ -2590,9 +2571,9 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const isVideoDraft = draftType === 'video';
         const isAudioDraft = draftType === 'audio';
         const isImmersiveWorkbench = mode === 'editor';
-        const isArticlePackage = editorFile.endsWith(ARTICLE_DRAFT_EXTENSION);
-        const isVideoPackage = editorFile.endsWith(VIDEO_DRAFT_EXTENSION);
-        const isAudioPackage = editorFile.endsWith(AUDIO_DRAFT_EXTENSION);
+        const isArticlePackage = draftType === 'longform';
+        const isVideoPackage = draftType === 'video';
+        const isAudioPackage = draftType === 'audio';
         const isScriptConfirmed = (
             packageState?.videoProject?.scriptApproval?.status
             || packageState?.editorProject?.ai?.scriptApproval?.status
@@ -2700,19 +2681,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         : 'border-b border-black/[0.03] bg-white/80 backdrop-blur-[32px]'
                 )}>
                     <div className="flex items-center gap-4 min-w-0">
-                        <button
-                            type="button"
-                            onClick={() => onClose?.()}
-                            className={clsx(
-                                'group inline-flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-[13px] font-bold transition-all active:scale-95',
-                                isImmersiveWorkbench
-                                    ? 'bg-surface-secondary/50 border border-border text-text-secondary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                    : 'bg-black/[0.03] border border-black/[0.02] text-text-secondary hover:bg-black/[0.06] hover:text-text-primary'
-                            )}
-                        >
-                            <ArrowLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
-                            关闭编辑器
-                        </button>
                         <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2.5">
                                 {isEditorTitleEditing ? (

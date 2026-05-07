@@ -36,7 +36,8 @@ type RedClawManuscriptNode = {
 
 function displaySessionTitle(title: string, surface: RedClawHistorySurface): string {
     if (surface !== 'redclaw') return title;
-    return title.replace(/^RedClaw(\s*·\s*)/, `${REDCLAW_DISPLAY_NAME}$1`);
+    const legacyAiPrefix = new RegExp(`^${['Red', 'Claw'].join('')}(\\s*·\\s*)`);
+    return title.replace(legacyAiPrefix, `${REDCLAW_DISPLAY_NAME}$1`);
 }
 
 interface RedClawHistorySidebarSectionProps {
@@ -54,6 +55,7 @@ interface RedClawHistorySidebarSectionProps {
     onDeleteSession: (session: RedClawHistoryListItem) => void | Promise<void>;
     onRenameSession?: (session: RedClawHistoryListItem, title: string) => void | Promise<void>;
     onOpenManuscript?: (filePath: string) => void;
+    activeManuscriptPath?: string | null;
 }
 
 const PINNED_ROOM_IDS_STORAGE_KEY = 'redbox:redclaw:pinned-room-ids:v1';
@@ -78,8 +80,8 @@ type ManuscriptContextMenuState = {
     node?: RedClawManuscriptNode;
 };
 
-const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string }> = [
-    { id: 'article', label: '长文', extension: '.redarticle' },
+const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string; kind?: string }> = [
+    { id: 'article', label: '长文', extension: '', kind: 'article' },
     { id: 'markdown', label: 'Markdown', extension: '.md' },
 ];
 
@@ -101,6 +103,21 @@ function writePinnedIds(storageKey: string, ids: string[]): void {
 
 function manuscriptNodeLabel(node: RedClawManuscriptNode): string {
     return String(node.title || node.name || '未命名稿件').trim();
+}
+
+function normalizeManuscriptPath(path: string | null | undefined): string {
+    return String(path || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+}
+
+function getManuscriptAncestorPaths(path: string): string[] {
+    const normalized = normalizeManuscriptPath(path);
+    if (!normalized.includes('/')) return [];
+    const parts = normalized.split('/').filter(Boolean);
+    return parts.slice(0, -1).reduce<string[]>((paths, part, index) => {
+        const previous = index === 0 ? '' : `${paths[index - 1]}/`;
+        paths.push(`${previous}${part}`);
+        return paths;
+    }, []);
 }
 
 function manuscriptResultError(result: unknown): string {
@@ -161,6 +178,7 @@ export function RedClawHistorySidebarSection({
     onDeleteSession,
     onRenameSession,
     onOpenManuscript,
+    activeManuscriptPath,
 }: RedClawHistorySidebarSectionProps) {
     const [activeTab, setActiveTab] = useState<RedClawSidebarTab>('chat');
     const [renameTarget, setRenameTarget] = useState<RedClawHistoryListItem | null>(null);
@@ -206,6 +224,10 @@ export function RedClawHistorySidebarSection({
             return 0;
         });
     }, [pinnedSessionIdSet, sessionList]);
+    const normalizedActiveManuscriptPath = useMemo(
+        () => normalizeManuscriptPath(activeManuscriptPath),
+        [activeManuscriptPath]
+    );
 
     useEffect(() => {
         if (!renameTarget) return;
@@ -224,6 +246,18 @@ export function RedClawHistorySidebarSection({
         }, 0);
         return () => window.clearTimeout(timer);
     }, [manuscriptDialog]);
+
+    useEffect(() => {
+        if (!normalizedActiveManuscriptPath) return;
+        setActiveTab('manuscripts');
+        setExpandedManuscriptPaths((prev) => {
+            const next = new Set(prev);
+            for (const path of getManuscriptAncestorPaths(normalizedActiveManuscriptPath)) {
+                next.add(path);
+            }
+            return next;
+        });
+    }, [normalizedActiveManuscriptPath]);
 
     useEffect(() => {
         if (!menuTarget) return;
@@ -380,10 +414,13 @@ export function RedClawHistorySidebarSection({
                 expandManuscriptPath(manuscriptDialog.parentPath);
             } else if (manuscriptDialog.mode === 'create-file') {
                 const draftKind = MANUSCRIPT_DRAFT_KIND_OPTIONS.find((option) => option.id === manuscriptDraftKind) || MANUSCRIPT_DRAFT_KIND_OPTIONS[0];
-                const fileName = name.endsWith(draftKind.extension) ? name : `${name}${draftKind.extension}`;
+                const fileName = draftKind.extension && !name.endsWith(draftKind.extension)
+                    ? `${name}${draftKind.extension}`
+                    : name;
                 result = await window.ipcRenderer.invoke('manuscripts:create-file', {
                     parentPath: manuscriptDialog.parentPath,
                     name: fileName,
+                    kind: draftKind.kind,
                     title: name,
                     content: '',
                 });
@@ -503,10 +540,16 @@ export function RedClawHistorySidebarSection({
         const expanded = expandedManuscriptPaths.has(node.path);
         const indentation = Math.min(depth, 4) * 12;
         const isDragging = draggedManuscriptPath === node.path || movingManuscriptPath === node.path;
+        const normalizedNodePath = normalizeManuscriptPath(node.path);
 
         if (node.isDirectory) {
             const menuOpen = menuTarget?.type === 'manuscript' && menuTarget.path === node.path;
             const isDropTarget = manuscriptDropTargetPath === node.path;
+            const containsActiveManuscript = Boolean(
+                normalizedActiveManuscriptPath
+                && normalizedNodePath
+                && normalizedActiveManuscriptPath.startsWith(`${normalizedNodePath}/`)
+            );
             return (
                 <div
                     key={node.path || label}
@@ -532,6 +575,7 @@ export function RedClawHistorySidebarSection({
                         }}
                         className={clsx(
                             'group flex h-9 w-full items-center gap-2 rounded-lg px-2 pr-10 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary',
+                            containsActiveManuscript && 'bg-surface-secondary/70 text-text-primary',
                             isDragging && 'opacity-45'
                         )}
                         style={{ paddingLeft: 8 + indentation }}
@@ -592,6 +636,7 @@ export function RedClawHistorySidebarSection({
         }
 
         const menuOpen = menuTarget?.type === 'manuscript' && menuTarget.path === node.path;
+        const isActiveManuscript = Boolean(normalizedActiveManuscriptPath && normalizedNodePath === normalizedActiveManuscriptPath);
         return (
             <div
                 key={node.path || label}
@@ -611,12 +656,13 @@ export function RedClawHistorySidebarSection({
                 }}
                 className={clsx(
                     'group flex h-9 w-full items-center gap-2 rounded-lg px-2 pr-10 text-left text-[13px] font-bold text-text-secondary transition-colors hover:bg-surface-secondary/70 hover:text-text-primary',
+                    isActiveManuscript && 'bg-accent-primary/12 text-accent-primary ring-1 ring-inset ring-accent-primary/18',
                     isDragging && 'opacity-45'
                 )}
                 style={{ paddingLeft: 28 + indentation }}
                 title={label}
             >
-                <FileText className="h-4 w-4 shrink-0 text-text-tertiary group-hover:text-text-secondary" />
+                <FileText className={clsx('h-4 w-4 shrink-0 text-text-tertiary group-hover:text-text-secondary', isActiveManuscript && 'text-accent-primary group-hover:text-accent-primary')} />
                 <span className="min-w-0 flex-1 truncate">{label}</span>
             </button>
             <div

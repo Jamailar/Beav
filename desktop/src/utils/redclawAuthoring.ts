@@ -21,7 +21,7 @@ export interface AuthoringTaskHints {
     requireSave?: boolean;
     deferredDiscovery?: boolean;
     teamEscalation?: 'disabled' | 'allowed';
-    saveArtifact?: 'thrive' | 'redarticle';
+    saveArtifact?: 'folder';
     saveSubdir?: string;
     platform?: AuthoringPlatform;
     taskType?: AuthoringTaskType;
@@ -65,8 +65,8 @@ export const AUTHORING_ALLOWED_OPERATE_ACTIONS = [
 ];
 
 const PLATFORM_SAVE_RULE: Record<AuthoringPlatform, string> = {
-    xiaohongshu: '如需新建稿件工程，优先用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "redarticle", "title": "<标题>" })` 获取规范工程路径。创建成功后，直接用 `Write(path="manuscripts://current", content="<完整正文>")` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
-    wechat_official_account: '如需新建稿件工程，优先用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "redarticle", "title": "<标题>" })` 获取规范工程路径。创建成功后，直接用 `Write(path="manuscripts://current", content="<完整正文>")` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
+    xiaohongshu: '如需新建稿件工程，优先用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "title": "<标题>" })` 获取规范文件夹工程路径。创建成功后，直接用 `Write(path="manuscripts://current", content="<完整正文>")` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
+    wechat_official_account: '如需新建稿件工程，优先用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "article", "title": "<标题>" })` 获取规范文件夹工程路径。创建成功后，直接用 `Write(path="manuscripts://current", content="<完整正文>")` 保存，不要把标题直接当文件名，也不要重复传 path。正文只保留正常内容结构，不要插入控制字符、占位分隔线或额外格式标记。',
 };
 
 export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) {
@@ -116,7 +116,7 @@ export function buildRedClawAuthoringMessage(input: BuildAuthoringMessageInput) 
             requireSave: true,
             deferredDiscovery: false,
             teamEscalation: 'disabled',
-            saveArtifact: input.platform === 'xiaohongshu' ? 'thrive' : 'redarticle',
+            saveArtifact: 'folder',
             platform: input.platform,
             taskType: input.taskType,
             formatTarget: 'markdown' as const,

@@ -4,10 +4,10 @@ use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, State};
 
 use crate::{
-    copy_image_to_clipboard, cover_root, get_default_package_entry, is_thrive_package_path,
-    media_root, package_entry_path, package_manifest_path, payload_string, pick_save_file_native,
-    read_thrive_json_entry_or, read_thrive_text_entry, resolve_local_path, resolve_manuscript_path,
-    strip_markdown_frontmatter, workspace_root, AppState, POST_DRAFT_EXTENSION,
+    copy_image_to_clipboard, cover_root, is_manuscript_package_path, media_root,
+    package_entry_path, package_manifest_path, payload_string, pick_save_file_native,
+    resolve_local_path, resolve_manuscript_path, strip_markdown_frontmatter, workspace_root,
+    AppState,
 };
 
 const PREVIEW_TEXT_MAX_BYTES: u64 = 512 * 1024;
@@ -72,12 +72,6 @@ fn file_name_for_path(path: &Path) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn is_redpost_package_path(path: &Path) -> bool {
-    file_name_for_path(path)
-        .map(|value| value.ends_with(POST_DRAFT_EXTENSION))
-        .unwrap_or(false)
-}
-
 fn preview_kind_for_extension(extension: Option<&str>, is_local: bool) -> &'static str {
     let Some(extension) = extension else {
         return if is_local { "unknown" } else { "web" };
@@ -86,7 +80,6 @@ fn preview_kind_for_extension(extension: Option<&str>, is_local: bool) -> &'stat
         "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg" | "avif" => "image",
         "mp4" | "webm" | "mov" | "m4v" | "mkv" | "avi" => "video",
         "mp3" | "wav" | "m4a" | "flac" | "aac" | "ogg" => "audio",
-        "thrive" => "manuscript",
         "pdf" => "pdf",
         "html" | "htm" => "html",
         "md" | "markdown" | "txt" | "json" | "csv" | "yaml" | "yml" | "xml" | "log" | "ts"
@@ -122,7 +115,6 @@ fn mime_type_for_extension(extension: Option<&str>) -> Option<&'static str> {
         "flac" => "audio/flac",
         "aac" => "audio/aac",
         "ogg" => "audio/ogg",
-        "thrive" => "application/vnd.redbox.thrive+zip",
         "pdf" => "application/pdf",
         "html" | "htm" => "text/html",
         "md" | "markdown" => "text/markdown",
@@ -164,8 +156,8 @@ fn read_package_manifest(package_path: &Path) -> Option<Value> {
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
 }
 
-fn resolve_redpost_preview_entry(path: &Path) -> Option<PathBuf> {
-    if !is_redpost_package_path(path) || !path.is_dir() {
+fn resolve_package_preview_entry(path: &Path) -> Option<PathBuf> {
+    if !is_manuscript_package_path(path) {
         return None;
     }
     let file_name = file_name_for_path(path)?;
@@ -182,22 +174,6 @@ fn resolve_redpost_preview_entry(path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn read_thrive_preview_text(path: &Path) -> Option<(String, String)> {
-    if !is_thrive_package_path(path) || !path.is_file() {
-        return None;
-    }
-    let file_name = file_name_for_path(path)?;
-    let manifest = read_thrive_json_entry_or(path, "manifest.json", json!({}));
-    let entry = manifest
-        .get("entry")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| get_default_package_entry(&file_name))
-        .to_string();
-    let content = read_thrive_text_entry(path, &entry)
-        .or_else(|| read_thrive_text_entry(path, "content.md"))?;
-    Some((entry, strip_markdown_frontmatter(&content)))
-}
-
 fn preview_title_for_path(
     trimmed_source: &str,
     original_path: &Path,
@@ -205,7 +181,7 @@ fn preview_title_for_path(
 ) -> String {
     let preview_name =
         file_name_for_path(preview_path).unwrap_or_else(|| trimmed_source.to_string());
-    if original_path != preview_path && is_redpost_package_path(original_path) {
+    if original_path != preview_path && is_manuscript_package_path(original_path) {
         if let Some(package_name) = file_name_for_path(original_path) {
             return format!("{package_name} / {preview_name}");
         }
@@ -283,7 +259,7 @@ fn resolve_manuscript_package_fallback(
         return None;
     }
     let (scheme, rest) = virtual_path_parts(source)?;
-    if scheme != "workspace" || !rest.to_ascii_lowercase().ends_with(POST_DRAFT_EXTENSION) {
+    if scheme != "workspace" {
         return None;
     }
     let relative = safe_virtual_relative_path(&rest)?;
@@ -329,12 +305,10 @@ fn resolve_preview_target(state: &State<'_, AppState>, source: &str) -> Result<V
     let resolved_path = resolved.ok_or_else(|| "无效路径".to_string())?;
     let original_path = resolve_manuscript_package_fallback(state, trimmed, &resolved_path)
         .unwrap_or(resolved_path);
-    let thrive_preview = read_thrive_preview_text(&original_path);
-    let path = if thrive_preview.is_some() {
-        original_path.clone()
-    } else {
-        resolve_redpost_preview_entry(&original_path).unwrap_or_else(|| original_path.clone())
-    };
+    let package_preview_entry = resolve_package_preview_entry(&original_path);
+    let path = package_preview_entry
+        .clone()
+        .unwrap_or_else(|| original_path.clone());
     let exists = path.exists();
     let is_directory = path.is_dir();
     let metadata = if exists {
@@ -343,17 +317,27 @@ fn resolve_preview_target(state: &State<'_, AppState>, source: &str) -> Result<V
         None
     };
     let extension = extension_for_path(&path);
-    let kind = preview_kind_for_extension(extension.as_deref(), true);
-    let title = if let Some((entry, _)) = thrive_preview.as_ref() {
+    let mut kind = preview_kind_for_extension(extension.as_deref(), true);
+    if package_preview_entry.is_some() {
+        kind = "manuscript";
+    }
+    let title = if let Some(entry_path) = package_preview_entry.as_ref() {
         file_name_for_path(&original_path)
-            .map(|package_name| format!("{package_name} / {entry}"))
+            .map(|package_name| {
+                format!(
+                    "{package_name} / {}",
+                    entry_path
+                        .strip_prefix(&original_path)
+                        .ok()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("content.md")
+                )
+            })
             .unwrap_or_else(|| preview_title_for_path(trimmed, &original_path, &path))
     } else {
         preview_title_for_path(trimmed, &original_path, &path)
     };
-    let preview_text = if let Some((_, content)) = thrive_preview {
-        Some(content)
-    } else if exists && !is_directory {
+    let preview_text = if exists && !is_directory {
         read_preview_text(&path, kind)
     } else {
         None
@@ -384,10 +368,9 @@ fn resolve_preview_target(state: &State<'_, AppState>, source: &str) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::{
-        find_existing_file_candidate, read_preview_text, read_thrive_preview_text,
-        resolve_redpost_preview_entry, safe_virtual_relative_path,
+        find_existing_file_candidate, read_preview_text, resolve_package_preview_entry,
+        safe_virtual_relative_path,
     };
-    use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -458,12 +441,17 @@ mod tests {
     #[test]
     fn package_preview_uses_default_content_markdown() {
         let root = make_temp_dir("package-default");
-        let package = root.join("demo.thrive");
-        fs::create_dir_all(&package).expect("create redpost package");
+        let package = root.join("demo");
+        fs::create_dir_all(&package).expect("create manuscript package");
+        fs::write(
+            package.join("manifest.json"),
+            r#"{"packageKind":"post","entry":"content.md"}"#,
+        )
+        .expect("write manifest");
         let entry = package.join("content.md");
         fs::write(&entry, "# Demo").expect("write package entry");
 
-        let resolved = resolve_redpost_preview_entry(&package);
+        let resolved = resolve_package_preview_entry(&package);
 
         assert_eq!(resolved, Some(entry));
         let _ = fs::remove_dir_all(root);
@@ -472,7 +460,7 @@ mod tests {
     #[test]
     fn package_preview_respects_manifest_entry() {
         let root = make_temp_dir("package-manifest");
-        let package = root.join("demo.thrive");
+        let package = root.join("demo");
         let notes_dir = package.join("notes");
         fs::create_dir_all(&notes_dir).expect("create notes dir");
         fs::write(
@@ -484,30 +472,9 @@ mod tests {
         fs::write(&entry, "# Manifest entry").expect("write manifest entry");
         fs::write(package.join("content.md"), "# Default entry").expect("write default entry");
 
-        let resolved = resolve_redpost_preview_entry(&package);
+        let resolved = resolve_package_preview_entry(&package);
 
         assert_eq!(resolved, Some(entry));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn thrive_preview_reads_zipped_content_markdown() {
-        let root = make_temp_dir("thrive-preview");
-        let package = root.join("demo.thrive");
-        crate::write_thrive_post_package(
-            &package,
-            &json!({ "entry": "content.md" }),
-            "---\ntitle: Hidden\n---\n\n# Demo",
-            &json!({}),
-        )
-        .expect("write thrive package");
-
-        let preview = read_thrive_preview_text(&package);
-
-        assert_eq!(
-            preview,
-            Some(("content.md".to_string(), "# Demo".to_string()))
-        );
         let _ = fs::remove_dir_all(root);
     }
 }

@@ -16,6 +16,7 @@ import {
     isLocalAssetSource,
 } from '../../../../shared/localAsset';
 import { resolveAssetUrl } from '../../../utils/pathManager';
+import { APP_BRAND } from '../../../config/brand';
 import type {
     RemotionCompositionConfig,
     RemotionEntityAnimation,
@@ -959,7 +960,7 @@ function SceneLayerContent({
                         fontWeight: 600,
                     }}
                 >
-                    {scene.overlayTitle || 'RedBox Motion Scene'}
+                    {scene.overlayTitle || `${APP_BRAND.displayName} Motion Scene`}
                 </AbsoluteFill>
             ) : null}
             {entities.map((entity) => (

@@ -172,6 +172,17 @@ fn log_runtime_event_emit<R: Runtime>(
             payload_string(payload, "phase").unwrap_or_default(),
             payload_string(payload, "runtimeMode").unwrap_or_default(),
         )),
+        "runtime:text-delta" => Some(format!(
+            "[runtime][emit] event={} session={} task={} stream={} content_chars={}",
+            event_type,
+            session_id.unwrap_or(""),
+            task_id.unwrap_or(""),
+            payload_string(payload, "stream").unwrap_or_else(|| "response".to_string()),
+            payload_string(payload, "content")
+                .unwrap_or_default()
+                .chars()
+                .count(),
+        )),
         "runtime:done" => Some(format!(
             "[runtime][emit] event={} session={} task={} status={} reason={} content_chars={}",
             event_type,

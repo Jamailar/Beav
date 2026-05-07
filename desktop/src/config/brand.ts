@@ -5,7 +5,7 @@ type GeneratedBrandConfig = {
   displayName?: string;
   windowTitle?: string;
   htmlTitle?: string;
-  redClawDisplayName?: string;
+  aiDisplayName?: string;
   logoSrc?: string;
   theme?: AppBrandTheme;
 };
@@ -83,10 +83,10 @@ export type AppBrandTheme = Partial<{
 
 export const APP_BRAND = {
   variant: String(config.variant || 'redbox'),
-  displayName: String(config.displayName || 'RedBox'),
-  windowTitle: String(config.windowTitle || config.displayName || 'RedBox'),
-  htmlTitle: String(config.htmlTitle || config.windowTitle || config.displayName || 'RedBox'),
-  redClawDisplayName: String(config.redClawDisplayName || 'RedClaw'),
+  displayName: String(config.displayName || 'App'),
+  windowTitle: String(config.windowTitle || config.displayName || 'App'),
+  htmlTitle: String(config.htmlTitle || config.windowTitle || config.displayName || 'App'),
+  aiDisplayName: String(config.aiDisplayName || config.displayName || 'App'),
   logoSrc: String(config.logoSrc || '/branding/logo.png'),
   theme: config.theme || {},
 } as const;

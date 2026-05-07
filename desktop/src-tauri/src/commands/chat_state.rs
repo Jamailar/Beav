@@ -383,7 +383,7 @@ mod tests {
             updated_at: "1".to_string(),
             metadata: Some(json!({
                 "contextType": "file",
-                "contextId": "manuscripts/demo.redpost",
+                "contextId": "manuscripts/demo",
                 "agentProfile": "manuscript-editor"
             })),
         });

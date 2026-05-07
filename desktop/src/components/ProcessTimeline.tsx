@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { clsx } from 'clsx';
 import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
+import { APP_BRAND } from '../config/brand';
 
 export type ProcessItemType =
   | 'phase'
@@ -187,7 +188,7 @@ const getHumanStatusText = (toolName: string, actionName: string, status: Status
     return statusVerb(status, '正在读取工作区', '已读取工作区', '工作区读取失败');
   }
   if (normalizedAction.startsWith('redclaw.task.')) {
-    return statusVerb(status, '正在处理 RedClaw 任务', '已处理 RedClaw 任务', 'RedClaw 任务处理失败');
+    return statusVerb(status, `正在处理 ${APP_BRAND.aiDisplayName} 任务`, `已处理 ${APP_BRAND.aiDisplayName} 任务`, `${APP_BRAND.aiDisplayName} 任务处理失败`);
   }
   if (normalizedAction === 'runtime.resume') {
     return statusVerb(status, '正在继续上次任务', '已继续上次任务', '恢复任务失败');

@@ -1103,34 +1103,34 @@ fn build_legacy_wander_prompt(
         .join("\n")
     };
 
-    [
-        "你现在处于 RedBox 的「漫步深度思考」Agent 模式。",
-        "你需要自主完成：分析素材 -> 提炼爆款方法与隐藏连接 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。",
-        "宿主已经预读了每条素材的关键内容，你要先基于这份预读 bundle 完成判断，再决定是否需要额外读取文件。",
-        "读取素材的目的不是强行把素材原样塞进选题，而是学习其中值得借鉴的 hook、冲突、情绪、叙事结构、评论点、反差和细节。",
-        "如果某个素材只提供了表达方式、视角或结构启发，而不适合直接进入最终内容，也可以只吸收其方法，不必硬写进去。",
-        "内容质量、传播性、切口强度优先于素材覆盖率；这不是命题作文。",
-        "",
-        "工具调用要求（默认不要触发）：",
-        "1) 先用预读 bundle 判断，不要为了证明你看过素材而重复读取；",
-        "2) 只有当预读 bundle 明显不足以确定选题时，才允许额外调用 resource 补读 1-2 个文件；",
-        "3) 不要再做目录侦察式探索，不要为单条素材反复 list/read 多个文件。",
-        "",
-        &output_requirement,
-        "",
-        "你收到的随机素材如下：",
-        items_text,
-        "",
-        "宿主预读素材包如下：",
-        material_bundle,
-        "",
-        "如确实需要补读，才使用这些真实素材路径：",
-        materials_guide,
-        "",
+    vec![
+        format!("你现在处于 {} 的「漫步深度思考」Agent 模式。", app_brand_display_name()),
+        "你需要自主完成：分析素材 -> 提炼爆款方法与隐藏连接 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。".to_string(),
+        "宿主已经预读了每条素材的关键内容，你要先基于这份预读 bundle 完成判断，再决定是否需要额外读取文件。".to_string(),
+        "读取素材的目的不是强行把素材原样塞进选题，而是学习其中值得借鉴的 hook、冲突、情绪、叙事结构、评论点、反差和细节。".to_string(),
+        "如果某个素材只提供了表达方式、视角或结构启发，而不适合直接进入最终内容，也可以只吸收其方法，不必硬写进去。".to_string(),
+        "内容质量、传播性、切口强度优先于素材覆盖率；这不是命题作文。".to_string(),
+        String::new(),
+        "工具调用要求（默认不要触发）：".to_string(),
+        "1) 先用预读 bundle 判断，不要为了证明你看过素材而重复读取；".to_string(),
+        "2) 只有当预读 bundle 明显不足以确定选题时，才允许额外调用 resource 补读 1-2 个文件；".to_string(),
+        "3) 不要再做目录侦察式探索，不要为单条素材反复 list/read 多个文件。".to_string(),
+        String::new(),
+        output_requirement,
+        String::new(),
+        "你收到的随机素材如下：".to_string(),
+        items_text.to_string(),
+        String::new(),
+        "宿主预读素材包如下：".to_string(),
+        material_bundle.to_string(),
+        String::new(),
+        "如确实需要补读，才使用这些真实素材路径：".to_string(),
+        materials_guide.to_string(),
+        String::new(),
         if long_term_context_section.is_empty() {
-            ""
+            String::new()
         } else {
-            long_term_context_section
+            long_term_context_section.to_string()
         },
     ]
     .join("\n")
@@ -3012,7 +3012,8 @@ pub fn handle_chat_sessions_wander_channel(
                 Ok(json!({ "result": result_text, "historyId": history_id, "items": items }))
             }
             _ => Err(format!(
-                "RedBox host does not recognize channel `{channel}`."
+                "{} host does not recognize channel `{channel}`.",
+                app_brand_display_name()
             )),
         }
     })())

@@ -792,8 +792,8 @@ export function ExperimentalVideoWorkbench({
                         welcomeTitle="AI 剪辑助手"
                         welcomeSubtitle="先确认脚本，再让 AI 生成基础视频与 Remotion 动画图层。默认只生成动画主体。"
                         shortcuts={[
-                            { label: '读取工程', text: '请先使用 redbox_editor 的 project_read 读取当前视频工程，然后总结脚本状态、基础视频状态和当前 Remotion 结构。' },
-                            { label: '生成基础剪辑', text: '请先读取当前脚本和工程，然后用 redbox_editor 的 ffmpeg_edit 生成基础视频，并说明你执行了哪些剪辑步骤。' },
+                            { label: '读取工程', text: '请先使用 editor 的 project_read 读取当前视频工程，然后总结脚本状态、基础视频状态和当前 Remotion 结构。' },
+                            { label: '生成基础剪辑', text: '请先读取当前脚本和工程，然后用 editor 的 ffmpeg_edit 生成基础视频，并说明你执行了哪些剪辑步骤。' },
                             { label: '生成动画', text: '请先读取当前 project_read 和 remotion_read，基于已确认脚本生成一版 Remotion 对象动画方案。除非脚本明确要求文字层，否则不要添加标题、字幕或说明。' },
                         ]}
                         fixedSessionBannerText="视频 AI 工作台"

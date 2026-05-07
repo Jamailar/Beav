@@ -1,4 +1,7 @@
-use crate::{run_curl_json, run_sse_mcp_method, slug_from_relative_path, McpServerRecord};
+use crate::{
+    app_brand_display_name, run_curl_json, run_sse_mcp_method, slug_from_relative_path,
+    McpServerRecord,
+};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
@@ -258,7 +261,7 @@ fn initialize_params() -> Value {
         "protocolVersion": "2024-11-05",
         "capabilities": {},
         "clientInfo": {
-            "name": "RedBox",
+            "name": app_brand_display_name(),
             "version": "0.1.0"
         }
     })

@@ -5,14 +5,13 @@ use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
 use url::Url;
 
-use crate::payload_string;
+use crate::{app_brand_display_name, payload_string};
 
 const DEFAULT_MAX_CHARS: usize = 12_000;
 const MIN_MAX_CHARS: usize = 1_000;
 const MAX_MAX_CHARS: usize = 40_000;
 const MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 const WEB_FETCH_TIMEOUT_SECONDS: u64 = 20;
-const USER_AGENT: &str = "RedBox-Agent/1.0 (+https://redbox.local)";
 
 pub(crate) fn fetch(payload: &Value) -> Result<Value, String> {
     let raw_url = payload_string(payload, "url")
@@ -39,7 +38,7 @@ pub(crate) fn fetch(payload: &Value) -> Result<Value, String> {
                 attempt.follow()
             }
         }))
-        .user_agent(USER_AGENT)
+        .user_agent(format!("{}-Agent/1.0", app_brand_display_name()))
         .build()
         .map_err(|error| format!("failed to build web client: {error}"))?;
 

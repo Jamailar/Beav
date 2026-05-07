@@ -440,7 +440,7 @@ impl Default for AssistantStateRecord {
             listening: false,
             lock_state: "passive".to_string(),
             blocked_by: None,
-            last_error: Some("RedClaw assistant daemon is idle.".to_string()),
+            last_error: Some("Assistant daemon is idle.".to_string()),
             active_task_count: 0,
             queued_peer_count: 0,
             in_flight_keys: Vec::new(),
@@ -1071,7 +1071,7 @@ fn store_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = state
         .store_path
         .parent()
-        .ok_or_else(|| "RedBox store root is unavailable".to_string())?
+        .ok_or_else(|| format!("{} store root is unavailable", app_brand_display_name()))?
         .to_path_buf();
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     Ok(root)
@@ -1546,12 +1546,15 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 mod tests {
     use super::{
         append_generated_media_markdown, asset_preview_url_from_result,
-        build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
-        decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
-        interactive_base64_payload_size, interactive_execution_progress_observe_success,
+        authoring_saved_final_summary, build_subject_record_for_workspace,
+        clear_interactive_execution_contract_metadata, decode_command_json_stdout,
+        guess_mime_and_kind, interactive_attachment_inline_data_url,
+        interactive_base64_payload_size, interactive_execution_contract_instruction,
+        interactive_execution_progress_observe_success,
         interactive_model_supports_direct_attachment, interactive_skill_activation_continuation,
-        interactive_skill_activations, interactive_tool_panic_message, json_value_to_path_list,
-        manuscript_save_result_path, message_is_successful_manuscript_write_tool_result,
+        interactive_skill_activations, interactive_tool_panic_message,
+        is_authoring_project_link_target, json_value_to_path_list, manuscript_save_result_path,
+        message_is_successful_manuscript_write_tool_result,
         normalized_structured_payload_arguments, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
         validate_runtime_tool_message_sequence, GeneratedMediaPreview,
@@ -1766,16 +1769,16 @@ mod tests {
         assert_eq!(
             manuscript_save_result_path(&json!({
                 "success": true,
-                "newPath": "wander/demo.thrive"
+                "newPath": "wander/demo"
             })),
-            Some("wander/demo.thrive")
+            Some("wander/demo")
         );
         assert_eq!(
             manuscript_save_result_path(&json!({
                 "success": true,
-                "projectPath": "wander/demo.thrive"
+                "projectPath": "wander/demo"
             })),
-            Some("wander/demo.thrive")
+            Some("wander/demo")
         );
     }
 
@@ -1873,8 +1876,8 @@ mod tests {
             "deferredDiscovery": false,
             "teamEscalation": "disabled",
             "sourceMode": "knowledge",
-            "currentAuthoringProjectPath": "wander/demo.thrive",
-            "currentAuthoringContentPath": "wander/demo.thrive/content.md"
+            "currentAuthoringProjectPath": "wander/demo",
+            "currentAuthoringContentPath": "wander/demo/content.md"
         })
         .as_object()
         .cloned()
@@ -1910,12 +1913,29 @@ mod tests {
         );
         assert_eq!(
             metadata.get("currentAuthoringProjectPath"),
-            Some(&json!("wander/demo.thrive"))
+            Some(&json!("wander/demo"))
         );
         assert_eq!(
             metadata.get("currentAuthoringContentPath"),
-            Some(&json!("wander/demo.thrive/content.md"))
+            Some(&json!("wander/demo/content.md"))
         );
+    }
+
+    #[test]
+    fn interactive_execution_contract_instruction_keeps_body_out_of_final_reply() {
+        let instruction =
+            interactive_execution_contract_instruction(&InteractiveExecutionContract {
+                require_source_read: true,
+                require_profile_read: true,
+                require_save: true,
+                save_artifact: Some("folder".to_string()),
+            })
+            .expect("instruction should be generated");
+
+        assert!(instruction.contains("保存到 文件夹稿件"));
+        assert!(instruction.contains("正文只能作为 Write 工具参数提交"));
+        assert!(instruction.contains("最终回复只给运行总结和稿件链接"));
+        assert!(!instruction.contains("先输出完整正文"));
     }
 
     #[test]
@@ -1928,7 +1948,7 @@ mod tests {
                 "tool": "workflow",
                 "action": "manuscripts.writeCurrent",
                 "data": {
-                    "projectPath": "wander/demo.thrive",
+                    "projectPath": "wander/demo",
                     "savedBytes": 12
                 }
             }"#
@@ -1942,7 +1962,7 @@ mod tests {
                 "tool": "workflow",
                 "action": "manuscripts.writeCurrent",
                 "data": {
-                    "projectPath": "wander/demo.thrive",
+                    "projectPath": "wander/demo",
                     "savedBytes": 0
                 }
             }"#
@@ -1959,6 +1979,24 @@ mod tests {
             }"#
             })
         ));
+    }
+
+    #[test]
+    fn authoring_saved_final_summary_links_folder_project_without_full_body() {
+        let content = "# 别做摘要了，把播客印成书\n\n这是一段完整正文。";
+        let summary = authoring_saved_final_summary("wander/别做摘要了", content);
+
+        assert!(summary.contains("已完成创作并保存为稿件"));
+        assert!(summary.contains("标题：别做摘要了，把播客印成书"));
+        assert!(summary.contains("[别做摘要了](manuscripts://wander/别做摘要了)"));
+        assert!(!summary.contains("这是一段完整正文"));
+    }
+
+    #[test]
+    fn authoring_project_link_target_accepts_folder_projects() {
+        assert!(is_authoring_project_link_target("wander/demo"));
+        assert!(is_authoring_project_link_target("articles/demo"));
+        assert!(!is_authoring_project_link_target("wander/demo.md"));
     }
 
     #[test]
@@ -2130,26 +2168,6 @@ mod tests {
             .expect("continuation should exist");
         assert!(continuation.contains("加入当前轮上下文"));
         assert!(!continuation.contains("写入当前会话"));
-    }
-
-    #[test]
-    fn interactive_skill_activations_preserve_session_scope_copy() {
-        let activations = interactive_skill_activations(
-            "workflow",
-            &json!({
-                "data": {
-                    "description": "theme editor",
-                    "persistedToSession": true,
-                    "activationTransition": {
-                        "continueWithUpdatedContext": true,
-                        "activatedSkillNames": ["richpost-theme-editor"]
-                    }
-                }
-            }),
-        );
-        let continuation = interactive_skill_activation_continuation(&activations)
-            .expect("continuation should exist");
-        assert!(continuation.contains("写入当前会话"));
     }
 }
 
@@ -2343,7 +2361,10 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
         let _ = prompt;
         let _ = folders_only;
         let _ = multiple;
-        Err("RedBox picker currently supports macOS and Windows".to_string())
+        Err(format!(
+            "{} picker currently supports macOS and Windows",
+            app_brand_display_name()
+        ))
     }
 }
 
@@ -2399,7 +2420,10 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
         let _ = prompt;
         let _ = default_name;
         let _ = default_dir;
-        Err("RedBox save picker currently supports macOS and Windows".to_string())
+        Err(format!(
+            "{} save picker currently supports macOS and Windows",
+            app_brand_display_name()
+        ))
     }
 }
 
@@ -3119,7 +3143,7 @@ fn write_placeholder_svg(
     <tspan x="128" dy="0">{subtitle}</tspan>
   </text>
   <rect x="128" y="1040" width="260" height="88" rx="24" fill="{accent}" fill-opacity="0.18"/>
-  <text x="164" y="1097" fill="#191919" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="600">RedBox Placeholder</text>
+  <text x="164" y="1097" fill="#191919" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="600">App Placeholder</text>
 </svg>"##,
         accent = accent,
         title = title,
@@ -3363,7 +3387,11 @@ fn execute_interactive_tool_call(
             "editor" => {
                 let action = payload_string(arguments, "action").unwrap_or_default();
                 let file_path = resolve_editor_tool_file_path(state, session_id, arguments)?;
-                let is_video_package = get_package_kind_from_file_name(&file_path) == Some("video");
+                let is_video_package = resolve_manuscript_path(state, &file_path)
+                    .ok()
+                    .and_then(|path| get_package_kind_from_manifest(&path))
+                    .as_deref()
+                    == Some("video");
                 let ensure_script_confirmed = |next_action: &str| -> Result<(), String> {
                     let script_state = call_manuscript_channel(
                         "manuscripts:get-package-script-state",
@@ -4259,65 +4287,6 @@ fn execute_interactive_tool_call(
     }
 }
 
-fn read_text_excerpt_from_path(path: &str, max_chars: usize) -> String {
-    let normalized = path.trim();
-    if normalized.is_empty() {
-        return String::new();
-    }
-    fs::read_to_string(normalized)
-        .map(|content| truncate_chars(&content, max_chars))
-        .unwrap_or_default()
-}
-
-fn find_richpost_theme_record<'a>(value: &'a Value, theme_id: &str) -> Option<&'a Value> {
-    if theme_id.trim().is_empty() {
-        return None;
-    }
-    if let Some(items) = value.as_array() {
-        return items.iter().find(|item| {
-            item.get("id").and_then(Value::as_str).map(str::trim) == Some(theme_id.trim())
-        });
-    }
-    for field in ["themes", "items", "records"] {
-        if let Some(items) = value.get(field).and_then(Value::as_array) {
-            if let Some(found) = items.iter().find(|item| {
-                item.get("id").and_then(Value::as_str).map(str::trim) == Some(theme_id.trim())
-            }) {
-                return Some(found);
-            }
-        }
-    }
-    None
-}
-
-fn load_richpost_theme_record_excerpt(
-    theme_file: &str,
-    theme_id: &str,
-    max_chars: usize,
-) -> String {
-    let normalized = theme_file.trim();
-    if normalized.is_empty() || theme_id.trim().is_empty() {
-        return String::new();
-    }
-    let Ok(content) = fs::read_to_string(normalized) else {
-        return String::new();
-    };
-    let Ok(parsed) = serde_json::from_str::<Value>(&content) else {
-        return String::new();
-    };
-    if parsed.get("id").and_then(Value::as_str).map(str::trim) == Some(theme_id.trim()) {
-        return serde_json::to_string_pretty(&parsed)
-            .map(|value| truncate_chars(&value, max_chars))
-            .unwrap_or_default();
-    }
-    let Some(record) = find_richpost_theme_record(&parsed, theme_id) else {
-        return String::new();
-    };
-    serde_json::to_string_pretty(record)
-        .map(|value| truncate_chars(&value, max_chars))
-        .unwrap_or_default()
-}
-
 fn editor_session_prompt_context(
     state: &State<'_, AppState>,
     session_id: Option<&str>,
@@ -4363,140 +4332,6 @@ contentPath: {content_path}\n\
         );
     }
     if matches!(runtime_mode, "team" | "chatroom") {
-        let workspace_mode =
-            payload_string(&metadata, "associatedPackageWorkspaceMode").unwrap_or_default();
-        let package_kind = payload_string(&metadata, "associatedPackageKind").unwrap_or_default();
-        if workspace_mode == "richpost-theme-editing" && package_kind == "richpost" {
-            let theme_id =
-                payload_string(&metadata, "associatedPackageThemeEditingId").unwrap_or_default();
-            let theme_label =
-                payload_string(&metadata, "associatedPackageThemeEditingLabel").unwrap_or_default();
-            let applied_theme_id =
-                payload_string(&metadata, "associatedPackageAppliedThemeId").unwrap_or_default();
-            let applied_theme_label =
-                payload_string(&metadata, "associatedPackageAppliedThemeLabel").unwrap_or_default();
-            let theme_file =
-                payload_string(&metadata, "associatedPackageThemeEditingFile").unwrap_or_default();
-            let template_file =
-                payload_string(&metadata, "associatedPackageThemeEditingTemplateFile")
-                    .unwrap_or_default();
-            let style_rule =
-                payload_string(&metadata, "associatedPackageStyleEditRule").unwrap_or_default();
-            let target_files = metadata
-                .get("associatedPackageThemeEditingTargetFiles")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            let theme_root = target_files
-                .get("themeRoot")
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .or_else(|| payload_string(&metadata, "associatedPackageThemeEditingRoot"))
-                .or_else(|| payload_string(&metadata, "associatedPackageThemeRoot"))
-                .unwrap_or_default();
-            let master_files = target_files
-                .get("masterFiles")
-                .cloned()
-                .unwrap_or_else(|| json!([]));
-            let layout_tokens_file = target_files
-                .get("layoutTokensFile")
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_default();
-            let page_plan_file = target_files
-                .get("pagePlanFile")
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_default();
-            let template_guide_file = target_files
-                .get("templateGuideFile")
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .unwrap_or_else(|| template_file.clone());
-            let theme_assets_dir = target_files
-                .get("assetsDir")
-                .and_then(|value| value.as_str().map(ToString::to_string))
-                .or_else(|| {
-                    if !theme_root.trim().is_empty() {
-                        Some(
-                            PathBuf::from(&theme_root)
-                                .join("assets")
-                                .display()
-                                .to_string(),
-                        )
-                    } else if !theme_file.trim().is_empty() {
-                        PathBuf::from(&theme_file)
-                            .parent()
-                            .map(|parent| parent.join("assets").display().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
-            let theme_record_json =
-                load_richpost_theme_record_excerpt(&theme_file, &theme_id, 2600);
-            let template_guide_excerpt = read_text_excerpt_from_path(&template_guide_file, 2600);
-            let master_files_json =
-                serde_json::to_string_pretty(&master_files).unwrap_or_else(|_| "[]".to_string());
-            let theme_record_json_for_prompt = theme_record_json.clone();
-            if let Some(template) = load_redbox_prompt("runtime/pi/richpost_theme_editor.txt") {
-                let rendered = render_redbox_prompt(
-                    &template,
-                    &[
-                        ("runtime_mode", runtime_mode.to_string()),
-                        ("workspace_mode", workspace_mode.clone()),
-                        ("theme_root", theme_root.clone()),
-                        ("theme_id", theme_id.clone()),
-                        ("theme_label", theme_label.clone()),
-                        ("applied_theme_id", applied_theme_id),
-                        ("applied_theme_label", applied_theme_label),
-                        ("theme_file", theme_file.clone()),
-                        ("template_file", template_file.clone()),
-                        ("template_guide_file", template_guide_file.clone()),
-                        ("layout_tokens_file", layout_tokens_file.clone()),
-                        ("page_plan_file", page_plan_file.clone()),
-                        ("master_files", master_files_json),
-                        ("theme_assets_dir", theme_assets_dir.clone()),
-                        ("style_rule", style_rule.clone()),
-                        ("theme_record_json", theme_record_json_for_prompt),
-                        ("template_guide_excerpt", template_guide_excerpt),
-                    ],
-                );
-                if !rendered.trim().is_empty() {
-                    return format!("\n\n{}", rendered.trim());
-                }
-            }
-            return format!(
-                "\n\n## 当前图文主题编辑上下文\n\
-runtime_mode: {runtime_mode}\n\
-workspaceMode: {workspace_mode}\n\
-themeId: {theme_id}\n\
-themeLabel: {theme_label}\n\
-\n\
-## 当前真实编辑目标\n\
-themeRecordFile: {theme_file}\n\
-themeTemplateGuideFile: {template_file}\n\
-layoutTokensFile: {layout_tokens_file}\n\
-masterFiles: {}\n\
-themeAssetsDir: {theme_assets_dir}\n\
-\n\
-## 理解规则\n\
-- 当前主题有自己的 theme root，当前正在编辑的是工作区 `themes/<themeId>/` 下这一整套文件。\n\
-- 当前会话只允许处理当前绑定主题 root；不要顺手改其他 theme root。\n\
-- 如果 `themeRecordFile` 为空，先创建或保存当前工作区主题，再继续编辑。\n\
-- 修改主题前，先阅读 `richpost-theme-template.md`，再决定改 `<themeId>.json`、layout tokens 还是母版 HTML。\n\
-- 添加渐变背景、背景图、容器、颜色、圆角、阴影、文字区域时，优先修改当前 theme root 里的 `<themeId>.json`、`layout.tokens.json` 和 `masters/*.master.html`。\n\
-- 不要扫描其他 richpost 工程来猜当前模板；以上这些文件就是当前主题编辑页绑定的真实目标。\n\
-- 不要改正文，不要手改渲染产物作为最终来源。\n\
-- 工具调用失败就表示这次修改没有完成；在读回当前 theme root 的 tokens 或预览前，不要宣称成功。\n\
-\n\
-## 当前规则\n\
-{style_rule}\n\
-\n\
-## 目标文件快照\n\
-themeRecordFileAgain: {theme_file}\n\
-themeTemplateGuideFileAgain: {template_guide_file}\n\
-\n\
-## 当前主题记录快照\n\
-{theme_record_json}\n",
-                serde_json::to_string(&master_files).unwrap_or_else(|_| "[]".to_string()),
-            );
-        }
         return String::new();
     }
     if !matches!(runtime_mode, "video-editor" | "audio-editor") {
@@ -5748,7 +5583,7 @@ impl InteractiveExecutionContract {
             missing.push("读取素材真实文件");
         }
         if self.require_profile_read && !progress.profile_read_completed {
-            missing.push("读取 RedClaw 用户档案");
+            missing.push("读取 AI 用户档案");
         }
         if self.require_save && !progress.save_completed {
             missing.push("调用 Write(manuscripts://current) 保存稿件");
@@ -6059,17 +5894,27 @@ fn interactive_execution_contract_instruction(
         lines.push("必须先读取素材目录中的真实文件内容。".to_string());
     }
     if contract.require_profile_read {
-        lines.push("必须先读取 RedClaw 用户档案。".to_string());
+        lines.push("必须先读取 AI 用户档案。".to_string());
     }
     if contract.require_save {
         let save_target = contract
             .save_artifact
             .as_deref()
-            .map(|value| format!(".{value}"))
+            .map(|value| {
+                if value == "folder" {
+                    "文件夹稿件".to_string()
+                } else {
+                    value.to_string()
+                }
+            })
             .unwrap_or_else(|| "目标稿件".to_string());
         lines.push(format!(
-            "必须先调用 `Write(path=\"manuscripts://current\", content=\"完整正文\")` 把完整内容保存到 {save_target} 工程，再汇报结果。"
+            "必须先调用 `Write(path=\"manuscripts://current\", content=\"完整正文\")` 把完整内容保存到 {save_target}，再汇报结果。"
         ));
+        lines.push(
+            "正文只能作为 Write 工具参数提交，不要把整篇正文作为最终可见回复打印出来；保存成功后的最终回复只给运行总结和稿件链接。"
+                .to_string(),
+        );
     }
     Some(lines.join(" "))
 }
@@ -6224,7 +6069,7 @@ fn interactive_authoring_continuation_instruction(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(target.project_path.as_str());
     Some(format!(
-        "当前写稿工程已创建并绑定为 `{project_path}`。下一步先在本轮给出可直接发布的完整正文，然后立刻调用 `Write(path=\"manuscripts://current\", content=\"<与刚生成正文完全一致的完整内容>\")` 保存同样内容。不要重新创建工程，不要重复传 path，也不要展开描述工程内部文件结构；如果这次仍然无法形成有效的 tool payload，就先输出完整正文，并明确说明“内容已生成但尚未保存”。"
+        "当前写稿工程已创建并绑定为 `{project_path}`。下一步直接调用 `Write(path=\"manuscripts://current\", content=\"<最终标题和完整正文>\")` 保存可直接发布的内容。不要重新创建工程，不要重复传 path，不要展开描述工程内部文件结构，也不要把整篇正文作为普通回复打印出来；保存成功后的最终回复只给运行总结和稿件链接。如果这次仍然无法形成有效的 tool payload，只能明确说明“内容已生成但尚未保存”。"
     ))
 }
 
@@ -6248,7 +6093,7 @@ fn interactive_authoring_error_correction_instruction(
     }
     let target = interactive_authoring_session_target(state, session_id)?;
     Some(format!(
-        "你刚才没有完成有效保存。当前写稿工程已经绑定为 `{}`。下一步先输出完整正文，然后调用 `Write(path=\"manuscripts://current\", content=\"<与刚生成正文完全一致的完整内容>\")` 保存同样内容；不要再次发送空的 Operate，也不要用 Operate 写正文，不要重新创建工程。如果仍然无法调用成功，就直接输出完整正文，并明确说明“内容已生成但尚未保存”。",
+        "你刚才没有完成有效保存。当前写稿工程已经绑定为 `{}`。下一步直接调用 `Write(path=\"manuscripts://current\", content=\"<最终标题和完整正文>\")` 保存内容；不要再次发送空的 Operate，也不要用 Operate 写正文，不要重新创建工程，不要把整篇正文作为普通回复打印出来。如果仍然无法调用成功，只能明确说明“内容已生成但尚未保存”。",
         target.project_path
     ))
 }
@@ -6267,12 +6112,10 @@ fn auto_save_interactive_authoring_content(
         runtime_mode,
         session_id,
         None,
-        "workflow",
+        "Write",
         &json!({
-            "action": "manuscripts.writeCurrent",
-            "payload": {
-                "content": content,
-            }
+            "path": "manuscripts://current",
+            "content": content,
         }),
         model_config,
     )
@@ -6287,7 +6130,7 @@ fn append_authoring_saved_path_link(
         return content.to_string();
     };
     let project_path = normalize_relative_path(&target.project_path);
-    if project_path.is_empty() || !project_path.ends_with(".thrive") {
+    if project_path.is_empty() || !is_authoring_project_link_target(&project_path) {
         return content.to_string();
     }
     let canonical_link = format!("manuscripts://{project_path}");
@@ -6299,6 +6142,44 @@ fn append_authoring_saved_path_link(
         .and_then(|value| value.to_str())
         .unwrap_or(project_path.as_str());
     format!("{content}\n\n保存路径：[{label}]({canonical_link})")
+}
+
+fn is_authoring_project_link_target(project_path: &str) -> bool {
+    let normalized = normalize_relative_path(project_path);
+    !normalized.is_empty()
+        && !normalized.ends_with(".md")
+        && normalized
+            .rsplit('/')
+            .next()
+            .map(|name| !name.contains('.'))
+            .unwrap_or(false)
+}
+
+fn authoring_title_from_content(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let title = trimmed.trim_start_matches('#').trim();
+        (!title.is_empty()).then(|| title.to_string())
+    })
+}
+
+fn should_replace_authoring_final_content_with_summary(content: &str) -> bool {
+    content.chars().count() > 600 || content.trim_start().starts_with('#')
+}
+
+fn authoring_saved_final_summary(project_path: &str, saved_content: &str) -> String {
+    let normalized = normalize_relative_path(project_path);
+    let label = std::path::Path::new(&normalized)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(normalized.as_str());
+    let title = authoring_title_from_content(saved_content).unwrap_or_else(|| label.to_string());
+    format!(
+        "已完成创作并保存为稿件。\n\n- 标题：{title}\n- 稿件：[{label}](manuscripts://{normalized})"
+    )
 }
 
 fn emit_loop_guard_checkpoint(
@@ -8060,6 +7941,8 @@ fn run_openai_interactive_chat_runtime(
         };
         let turn_policy =
             provider_profile.turn_policy(runtime_mode, tool_choice, wander_saw_tool_call);
+        let streaming_enabled =
+            !is_wander && !should_prefer_non_streaming_openai_turn(runtime_mode, config);
         let turn_index = tool_turn + usize::from(forcing_toolless_turn);
         if let Some(current_session_id) = session_id {
             emit_runtime_stream_start(app, current_session_id, "thinking", Some(runtime_mode));
@@ -8075,11 +7958,12 @@ fn run_openai_interactive_chat_runtime(
         append_debug_log_state(
             state,
             format!(
-                "[timing][wander-runtime][{}] turn-{}-request elapsed=0ms | toolChoice={} thinkingDisabled={}",
+                "[timing][wander-runtime][{}] turn-{}-request elapsed=0ms | toolChoice={} thinkingDisabled={} stream={}",
                 trace_id,
                 turn_index,
                 tool_choice.as_api_value(),
-                turn_policy.disable_thinking
+                turn_policy.disable_thinking,
+                streaming_enabled
             ),
         );
         if let Some(instruction) = forced_toolless_instruction {
@@ -8106,8 +7990,6 @@ fn run_openai_interactive_chat_runtime(
             }),
         );
         let include_tools = !forcing_toolless_turn && !tool_turn_limit_reached;
-        let streaming_enabled =
-            !is_wander && !should_prefer_non_streaming_openai_turn(runtime_mode, config);
         let mut body = json!({
             "model": config.model_name,
             "messages": messages,
@@ -8221,6 +8103,10 @@ fn run_openai_interactive_chat_runtime(
                 ) {
                     Ok(_) => {
                         execution_progress.save_completed = true;
+                        if let Some(target) = bound_authoring_target.as_ref() {
+                            final_content =
+                                authoring_saved_final_summary(&target.project_path, &final_content);
+                        }
                     }
                     Err(error) => {
                         auto_save_failed = true;
@@ -8271,6 +8157,15 @@ fn run_openai_interactive_chat_runtime(
                     correction,
                 );
                 continue;
+            }
+            if execution_contract.require_save
+                && execution_progress.save_completed
+                && should_replace_authoring_final_content_with_summary(&final_content)
+            {
+                if let Some(target) = bound_authoring_target.as_ref() {
+                    final_content =
+                        authoring_saved_final_summary(&target.project_path, &final_content);
+                }
             }
             final_content = append_authoring_saved_path_link(state, session_id, &final_content);
             clear_completed_interactive_execution_contract(
@@ -9511,7 +9406,8 @@ fn handle_channel(
     }
     match channel {
         _ => Err(format!(
-            "RedBox host does not recognize channel `{channel}`."
+            "{} host does not recognize channel `{channel}`.",
+            app_brand_display_name()
         )),
     }
 }
@@ -9629,7 +9525,10 @@ fn run_official_auth_bootstrap_once(app: AppHandle) {
                 logging::event::LogLevel::Warn,
                 "auth",
                 "startup.official_auth_bootstrap_failed",
-                format!("[RedBox official auth bootstrap] {error}"),
+                format!(
+                    "[{} official auth bootstrap] {error}",
+                    app_brand_display_name()
+                ),
                 json!({ "error": error }),
                 None,
             );
@@ -9665,7 +9564,10 @@ fn main() {
             logging::event::LogLevel::Warn,
             "workspace",
             "startup.workspace_compatibility_failed",
-            format!("[RedBox workspace compatibility] {error}"),
+            format!(
+                "[{} workspace compatibility] {error}",
+                app_brand_display_name()
+            ),
             json!({ "error": error }),
             None,
         );
@@ -9676,7 +9578,7 @@ fn main() {
             logging::event::LogLevel::Warn,
             "auth",
             "startup.auth_migrate_failed",
-            format!("[RedBox auth migrate] {error}"),
+            format!("[{} auth migrate] {error}", app_brand_display_name()),
             json!({ "error": error }),
             None,
         );
@@ -9689,7 +9591,7 @@ fn main() {
             logging::event::LogLevel::Warn,
             "app.lifecycle",
             "startup.persist_store_failed",
-            format!("[RedBox store persist] {error}"),
+            format!("[{} store persist] {error}", app_brand_display_name()),
             json!({ "error": error }),
             None,
         );
@@ -9767,7 +9669,10 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "workspace",
                     "startup.knowledge_index_init_failed",
-                    format!("[RedBox knowledge index init] {error}"),
+                    format!(
+                        "[{} knowledge index init] {error}",
+                        app_brand_display_name()
+                    ),
                     json!({ "error": error }),
                     None,
                 );
@@ -9778,7 +9683,7 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "auth",
                     "startup.auth_init_failed",
-                    format!("[RedBox auth init] {error}"),
+                    format!("[{} auth init] {error}", app_brand_display_name()),
                     json!({ "error": error }),
                     None,
                 );
@@ -9789,7 +9694,7 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "daemon",
                     "startup.redclaw_profile_init_failed",
-                    format!("[RedBox redclaw profile init] {error}"),
+                    format!("[{} AI profile init] {error}", app_brand_display_name()),
                     json!({ "error": error }),
                     None,
                 );
@@ -9802,7 +9707,7 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "daemon",
                     "startup.redclaw_runtime_restore_failed",
-                    format!("[RedBox redclaw runtime restore] {error}"),
+                    format!("[{} AI runtime restore] {error}", app_brand_display_name()),
                     json!({ "error": error }),
                     None,
                 );
@@ -9815,7 +9720,10 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "daemon",
                     "startup.media_generation_runtime_restore_failed",
-                    format!("[RedBox media generation runtime restore] {error}"),
+                    format!(
+                        "[{} media generation runtime restore] {error}",
+                        app_brand_display_name()
+                    ),
                     json!({ "error": error }),
                     None,
                 );
@@ -9830,7 +9738,10 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "daemon",
                     "startup.assistant_daemon_restore_failed",
-                    format!("[RedBox assistant daemon restore] {error}"),
+                    format!(
+                        "[{} assistant daemon restore] {error}",
+                        app_brand_display_name()
+                    ),
                     json!({ "error": error }),
                     None,
                 );
@@ -9841,7 +9752,10 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "runtime.task",
                     "startup.skill_catalog_refresh_failed",
-                    format!("[RedBox skill catalog refresh] {error}"),
+                    format!(
+                        "[{} skill catalog refresh] {error}",
+                        app_brand_display_name()
+                    ),
                     json!({ "error": error }),
                     None,
                 );
@@ -9852,7 +9766,7 @@ fn main() {
                     logging::event::LogLevel::Warn,
                     "runtime.task",
                     "startup.runtime_warmup_failed",
-                    format!("[RedBox runtime warmup] {error}"),
+                    format!("[{} runtime warmup] {error}", app_brand_display_name()),
                     json!({ "error": error }),
                     None,
                 );
@@ -9861,7 +9775,7 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to build RedBox")
+        .expect("failed to build desktop app")
         .run(|app, event| {
             if matches!(
                 event,

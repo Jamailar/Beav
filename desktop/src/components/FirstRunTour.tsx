@@ -9,6 +9,7 @@ import {
   type StartupAnnouncementFeature,
   type StartupAnnouncementStep,
 } from '../config/startupAnnouncements';
+import { APP_BRAND } from '../config/brand';
 
 interface FirstRunTourProps {
   currentView: ViewType;
@@ -275,7 +276,7 @@ export function FirstRunTour({ currentView, onNavigate }: FirstRunTourProps) {
   }
 
   return (
-    <div className="redbox-tour-overlay" role="dialog" aria-modal="true" aria-label="RedBox 更新提示">
+    <div className="redbox-tour-overlay" role="dialog" aria-modal="true" aria-label={`${APP_BRAND.displayName} 更新提示`}>
       <div className="redbox-tour-backdrop" onClick={finishTour} />
       <div className="redbox-tour-panel">
         <button

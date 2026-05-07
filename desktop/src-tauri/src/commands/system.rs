@@ -15,8 +15,9 @@ use crate::logging::{
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    now_iso, payload_field, payload_string, payload_value_as_string, pick_files_native,
-    refresh_runtime_warm_state, store_root, update_workspace_root_cache, AppState,
+    app_brand_display_name, now_iso, payload_field, payload_string, payload_value_as_string,
+    pick_files_native, refresh_runtime_warm_state, store_root, update_workspace_root_cache,
+    AppState,
 };
 
 const APP_UPDATE_DOWNLOAD_PAGE_URL: &str = "https://redbox.ziz.hk/download";
@@ -131,7 +132,7 @@ fn fetch_latest_app_update(current_version: &str) -> Result<LatestAppUpdate, Str
         .header("Accept", "application/json")
         .header(
             "User-Agent",
-            format!("RedBox/{}", env!("CARGO_PKG_VERSION")),
+            format!("{}/{}", app_brand_display_name(), env!("CARGO_PKG_VERSION")),
         )
         .send()
         .map_err(|error| error.to_string())?;
@@ -390,10 +391,6 @@ fn knowledge_api_guide_path(app: &AppHandle) -> Result<PathBuf, String> {
     bundled_html_resource_path(app, "knowledge-api-guide.html", "知识导入 API 文档页不存在")
 }
 
-fn richpost_theme_guide_path(app: &AppHandle) -> Result<PathBuf, String> {
-    bundled_html_resource_path(app, "richpost-theme-guide.html", "主题编辑指南不存在")
-}
-
 pub fn handle_system_channel(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -407,7 +404,6 @@ pub fn handle_system_channel(
         | "app:startup-migration-start"
         | "app:startup-migration-status"
         | "app:open-knowledge-api-guide"
-        | "app:open-richpost-theme-guide"
         | "app:open-path"
         | "settings:pick-workspace-dir"
         | "db:get-settings"
@@ -449,11 +445,6 @@ pub fn handle_system_channel(
                 "app:startup-migration-start" => crate::start_startup_migration(app, state),
                 "app:open-knowledge-api-guide" => {
                     let path = knowledge_api_guide_path(app)?;
-                    open::that(&path).map_err(|error| error.to_string())?;
-                    Ok(json!({ "success": true, "path": path.display().to_string() }))
-                }
-                "app:open-richpost-theme-guide" => {
-                    let path = richpost_theme_guide_path(app)?;
                     open::that(&path).map_err(|error| error.to_string())?;
                     Ok(json!({ "success": true, "path": path.display().to_string() }))
                 }

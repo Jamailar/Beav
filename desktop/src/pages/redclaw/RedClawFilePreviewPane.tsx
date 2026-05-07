@@ -112,7 +112,7 @@ export function RedClawFilePreviewPane({
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1200);
         } catch (error) {
-            console.error('Failed to copy RedClaw preview path:', error);
+            console.error('Failed to copy AI preview path:', error);
         }
     };
 

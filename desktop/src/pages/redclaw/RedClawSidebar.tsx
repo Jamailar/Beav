@@ -1,5 +1,6 @@
 import { Download, Loader2, X } from 'lucide-react';
 import { clsx } from 'clsx';
+import { APP_BRAND } from '../../config/brand';
 
 interface RedClawSidebarProps {
     open: boolean;
@@ -145,7 +146,7 @@ export function RedClawSidebar({
 
                             <div className="border-t border-border/70 px-5 py-3">
                                 <p className="text-center text-[8px] font-bold uppercase tracking-[0.3em] text-text-tertiary/40">
-                                    RedBox Skills
+                                    {APP_BRAND.displayName} Skills
                                 </p>
                             </div>
                         </div>

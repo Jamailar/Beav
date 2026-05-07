@@ -1,3 +1,5 @@
+import { APP_BRAND } from '../config/brand';
+
 type MediaPreflightOptions = {
   maxLongEdge?: number;
   hardMaxLongEdge?: number;
@@ -303,7 +305,7 @@ async function preflightImageValue(value: unknown, options?: MediaPreflightOptio
     const result = await optimizeDataImage(value, options);
     return result.dataUrl;
   } catch (error) {
-    console.warn('[RedBox] reference image preflight skipped:', error);
+    console.warn(`[${APP_BRAND.displayName}] reference image preflight skipped:`, error);
     return value;
   }
 }

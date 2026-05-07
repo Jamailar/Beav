@@ -180,7 +180,7 @@ mod tests {
         SkillRecord {
             name: name.to_string(),
             description: format!("{name} desc"),
-            location: format!("redbox://skills/{name}"),
+            location: format!("skills://{name}"),
             body: format!("# {name}"),
             source_scope: Some(scope.to_string()),
             is_builtin: Some(scope == "builtin"),
@@ -202,17 +202,5 @@ mod tests {
         let existing = vec![skill("old-builtin", "builtin", false)];
         let merged = merge_discovered_with_existing(&existing, Vec::new());
         assert!(merged.is_empty());
-    }
-
-    #[test]
-    fn merge_discovered_with_existing_preserves_disabled_state_for_renamed_builtin_skill() {
-        let existing = vec![skill("redbox-image-director", "builtin", true)];
-        let merged = merge_discovered_with_existing(
-            &existing,
-            vec![skill("image-director", "builtin", false)],
-        );
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].name, "image-director");
-        assert_eq!(merged[0].disabled, Some(true));
     }
 }

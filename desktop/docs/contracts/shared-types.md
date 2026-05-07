@@ -21,11 +21,11 @@ Status: Current
 - 兼容历史：`local-file://`、`file://`、绝对路径
 - 使用场景：renderer 预览、素材引用、Remotion 渲染前的路径重写
 
-### Manuscript File Extensions
+### Manuscript Folder Projects
 
 - Markdown：`.md`
-- Package drafts：`.redarticle`、`.redpost`、`.redvideo`、`.redaudio`
-- 这些扩展决定稿件类型、编辑器能力和导出路径
+- Package drafts：包含 `manifest.json` 的普通文件夹
+- `manifest.packageKind` 决定稿件类型、编辑器能力和导出路径
 
 ### Model Capabilities
 

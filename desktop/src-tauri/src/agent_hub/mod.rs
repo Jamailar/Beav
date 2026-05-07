@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::AppStore;
+use crate::{app_brand_display_name, AppStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,7 +18,7 @@ pub struct AgentBackendDescriptor {
 pub fn list_agent_backends(_store: &AppStore) -> Vec<AgentBackendDescriptor> {
     vec![AgentBackendDescriptor {
         id: "internal-runtime".to_string(),
-        label: "RedBox Internal Runtime".to_string(),
+        label: format!("{} Internal Runtime", app_brand_display_name()),
         source_kind: "internal_runtime".to_string(),
         backend: "redbox-runtime".to_string(),
         status: "available".to_string(),

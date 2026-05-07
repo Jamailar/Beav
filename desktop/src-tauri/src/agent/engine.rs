@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::app_ai_display_name;
+
 use crate::agent::{
     build_runtime_query_checkpoint_bundle, PreparedChatSendTurn, PreparedRuntimeQueryTurn,
     PreparedSessionBridgeTurn, RuntimeQueryCheckpointBundle,
@@ -33,7 +35,7 @@ impl SessionAgentTurnKind {
             Self::RuntimeQuery => "Runtime query completed",
             Self::SessionBridge => "Session bridge message completed",
             Self::AssistantDaemon => "Assistant daemon handled request",
-            Self::RedclawRun => "RedClaw run completed",
+            Self::RedclawRun => "AI run completed",
             Self::Wander => "Wander brainstorm completed",
         }
     }
@@ -142,14 +144,20 @@ impl<'a> ChatExchangeRequest<'a> {
     ) -> Self {
         Self {
             session_id: Some(session_id),
-            display_content: format!("RedClaw 执行 · {}", source_label),
+            display_content: format!("{} 执行 · {}", app_ai_display_name(), source_label),
             message: prompt,
             persist_user_message: true,
             model_config: None,
             attachment: None,
             turn_kind: SessionAgentTurnKind::RedclawRun,
-            checkpoint_summary_override: Some(format!("RedClaw completed {}", source_label)),
-            session_title_override: Some(session_title.unwrap_or_else(|| "RedClaw".to_string())),
+            checkpoint_summary_override: Some(format!(
+                "{} completed {}",
+                app_ai_display_name(),
+                source_label
+            )),
+            session_title_override: Some(
+                session_title.unwrap_or_else(|| app_ai_display_name().to_string()),
+            ),
         }
     }
 
@@ -410,7 +418,10 @@ mod tests {
             "cron",
             Some("Cron Task".to_string()),
         );
-        assert_eq!(redclaw.checkpoint_summary_text(), "RedClaw completed cron");
+        assert_eq!(
+            redclaw.checkpoint_summary_text(),
+            format!("{} completed cron", app_ai_display_name())
+        );
         assert_eq!(redclaw.session_title_hint_override(), Some("Cron Task"));
     }
 

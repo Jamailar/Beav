@@ -204,7 +204,6 @@ pub(crate) fn ensure_richpost_layout_scaffold(
     package_path: &std::path::Path,
     manifest: &Value,
 ) -> Result<Value, String> {
-    ensure_richpost_theme_template_file(package_path)?;
     let theme = richpost_theme_spec_from_manifest(Some(package_path), manifest);
     let tokens_path = package_layout_tokens_path(package_path);
     let theme_tokens_path = richpost_theme_root_tokens_path_for_theme(package_path, &theme);

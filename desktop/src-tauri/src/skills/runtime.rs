@@ -105,7 +105,7 @@ pub fn build_user_skill_record(name: &str) -> SkillRecord {
     SkillRecord {
         name: name.to_string(),
         description: format!("{name} skill"),
-        location: format!("redbox://skills/{}", slug_from_relative_path(name)),
+        location: format!("skills://{}", slug_from_relative_path(name)),
         body: format!(
             "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: inline\nautoActivate: false\nactivationScope: turn\ncontextNote: \n---\n# {name}\n\nDescribe this skill's runtime rules, prompt patches, and execution contract here."
         ),
@@ -119,9 +119,9 @@ pub fn build_market_skill_record(slug: &str) -> SkillRecord {
     SkillRecord {
         name: slug.to_string(),
         description: format!("Market placeholder skill: {slug}"),
-        location: format!("redbox://skills/market/{slug}"),
+        location: format!("skills://market/{slug}"),
         body: format!(
-            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: turn\ncontextNote: Registered as a market placeholder. This does not provision CLI tools or external runtimes.\n---\n# {slug}\n\nThis skill entry was registered from the RedBox market installer as a placeholder only.\n\nIt does not install upstream toolchains, npm packages, binaries, or other external runtimes.\nUse the CLI Runtime control plane to provision required tools, then replace this body with the upstream skill contract or runtime modifiers."
+            "---\nallowedRuntimeModes: []\nallowedTools: []\nblockedTools: []\nhookMode: forked\nautoActivate: false\nactivationScope: turn\ncontextNote: Registered as a market placeholder. This does not provision CLI tools or external runtimes.\n---\n# {slug}\n\nThis skill entry was registered from the market installer as a placeholder only.\n\nIt does not install upstream toolchains, npm packages, binaries, or other external runtimes.\nUse the CLI runtime control plane to provision required tools, then replace this body with the upstream skill contract or runtime modifiers."
         ),
         source_scope: Some("user".to_string()),
         is_builtin: Some(false),
@@ -138,7 +138,7 @@ mod tests {
             SkillRecord {
                 name: "redclaw-guide".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/redclaw-guide".to_string(),
+                location: "skills://redclaw-guide".to_string(),
                 body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [bash, workflow]\nautoActivate: true\nhookMode: inline\n---\n# Skill\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -147,8 +147,8 @@ mod tests {
             SkillRecord {
                 name: "cover-builder".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/cover-builder".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [workflow]\nautoActivate: false\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
+                location: "skills://cover-builder".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [workflow]\nautoActivate: false\nactivationScope: session\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -156,7 +156,7 @@ mod tests {
             SkillRecord {
                 name: "remotion-best-practices".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/remotion-best-practices".to_string(),
+                location: "skills://remotion-best-practices".to_string(),
                 body: "---\nallowedRuntimeModes: [video-editor]\nallowedTools: [bash, workflow, editor]\nautoActivate: true\nhookMode: inline\n---\n# Remotion\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -261,7 +261,7 @@ mod tests {
             &[SkillRecord {
                 name: "writing-style".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/writing-style".to_string(),
+                location: "skills://writing-style".to_string(),
                 body: "---\nallowedRuntimeModes: [wander]\nautoActivate: true\nhookMode: inline\n---\n# Writing Style\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -283,7 +283,7 @@ mod tests {
             &[SkillRecord {
                 name: "writing-style".to_string(),
                 description: "desc".to_string(),
-                location: "redbox://skills/writing-style".to_string(),
+                location: "skills://writing-style".to_string(),
                 body: "---\nallowedRuntimeModes: [redclaw]\nautoActivate: false\nactivationScope: turn\nhookMode: forked\n---\n# Writing Style\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -303,7 +303,7 @@ mod tests {
             &[SkillRecord {
                 name: "image-director".to_string(),
                 description: "image desc".to_string(),
-                location: "redbox://skills/image-director".to_string(),
+                location: "skills://image-director".to_string(),
                 body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
@@ -323,7 +323,7 @@ mod tests {
             &[SkillRecord {
                 name: "image-director".to_string(),
                 description: "image desc".to_string(),
-                location: "redbox://skills/image-director".to_string(),
+                location: "skills://image-director".to_string(),
                 body: "---\nallowedRuntimeModes: [team, redclaw, image-generation]\nautoActivate: false\nactivationScope: session\nhookMode: inline\n---\n# Image Director\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),

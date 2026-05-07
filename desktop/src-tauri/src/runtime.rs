@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(session_title_from_message("   "), "New Chat");
         assert_eq!(
             session_title_from_message("abcdefghijklmnopqrstuvwxyz"),
-            "abcdefghijklmnopqrstuvwx"
+            "abcdefghijklmno"
         );
     }
 

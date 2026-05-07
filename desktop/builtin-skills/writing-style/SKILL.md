@@ -4,7 +4,7 @@ allowedRuntimeModes: [wander, redclaw, chatroom]
 hookMode: inline
 autoActivate: false
 activationScope: turn
-activationHint: 当任务进入选题 framing、标题拟定、完整写稿、改写、扩写、润色、内容表达方式调整，或用户明确要求沿用既定写作风格时，先调用 `Operate(resource="skill", operation="run", input={ "name": "writing-style" })`。如果用户要做的是文章卡片、图解卡片、演示卡片、电商套图、组图或配图包，不要只因出现“文章”“内容”“标题”这些词就启用它；这类任务优先交给 image-director。
+activationHint: 当任务进入选题 framing、标题拟定、完整写稿、改写、扩写、润色、内容表达方式调整，或用户明确要求沿用既定写作风格时，可调用 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`。如果用户要做的是文章卡片、图解卡片、演示卡片、电商套图、组图或配图包，不要只因出现“文章”“内容”“标题”这些词就启用它；这类任务优先交给 image-director。
 contextNote: 这是当前空间统一的写作风格底盘。若任务已经进入选题 framing、标题拟定、完整写稿、改写、扩写、润色，或用户明确提到 writing-style，应优先加载它；但如果目标交付物是卡片图、图解图、演示卡片、电商套图或其它成套图片，就不要让它干扰图片导演类决策。
 promptPrefix: 你当前已加载 writing-style。凡是涉及选题 framing、完整写稿、改写、扩写、润色或内容表达方式调整，都先按这份技能执行，避免模板化 AI 文案。
 promptSuffix: 如果当前任务不是写作，就不要让 writing-style 主导其他决策；如果当前任务是写作，标题、内容方向、正文和文案细节都必须体现这份技能的约束。所有标题必须控制在 20 个汉字以内，或其它语言下等价的简洁长度。写稿时禁止输出控制字符、非正文占位标记或孤立分隔线。
@@ -19,7 +19,7 @@ maxPromptChars: 2400
 ## 强制规则
 
 - 涉及写作、改写、扩写、润色、复盘，或选题 framing 的任务，都先遵守这份技能。
-- 漫步阶段的标题和内容方向，与 RedClaw 阶段的完整稿件、标签、封面文案，使用同一套风格底盘。
+- 漫步阶段的标题和内容方向，与创作执行阶段的完整稿件、标签、封面文案，使用同一套风格底盘。
 - 所有标题都必须控制在 20 个汉字以内，或其它语言下等价的简洁长度。
 - 标题和方向先追求具体、有人味、真实张力，再追求工整。
 - 没有真实细节时，不要硬装第一手经历或情绪。

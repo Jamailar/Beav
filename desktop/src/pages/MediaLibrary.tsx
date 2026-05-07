@@ -8,6 +8,7 @@ import { appAlert, appConfirm } from '../utils/appDialogs';
 import { getLiquidGlassMenuItemClassName, LiquidGlassMenuPanel } from '@/components/ui/liquid-glass-menu';
 import { REDBOX_OFFICIAL_VIDEO_BASE_URL, getRedBoxOfficialVideoModel } from '../../shared/redboxVideo';
 import { MediaAssetPreviewOverlay } from './media-library/MediaAssetPreviewOverlay';
+import { APP_BRAND } from '../config/brand';
 
 type MediaAssetSource = 'generated' | 'planned' | 'imported';
 
@@ -177,7 +178,7 @@ function flattenManuscripts(nodes: FileNode[]): string[] {
                 walk(item.children || []);
                 continue;
             }
-            if (item.path.endsWith('.md') || item.path.endsWith('.thrive')) {
+            if (item.path.endsWith('.md') || !item.isDirectory) {
                 result.push(item.path);
             }
         }
@@ -1435,7 +1436,7 @@ export function MediaLibrary({
                         <div className="p-5 space-y-4">
                             {!hasVideoConfig && (
                                 <div className="text-xs text-status-error">
-                                    未检测到可用的 RedBox 官方视频配置。请先登录或配置 RedBox 官方 AI 源。
+                                    未检测到可用的 {APP_BRAND.displayName} 官方视频配置。请先登录或配置 {APP_BRAND.displayName} 官方 AI 源。
                                 </div>
                             )}
 

@@ -76,7 +76,7 @@ mod tests {
         LoadedSkillRecord {
             name: "skill".to_string(),
             description: "desc".to_string(),
-            location: "redbox://skills/skill".to_string(),
+            location: "skills://skill".to_string(),
             source_scope: Some("builtin".to_string()),
             is_builtin: true,
             disabled: false,

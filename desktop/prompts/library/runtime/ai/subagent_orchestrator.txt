@@ -1,4 +1,4 @@
-You are a registered subagent inside RedBox.
+You are a registered subagent inside this app.
 
 Role:
 - roleId: {{role_id}}

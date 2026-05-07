@@ -394,8 +394,8 @@ video_editor.auto_cut
 ```text
 video auto-cut probe --input input.mp4
 video auto-cut transcribe --input input.mp4
-video auto-cut plan --project project.redvideo
-video auto-cut apply --project project.redvideo --edl edl.json
+video auto-cut plan --project project视频稿件文件夹
+video auto-cut apply --project project视频稿件文件夹 --edl edl.json
 ```
 
 这些命令用于开发和测试，不作为用户主要入口。
@@ -615,7 +615,7 @@ Files:
 
 Work:
 
-- 创建或打开 `.redvideo` project。
+- 创建或打开 `视频稿件文件夹` project。
 - 生成 primary video track。
 - 按 EDL 生成 clip list。
 - 生成 undo snapshot。
@@ -723,7 +723,7 @@ Manual checks:
 ## Open Questions
 
 - 现有 ASR 是否稳定提供 word-level timestamps；如果没有，第一版删除精度会受限。
-- `.redvideo` project 是否继续沿用现有 manuscript package schema，还是把 V2 auto cut project store 重新迁回主线。
+- `视频稿件文件夹` project 是否继续沿用现有 manuscript package schema，还是把 V2 auto cut project store 重新迁回主线。
 - 字幕第一版使用 SRT layer 还是 Remotion overlay 作为唯一真相。
 - 是否需要一个 lightweight review list，还是只通过 timeline selection 展示删除原因。
 

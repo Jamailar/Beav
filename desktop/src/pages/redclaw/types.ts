@@ -83,17 +83,6 @@ export interface ScheduleTemplate {
     prompt: string;
 }
 
-export interface LongTemplate {
-    id: string;
-    label: string;
-    description: string;
-    name: string;
-    objective: string;
-    stepPrompt: string;
-    intervalMinutes: number;
-    totalRounds: number;
-}
-
 export interface ScheduleDraft {
     templateId: string;
     name: string;
@@ -103,13 +92,4 @@ export interface ScheduleDraft {
     weekdays: number[];
     runAtLocal: string;
     prompt: string;
-}
-
-export interface LongDraft {
-    templateId: string;
-    name: string;
-    objective: string;
-    stepPrompt: string;
-    intervalMinutes: number;
-    totalRounds: number;
 }

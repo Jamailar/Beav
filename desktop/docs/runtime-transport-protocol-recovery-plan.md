@@ -576,7 +576,7 @@ UI 只能消费这个 envelope，不再根据 prose 拼接判断。
 改造点：
 
 - 继续作为 execution contract 的 typed source
-- 不能再把“必须保存成 `.redpost`”只写在 prompt 文本里
+- 不能再把“必须保存成 稿件文件夹”只写在 prompt 文本里
 
 ## 7. 必须使用现成库 vs 必须自研
 

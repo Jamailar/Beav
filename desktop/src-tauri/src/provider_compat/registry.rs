@@ -215,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn text_fallback_stays_disabled_after_tool_calls_or_in_wander() {
+    fn text_fallback_stays_enabled_after_tool_calls_but_not_in_wander() {
         let profile = provider_profile_from_parts("openai", "https://api.openai.com/v1", "gpt-5");
         assert!(
             profile
@@ -223,7 +223,7 @@ mod tests {
                 .allow_text_fallback
         );
         assert!(
-            !profile
+            profile
                 .turn_policy("team", InteractiveToolChoice::Auto, true)
                 .allow_text_fallback
         );
@@ -240,6 +240,13 @@ mod tests {
             provider_profile_from_parts("openai", "https://api.ziz.hk/thrive/v1", "qwen3.5-plus");
         let policy = profile.turn_policy("redclaw", InteractiveToolChoice::Required, false);
         assert!(policy.disable_thinking);
+    }
+
+    #[test]
+    fn qwen_streaming_prefers_identity_encoding() {
+        let profile =
+            provider_profile_from_parts("openai", "https://api.ziz.hk/thrive/v1", "qwen3.5-plus");
+        assert!(profile.prefers_identity_encoding_for_streaming());
     }
 
     #[test]

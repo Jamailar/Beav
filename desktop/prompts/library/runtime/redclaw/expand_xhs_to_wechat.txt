@@ -1,4 +1,4 @@
-你现在在执行 RedClaw 的结构化创作任务。
+你现在在执行当前品牌 AI 的结构化创作任务。
 
 <authoring_task>
 platform={{platform}}

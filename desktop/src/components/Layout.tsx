@@ -146,7 +146,7 @@ function AppTitleBar({
     if (target?.closest('button,a,input,textarea,select,[role="button"],[data-no-window-drag]')) return;
     event.preventDefault();
     void window.ipcRenderer.windowControls.startDragging().catch((error) => {
-      console.warn('[RedBox] failed to start window drag:', error);
+      console.warn(`[${APP_BRAND.displayName}] failed to start window drag:`, error);
     });
   };
 
@@ -219,7 +219,6 @@ function AppTitleBar({
 export function Layout({ children, currentView, onNavigate, immersiveMode = false, hideGlobalSidebar = false, globalNotice = null, globalSidebarContent, activeModalView, renderTitleBarContent, renderTitleBarActions }: LayoutProps) {
   const { t } = useI18n();
   const [spaces, setSpaces] = useState<WorkspaceSpace[]>([]);
-  const [appVersion, setAppVersion] = useState('');
   const [themeMode, setThemeMode] = useState<ThemeMode>(readInitialThemeMode);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(readInitialSidebarCollapsed);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
@@ -285,20 +284,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       window.ipcRenderer.off('space:changed', handleSpaceChanged);
     };
   }, [loadSpaces]);
-
-  useEffect(() => {
-    const loadVersion = async () => {
-      try {
-        const version = await uiMeasure('layout', 'load_version', async () => (
-          window.ipcRenderer.getAppVersion()
-        ));
-        setAppVersion(String(version || '').trim());
-      } catch (error) {
-        console.error('Failed to load app version:', error);
-      }
-    };
-    void loadVersion();
-  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -385,7 +370,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         setGlobalSearchResults(Array.isArray(response?.items) ? response.items : []);
       }).catch((error) => {
         if (requestId !== globalSearchRequestRef.current) return;
-        console.warn('[RedBox] global knowledge search failed:', error);
+        console.warn(`[${APP_BRAND.displayName}] global knowledge search failed:`, error);
         setGlobalSearchResults([]);
       }).finally(() => {
         if (requestId === globalSearchRequestRef.current) {
@@ -860,7 +845,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                   </button>
                 </>
               )}
-              <span>{appVersion ? `v${appVersion}` : 'v--'}</span>
               <div ref={spaceMenuRef} className="relative min-w-0">
                 <button
                   type="button"

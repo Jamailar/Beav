@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    append_debug_trace_state, now_iso, now_ms, payload_field, payload_string, AppState, AppStore,
-    REDBOX_OFFICIAL_BASE_URL,
+    app_brand_display_name, append_debug_trace_state, now_iso, now_ms, payload_field,
+    payload_string, AppState, AppStore, REDBOX_OFFICIAL_BASE_URL,
 };
 
 pub(crate) const AUTH_STATE_CHANGED_EVENT: &str = "auth:state-changed";
@@ -146,7 +146,7 @@ fn cache_record_from_settings(settings: &Value) -> AuthCacheRecord {
 fn auth_cache_path_from_store_path(store_path: &Path) -> Result<PathBuf, String> {
     let root = store_path
         .parent()
-        .ok_or_else(|| "RedBox store root is unavailable".to_string())?;
+        .ok_or_else(|| format!("{} store root is unavailable", app_brand_display_name()))?;
     fs::create_dir_all(root).map_err(|error| error.to_string())?;
     Ok(root.join(AUTH_CACHE_FILE_NAME))
 }
@@ -417,7 +417,7 @@ fn persist_auth_cache(store_path: &Path, cache: &AuthCacheRecord) -> Result<(), 
 fn schedule_auth_cache_persist(store_path: PathBuf, cache: AuthCacheRecord) {
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(error) = persist_auth_cache(&store_path, &cache) {
-            eprintln!("[RedBox auth cache persist] {error}");
+            eprintln!("[{} auth cache persist] {error}", app_brand_display_name());
         }
     });
 }

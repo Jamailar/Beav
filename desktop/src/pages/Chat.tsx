@@ -199,21 +199,6 @@ export interface ChatShortcutContext {
 
 export type ChatShortcutProvider = ChatShortcut[] | ((context: ChatShortcutContext) => ChatShortcut[]);
 
-interface ChatDispatchOverridePayload {
-  sessionId?: string;
-  message: string;
-  displayContent: string;
-  attachment?: Message['attachment'];
-  attachments?: UploadedFileAttachment[];
-  knowledgeReferences?: ChatKnowledgeMentionOption[];
-  taskHints?: unknown;
-}
-
-interface ChatDispatchOverrideResult {
-  handled: boolean;
-  assistantContent?: string;
-}
-
 // 选中文字菜单状态
 interface SelectionMenu {
   visible: boolean;
@@ -229,7 +214,7 @@ interface ChatProps {
   onMessageConsumed?: () => void;
   fixedSessionId?: string | null;
   fixedSessionDraft?: boolean;
-  onEnsureSessionForSend?: () => Promise<string | null>;
+  onEnsureSessionForSend?: (defaultTitle?: string) => Promise<string | null>;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
   shortcuts?: ChatShortcutProvider;
@@ -270,7 +255,6 @@ interface ChatProps {
   messageListHeader?: React.ReactNode;
   placeholder?: string;
   fixedMemberMention?: ChatMemberMentionOption | null;
-  onDispatchOverride?: (payload: ChatDispatchOverridePayload) => Promise<ChatDispatchOverrideResult | boolean>;
   onSessionActivity?: (sessionId: string, updatedAt: string) => void;
 }
 
@@ -327,6 +311,18 @@ function stripTransientAttachmentPreview(
   if (!attachment) return undefined;
   const { thumbnailDataUrl: _thumbnailDataUrl, ...persisted } = attachment;
   return persisted;
+}
+
+function stripTransientMessageAttachmentPreview(
+  attachment?: Message['attachment'],
+): Message['attachment'] | undefined {
+  if (!attachment) return undefined;
+  if (attachment.type !== 'uploaded-file') return attachment;
+  return stripTransientAttachmentPreview(attachment as UploadedFileAttachment) as Message['attachment'];
+}
+
+function defaultSessionTitleFromMessage(message: string): string {
+  return Array.from(String(message || '').trim()).slice(0, 15).join('');
 }
 
 function attachmentKind(attachment: UploadedFileAttachment | undefined): string {
@@ -858,7 +854,6 @@ export function Chat({
   messageListHeader,
   placeholder,
   fixedMemberMention = null,
-  onDispatchOverride,
   onSessionActivity,
 }: ChatProps) {
   const debugUi = useCallback((_event: string, _extra?: Record<string, unknown>) => {}, []);
@@ -940,6 +935,7 @@ export function Chat({
   const localMessageMutationRef = useRef(0);
   const skipNextFixedSessionLoadRef = useRef<string | null>(null);
   const handledFixedSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
+  const lastFixedSessionIdRef = useRef<string | null>(fixedSessionId ?? null);
   const isActiveRef = useRef(isActive);
   const coldRecoveryPendingRef = useRef(true);
   const streamStatsRef = useRef<{ startedAt: number; chunks: number; chars: number } | null>(null);
@@ -962,6 +958,14 @@ export function Chat({
 
   useLayoutEffect(() => {
     if (!fixedSessionId) return;
+    if (lastFixedSessionIdRef.current !== fixedSessionId) {
+      lastFixedSessionIdRef.current = fixedSessionId;
+      const warm = readFixedSessionWarmSnapshot(fixedSessionId);
+      localMessageMutationRef.current += 1;
+      setMessages(warm?.messages || []);
+      setContextUsage(warm?.contextUsage || null);
+      setErrorNotice(null);
+    }
     if (currentSessionIdRef.current === fixedSessionId) return;
     currentSessionIdRef.current = fixedSessionId;
     setCurrentSessionId(fixedSessionId);
@@ -1437,9 +1441,10 @@ export function Chat({
 
     // 标记为已处理
     pendingMessageHandledRef.current = true;
+    const pendingMessagePrimaryAttachment = pendingMessage.attachment as Message['attachment'] | undefined;
     const pendingMessageAttachments = [
       ...((pendingMessage.attachments || []) as UploadedFileAttachment[]),
-      ...uploadedFileAttachmentsFromMessageAttachment(pendingMessage.attachment as Message['attachment'] | undefined),
+      ...uploadedFileAttachmentsFromMessageAttachment(pendingMessagePrimaryAttachment),
     ];
 
     if (pendingMessage.deliveryMode === 'draft') {
@@ -1474,7 +1479,8 @@ export function Chat({
 
     const sendPendingMessage = async () => {
       let sessionId: string;
-      const shouldAppendToCurrentSession = Boolean(fixedSessionId);
+      const shouldReplaceLocalMessages = pendingMessage.sessionRouting === 'new';
+      const shouldAppendToCurrentSession = Boolean(fixedSessionId) && !shouldReplaceLocalMessages;
 
       if (fixedSessionId) {
         sessionId = fixedSessionId;
@@ -1517,7 +1523,8 @@ export function Chat({
         resolvedModelConfig?.modelName || getChatModelConfig()?.modelName,
       );
       const committedAttachments = commitAttachmentsForSend(resolvedAttachments);
-      const resolvedAttachment = createAttachmentPayload(committedAttachments);
+      const resolvedAttachment = createAttachmentPayload(committedAttachments)
+        || (pendingMessagePrimaryAttachment?.type !== 'uploaded-file' ? pendingMessagePrimaryAttachment : undefined);
       const pendingAttachmentBlockReason = attachmentsSendBlockReason(resolvedAttachments);
       if (pendingAttachmentBlockReason) {
         setErrorNotice(pendingAttachmentBlockReason);
@@ -1579,7 +1586,6 @@ export function Chat({
         localMessageMutationRef.current += 1;
         setMessages(prev => [...prev, userMsg, aiPlaceholder]);
       } else {
-        // 新会话直接设置消息
         localMessageMutationRef.current += 1;
         setMessages([userMsg, aiPlaceholder]);
       }
@@ -1591,7 +1597,7 @@ export function Chat({
         sessionId: sessionId,
         message: pendingRuntimeMessage,
         displayContent: pendingMessage.displayContent,
-        attachment: stripTransientAttachmentPreview(resolvedAttachment as UploadedFileAttachment | undefined),
+        attachment: stripTransientMessageAttachmentPreview(resolvedAttachment),
         attachments: committedAttachments.map((attachment) => stripTransientAttachmentPreview(attachment) as UploadedFileAttachment),
         knowledgeReferences: pendingKnowledgeReferences,
         modelConfig: resolvedModelConfig,
@@ -3240,7 +3246,7 @@ export function Chat({
     let targetSessionId = currentSessionIdRef.current || currentSessionId || null;
     if (!targetSessionId && onEnsureSessionForSend) {
       try {
-        targetSessionId = await onEnsureSessionForSend();
+        targetSessionId = await onEnsureSessionForSend(defaultSessionTitleFromMessage(displayBody || displayText));
       } catch (error) {
         console.error('Failed to create chat session before send:', error);
         targetSessionId = null;
@@ -3293,56 +3299,6 @@ export function Chat({
     setSelectedKnowledgeMentions([]);
     resetPendingAttachment();
     setIsProcessing(true);
-
-    if (onDispatchOverride) {
-      try {
-        const overrideResult = await onDispatchOverride({
-          sessionId: targetSessionId || undefined,
-          message: runtimeMessage,
-          displayContent: displayText,
-          attachment: primaryAttachment as Message['attachment'],
-          attachments,
-          knowledgeReferences: safeKnowledgeMentions,
-          taskHints: fixedSessionTaskHints,
-        });
-        const handled = typeof overrideResult === 'boolean' ? overrideResult : Boolean(overrideResult?.handled);
-        if (handled) {
-          const assistantContent = typeof overrideResult === 'boolean'
-            ? ''
-            : String(overrideResult.assistantContent || '').trim();
-          const now = Date.now();
-          setIsProcessing(false);
-          setMessages((prev) => prev.map((message) => (
-            message.id === aiPlaceholder.id
-              ? {
-                ...message,
-                content: assistantContent || '任务已交给 RedClaw 自动团队执行。',
-                isStreaming: false,
-                processingFinishedAt: now,
-              }
-              : message
-          )));
-          return;
-        }
-      } catch (error) {
-        console.error('Chat dispatch override failed:', error);
-        const detail = error instanceof Error ? error.message : String(error || '执行失败');
-        const now = Date.now();
-        setIsProcessing(false);
-        setErrorNotice(detail);
-        setMessages((prev) => prev.map((message) => (
-          message.id === aiPlaceholder.id
-            ? {
-              ...message,
-              content: `RedClaw 自动执行失败：${detail}`,
-              isStreaming: false,
-              processingFinishedAt: now,
-            }
-            : message
-        )));
-        return;
-      }
-    }
 
     let resolvedModelConfig;
     try {

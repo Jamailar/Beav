@@ -157,6 +157,7 @@ pub fn runtime_error_envelope_from_error(
         || lower.contains("required tool execution")
         || lower.contains("empty fallback response")
         || lower.contains("interactive fallback returned")
+        || lower.contains("json fallback returned")
     {
         (
             RuntimeErrorCategory::RecoveryIncomplete,
@@ -403,5 +404,18 @@ mod tests {
         assert_eq!(envelope.category, RuntimeErrorCategory::RateLimit);
         assert_eq!(envelope.title, "请求频率受限");
         assert!(envelope.retryable);
+    }
+
+    #[test]
+    fn runtime_error_envelope_marks_json_fallback_recovery_failures() {
+        let envelope = runtime_error_envelope_from_error(
+            "interactive json fallback returned tool calls",
+            Some(&openai_profile()),
+            Some("qwen3.5-plus"),
+        );
+        assert_eq!(envelope.layer, RuntimeErrorLayer::Recovery);
+        assert_eq!(envelope.category, RuntimeErrorCategory::RecoveryIncomplete);
+        assert_eq!(envelope.title, "执行恢复失败");
+        assert!(!envelope.retryable);
     }
 }

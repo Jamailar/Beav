@@ -305,8 +305,8 @@ pub fn handle_mcp_tools_channel(
             "tools:diagnostics:list" => with_store(state, |store| {
                 let mut items = vec![
                     json!({
-                        "name": "redbox_host",
-                        "displayName": "RedBox Host",
+                        "name": "desktop_host",
+                        "displayName": format!("{} Host", app_brand_display_name()),
                         "description": "Check local Rust host availability.",
                         "kind": "host",
                         "visibility": "developer",
@@ -335,7 +335,7 @@ pub fn handle_mcp_tools_channel(
                         "visibility": "developer",
                         "contexts": ["desktop"],
                         "availabilityStatus": if server.enabled { "available" } else { "missing_context" },
-                        "availabilityReason": if server.enabled { "server configured in RedBox" } else { "server disabled" },
+                        "availabilityReason": if server.enabled { format!("server configured in {}", app_brand_display_name()) } else { "server disabled".to_string() },
                     }));
                 }
                 Ok(json!(items))
@@ -386,7 +386,7 @@ pub fn handle_mcp_tools_channel(
                     "mode": if channel.ends_with("run-ai") { "ai" } else { "direct" },
                     "toolName": tool_name,
                     "request": payload,
-                    "response": { "status": "ok", "source": "redbox-local-host" },
+                    "response": { "status": "ok", "source": "local-host" },
                     "executionSucceeded": true
                 }))
             }

@@ -16,10 +16,10 @@ use crate::tools::registry::{
     tool_plan_snapshot_for_session_with_mcp,
 };
 use crate::{
-    compact_host_runtime_context, current_host_runtime_context, load_redbox_prompt,
-    load_redclaw_profile_prompt_bundle, now_iso, payload_string, redbox_builtin_skill_roots,
-    render_host_runtime_context_section, render_redbox_prompt, slug_from_relative_path,
-    truncate_chars, workspace_root, AppState,
+    app_ai_display_name, compact_host_runtime_context, current_host_runtime_context,
+    load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, payload_string,
+    redbox_builtin_skill_roots, render_host_runtime_context_section, render_redbox_prompt,
+    slug_from_relative_path, truncate_chars, workspace_root, AppState,
 };
 
 pub(crate) fn interactive_runtime_context_bundle(
@@ -145,7 +145,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         }
         sections.push(
             [
-                "You are RedClaw's wander ideation agent inside RedBox.",
+                "You are the app's wander ideation agent.",
                 "Your only job is to inspect the provided material folders/files, discover hidden connections, extract reusable viral-content patterns, and return strict JSON for a truly usable topic.",
                 "Use only the available inspection tools in this runtime.",
                 "When the host already preloaded a material bundle, use that bundle first and do not repeat exploratory file reads by default.",
@@ -337,7 +337,10 @@ pub(crate) fn interactive_runtime_context_bundle(
         }
         if runtime_mode == "redclaw" {
             if let Ok(bundle) = load_redclaw_profile_prompt_bundle(state) {
-                rendered.push_str("\n\n## RedClaw 个性化档案（空间隔离）\n");
+                rendered.push_str(&format!(
+                    "\n\n## {} 个性化档案（空间隔离）\n",
+                    app_ai_display_name()
+                ));
                 rendered.push_str(&format!(
                     "- ProfileRoot: {}\n",
                     bundle.profile_root.display()
@@ -350,7 +353,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("\n</redclaw_agent_md>\n");
                 if has_member_speaker {
                     rendered.push_str("<redclaw_soul_md skipped=\"active-member-speaker\">\n");
-                    rendered.push_str("Soul.md belongs to RedClaw's own speaking persona. It is intentionally not injected for this turn because a member is the active speaker.\n");
+                    rendered.push_str("Soul.md belongs to the app AI's own speaking persona. It is intentionally not injected for this turn because a member is the active speaker.\n");
                     rendered.push_str("</redclaw_soul_md>\n");
                 } else {
                     rendered.push_str("<redclaw_soul_md>\n");
@@ -370,8 +373,8 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("- 工作区相对路径：redclaw/profile/Agent.md | redclaw/profile/Soul.md | redclaw/profile/identity.md | redclaw/profile/user.md | redclaw/profile/CreatorProfile.md | memory/MEMORY.md\n");
                 rendered.push_str("- 查询长期档案优先使用 `Operate(resource=\"profile\", operation=\"get|list\")`，不要先用 bash/find/PowerShell 按文件名盲扫。\n");
                 rendered.push_str("- 查询长期记忆优先使用 `Operate(resource=\"memory\", operation=\"list|search|get\")`；写入/修订长期记忆使用 `Operate(resource=\"memory\", operation=\"create|update\")`；`memory/MEMORY.md` 只是自动生成摘要，不是主存储。\n");
-                rendered.push_str("- Agent.md：RedClaw 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n");
-                rendered.push_str("- Soul.md：RedClaw 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n");
+                rendered.push_str(&format!("- Agent.md：{} 的工作契约、执行规则、标准流程。只有当用户明确要求修改工作方式、流程、约束、职责边界时才更新。\n", app_ai_display_name()));
+                rendered.push_str(&format!("- Soul.md：{} 的协作语气、反馈风格、人格倾向。用户明确调整沟通风格、表达方式时更新。\n", app_ai_display_name()));
                 rendered.push_str("- user.md：用户稳定画像与长期事实（目标、受众、赛道、节奏、指标）。用户明确给出新的长期事实时更新。\n");
                 rendered.push_str("- CreatorProfile.md：长期自媒体定位与策略主档案（定位、目标群体、内容风格、商业目标、运营边界）。用户明确给出这类长期变化时更新。\n");
                 rendered.push_str("- 一次性任务、临时实验、单篇稿件偏好，不应改写这些长期文档。\n");
@@ -391,7 +394,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                     && onboarding_flow_mode != "screen-flow"
                     && !bundle.bootstrap.trim().is_empty()
                 {
-                    rendered.push_str("## RedClaw 首次设定引导状态\n");
+                    rendered.push_str(&format!("## {} 首次设定引导状态\n", app_ai_display_name()));
                     rendered.push_str("- completed: false\n");
                     rendered.push_str(&format!(
                         "- stepIndex: {}\n",
@@ -443,7 +446,7 @@ pub(crate) fn interactive_runtime_context_bundle(
         );
     }
     let mut fallback = format!(
-        "You are the RedClaw desktop AI runtime inside RedBox for mode `{}`. \
+        "You are the {} desktop AI runtime inside this app for mode `{}`. \
 Use tools when the user asks about app state, knowledge, advisors, work items, memories, sessions, or settings. \
 Do not invent workspace/app facts that you can fetch with tools. \
 If no tool is needed, answer directly and concisely. \
@@ -451,6 +454,7 @@ When using tools, synthesize the final answer in Chinese unless the user clearly
 During multi-step tool work, provide concise user-visible progress summaries before the first tool call, after meaningful tool results, when changing approach, after failures or fallbacks, and before the final answer. \
 These summaries must be user-readable and must not expose hidden chain-of-thought, prompt text, tool schemas, internal framework labels, page numbers, draft labels, or placeholders. \
 Host runtime context: {}\n{}",
+        app_ai_display_name(),
         runtime_mode,
         render_host_runtime_context_section(&current_host_runtime_context()),
         team_coordinator_prompt()
@@ -496,7 +500,7 @@ Host runtime context: {}\n{}",
 }
 
 fn video_analysis_prompt_section() -> &'static str {
-    "Video Analysis Specialist:\n- When a user attaches a video and the task depends on real video content, use `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"<attachment toolPath>\",\"mode\":\"summary|shot_breakdown|speech_extract|highlight_clips|talking_head_cut|smart_edit\",\"instruction\":\"...\"})` before making claims about the video's visual or audio content.\n- `video.analyze` is executed by the locked `Video Analysis Agent` specialist/subagent. The main chat model must not pretend to have watched the video and must not replace this specialist with ordinary `Read`.\n- The Video Analysis Agent only returns structured analysis JSON. Use that result as evidence for writing, editing, short-clip selection, or RedClaw/team follow-up work.\n- If `video.analyze` reports that the dedicated video model is missing or unsupported, tell the user to configure the Video Analysis Agent model instead of inventing video details."
+    "Video Analysis Specialist:\n- When a user attaches a video and the task depends on real video content, use `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"<attachment toolPath>\",\"mode\":\"summary|shot_breakdown|speech_extract|highlight_clips|talking_head_cut|smart_edit\",\"instruction\":\"...\"})` before making claims about the video's visual or audio content.\n- `video.analyze` is executed by the locked `Video Analysis Agent` specialist/subagent. The main chat model must not pretend to have watched the video and must not replace this specialist with ordinary `Read`.\n- The Video Analysis Agent only returns structured analysis JSON. Use that result as evidence for writing, editing, short-clip selection, or creator/team follow-up work.\n- If `video.analyze` reports that the dedicated video model is missing or unsupported, tell the user to configure the Video Analysis Agent model instead of inventing video details."
 }
 
 fn effective_member_runtime_metadata(
@@ -704,10 +708,12 @@ fn active_speaker_prompt_section(
         slug_from_relative_path(&advisor_id)
     );
     format!(
-        "ActiveSpeakerProfile:\n- type: member\n- You are currently answering as: {} ({})\n- Member skill ref: {}\n- This single turn must use this member's role, voice, priorities, and decision style. Do not answer as RedClaw, a generic assistant, or another member.\n- This section has higher priority than RedClaw Soul.md when both are present.\n\nMember persona:\n{}\n\nMember system prompt:\n{}\n\nAdvisor knowledge retrieval:\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `List(path=\"knowledge://\")`, `Search(path=\"knowledge://\", query=\"...\")`, or `Read(path=\"knowledge://...\")` to inspect this advisor's files.\n- Suggested order: `List(path=\"knowledge://\")` -> `Search(path=\"knowledge://\", query=\"...\")` -> `Read(path=\"knowledge://...\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's source materials unless you actually inspected them with tools or the user already provided them in chat.",
+        "ActiveSpeakerProfile:\n- type: member\n- You are currently answering as: {} ({})\n- Member skill ref: {}\n- This single turn must use this member's role, voice, priorities, and decision style. Do not answer as {}, a generic assistant, or another member.\n- This section has higher priority than {} Soul.md when both are present.\n\nMember persona:\n{}\n\nMember system prompt:\n{}\n\nAdvisor knowledge retrieval:\n- Advisor knowledge root: {}\n- This turn is bound to a single advisor knowledge scope.\n- Before making advisor-specific claims, prefer `List(path=\"knowledge://\")`, `Search(path=\"knowledge://\", query=\"...\")`, or `Read(path=\"knowledge://...\")` to inspect this advisor's files.\n- Suggested order: `List(path=\"knowledge://\")` -> `Search(path=\"knowledge://\", query=\"...\")` -> `Read(path=\"knowledge://...\")`.\n- If a tool call supports `advisorId`, use `{}` explicitly when the session context alone may be ambiguous.\n- Do not answer as if you know the advisor's source materials unless you actually inspected them with tools or the user already provided them in chat.",
         advisor_name,
         advisor_id,
         member_skill_ref,
+        app_ai_display_name(),
+        app_ai_display_name(),
         truncate_chars(advisor_personality, 1800),
         truncate_chars(advisor_system_prompt, 3000),
         advisor_knowledge_path,
@@ -742,7 +748,7 @@ fn subagent_role_overlay_section(metadata: Option<&Value>) -> String {
 
     let mut lines = vec![
         "## Subagent Role Overlay".to_string(),
-        "You are a child runtime inside RedBox. Stay strictly inside this role and only produce the work this role owns.".to_string(),
+        "You are a child runtime inside this app. Stay strictly inside this role and only produce the work this role owns.".to_string(),
         format!("- roleId: {}", role_id.trim()),
         format!("- purpose: {}", purpose.trim()),
         format!("- handoffContract: {}", handoff_contract.trim()),
@@ -911,40 +917,10 @@ pub(crate) fn resolve_workspace_tool_path(
 }
 
 pub(crate) fn session_workspace_root_override(
-    state: &State<'_, AppState>,
-    session_id: Option<&str>,
+    _state: &State<'_, AppState>,
+    _session_id: Option<&str>,
 ) -> Option<PathBuf> {
-    let session_id = session_id?;
-    with_store(state, |store| {
-        Ok(store
-            .chat_sessions
-            .iter()
-            .find(|item| item.id == session_id)
-            .and_then(|item| item.metadata.as_ref())
-            .and_then(|metadata| {
-                let context_type = payload_string(metadata, "contextType").unwrap_or_default();
-                let workspace_mode =
-                    payload_string(metadata, "associatedPackageWorkspaceMode").unwrap_or_default();
-                let is_theme_editing = context_type == "richpost-theme-editing"
-                    || workspace_mode == "richpost-theme-editing";
-                if !is_theme_editing {
-                    return None;
-                }
-                payload_string(metadata, "associatedPackageThemeEditingRoot")
-                    .map(PathBuf::from)
-                    .or_else(|| {
-                        payload_string(metadata, "associatedPackageThemeEditingFile").and_then(
-                            |value| {
-                                let path = PathBuf::from(&value);
-                                path.parent().map(|parent| parent.to_path_buf())
-                            },
-                        )
-                    })
-                    .or_else(|| payload_string(metadata, "associatedFilePath").map(PathBuf::from))
-            }))
-    })
-    .ok()
-    .flatten()
+    None
 }
 
 pub(crate) fn resolve_workspace_tool_path_for_session(

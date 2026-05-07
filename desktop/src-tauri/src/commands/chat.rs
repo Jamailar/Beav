@@ -20,7 +20,7 @@ use crate::skills::{
 };
 use crate::{
     append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64, now_iso,
-    now_ms, payload_field, payload_string, AppState,
+    now_ms, payload_field, payload_string, session_title_from_message, AppState,
 };
 
 const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[
@@ -350,14 +350,19 @@ pub fn handle_send_channel(
         "chat:send-message" => {
             let started_at = now_ms();
             let requested_session_id = payload_string(&payload, "sessionId");
-            let session_id = Some(ensure_chat_session_record(
-                state,
-                requested_session_id.clone(),
-                None,
-            )?);
             let message = payload_string(&payload, "message").unwrap_or_default();
             let display_content =
                 payload_string(&payload, "displayContent").unwrap_or_else(|| message.clone());
+            let title_hint = if requested_session_id.is_none() {
+                Some(session_title_from_message(&display_content))
+            } else {
+                None
+            };
+            let session_id = Some(ensure_chat_session_record(
+                state,
+                requested_session_id.clone(),
+                title_hint,
+            )?);
             let request_id = format!(
                 "chat:send:{}",
                 session_id
@@ -624,10 +629,10 @@ mod tests {
             "sourceNoteId": "note-1",
             "sourceMode": "knowledge",
             "sourceTitle": "source",
-            "sourceManuscriptPath": "wander/source.thrive",
+            "sourceManuscriptPath": "wander/source",
             "forceMultiAgent": true,
             "forceLongRunningTask": true,
-            "currentAuthoringProjectPath": "wander/demo.thrive"
+            "currentAuthoringProjectPath": "wander/demo"
         });
 
         let cleaned = clear_stale_task_hints_from_metadata(&metadata).expect("cleaned metadata");
@@ -666,7 +671,7 @@ mod tests {
         );
         assert_eq!(
             cleaned.get("currentAuthoringProjectPath"),
-            Some(&json!("wander/demo.thrive"))
+            Some(&json!("wander/demo"))
         );
     }
 

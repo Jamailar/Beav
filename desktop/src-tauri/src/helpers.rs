@@ -1,12 +1,14 @@
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::State;
 use url::Url;
 
-use crate::{ensure_parent_dir, manuscripts_root, payload_string, AppState, FileNode};
+use crate::{
+    ensure_parent_dir, manuscripts_root, payload_string, write_text_file, AppState, FileNode,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HostRuntimeContext {
@@ -72,6 +74,18 @@ pub(crate) fn compact_host_runtime_context(context: &HostRuntimeContext) -> Stri
     )
 }
 
+pub(crate) fn app_brand_display_name() -> &'static str {
+    match env!("CARGO_PKG_NAME") {
+        "thrive" => "Thrive",
+        "redbox" => "RedBox",
+        _ => "App",
+    }
+}
+
+pub(crate) fn app_ai_display_name() -> &'static str {
+    app_brand_display_name()
+}
+
 pub(crate) fn render_host_runtime_context_section(context: &HostRuntimeContext) -> String {
     [
         format!("- Host OS: {}", context.os_family),
@@ -112,60 +126,24 @@ pub(crate) fn ensure_markdown_extension(value: &str) -> String {
     }
 }
 
-pub(crate) const THRIVE_DRAFT_EXTENSION: &str = ".thrive";
-pub(crate) const ARTICLE_DRAFT_EXTENSION: &str = ".redarticle";
-pub(crate) const POST_DRAFT_EXTENSION: &str = THRIVE_DRAFT_EXTENSION;
-pub(crate) const VIDEO_DRAFT_EXTENSION: &str = ".redvideo";
-pub(crate) const AUDIO_DRAFT_EXTENSION: &str = ".redaudio";
-
-pub(crate) fn is_manuscript_package_name(file_name: &str) -> bool {
-    file_name.ends_with(ARTICLE_DRAFT_EXTENSION)
-        || file_name.ends_with(VIDEO_DRAFT_EXTENSION)
-        || file_name.ends_with(AUDIO_DRAFT_EXTENSION)
-}
-
-pub(crate) fn get_package_kind_from_file_name(file_name: &str) -> Option<&'static str> {
-    if file_name.ends_with(ARTICLE_DRAFT_EXTENSION) {
-        Some("article")
-    } else if file_name.ends_with(VIDEO_DRAFT_EXTENSION) {
-        Some("video")
-    } else if file_name.ends_with(AUDIO_DRAFT_EXTENSION) {
-        Some("audio")
-    } else {
-        None
-    }
-}
-
-pub(crate) fn get_draft_type_from_file_name(file_name: &str) -> &'static str {
-    match get_package_kind_from_file_name(file_name) {
-        Some("article") => "longform",
-        Some("video") => "video",
-        Some("audio") => "audio",
+pub(crate) fn draft_type_from_package_kind(kind: &str) -> &'static str {
+    match kind {
+        "post" => "richpost",
+        "article" => "longform",
+        "video" => "video",
+        "audio" => "audio",
         _ => "unknown",
     }
 }
 
-pub(crate) fn get_default_package_entry(file_name: &str) -> &'static str {
-    match get_package_kind_from_file_name(file_name) {
+pub(crate) fn default_package_entry_for_kind(kind: Option<&str>) -> &'static str {
+    match kind {
         Some("video") | Some("audio") => "script.md",
         _ => "content.md",
     }
 }
 
-pub(crate) fn ensure_manuscript_file_name(name: &str, fallback_extension: &str) -> String {
-    let trimmed = name.trim();
-    if trimmed.ends_with(".md")
-        || trimmed.ends_with(ARTICLE_DRAFT_EXTENSION)
-        || trimmed.ends_with(VIDEO_DRAFT_EXTENSION)
-        || trimmed.ends_with(AUDIO_DRAFT_EXTENSION)
-    {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}{fallback_extension}")
-    }
-}
-
-fn normalize_thrive_entry_name(name: &str) -> Option<String> {
+fn normalize_package_entry_name(name: &str) -> Option<String> {
     let normalized = name.replace('\\', "/");
     if normalized.is_empty()
         || normalized.starts_with('/')
@@ -178,170 +156,66 @@ fn normalize_thrive_entry_name(name: &str) -> Option<String> {
     Some(normalized)
 }
 
-pub(crate) fn is_thrive_package_path(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .map(|name| name.ends_with(THRIVE_DRAFT_EXTENSION))
-        .unwrap_or(false)
+pub(crate) fn is_manuscript_package_path(path: &Path) -> bool {
+    path.is_dir() && package_manifest_path(path).is_file()
 }
 
-pub(crate) fn read_thrive_text_entry(package_path: &Path, entry_name: &str) -> Option<String> {
-    let entry_name = normalize_thrive_entry_name(entry_name)?;
-    let file = fs::File::open(package_path).ok()?;
-    let mut archive = zip::ZipArchive::new(file).ok()?;
-    let mut entry = archive.by_name(&entry_name).ok()?;
-    let mut content = String::new();
-    entry.read_to_string(&mut content).ok()?;
-    Some(content)
+pub(crate) fn get_package_kind_from_manifest(path: &Path) -> Option<String> {
+    if !is_manuscript_package_path(path) {
+        return None;
+    }
+    let manifest = read_json_value_or(&package_manifest_path(path), json!({}));
+    payload_string(&manifest, "packageKind")
+        .or_else(|| payload_string(&manifest, "kind"))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| matches!(value.as_str(), "post" | "article" | "video" | "audio"))
 }
 
-pub(crate) fn read_thrive_json_entry_or(
+pub(crate) fn read_package_text_entry(package_path: &Path, entry_name: &str) -> Option<String> {
+    let entry_name = normalize_package_entry_name(entry_name)?;
+    fs::read_to_string(package_path.join(entry_name)).ok()
+}
+
+pub(crate) fn read_package_json_entry_or(
     package_path: &Path,
     entry_name: &str,
     fallback: Value,
 ) -> Value {
-    read_thrive_text_entry(package_path, entry_name)
+    read_package_text_entry(package_path, entry_name)
         .and_then(|content| serde_json::from_str::<Value>(&content).ok())
         .unwrap_or(fallback)
 }
 
-fn read_thrive_entries(package_path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
-    if !package_path.exists() {
-        return Ok(BTreeMap::new());
-    }
-    let file = fs::File::open(package_path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-    let mut entries = BTreeMap::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
-        if entry.is_dir() {
-            continue;
-        }
-        let Some(name) = normalize_thrive_entry_name(entry.name()) else {
-            continue;
-        };
-        let mut bytes = Vec::new();
-        entry
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        entries.insert(name, bytes);
-    }
-    Ok(entries)
-}
-
-fn write_thrive_entries(
-    package_path: &Path,
-    entries: &BTreeMap<String, Vec<u8>>,
-) -> Result<(), String> {
-    if let Some(parent) = package_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let tmp_path = package_path.with_extension("thrive.tmp");
-    let file = fs::File::create(&tmp_path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipWriter::new(file);
-    let options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    for (name, bytes) in entries {
-        let Some(normalized) = normalize_thrive_entry_name(name) else {
-            continue;
-        };
-        archive
-            .start_file(normalized, options)
-            .map_err(|error| error.to_string())?;
-        archive
-            .write_all(bytes)
-            .map_err(|error| error.to_string())?;
-    }
-    archive.finish().map_err(|error| error.to_string())?;
-    fs::rename(&tmp_path, package_path).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-pub(crate) fn write_thrive_post_package(
+#[cfg(test)]
+pub(crate) fn write_post_package_files(
     package_path: &Path,
     manifest: &Value,
     content: &str,
     bindings: &Value,
 ) -> Result<(), String> {
-    let mut entries = read_thrive_entries(package_path)?;
-    entries.insert(
-        "manifest.json".to_string(),
-        serde_json::to_vec_pretty(manifest).map_err(|error| error.to_string())?,
-    );
-    entries.insert("content.md".to_string(), content.as_bytes().to_vec());
-    entries.insert(
-        "bindings.json".to_string(),
-        serde_json::to_vec_pretty(bindings).map_err(|error| error.to_string())?,
-    );
-    write_thrive_entries(package_path, &entries)
+    fs::create_dir_all(package_path).map_err(|error| error.to_string())?;
+    write_json_value(&package_manifest_path(package_path), manifest)?;
+    write_package_text_entry(package_path, "content.md", content)?;
+    write_package_json_entry(package_path, "bindings.json", bindings)
 }
 
-pub(crate) fn write_thrive_text_entry(
+pub(crate) fn write_package_text_entry(
     package_path: &Path,
     entry_name: &str,
     content: &str,
 ) -> Result<(), String> {
-    let entry_name = normalize_thrive_entry_name(entry_name)
-        .ok_or_else(|| "Invalid thrive entry".to_string())?;
-    let mut entries = read_thrive_entries(package_path)?;
-    entries.insert(entry_name, content.as_bytes().to_vec());
-    write_thrive_entries(package_path, &entries)
+    let entry_name = normalize_package_entry_name(entry_name)
+        .ok_or_else(|| "Invalid package entry".to_string())?;
+    write_text_file(&package_path.join(entry_name), content)
 }
 
-pub(crate) fn write_thrive_json_entry(
+pub(crate) fn write_package_json_entry(
     package_path: &Path,
     entry_name: &str,
     value: &Value,
 ) -> Result<(), String> {
     let content = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
-    write_thrive_text_entry(package_path, entry_name, &content)
-}
-
-pub(crate) fn update_thrive_post_content(
-    package_path: &Path,
-    content: &str,
-    metadata: Option<&serde_json::Map<String, Value>>,
-) -> Result<Value, String> {
-    let mut manifest = read_thrive_json_entry_or(package_path, "manifest.json", json!({}));
-    if !manifest.is_object() {
-        manifest = json!({});
-    }
-    if let Some(object) = manifest.as_object_mut() {
-        if let Some(metadata_object) = metadata {
-            for (key, value) in metadata_object {
-                object.insert(key.clone(), value.clone());
-            }
-        }
-        object.insert("updatedAt".to_string(), json!(crate::now_i64()));
-        object
-            .entry("schemaVersion".to_string())
-            .or_insert(json!(1));
-        object
-            .entry("kind".to_string())
-            .or_insert(json!("article"));
-        object
-            .entry("packageKind".to_string())
-            .or_insert(json!("article"));
-        object
-            .entry("draftType".to_string())
-            .or_insert(json!("longform"));
-        object
-            .entry("entry".to_string())
-            .or_insert(json!("content.md"));
-    }
-    let bindings = read_thrive_json_entry_or(
-        package_path,
-        "bindings.json",
-        json!({
-            "media": [],
-            "targets": [],
-            "publishedPosts": [],
-            "sources": [],
-            "inspirations": []
-        }),
-    );
-    write_thrive_post_package(package_path, &manifest, content, &bindings)?;
-    Ok(manifest)
+    write_package_text_entry(package_path, entry_name, &content)
 }
 
 pub(crate) fn package_manifest_path(package_path: &Path) -> PathBuf {
@@ -350,14 +224,16 @@ pub(crate) fn package_manifest_path(package_path: &Path) -> PathBuf {
 
 pub(crate) fn package_entry_path(
     package_path: &Path,
-    file_name: &str,
+    _file_name: &str,
     manifest: Option<&Value>,
 ) -> PathBuf {
     let entry = manifest
         .and_then(|value| value.get("entry"))
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| get_default_package_entry(file_name));
+        .unwrap_or_else(|| {
+            default_package_entry_for_kind(get_package_kind_from_manifest(package_path).as_deref())
+        });
     package_path.join(entry)
 }
 
@@ -913,28 +789,24 @@ pub(crate) fn parse_markdown_frontmatter(content: &str) -> Option<Value> {
 }
 
 fn file_node_from_package(path: &Path, file_name: &str, relative: String) -> FileNode {
-    let manifest = if is_thrive_package_path(path) {
-        read_thrive_json_entry_or(path, "manifest.json", json!({}))
-    } else {
-        read_json_value_or(&package_manifest_path(path), json!({}))
-    };
-    let entry_content = if is_thrive_package_path(path) {
-        read_thrive_text_entry(
-            path,
-            manifest
-                .get("entry")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| get_default_package_entry(file_name)),
-        )
-        .unwrap_or_default()
-    } else {
-        let entry_path = package_entry_path(path, file_name, Some(&manifest));
-        read_text_prefix(&entry_path, 8 * 1024)
-    };
+    let manifest = read_json_value_or(&package_manifest_path(path), json!({}));
+    let entry_path = package_entry_path(path, file_name, Some(&manifest));
+    let entry_content = read_text_prefix(&entry_path, 8 * 1024);
     let title =
         payload_string(&manifest, "title").unwrap_or_else(|| title_from_relative_path(file_name));
-    let draft_type = payload_string(&manifest, "draftType")
-        .unwrap_or_else(|| get_draft_type_from_file_name(file_name).to_string());
+    let draft_type = payload_string(&manifest, "draftType").unwrap_or_else(|| {
+        get_package_kind_from_manifest(path)
+            .as_deref()
+            .map(|kind| match kind {
+                "post" => "richpost",
+                "article" => "longform",
+                "video" => "video",
+                "audio" => "audio",
+                _ => "unknown",
+            })
+            .unwrap_or("unknown")
+            .to_string()
+    });
     let updated_at = parse_optional_i64_from_value(
         manifest
             .get("updatedAt")
@@ -979,7 +851,7 @@ fn file_node_from_markdown(path: &Path, file_name: &str, relative: String) -> Fi
         .unwrap_or_else(|| title_from_relative_path(file_name));
     let draft_type = payload_string(&frontmatter, "draftType")
         .or_else(|| payload_string(&frontmatter, "draft_type"))
-        .unwrap_or_else(|| get_draft_type_from_file_name(file_name).to_string());
+        .unwrap_or_else(|| "unknown".to_string());
     let status = payload_string(&frontmatter, "status");
     let updated_at = parse_optional_i64_from_value(
         frontmatter
@@ -1040,11 +912,6 @@ pub(crate) fn resolve_manuscript_path(
 const MANUSCRIPTS_TREE_MAX_DEPTH: usize = 12;
 
 fn read_text_prefix(path: &Path, max_bytes: u64) -> String {
-    if is_thrive_package_path(path) {
-        return read_thrive_text_entry(path, "content.md")
-            .map(|content| content.chars().take(max_bytes as usize).collect())
-            .unwrap_or_default();
-    }
     let Ok(file) = fs::File::open(path) else {
         return String::new();
     };
@@ -1062,12 +929,10 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
     }
     if current != root {
         if let Ok(relative) = current.strip_prefix(root) {
+            let mut cursor = root.to_path_buf();
             let inside_package = relative.components().any(|component| {
-                component
-                    .as_os_str()
-                    .to_str()
-                    .map(is_manuscript_package_name)
-                    .unwrap_or(false)
+                cursor.push(component.as_os_str());
+                is_manuscript_package_path(&cursor)
             });
             if inside_package {
                 return Ok(Vec::new());
@@ -1100,7 +965,7 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
         };
         let relative = normalize_relative_path(stripped_path.to_string_lossy().as_ref());
 
-        if file_type.is_dir() && is_manuscript_package_name(&file_name) {
+        if file_type.is_dir() && is_manuscript_package_path(&path) {
             nodes.push(file_node_from_package(&path, &file_name, relative));
         } else if file_type.is_dir() {
             let updated_at = fs::metadata(&path)
@@ -1126,9 +991,7 @@ fn list_tree_internal(root: &Path, current: &Path, depth: usize) -> Result<Vec<F
                 richpost_preview_page_updated_at: None,
             });
         } else if file_type.is_file() {
-            if is_manuscript_package_name(&file_name) {
-                nodes.push(file_node_from_package(&path, &file_name, relative));
-            } else if file_name.ends_with(".md") {
+            if file_name.ends_with(".md") {
                 nodes.push(file_node_from_markdown(&path, &file_name, relative));
             }
         }
@@ -1306,10 +1169,13 @@ mod tests {
     #[test]
     fn list_tree_treats_package_directory_as_single_manuscript_node() {
         let root = std::env::temp_dir().join(format!("redbox-list-tree-{}", crate::now_ms()));
-        let package_root = root.join("demo.redpost");
+        let package_root = root.join("demo");
         fs::create_dir_all(package_root.join("pages")).expect("package pages dir");
-        fs::write(package_root.join("manifest.json"), r#"{"title":"Demo"}"#)
-            .expect("manifest should be written");
+        fs::write(
+            package_root.join("manifest.json"),
+            r#"{"title":"Demo","packageKind":"post","draftType":"richpost","entry":"content.md"}"#,
+        )
+        .expect("manifest should be written");
         fs::write(package_root.join("content.md"), "# Demo\n\nBody")
             .expect("content should be written");
         fs::write(
@@ -1320,7 +1186,8 @@ mod tests {
 
         let nodes = list_tree(&root, &root).expect("tree should load");
         assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].name, "demo.redpost");
+        assert_eq!(nodes[0].name, "demo");
+        assert_eq!(nodes[0].draft_type.as_deref(), Some("richpost"));
         assert!(!nodes[0].is_directory);
         assert!(nodes[0].children.is_none());
 
@@ -1332,21 +1199,20 @@ mod tests {
     }
 
     #[test]
-    fn list_tree_reads_thrive_post_as_single_manuscript_file() {
-        let root = std::env::temp_dir().join(format!("redbox-thrive-tree-{}", crate::now_ms()));
+    fn package_entry_helpers_read_and_write_directory_entries() {
+        let root = std::env::temp_dir().join(format!("redbox-package-entry-{}", crate::now_ms()));
         fs::create_dir_all(&root).expect("root should exist");
-        let package_path = root.join("demo.thrive");
-        write_thrive_post_package(
+        let package_path = root.join("demo");
+        write_post_package_files(
             &package_path,
             &json!({
                 "schemaVersion": 1,
-                "kind": "post",
                 "packageKind": "post",
                 "draftType": "richpost",
-                "title": "Thrive Demo",
+                "title": "Package Demo",
                 "entry": "content.md"
             }),
-            "# Thrive Demo\n\nBody",
+            "# Package Demo\n\nBody",
             &json!({
                 "media": [],
                 "targets": [],
@@ -1355,23 +1221,23 @@ mod tests {
                 "inspirations": []
             }),
         )
-        .expect("thrive package should be written");
+        .expect("package files should be written");
 
         let nodes = list_tree(&root, &root).expect("tree should load");
         assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].name, "demo.thrive");
-        assert_eq!(nodes[0].title.as_deref(), Some("Thrive Demo"));
+        assert_eq!(nodes[0].name, "demo");
+        assert_eq!(nodes[0].title.as_deref(), Some("Package Demo"));
         assert_eq!(nodes[0].draft_type.as_deref(), Some("richpost"));
         assert!(!nodes[0].is_directory);
         assert!(nodes[0]
             .summary
             .as_deref()
             .unwrap_or("")
-            .contains("Thrive Demo"));
-        write_thrive_text_entry(&package_path, "variants/xiaohongshu.md", "平台版本")
+            .contains("Package Demo"));
+        write_package_text_entry(&package_path, "variants/xiaohongshu.md", "平台版本")
             .expect("variant should be written");
         assert_eq!(
-            read_thrive_text_entry(&package_path, "variants/xiaohongshu.md").as_deref(),
+            read_package_text_entry(&package_path, "variants/xiaohongshu.md").as_deref(),
             Some("平台版本")
         );
 

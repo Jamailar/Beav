@@ -1,4 +1,6 @@
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, State};
 
 use super::{ProviderError, ProviderErrorKind, ProviderTurnDelivery, ProviderTurnResult};
@@ -8,20 +10,93 @@ use crate::llm_transport::{
 };
 use crate::provider_compat::InteractiveToolChoice;
 use crate::{
-    append_debug_log_state, provider_profile_from_config, AppState, InteractiveToolCall,
-    ResolvedChatConfig,
+    append_debug_log_state, normalize_base_url, now_ms, provider_profile_from_config, AppState,
+    InteractiveToolCall, ResolvedChatConfig,
 };
+
+static OPENAI_STREAM_DEGRADES: OnceLock<Mutex<HashMap<String, StreamDegradeState>>> =
+    OnceLock::new();
+const OPENAI_STREAM_DEGRADE_FAILURE_THRESHOLD: u32 = 2;
+const OPENAI_STREAM_DEGRADE_WINDOW_MS: u128 = 10 * 60 * 1000;
+const OPENAI_STREAM_DEGRADE_COOLDOWN_MS: u128 = 10 * 60 * 1000;
+
+#[derive(Debug, Clone, Copy)]
+struct StreamDegradeState {
+    failures: u32,
+    first_failure_at: u128,
+    disabled_until: u128,
+}
 
 pub(crate) fn should_prefer_non_streaming_openai_turn(
     runtime_mode: &str,
     config: &ResolvedChatConfig,
 ) -> bool {
-    runtime_mode == "redclaw"
-        && config
-            .model_name
-            .trim()
-            .to_ascii_lowercase()
-            .contains("qwen")
+    let Some(key) = openai_stream_degrade_key(runtime_mode, config) else {
+        return false;
+    };
+    openai_stream_degrade_store()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(&key).copied())
+        .map(|entry| entry.disabled_until > now_ms())
+        .unwrap_or(false)
+}
+
+fn openai_stream_degrade_store() -> &'static Mutex<HashMap<String, StreamDegradeState>> {
+    OPENAI_STREAM_DEGRADES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn openai_stream_degrade_key(runtime_mode: &str, config: &ResolvedChatConfig) -> Option<String> {
+    let mode = runtime_mode.trim();
+    if !matches!(mode, "redclaw" | "team" | "chatroom") {
+        return None;
+    }
+    let model_name = config.model_name.trim().to_ascii_lowercase();
+    let base_url = config.base_url.trim().to_ascii_lowercase();
+    let is_fragile_stream_provider = model_name.contains("qwen")
+        || base_url.contains("dashscope")
+        || base_url.contains("api.ziz.hk");
+    if !is_fragile_stream_provider {
+        return None;
+    }
+    Some(format!(
+        "{}::{}::{}",
+        mode,
+        normalize_base_url(&config.base_url).to_ascii_lowercase(),
+        model_name,
+    ))
+}
+
+fn record_openai_stream_success(runtime_mode: &str, config: &ResolvedChatConfig) {
+    let Some(key) = openai_stream_degrade_key(runtime_mode, config) else {
+        return;
+    };
+    if let Ok(mut guard) = openai_stream_degrade_store().lock() {
+        guard.remove(&key);
+    }
+}
+
+fn record_openai_stream_failure(runtime_mode: &str, config: &ResolvedChatConfig) {
+    let Some(key) = openai_stream_degrade_key(runtime_mode, config) else {
+        return;
+    };
+    let now = now_ms();
+    if let Ok(mut guard) = openai_stream_degrade_store().lock() {
+        let entry = guard.entry(key).or_insert(StreamDegradeState {
+            failures: 0,
+            first_failure_at: now,
+            disabled_until: 0,
+        });
+        if now.saturating_sub(entry.first_failure_at) > OPENAI_STREAM_DEGRADE_WINDOW_MS {
+            entry.failures = 0;
+            entry.first_failure_at = now;
+            entry.disabled_until = 0;
+        }
+        entry.failures = entry.failures.saturating_add(1);
+        if entry.failures >= OPENAI_STREAM_DEGRADE_FAILURE_THRESHOLD {
+            entry.disabled_until = now.saturating_add(OPENAI_STREAM_DEGRADE_COOLDOWN_MS);
+        }
+    }
 }
 
 fn provider_error_from_transport(error: &LlmTransportError) -> ProviderError {
@@ -199,15 +274,21 @@ pub(crate) fn run_openai_provider_turn(
         max_time_seconds,
         allow_official_reauth_retry,
     ) {
-        Ok(streamed) => Ok(ProviderTurnResult {
-            content: streamed.content,
-            reasoning_content: String::new(),
-            tool_calls: streamed.tool_calls,
-            delivery: ProviderTurnDelivery::Streaming,
-        }),
+        Ok(streamed) => {
+            record_openai_stream_success(runtime_mode, config);
+            Ok(ProviderTurnResult {
+                content: streamed.content,
+                reasoning_content: String::new(),
+                tool_calls: streamed.tool_calls,
+                delivery: ProviderTurnDelivery::Streaming,
+            })
+        }
         Err(stream_error) => {
             if !should_attempt_json_fallback(&stream_error, allow_text_fallback) {
                 return Err(provider_error_from_transport(&stream_error));
+            }
+            if is_stream_degrade_error(&stream_error) {
+                record_openai_stream_failure(runtime_mode, config);
             }
             append_debug_log_state(
                 state,
@@ -254,14 +335,7 @@ pub(crate) fn run_openai_provider_turn(
             })?;
             let (content, reasoning_content, tool_calls) =
                 extract_openai_json_assistant_response(&response)?;
-            if !tool_calls.is_empty() {
-                return Err(ProviderError::new(
-                    ProviderErrorKind::Recovery,
-                    false,
-                    "interactive json fallback returned tool calls",
-                ));
-            }
-            if content.trim().is_empty() {
+            if content.trim().is_empty() && tool_calls.is_empty() {
                 return Err(ProviderError::new(
                     ProviderErrorKind::Recovery,
                     false,
@@ -278,11 +352,27 @@ pub(crate) fn run_openai_provider_turn(
     }
 }
 
+fn is_stream_degrade_error(error: &LlmTransportError) -> bool {
+    if matches!(error.http_status, Some(429) | Some(500..=599)) {
+        return true;
+    }
+    matches!(
+        error.kind,
+        TransportErrorKind::Connect
+            | TransportErrorKind::Timeout
+            | TransportErrorKind::PartialBody
+            | TransportErrorKind::Http2Framing
+            | TransportErrorKind::EmptyReply
+            | TransportErrorKind::Unknown
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         extract_openai_json_assistant_response, openai_tool_arguments_value,
-        should_attempt_json_fallback, should_prefer_non_streaming_openai_turn,
+        record_openai_stream_failure, record_openai_stream_success, should_attempt_json_fallback,
+        should_prefer_non_streaming_openai_turn,
     };
     use crate::llm_transport::{LlmTransportError, TransportErrorKind, TransportMode};
     use crate::runtime::ResolvedChatConfig;
@@ -308,8 +398,8 @@ mod tests {
     #[test]
     fn tool_arguments_parser_accepts_object_arguments() {
         assert_eq!(
-            openai_tool_arguments_value(Some(&json!({ "path": "wander/a.redpost" }))),
-            Some(json!({ "path": "wander/a.redpost" }))
+            openai_tool_arguments_value(Some(&json!({ "path": "wander/a" }))),
+            Some(json!({ "path": "wander/a" }))
         );
     }
 
@@ -333,7 +423,37 @@ mod tests {
     }
 
     #[test]
-    fn redclaw_qwen_turns_prefer_non_streaming() {
+    fn json_assistant_response_preserves_tool_calls() {
+        let (content, reasoning_content, tool_calls) =
+            extract_openai_json_assistant_response(&json!({
+                "choices": [{
+                    "message": {
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "Read",
+                                "arguments": "{\"path\":\"knowledge://item\"}"
+                            }
+                        }]
+                    }
+                }]
+            }))
+            .unwrap();
+
+        assert!(content.is_empty());
+        assert!(reasoning_content.is_empty());
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].name, "Read");
+        assert_eq!(
+            tool_calls[0].arguments,
+            json!({ "path": "knowledge://item" })
+        );
+    }
+
+    #[test]
+    fn redclaw_qwen_turns_start_streaming_until_circuit_breaker_opens() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
             base_url: "https://api.ziz.hk/thrive/v1".to_string(),
@@ -342,12 +462,22 @@ mod tests {
             reasoning_effort: None,
         };
 
+        record_openai_stream_success("redclaw", &config);
+        assert!(!should_prefer_non_streaming_openai_turn("redclaw", &config));
+        record_openai_stream_failure("redclaw", &config);
+        assert!(!should_prefer_non_streaming_openai_turn("redclaw", &config));
+        record_openai_stream_failure("redclaw", &config);
         assert!(should_prefer_non_streaming_openai_turn("redclaw", &config));
-        assert!(!should_prefer_non_streaming_openai_turn("team", &config));
+        record_openai_stream_failure("team", &config);
+        record_openai_stream_failure("team", &config);
+        assert!(should_prefer_non_streaming_openai_turn("team", &config));
+        assert!(!should_prefer_non_streaming_openai_turn("wander", &config));
+        record_openai_stream_success("redclaw", &config);
+        assert!(!should_prefer_non_streaming_openai_turn("redclaw", &config));
     }
 
     #[test]
-    fn non_qwen_models_keep_streaming_behavior() {
+    fn non_qwen_redclaw_models_keep_streaming_behavior() {
         let config = ResolvedChatConfig {
             protocol: "openai".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),

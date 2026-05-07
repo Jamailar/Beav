@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { Users, Plus, Pencil, Trash2, Upload, FolderOpen, FileText, X, Check, Sparkles, RefreshCw, ChevronDown, ChevronUp, AlertCircle, MoreHorizontal, History, Loader2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { Chat } from './Chat';
+import { APP_BRAND } from '../config/brand';
 import { hasRenderableAssetUrl, resolveAssetUrl } from '../utils/pathManager';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 
@@ -1043,7 +1044,7 @@ function AdvisorHistoryPanel({
 
                     <div className="px-5 py-3 border-t border-black/[0.02]">
                         <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
-                            RedBox Engine
+                            {APP_BRAND.displayName} Engine
                         </p>
                     </div>
                 </div>
@@ -1415,7 +1416,7 @@ export function AdvisorSettingsPanel({
 
             <div className="border-t border-black/[0.02] px-5 py-3">
                 <p className="text-[8px] text-center font-bold text-text-tertiary/40 uppercase tracking-[0.3em]">
-                    RedBox Engine
+                    {APP_BRAND.displayName} Engine
                 </p>
             </div>
         </div>
