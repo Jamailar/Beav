@@ -2,13 +2,13 @@
 description: 当任务进入选题 framing、标题拟定、完整写稿、改写、扩写或润色时，用它统一语气、结构和禁区。
 allowedRuntimeModes: [wander, redclaw, chatroom]
 hookMode: inline
-autoActivate: false
+autoActivate: true
 activationScope: turn
 activationHint: 当任务进入选题 framing、标题拟定、完整写稿、改写、扩写、润色、内容表达方式调整，或用户明确要求沿用既定写作风格时，可调用 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`。如果用户要做的是文章卡片、图解卡片、演示卡片、电商套图、组图或配图包，不要只因出现“文章”“内容”“标题”这些词就启用它；这类任务优先交给 image-director。
-contextNote: 这是当前空间统一的写作风格底盘。若任务已经进入选题 framing、标题拟定、完整写稿、改写、扩写、润色，或用户明确提到 writing-style，应优先加载它；但如果目标交付物是卡片图、图解图、演示卡片、电商套图或其它成套图片，就不要让它干扰图片导演类决策。
-promptPrefix: 你当前已加载 writing-style。凡是涉及选题 framing、完整写稿、改写、扩写、润色或内容表达方式调整，都先按这份技能执行，避免模板化 AI 文案。
+contextNote: 这是当前空间统一的写作风格底盘。若任务已经进入选题 framing、标题拟定、完整写稿、改写、扩写、润色，或用户明确提到 writing-style，应优先加载它。写作前先读取用户档案和创作者档案，理解自媒体创作目标、目标读者、内容边界和长期风格；但如果目标交付物是卡片图、图解图、演示卡片、电商套图或其它成套图片，就不要让它干扰图片导演类决策。
+promptPrefix: 你当前已加载 writing-style。凡是涉及选题 framing、完整写稿、改写、扩写、润色或内容表达方式调整，都先按这份技能执行。动笔前先读取 `profiles://user` 与 `profiles://creator_profile`，或调用 `Operate(resource="redclaw.profile", operation="bundle", input={})` 获取档案包，理解用户的自媒体创作目标和长期边界，再开始标题、结构和正文。
 promptSuffix: 如果当前任务不是写作，就不要让 writing-style 主导其他决策；如果当前任务是写作，标题、内容方向、正文和文案细节都必须体现这份技能的约束。所有标题必须控制在 20 个汉字以内，或其它语言下等价的简洁长度。写稿时禁止输出控制字符、非正文占位标记或孤立分隔线。
-maxPromptChars: 2400
+maxPromptChars: 3600
 ---
 # Writing Style
 
@@ -19,6 +19,9 @@ maxPromptChars: 2400
 ## 强制规则
 
 - 涉及写作、改写、扩写、润色、复盘，或选题 framing 的任务，都先遵守这份技能。
+- 写作前先读取用户档案和创作者档案，理解用户是谁、账号做什么、服务谁、长期创作目标是什么、哪些表达边界不能碰。
+- 档案读取优先使用 `profiles://user`、`profiles://creator_profile`，或 `Operate(resource="redclaw.profile", operation="bundle", input={})`；不要只凭当前素材猜用户定位。
+- 档案只用于校准方向、语气、边界和读者，不要把档案内容大段复述进正文。
 - 漫步阶段的标题和内容方向，与创作执行阶段的完整稿件、标签、封面文案，使用同一套风格底盘。
 - 所有标题都必须控制在 20 个汉字以内，或其它语言下等价的简洁长度。
 - 标题和方向先追求具体、有人味、真实张力，再追求工整。
@@ -35,6 +38,13 @@ maxPromptChars: 2400
 - 先讲具体场景、动作、问题和处境，再讲抽象判断。
 - 可以有观点，但不要写成无懈可击的上帝视角。
 - 能承认不确定，就不要假装确定。
+
+## 写作前流程
+
+1. 先读档案：确认用户画像、自媒体定位、目标读者、商业目标、内容风格和禁区。
+2. 再读素材：判断素材只是启发、证据、细节，还是可以作为正文核心。
+3. 先定创作目标：这篇内容要让哪类读者产生什么判断、情绪或行动。
+4. 再写标题和正文：标题、开头、正文推进和 CTA 都要服务于这个目标，而不是服务于素材覆盖率。
 
 ## 选题判断
 
