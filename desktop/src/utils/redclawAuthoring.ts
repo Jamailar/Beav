@@ -11,7 +11,7 @@ export interface AuthoringTaskHints {
     executionProfile?: 'artifact-authoring';
     artifactType?: 'manuscript';
     writeTarget?: 'manuscripts://current';
-    requiredSkill?: string;
+    requiredSkill?: string | string[];
     allowedTools?: string[];
     allowedAppCliActions?: string[];
     allowedOperateActions?: string[];

@@ -1719,7 +1719,7 @@ declare global {
           executionProfile?: 'artifact-authoring';
           artifactType?: 'manuscript';
           writeTarget?: 'manuscripts://current';
-          requiredSkill?: string;
+          requiredSkill?: string | string[];
           allowedTools?: string[];
           allowedAppCliActions?: string[];
           allowedOperateActions?: string[];

@@ -70,6 +70,14 @@ interface WanderMaterialRef {
   exists?: boolean;
 }
 
+interface KnowledgeFolderReference {
+  folderName: string;
+  folderPath: string;
+  metaPath: string;
+  contentHint: string;
+  suggestedReadPaths: string[];
+}
+
 interface WanderResult {
   content_direction: string;
   thinking_process: string[];
@@ -176,6 +184,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         folderPath: item.folderPath || item.rootPath,
         filePath: item.rootPath,
         relativePath: item.sampleFiles?.[0] || '',
+        sampleFiles: item.sampleFiles || [],
         sourceUrl: item.sourceUrl,
         tags: item.tags || [],
         status: item.status,
@@ -516,7 +525,48 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
     };
   };
 
-  const buildKnowledgeFolderReference = (item: WanderItem) => {
+  const inferSuggestedReadPaths = (
+    item: WanderItem,
+    folderPath: string,
+    folderName: string,
+  ): string[] => {
+    const meta = (item.meta || {}) as Record<string, unknown>;
+    const sampleFiles = Array.isArray(meta.sampleFiles)
+      ? meta.sampleFiles.map((value) => String(value || '').trim()).filter(Boolean)
+      : [];
+    const normalize = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.startsWith('workspace://') || trimmed.startsWith('knowledge://')) {
+        return trimmed;
+      }
+      return `${folderPath}/${trimmed}`;
+    };
+    const normalizedSampleFiles = sampleFiles
+      .map((value) => normalize(value))
+      .filter((value): value is string => Boolean(value));
+    const sourceType = String(meta.sourceType || '').trim().toLowerCase();
+    const candidates = [
+      `${folderPath}/meta.json`,
+      ...normalizedSampleFiles,
+      normalize(meta.subtitleFile),
+      normalize(meta.transcriptFile),
+      normalize(meta.contentFile),
+    ];
+    if (sourceType === 'youtube') {
+      const videoId = typeof meta.videoId === 'string' && meta.videoId.trim()
+        ? meta.videoId.trim()
+        : folderName.replace(/^youtube_/, '').trim();
+      if (videoId) {
+        candidates.push(`${folderPath}/${videoId}.txt`);
+      }
+    }
+    candidates.push(`${folderPath}/content.md`);
+    return Array.from(new Set(candidates.filter((value): value is string => Boolean(value))));
+  };
+
+  const buildKnowledgeFolderReference = (item: WanderItem): KnowledgeFolderReference => {
     const meta = (item.meta || {}) as Record<string, unknown>;
     const materialRef = resolveWanderMaterialRef(item);
     if (materialRef) {
@@ -531,6 +581,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         folderPath: folderPath || `material://${item.id}`,
         metaPath: folderPath || `material://${item.id}`,
         contentHint: [materialRef.explorationHint, namingRulesHint].filter(Boolean).join(' '),
+        suggestedReadPaths: folderPath ? inferSuggestedReadPaths(item, folderPath, fallbackName) : [],
       };
     }
     if (meta.sourceType === 'document') {
@@ -543,6 +594,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         folderPath: filePath || `document://${item.id}`,
         metaPath: filePath || `document://${item.id}`,
         contentHint: `这是文档知识源（${sourceName || sourceKind || 'document'}），先列目录，再根据文件名和样例文件自行判断该读什么正文。`,
+        suggestedReadPaths: filePath ? [filePath] : [],
       };
     }
 
@@ -557,21 +609,23 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       contentHint: item.type === 'video'
         ? '先列目录，再优先读 meta.json，然后根据 transcript / subtitle / content / description 等命名线索自行寻找相关文件。'
         : '先列目录，再优先读 meta.json，然后根据 content / body / article / note 等命名线索自行寻找正文文件。',
+      suggestedReadPaths: inferSuggestedReadPaths(item, fallbackFolderPath, folderName),
     };
   };
 
+  const canStartCreate = Boolean(parsedResult && onNavigateToRedClaw && validationIssues.length === 0 && !parseError);
+
   const startCreateInRedClaw = () => {
-    if (!parsedResult || !onNavigateToRedClaw) return;
+    if (!parsedResult || !onNavigateToRedClaw || validationIssues.length > 0 || parseError) return;
     const selectedOption = parsedResult.options?.[selectedOptionIndex];
     const activeTopic = selectedOption?.topic || parsedResult.topic;
     const activeDirection = selectedOption?.content_direction || parsedResult.content_direction;
-    const connectedSet = new Set(activeTopic.connections || []);
     const referenceCards = items.map((item, index) => {
       const folderRef = buildKnowledgeFolderReference(item);
       return {
         title: item.title || '(无标题)',
         itemType: item.type,
-        tag: connectedSet.has(index + 1) ? '核心关联素材' : '辅助素材',
+        tag: '可选灵感素材',
         folderPath: folderRef.folderPath,
         summary: String(item.content || '').replace(/\s+/g, ' ').trim().slice(0, 96),
         cover: resolveAssetUrl(item.cover),
@@ -584,24 +638,24 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         `素材${order}`,
         `类型：${item.type === 'video' ? '视频笔记' : ((item.meta as Record<string, unknown> | undefined)?.sourceType === 'document' ? '文档' : '图文笔记')}`,
         `标题：${item.title || '(无标题)'}`,
-        `素材路径：${folderRef.folderPath}`,
+        `素材目录：${folderRef.folderPath}`,
+        folderRef.suggestedReadPaths.length > 0
+          ? `建议读取：${folderRef.suggestedReadPaths.slice(0, 3).join('、')}`
+          : `读取方式：先 List 素材目录，再 Read 具体文件`,
       ].join('\n');
     }).join('\n\n');
 
     const content = [
-      '请基于以下“漫步结果”开始创作一篇完整的小红书文案。',
+      '请基于以下“漫步选题”创作一篇完整的小红书文案。',
       '',
-      '注意：不要只依赖我在消息里给的摘要。开始写作前，请先读取下方素材目录中的真实文件，理解哪些内容值得借鉴、哪些内容不该硬塞进正文。',
-      '优先使用 `List(path="workspace://...")` 列出素材目录，再用 `Read(path="workspace://...")` 读取真实文件内容。不要使用历史兼容别名，也不要回退到 bash。',
-      '',
-      '请先进入每条素材目录，自行列出文件，再优先读取 meta.json，并根据目录中的命名规则判断还需要读哪些正文/转录/字幕文件；重点学习其中可复用的 hook、情绪触发点、叙事结构、反差和细节，而不是逐条照搬素材。',
-      '',
-      '宿主会通过任务 metadata 预激活 `writing-style`。如果本轮上下文显示它尚未激活，只调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "writing-style" })`，不要反复激活。',
-      `需要参考 ${APP_BRAND.aiDisplayName} 用户档案来进行创作。优先用 \`Operate(resource="redclaw.profile", operation="bundle", input={})\` 或 \`Operate(resource="redclaw.profile", operation="read", input={ "docType": "CreatorProfile" })\` 读取档案，不要使用 \`redclaw://profile/...\`。`,
-      '这不是命题作文。内容质量、传播性和完成度优先，不要求把所有目标素材都直接写进最终正文。',
-      '如果某个素材只提供了切口启发、结构方法、情绪张力或表达方式，可以只吸收其方法；如果某个素材会拖累成稿质量，可以舍弃。',
-      '写正文时不要插入控制字符、占位分隔线或额外格式标记；正文只保留正常段落结构。',
-      '完稿前自行做一次风格与事实自检，再保存。',
+      '核心目标是写出一篇好文章，不是证明三条素材都被使用了。',
+      '漫步素材只是灵感池：优先继承高互动母版的表达公式；另外素材只在能提高成稿质量时借一个细节、场景、反差或词感。可以完全舍弃无助于成稿的素材。',
+      '不要把三篇内容强行关联成一个大主题；如果漫步选题仍然偏大，请继续缩小到一个具体人群、具体状态、具体动作或具体瞬间再写。',
+      '可按需读取下方素材目录或用户档案；素材目录不是正文文件，如需读取，请优先 Read “建议读取”里的具体文件，或先 List 目录再 Read 具体文件。',
+      '宿主会通过任务 metadata 预激活 `writing-style` 和 `xhs-title`；如果本轮上下文显示任一技能尚未激活，只对缺失的技能调用一次 `Operate(resource="skills", operation="invoke", input={ "name": "<技能名>" })`。',
+      '创作流程必须先标题、后正文：先使用 `xhs-title` 为当前选题生成 3 个候选标题，并基于点击欲望、准确性和不模板化程度选出 1 个最终标题；候选标题只是内部草稿，不要写入稿件或最终回复。',
+      '确定最终标题后，再使用 `writing-style` 写完整正文；正文必须服从写作风格指导，不要只模仿素材格式。',
+      '完稿前自行判断标题、开头、结构、事实边界和风格一致性；内容质量优先于素材覆盖率。',
       '',
       '## 灵感选题',
       `标题：${activeTopic.title}`,
@@ -611,13 +665,10 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
       materialText,
       '',
       '## 输出要求',
-      '1. 只输出一个最终标题，不要再输出标题候选、备选标题或标题列表。',
-      '2. 生成一篇可直接发布的完整正文，结构清晰，优先保证成稿质量而不是素材覆盖率；正文只作为保存内容，不要作为最终可见回复整篇打印出来。',
-      '3. 这是 post 类型图文任务，必须保存成文件夹稿件工程，由 manifest.json 标记类型。',
-      '4. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 获取规范工程路径。不要把标题直接当成工程文件名。',
-      '5. 创建成功后，宿主会把该工程绑定为当前写稿目标；你只需要生成最终标题和完整正文，不要展开描述工程内部文件结构，也不要自己管理其他工程文件。',
-      '6. 完成后必须直接调用 `Write(path="manuscripts://current", content="<最终标题和完整正文>")` 保存完整稿件；不要重新创建工程，也不要再重复传 path。',
-      '7. 未收到工具成功返回前，禁止告诉我“已经保存”。保存成功后的最终回复只给运行总结和稿件链接，不要重复全文；如果保存失败，必须明确说“内容已生成但尚未保存”。',
+      '1. 先完成标题步骤：用 `xhs-title` 生成 3 个候选标题，内部选择 1 个最终标题；最终稿件和最终回复都只保留这个最终标题。',
+      '2. 再完成正文步骤：用 `writing-style` 写一篇可直接发布的完整正文；正文只作为保存内容，不要作为最终可见回复整篇打印出来。',
+      '3. 如目标工程不存在，先调用 `Operate(resource="manuscripts", operation="createProject", input={ "kind": "post", "parent": "wander", "title": "<最终标题>" })` 创建 post 文件夹稿件工程。',
+      '4. 完成后调用 `Write(path="manuscripts://current", content="<最终标题和完整正文>")` 保存；保存成功后的最终回复只给运行总结和稿件链接，不要重复全文。',
     ].join('\n');
 
     onNavigateToRedClaw({
@@ -629,13 +680,13 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
         executionProfile: 'artifact-authoring',
         artifactType: 'manuscript',
         writeTarget: 'manuscripts://current',
-        requiredSkill: 'writing-style',
-        activeSkills: ['writing-style'],
+        requiredSkill: ['writing-style', 'xhs-title'],
+        activeSkills: ['writing-style', 'xhs-title'],
         allowedTools: AUTHORING_ALLOWED_TOOLS,
         allowedOperateActions: AUTHORING_ALLOWED_OPERATE_ACTIONS,
         allowedWriteTargets: ['manuscripts://current'],
-        requireSourceRead: true,
-        requireProfileRead: true,
+        requireSourceRead: false,
+        requireProfileRead: false,
         requireSave: true,
         deferredDiscovery: false,
         teamEscalation: 'disabled',
@@ -1407,7 +1458,7 @@ export function Wander({ isActive = true, onExecutionStateChange, onTitleBarCont
                             <div className="flex items-center gap-2">
                                 <button
                                     onClick={startCreateInRedClaw}
-                                    disabled={!onNavigateToRedClaw}
+                                    disabled={!canStartCreate}
                                     className="flex h-10 items-center gap-2 px-5 bg-accent-primary text-white text-[13px] font-extrabold rounded-xl shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95 disabled:opacity-40"
                                 >
                                     <MessageSquarePlus className="w-4 h-4" />

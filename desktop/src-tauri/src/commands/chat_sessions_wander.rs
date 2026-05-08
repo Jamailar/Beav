@@ -14,6 +14,7 @@ use crate::session_manager::{
     list_context_sessions, list_sessions, rename_session, resolve_resume_target_session_id,
     session_detail_value, session_list_item_value, session_resume_value, update_metadata,
 };
+use crate::skills::{merge_requested_skills_into_metadata, SkillActivationSource};
 use crate::*;
 use base64::Engine;
 use serde_json::{json, Value};
@@ -24,6 +25,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 const CHATROOM_SYNTHETIC_SESSION_PREFIX: &str = "chatroom:";
+const WANDER_SYNTHESIS_SKILL: &str = "wander-synthesis";
+const XHS_TITLE_SKILL: &str = "xhs-title";
 const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CHAT_ATTACHMENT_PENDING_TTL_MS: u128 = 72 * 60 * 60 * 1000;
@@ -570,27 +573,39 @@ fn pick_random_wander_items(
             .to_string()
     });
 
-    let mut eligible = items
-        .into_iter()
-        .filter(|item| {
-            let id = item
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            !id.is_empty() && !excluded_ids.contains(&id)
-        })
-        .collect::<Vec<_>>();
+    let mut eligible = Vec::new();
+    let mut fallback = Vec::new();
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if id.is_empty() {
+            continue;
+        }
+        if excluded_ids.contains(&id) {
+            fallback.push(item);
+        } else {
+            eligible.push(item);
+        }
+    }
 
-    if eligible.is_empty() {
+    if eligible.is_empty() && fallback.is_empty() {
         return Vec::new();
     }
 
+    let target_count = count.max(1);
     let seed = wander_shuffle_seed(&eligible);
     shuffle_wander_items(&mut eligible, seed);
-    eligible.truncate(eligible.len().min(count.max(1)));
-    eligible
+    let mut selected = eligible.into_iter().take(target_count).collect::<Vec<_>>();
+    if selected.len() < target_count {
+        let fallback_seed = wander_shuffle_seed(&fallback);
+        shuffle_wander_items(&mut fallback, fallback_seed);
+        selected.extend(fallback.into_iter().take(target_count - selected.len()));
+    }
+    selected
 }
 
 fn normalize_guided_text(raw: &str) -> String {
@@ -924,6 +939,24 @@ fn normalize_wander_direction_frame(raw: &Value) -> Value {
     })
 }
 
+fn synthesize_wander_content_direction(frame: &Value) -> Option<String> {
+    let read_field = |key: &str| {
+        frame
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    };
+    let target_reader = read_field("target_reader")?;
+    let core_tension = read_field("core_tension")?;
+    let angle = read_field("angle")?;
+    let material_entry = read_field("material_entry")?;
+    Some(format!(
+        "面向{target_reader}，围绕「{core_tension}」展开；叙事角度是{angle}；素材切口是{material_entry}。"
+    ))
+}
+
 fn normalize_wander_option(raw: &Value) -> Value {
     let topic = raw.get("topic").and_then(Value::as_object);
     let title = topic
@@ -938,18 +971,19 @@ fn normalize_wander_option(raw: &Value) -> Value {
         .unwrap_or("")
         .trim()
         .to_string();
+    let direction_frame = normalize_wander_direction_frame(raw);
     let content_direction = raw
         .get("content_direction")
         .and_then(Value::as_str)
         .or_else(|| raw.get("direction").and_then(Value::as_str))
         .or_else(|| raw.get("contentDirection").and_then(Value::as_str))
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+        .map(|value| value.trim().to_string())
+        .or_else(|| synthesize_wander_content_direction(&direction_frame))
+        .unwrap_or_default();
     json!({
         "content_direction": content_direction,
-        "direction_frame": normalize_wander_direction_frame(raw),
+        "direction_frame": direction_frame,
         "topic": {
             "title": title,
             "connections": normalize_wander_connections(
@@ -1060,78 +1094,51 @@ fn normalize_wander_result(raw: Value, multi_choice: bool) -> Value {
     })
 }
 
-fn build_legacy_wander_prompt(
+fn build_wander_task_prompt(
     items_text: &str,
-    long_term_context_section: &str,
     material_bundle: &str,
     materials_guide: &str,
     multi_choice: bool,
 ) -> String {
     let output_requirement = if multi_choice {
         [
-            "硬性输出要求（多选题模式）：",
-            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
-            "2) JSON 顶层必须包含：thinking_process, options；",
-            "3) options 必须是长度为 3 的数组；",
-            "4) 每个 option 必须包含：content_direction, topic, direction_frame；",
-            "5) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
-            "6) direction_frame 必须包含：target_reader, core_tension, angle, material_entry；这 4 个字段都必须是具体中文短句。",
-            "7) thinking_process 为 3-6 条简洁思考要点。",
-            "8) title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
-            "9) content_direction 必须具体说明面向谁、核心冲突是什么、切入角度是什么，不得使用空泛套话。",
-            "10) 先收紧 direction_frame，再写 title 和 content_direction；不要只写漂亮空话。",
-            "11) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
-            "12) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
-            "13) 如果当前只想到 1-2 个合格方向，继续思考补齐，不要复制弱结果凑满 3 条。",
+            "输出合同：仅输出 JSON，不要 Markdown 或解释。",
+            "模式：multi_choice。",
+            "顶层字段：thinking_process, options。",
+            "options 长度必须为 3。",
+            "每个 option 必须包含 content_direction, topic, direction_frame。",
+            "topic 必须包含 title 和 connections；connections 只能包含 1-3。",
+            "direction_frame 必须包含 target_reader, core_tension, angle, material_entry。",
         ]
         .join("\n")
     } else {
         [
-            "硬性输出要求（单选题模式）：",
-            "1) 仅输出 JSON，不要输出 Markdown、解释、前后缀文本；",
-            "2) JSON 顶层必须包含：content_direction, thinking_process, topic, direction_frame；",
-            "3) topic 必须包含：title, connections（数组，取值只能是 1-3）；",
-            "4) direction_frame 必须包含：target_reader, core_tension, angle, material_entry；这 4 个字段都必须是具体中文短句。",
-            "5) thinking_process 为 3-6 条简洁思考要点；",
-            "6) content_direction 必须是可直接创作的内容方向说明。",
-            "7) topic.title 必须是可直接发布/继续创作的中文标题，不能是“从某素材延展出的内容选题”这类模板句。",
-            "8) content_direction 必须明确：目标读者、核心矛盾、叙事角度、可用素材切入点；不得使用“围绕这组素材提炼一个方向”之类空话。",
-            "9) 先收紧 direction_frame，再写 title 和 content_direction；不要只写漂亮空话。",
-            "10) 你的重点是提炼可形成爆款内容的切口、情绪触发点、结构优势与反差，不是把 3 个素材机械拼接到一起。",
-            "11) 不要求把每个素材都直接写进最终方向；弱素材可以舍弃，强素材也可以只学习其 hook、叙事结构、语气或矛盾设置。",
+            "输出合同：仅输出 JSON，不要 Markdown 或解释。",
+            "模式：single_choice。",
+            "顶层字段：content_direction, thinking_process, topic, direction_frame。",
+            "topic 必须包含 title 和 connections；connections 只能包含 1-3。",
+            "direction_frame 必须包含 target_reader, core_tension, angle, material_entry。",
         ]
         .join("\n")
     };
 
     vec![
-        format!("你现在处于 {} 的「漫步深度思考」Agent 模式。", app_brand_display_name()),
-        "你需要自主完成：分析素材 -> 提炼爆款方法与隐藏连接 -> 发散选题 -> 收敛方向 -> 产出最终结构化结果。".to_string(),
-        "宿主已经预读了每条素材的关键内容，你要先基于这份预读 bundle 完成判断，再决定是否需要额外读取文件。".to_string(),
-        "读取素材的目的不是强行把素材原样塞进选题，而是学习其中值得借鉴的 hook、冲突、情绪、叙事结构、评论点、反差和细节。".to_string(),
-        "如果某个素材只提供了表达方式、视角或结构启发，而不适合直接进入最终内容，也可以只吸收其方法，不必硬写进去。".to_string(),
-        "内容质量、传播性、切口强度优先于素材覆盖率；这不是命题作文。".to_string(),
-        String::new(),
-        "工具调用要求（默认不要触发）：".to_string(),
-        "1) 先用预读 bundle 判断，不要为了证明你看过素材而重复读取；".to_string(),
-        "2) 只有当预读 bundle 明显不足以确定选题时，才允许额外调用 resource 补读 1-2 个文件；".to_string(),
-        "3) 不要再做目录侦察式探索，不要为单条素材反复 list/read 多个文件。".to_string(),
+        format!("任务：使用已激活的 `{WANDER_SYNTHESIS_SKILL}` 和 `{XHS_TITLE_SKILL}` skills，基于本轮随机素材生成漫步选题。"),
+        "边界：只使用本轮素材、宿主预读素材包和必要补读内容；不要引入长期记忆、用户档案、账号定位或其他知识库内容。".to_string(),
+        "选题方法：先以 likes 最高的素材作为母版，拆它的标题、结构、情绪和表达公式；另外两条素材只用于寻找小细节、小场景、小反差，不要把三条素材硬串成一个大主题。越细、越小、越具体的选题越好。".to_string(),
+        format!("标题：topic.title 必须先按 `{XHS_TITLE_SKILL}` 的小红书标题公式逻辑内部筛选，控制在 20 字以内；最终 JSON 只输出最终标题，不输出公式编号、候选标题或推荐理由。"),
+        "工具：预读素材包足够时不要调用工具；确实缺信息时，只补读下面列出的素材路径。".to_string(),
         String::new(),
         output_requirement,
         String::new(),
-        "你收到的随机素材如下：".to_string(),
+        "随机素材：".to_string(),
         items_text.to_string(),
         String::new(),
-        "宿主预读素材包如下：".to_string(),
+        "宿主预读素材包：".to_string(),
         material_bundle.to_string(),
         String::new(),
-        "如确实需要补读，才使用这些真实素材路径：".to_string(),
+        "可补读素材路径：".to_string(),
         materials_guide.to_string(),
-        String::new(),
-        if long_term_context_section.is_empty() {
-            String::new()
-        } else {
-            long_term_context_section.to_string()
-        },
     ]
     .join("\n")
 }
@@ -2701,6 +2708,7 @@ pub fn handle_chat_sessions_wander_channel(
                         "detail": format!("已装载 {} 条随机素材。", items.len()),
                     }),
                 );
+                let context_started_at = now_ms();
                 let _ = app.emit(
                     "wander:progress",
                     json!({
@@ -2711,24 +2719,16 @@ pub fn handle_chat_sessions_wander_channel(
                         "totalSteps": 3,
                         "title": "构建上下文",
                         "status": "running",
-                        "detail": "正在加载用户档案与长期记忆...",
+                        "detail": "正在预读本轮素材...",
                     }),
                 );
-                let context_started_at = now_ms();
-                let long_term_context = warm_wander
-                    .long_term_context
-                    .clone()
-                    .unwrap_or_else(|| build_wander_long_term_context(state));
                 log_timing_event(
                     state,
                     "wander",
                     &request_id,
-                    "long-term-context-ready",
+                    "material-context-ready",
                     context_started_at,
-                    Some(format!(
-                        "profileChars={}",
-                        long_term_context.chars().count(),
-                    )),
+                    Some(format!("inputItems={}", items.len())),
                 );
                 let _ = app.emit(
                     "wander:progress",
@@ -2740,23 +2740,14 @@ pub fn handle_chat_sessions_wander_channel(
                         "totalSteps": 3,
                         "title": "构建上下文",
                         "status": "completed",
-                        "detail": "长期上下文与宿主预读的关键素材摘录已准备完成。",
+                        "detail": "本轮素材与宿主预读摘录已准备完成。",
                     }),
                 );
                 let items_text = build_wander_items_text(&items);
                 let material_bundle = build_wander_material_bundle(&items);
-                let long_term_context_section = if long_term_context.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        "\n\n## 用户长期上下文（供你参考）\n{}\n\n使用要求：\n- 与长期定位保持一致；\n- 若素材与长期定位冲突，优先选择可落地、可执行的方向。",
-                        long_term_context
-                    )
-                };
                 let materials_guide = build_wander_materials_guide(&items);
-                let prompt = build_legacy_wander_prompt(
+                let prompt = build_wander_task_prompt(
                     &items_text,
-                    &long_term_context_section,
                     &material_bundle,
                     &materials_guide,
                     multi_choice,
@@ -2785,11 +2776,21 @@ pub fn handle_chat_sessions_wander_channel(
                     metadata.insert("contextContent".to_string(), json!(items_text));
                     metadata.insert("isContextBound".to_string(), json!(true));
                     metadata.insert("allowedTools".to_string(), json!(["resource"]));
+                    let required_skills = vec![
+                        WANDER_SYNTHESIS_SKILL.to_string(),
+                        XHS_TITLE_SKILL.to_string(),
+                    ];
+                    metadata.insert("requiredSkill".to_string(), json!(required_skills.clone()));
                     metadata.insert(
                         "wanderMaterialBundleChars".to_string(),
                         json!(material_bundle.chars().count()),
                     );
-                    session.metadata = Some(Value::Object(metadata));
+                    session.metadata = Some(merge_requested_skills_into_metadata(
+                        Some(&Value::Object(metadata)),
+                        &required_skills,
+                        SkillActivationSource::ContextDefault,
+                        "wander-brainstorm-default",
+                    ));
                     session.updated_at = now_iso();
                     Ok(())
                 })?;
@@ -3051,6 +3052,33 @@ mod tests {
     }
 
     #[test]
+    fn normalize_wander_result_synthesizes_direction_from_frame() {
+        let result = normalize_wander_result(
+            json!({
+                "direction_frame": {
+                    "target_reader": "想做 side project 但不敢发布的独立开发者",
+                    "core_tension": "担心被抄所以不敢发布 vs 不发布永远不知道想法好不好",
+                    "angle": "把发布产品变成一次低成本的自我表达实验",
+                    "material_entry": "母版是高赞素材，借一个具体动作做切口"
+                },
+                "topic": {
+                    "title": "怕被抄？你的想法还没资格被抄",
+                    "connections": [1, 2]
+                }
+            }),
+            false,
+        );
+
+        let direction = result
+            .get("content_direction")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(direction.contains("想做 side project"));
+        assert!(direction.contains("低成本的自我表达实验"));
+        assert!(collect_wander_validation_issues(&result, false).is_empty());
+    }
+
+    #[test]
     fn collect_wander_validation_issues_reports_missing_direction_frame_fields() {
         let issues = collect_wander_validation_issues(
             &json!({
@@ -3107,18 +3135,47 @@ mod tests {
     }
 
     #[test]
-    fn build_legacy_wander_prompt_prefers_preloaded_bundle_before_tools() {
-        let prompt = build_legacy_wander_prompt(
+    fn build_wander_task_prompt_delegates_flow_to_skill() {
+        let prompt = build_wander_task_prompt(
             "Item 1",
-            "",
             "素材 1 | 标题: 示例\n- 预读正文:\n这里是宿主预读的内容",
             "素材 1 | workspace 路径: knowledge/redbook/demo",
             false,
         );
 
-        assert!(prompt.contains("宿主已经预读了每条素材的关键内容"));
-        assert!(prompt.contains("先用预读 bundle 判断"));
+        assert!(prompt.contains("wander-synthesis"));
+        assert!(prompt.contains("xhs-title"));
+        assert!(prompt.contains("topic.title 必须先按 `xhs-title`"));
+        assert!(prompt.contains("likes 最高的素材作为母版"));
+        assert!(prompt.contains("不要把三条素材硬串成一个大主题"));
+        assert!(prompt.contains("越细、越小、越具体"));
+        assert!(prompt.contains("宿主预读素材包"));
+        assert!(prompt.contains("只使用本轮素材"));
         assert!(!prompt.contains("至少发起 1 次工具调用"));
+        assert!(!prompt.contains("用户长期上下文"));
+        assert!(!prompt.contains("MEMORY.md"));
+        assert!(!prompt.contains("爆款方法"));
+        assert!(!prompt.contains("隐藏连接"));
+    }
+
+    #[test]
+    fn pick_random_wander_items_fills_from_recent_when_unseen_are_insufficient() {
+        let items = vec![
+            json!({ "id": "recent-a", "title": "最近用过 A" }),
+            json!({ "id": "fresh", "title": "未用过" }),
+            json!({ "id": "recent-b", "title": "最近用过 B" }),
+        ];
+        let excluded_ids = HashSet::from(["recent-a".to_string(), "recent-b".to_string()]);
+
+        let picked = pick_random_wander_items(items, 3, &excluded_ids);
+        let picked_ids = picked
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(picked.len(), 3);
+        assert!(picked_ids.contains("fresh"));
+        assert!(picked_ids.contains("recent-a") || picked_ids.contains("recent-b"));
     }
 
     #[test]

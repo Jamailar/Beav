@@ -59,35 +59,7 @@ pub(crate) fn build_memory_maintenance_prompt(store: &AppStore) -> String {
         .cloned()
         .map(|item| json!(item))
         .collect();
-    let recent_conversations: Vec<Value> = store
-        .chat_sessions
-        .iter()
-        .take(5)
-        .map(|session| {
-            let metadata = session.metadata.clone().unwrap_or_else(|| json!({}));
-            let messages = store
-                .chat_messages
-                .iter()
-                .filter(|item| item.session_id == session.id)
-                .take(12)
-                .map(|item| {
-                    json!({
-                        "role": item.role,
-                        "content": truncate_chars(&item.content, 280),
-                        "timestamp": item.created_at,
-                    })
-                })
-                .collect::<Vec<_>>();
-            json!({
-                "sessionId": session.id,
-                "title": session.title,
-                "updatedAt": session.updated_at,
-                "contextType": metadata.get("contextType").cloned().unwrap_or_else(|| json!("unknown")),
-                "messageCount": messages.len(),
-                "messages": messages,
-            })
-        })
-        .collect();
+    let recent_conversations = recent_conversations_for_memory_maintenance(store);
     render_redbox_prompt(
         &template,
         &[
@@ -121,6 +93,77 @@ pub(crate) fn build_memory_maintenance_prompt(store: &AppStore) -> String {
             ),
         ],
     )
+}
+
+fn parse_timestamp(value: &str) -> i64 {
+    value.trim().parse::<i64>().unwrap_or(0)
+}
+
+fn context_type_from_metadata(metadata: Option<&Value>) -> String {
+    metadata
+        .and_then(|value| value.get("contextType"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+fn should_include_session_in_memory_maintenance(session_id: &str, context_type: &str) -> bool {
+    let normalized_context = context_type.trim().to_ascii_lowercase();
+    if session_id.starts_with("context-session:") {
+        return false;
+    }
+    !matches!(
+        normalized_context.as_str(),
+        "file" | "diagnostics" | "chatroom-advisor"
+    )
+}
+
+fn recent_conversations_for_memory_maintenance(store: &AppStore) -> Vec<Value> {
+    let mut sessions = store
+        .chat_sessions
+        .iter()
+        .filter_map(|session| {
+            let metadata = session.metadata.as_ref();
+            let context_type = context_type_from_metadata(metadata);
+            should_include_session_in_memory_maintenance(&session.id, &context_type)
+                .then_some((session, context_type))
+        })
+        .collect::<Vec<_>>();
+    sessions.sort_by(|(left, _), (right, _)| {
+        parse_timestamp(&right.updated_at).cmp(&parse_timestamp(&left.updated_at))
+    });
+    sessions
+        .into_iter()
+        .filter_map(|(session, context_type)| {
+            let messages = store
+                .chat_messages
+                .iter()
+                .filter(|item| item.session_id == session.id)
+                .take(6)
+                .map(|item| {
+                    json!({
+                        "role": item.role,
+                        "content": truncate_chars(&item.content, 180),
+                        "timestamp": item.created_at,
+                    })
+                })
+                .collect::<Vec<_>>();
+            if messages.is_empty() {
+                return None;
+            }
+            Some(json!({
+                "sessionId": session.id,
+                "title": session.title,
+                "updatedAt": session.updated_at,
+                "contextType": context_type,
+                "messageCount": messages.len(),
+                "messages": messages,
+            }))
+        })
+        .take(5)
+        .collect()
 }
 
 pub(crate) fn bump_memory_maintenance_mutation(
@@ -452,4 +495,78 @@ pub(crate) fn default_memory_maintenance_status() -> Value {
         "lastError": Value::Null,
         "nextScheduledAt": Value::Null,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ChatMessageRecord, ChatSessionRecord};
+
+    fn session(id: &str, title: &str, updated_at: &str, context_type: &str) -> ChatSessionRecord {
+        ChatSessionRecord {
+            id: id.to_string(),
+            title: title.to_string(),
+            created_at: updated_at.to_string(),
+            updated_at: updated_at.to_string(),
+            metadata: Some(json!({
+                "contextType": context_type
+            })),
+        }
+    }
+
+    fn user_message(session_id: &str, content: &str, created_at: &str) -> ChatMessageRecord {
+        ChatMessageRecord {
+            id: format!("message-{created_at}"),
+            session_id: session_id.to_string(),
+            role: "user".to_string(),
+            content: content.to_string(),
+            display_content: None,
+            attachment: None,
+            metadata: None,
+            created_at: created_at.to_string(),
+        }
+    }
+
+    #[test]
+    fn memory_maintenance_recent_conversations_skip_internal_chatroom_sessions() {
+        let mut store = AppStore::default();
+        store.chat_sessions.push(session(
+            "context-session:chatroom-advisor:room:advisor",
+            "选题脑爆 · Dan Koe",
+            "300",
+            "chatroom-advisor",
+        ));
+        store
+            .chat_sessions
+            .push(session("session-old", "旧普通会话", "100", "redclaw"));
+        store
+            .chat_sessions
+            .push(session("session-new", "新普通会话", "500", "redclaw"));
+        store.chat_messages.push(user_message(
+            "context-session:chatroom-advisor:room:advisor",
+            "内部成员发言",
+            "301",
+        ));
+        store
+            .chat_messages
+            .push(user_message("session-old", "旧会话内容", "101"));
+        store
+            .chat_messages
+            .push(user_message("session-new", "新会话内容", "501"));
+
+        let conversations = recent_conversations_for_memory_maintenance(&store);
+
+        assert_eq!(conversations.len(), 2);
+        assert_eq!(
+            conversations[0].get("sessionId").and_then(Value::as_str),
+            Some("session-new")
+        );
+        assert_eq!(
+            conversations[1].get("sessionId").and_then(Value::as_str),
+            Some("session-old")
+        );
+        assert!(!serde_json::to_string(&conversations)
+            .unwrap()
+            .contains("chatroom-advisor"));
+    }
 }
