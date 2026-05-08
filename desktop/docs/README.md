@@ -29,6 +29,7 @@
 - [dynamic-tool-exposure-toolrouter-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/dynamic-tool-exposure-toolrouter-plan.md)
 - [mcp-codex-alignment-optimization-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/mcp-codex-alignment-optimization-plan.md)
 - [cli-runtime-effective-environment-optimization-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/cli-runtime-effective-environment-optimization-plan.md)
+- [headless-ai-runtime-test-harness-plan.md](/Users/Jam/LocalDev/GitHub/RedConvert/desktop/docs/headless-ai-runtime-test-harness-plan.md)
 
 ### Archive
 

@@ -199,6 +199,10 @@ export interface ChatShortcutContext {
 
 export type ChatShortcutProvider = ChatShortcut[] | ((context: ChatShortcutContext) => ChatShortcut[]);
 
+interface EnsureSessionForSendOptions {
+  onCreated?: (sessionId: string) => void;
+}
+
 // 选中文字菜单状态
 interface SelectionMenu {
   visible: boolean;
@@ -214,7 +218,7 @@ interface ChatProps {
   onMessageConsumed?: () => void;
   fixedSessionId?: string | null;
   fixedSessionDraft?: boolean;
-  onEnsureSessionForSend?: (defaultTitle?: string) => Promise<string | null>;
+  onEnsureSessionForSend?: (defaultTitle?: string, options?: EnsureSessionForSendOptions) => Promise<string | null>;
   showClearButton?: boolean;
   fixedSessionBannerText?: string;
   shortcuts?: ChatShortcutProvider;
@@ -467,6 +471,15 @@ type FixedSessionWarmSnapshot = {
 const FIXED_SESSION_SNAPSHOT_TTL_MS = 30_000;
 const fixedSessionWarmSnapshots = new Map<string, FixedSessionWarmSnapshot>();
 const fixedSessionInflightLoads = new Map<string, Promise<[unknown[], ChatRuntimeState | null]>>();
+
+function shouldPreserveFixedSessionWarmMessages(
+  warm: FixedSessionWarmSnapshot | null,
+  history: unknown[],
+): warm is FixedSessionWarmSnapshot {
+  if (!warm?.messages.length) return false;
+  const hasActivePlaceholder = warm.messages.some((message) => message.role === 'ai' && message.isStreaming);
+  return hasActivePlaceholder && history.length < warm.messages.length;
+}
 
 function resolveChatShortcutProvider(
   provider: ChatShortcutProvider | undefined,
@@ -1668,6 +1681,19 @@ export function Chat({
         return;
       }
       const runtimeState = runtimeStateRaw as ChatRuntimeState;
+      if (fixedSessionId && sessionId === fixedSessionId) {
+        const warm = readFixedSessionWarmSnapshot(sessionId);
+        if (shouldPreserveFixedSessionWarmMessages(warm, history)) {
+          setMessages(warm.messages);
+          setIsProcessing(true);
+          debugUi('select_session:preserve_warm_messages', {
+            sessionId,
+            warmMessageCount: warm.messages.length,
+            historyMessageCount: history.length,
+          });
+          return;
+        }
+      }
 
       // Convert DB messages to UI messages
       let lastUserCreatedAt: number | undefined;
@@ -3243,24 +3269,7 @@ export function Chat({
       baseRuntimeMessage,
       knowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${knowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
     ].filter(Boolean).join('');
-    let targetSessionId = currentSessionIdRef.current || currentSessionId || null;
-    if (!targetSessionId && onEnsureSessionForSend) {
-      try {
-        targetSessionId = await onEnsureSessionForSend(defaultSessionTitleFromMessage(displayBody || displayText));
-      } catch (error) {
-        console.error('Failed to create chat session before send:', error);
-        targetSessionId = null;
-      }
-      if (!targetSessionId) {
-        setErrorNotice('创建对话失败，请稍后重试');
-        return;
-      }
-      currentSessionIdRef.current = targetSessionId;
-      skipNextFixedSessionLoadRef.current = targetSessionId;
-      setCurrentSessionId(targetSessionId);
-    }
     const processingStartedAt = Date.now();
-    notifySessionActivity(targetSessionId, new Date(processingStartedAt).toISOString());
     const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
       type: 'member',
       memberId: memberMention.id,
@@ -3291,9 +3300,41 @@ export function Chat({
       processingStartedAt,
       memberActor,
     };
+    const optimisticMessages = [userMsg, aiPlaceholder];
+    let targetSessionId = currentSessionIdRef.current || currentSessionId || null;
+    let seededOptimisticMessages = false;
+    if (!targetSessionId && onEnsureSessionForSend) {
+      try {
+        targetSessionId = await onEnsureSessionForSend(defaultSessionTitleFromMessage(displayBody || displayText), {
+          onCreated: (sessionId) => {
+            currentSessionIdRef.current = sessionId;
+            skipNextFixedSessionLoadRef.current = sessionId;
+            writeFixedSessionWarmSnapshot(sessionId, { messages: optimisticMessages });
+            localMessageMutationRef.current += 1;
+            setMessages(optimisticMessages);
+            setCurrentSessionId(sessionId);
+            setIsProcessing(true);
+            seededOptimisticMessages = true;
+          },
+        });
+      } catch (error) {
+        console.error('Failed to create chat session before send:', error);
+        targetSessionId = null;
+      }
+      if (!targetSessionId) {
+        setErrorNotice('创建对话失败，请稍后重试');
+        return;
+      }
+      currentSessionIdRef.current = targetSessionId;
+      skipNextFixedSessionLoadRef.current = targetSessionId;
+      setCurrentSessionId(targetSessionId);
+    }
+    notifySessionActivity(targetSessionId, new Date(processingStartedAt).toISOString());
 
-    localMessageMutationRef.current += 1;
-    setMessages(prev => [...prev, userMsg, aiPlaceholder]);
+    if (!seededOptimisticMessages) {
+      localMessageMutationRef.current += 1;
+      setMessages(prev => [...prev, userMsg, aiPlaceholder]);
+    }
     setInput('');
     setSelectedMemberMention(null);
     setSelectedKnowledgeMentions([]);

@@ -760,7 +760,9 @@ fn handle_browser_ipc_http_request(
     if method == "GET" && normalized_path == "/api/ipc/health" {
         return Ok((200, "OK", json!({ "success": true })));
     }
-    if method != "POST" || normalized_path != "/api/ipc/invoke" {
+    if method != "POST"
+        || (normalized_path != "/api/ipc/invoke" && normalized_path != "/api/ipc/send")
+    {
         return Ok((
             404,
             "Not Found",
@@ -792,6 +794,10 @@ fn handle_browser_ipc_http_request(
         .ok_or_else(|| "browser IPC request 缺少 channel".to_string())?;
     let payload = request.get("payload").cloned().unwrap_or(Value::Null);
     let state = app.state::<AppState>();
+    if normalized_path == "/api/ipc/send" {
+        crate::commands::chat::handle_send_channel(app, channel, payload, &state)?;
+        return Ok((200, "OK", json!({ "success": true })));
+    }
     let value = crate::handle_channel(app, channel, payload, &state)?;
     Ok((200, "OK", value))
 }

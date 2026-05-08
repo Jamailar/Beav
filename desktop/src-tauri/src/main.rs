@@ -966,11 +966,7 @@ pub(crate) fn refresh_runtime_warm_state(
                 None
             },
             context_bundle: bundle.summary,
-            long_term_context: if *mode == "wander" {
-                Some(build_wander_long_term_context(state))
-            } else {
-                None
-            },
+            long_term_context: None,
             warmed_at: now_i64(),
         };
         warmed_entries.push(entry);
@@ -1553,15 +1549,17 @@ mod tests {
         interactive_execution_progress_observe_success,
         interactive_model_supports_direct_attachment, interactive_skill_activation_continuation,
         interactive_skill_activations, interactive_tool_panic_message,
-        is_authoring_project_link_target, json_value_to_path_list, manuscript_save_result_path,
+        is_authoring_project_link_target, json_value_to_path_list,
+        looks_like_authoring_status_summary, manuscript_save_result_path,
         message_is_successful_manuscript_write_tool_result,
         normalized_structured_payload_arguments, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
-        validate_runtime_tool_message_sequence, GeneratedMediaPreview,
-        InteractiveExecutionContract, InteractiveExecutionProgress, SubjectAttribute,
-        SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord, SubjectVoiceInput,
+        validate_runtime_tool_message_sequence, workspace_read_directory_response,
+        GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
+        SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
+        SubjectVoiceInput,
     };
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::fs;
     use std::path::Path;
     use std::time::Instant;
@@ -1608,6 +1606,36 @@ mod tests {
             "scope": "workspace",
             "path": "notes/demo.md"
         })));
+    }
+
+    #[test]
+    fn workspace_read_directory_response_lists_entries_without_error() {
+        let root = std::env::temp_dir().join(format!(
+            "redbox-read-directory-response-{}",
+            crate::now_ms()
+        ));
+        fs::create_dir_all(&root).expect("create temp directory");
+        fs::write(root.join("meta.json"), "{}").expect("write meta file");
+        fs::write(root.join("transcript.txt"), "body").expect("write transcript file");
+
+        let response =
+            workspace_read_directory_response(&root, 10).expect("directory read response");
+        assert_eq!(
+            response.get("kind").and_then(Value::as_str),
+            Some("directory")
+        );
+        assert_eq!(
+            response.get("isDirectory").and_then(Value::as_bool),
+            Some(true)
+        );
+        let content = response
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(content.contains("meta.json"));
+        assert!(content.contains("transcript.txt"));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1850,6 +1878,47 @@ mod tests {
     }
 
     #[test]
+    fn interactive_execution_progress_counts_write_current_as_save() {
+        let mut progress = InteractiveExecutionProgress::default();
+        let contract = InteractiveExecutionContract {
+            require_save: true,
+            ..Default::default()
+        };
+        interactive_execution_progress_observe_success(
+            &mut progress,
+            &contract,
+            "Write",
+            &json!({
+                "path": "manuscripts://current",
+                "content": "正文"
+            }),
+            &json!({
+                "ok": true,
+                "data": {
+                    "projectPath": "wander/demo",
+                    "result": {
+                        "content": "正文"
+                    }
+                }
+            }),
+        );
+
+        assert!(progress.save_completed);
+        assert_eq!(progress.saved_project_path.as_deref(), Some("wander/demo"));
+        assert_eq!(progress.saved_content.as_deref(), Some("正文"));
+    }
+
+    #[test]
+    fn authoring_status_summary_is_not_auto_save_content() {
+        assert!(looks_like_authoring_status_summary(
+            "稿件已保存成功。\n\n**运行总结：**\n- 已保存\n\n**稿件链接：**\n[demo](workspace://wander/demo/content.md)"
+        ));
+        assert!(!looks_like_authoring_status_summary(
+            "别用 AI 提效了\n\n这是文章正文第一段。"
+        ));
+    }
+
+    #[test]
     fn clear_interactive_execution_contract_metadata_removes_task_scoped_fields_only() {
         let mut metadata = json!({
             "contextType": "redclaw",
@@ -1988,8 +2057,22 @@ mod tests {
 
         assert!(summary.contains("已完成创作并保存为稿件"));
         assert!(summary.contains("标题：别做摘要了，把播客印成书"));
-        assert!(summary.contains("[别做摘要了](manuscripts://wander/别做摘要了)"));
+        assert!(summary.contains("[别做摘要了](<manuscripts://wander/别做摘要了>)"));
         assert!(!summary.contains("这是一段完整正文"));
+    }
+
+    #[test]
+    fn authoring_saved_final_summary_wraps_spaced_virtual_path() {
+        let content = "别用 AI 提效了，用它做个只有你会做出来的东西\n\n正文。";
+        let summary = authoring_saved_final_summary(
+            "wander/别用 AI 提效了，用它做个只有你会做出来的东西-1778213490701",
+            content,
+        );
+
+        assert!(summary.contains("标题：别用 AI 提效了，用它做个只有你会做出来的东西"));
+        assert!(summary.contains(
+            "[别用 AI 提效了，用它做个只有你会做出来的东西-1778213490701](<manuscripts://wander/别用 AI 提效了，用它做个只有你会做出来的东西-1778213490701>)"
+        ));
     }
 
     #[test]
@@ -3060,37 +3143,6 @@ fn build_wander_items_text(items: &[Value]) -> String {
         .join("\n\n")
 }
 
-fn build_wander_long_term_context(state: &State<'_, AppState>) -> String {
-    let _ = ensure_redclaw_profile_files(state);
-    let root = workspace_root(state).unwrap_or_else(|_| PathBuf::from("."));
-    let profile_root = root.join("redclaw").join("profile");
-    let paths = [
-        ("Agent.md", profile_root.join("Agent.md"), 2200usize),
-        ("user.md", profile_root.join("user.md"), 1800usize),
-        (
-            "CreatorProfile.md",
-            profile_root.join("CreatorProfile.md"),
-            2200usize,
-        ),
-        (
-            "MEMORY.md",
-            root.join("memory").join("MEMORY.md"),
-            2200usize,
-        ),
-        ("Soul.md", profile_root.join("Soul.md"), 1200usize),
-    ];
-    let mut sections = Vec::new();
-    for (label, path, max_chars) in paths {
-        let snippet = fs::read_to_string(&path)
-            .map(|content| truncate_chars(content.trim(), max_chars))
-            .unwrap_or_default();
-        if !snippet.trim().is_empty() {
-            sections.push(format!("### {}\n{}", label, snippet));
-        }
-    }
-    sections.join("\n\n")
-}
-
 fn resolve_wander_model_config(settings: &Value) -> Value {
     let base_url = payload_string(settings, "api_endpoint").unwrap_or_default();
     let api_key = payload_string(settings, "api_key").unwrap_or_default();
@@ -3181,6 +3233,39 @@ fn collect_recent_chat_messages(
 
 fn list_directory_entries(path: &Path, limit: usize) -> Result<Vec<Value>, String> {
     interactive_runtime_shared::list_directory_entries(path, limit)
+}
+
+fn workspace_read_directory_response(path: &Path, limit: usize) -> Result<Value, String> {
+    let entries = list_directory_entries(path, limit)?;
+    let entry_names = entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.get("name").and_then(Value::as_str)?;
+            let kind = entry
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            Some(format!("- {name} ({kind})"))
+        })
+        .collect::<Vec<_>>();
+    let content = format!(
+        "This path is a directory, not a readable file. Use List(path=\"{}\") to inspect it, then call Read(path=\"<one concrete file path>\"). For knowledge material folders, start with meta.json and the main transcript/content file when present.\n\nEntries:\n{}",
+        path.display(),
+        if entry_names.is_empty() {
+            "(empty)".to_string()
+        } else {
+            entry_names.join("\n")
+        }
+    );
+    Ok(json!({
+        "path": path.display().to_string(),
+        "kind": "directory",
+        "isDirectory": true,
+        "message": "Read received a directory path. Choose a concrete file from entries and call Read again.",
+        "nextAction": "Read one concrete file path, such as meta.json or the transcript/content file.",
+        "entries": entries,
+        "content": content
+    }))
 }
 
 fn interactive_runtime_tools_for_mode(
@@ -4247,15 +4332,19 @@ fn execute_interactive_tool_call(
                             interactive_runtime_shared::resolve_workspace_tool_path_for_session(
                                 state, session_id, &raw_path,
                             )?;
-                        if !resolved.is_file() {
-                            return Err(format!("not a file: {}", resolved.display()));
+                        if resolved.is_dir() {
+                            let limit = parse_usize_arg(&normalized_arguments, "limit", 20, 50);
+                            workspace_read_directory_response(&resolved, limit)
+                        } else if !resolved.is_file() {
+                            Err(format!("not a file: {}", resolved.display()))
+                        } else {
+                            let content =
+                                fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
+                            Ok(json!({
+                                "path": resolved.display().to_string(),
+                                "content": truncate_chars(&content, max_chars)
+                            }))
                         }
-                        let content =
-                            fs::read_to_string(&resolved).map_err(|error| error.to_string())?;
-                        Ok(json!({
-                            "path": resolved.display().to_string(),
-                            "content": truncate_chars(&content, max_chars)
-                        }))
                     }
                     _ => Err(format!("unsupported fs action: {action}")),
                 }
@@ -5597,6 +5686,8 @@ struct InteractiveExecutionProgress {
     source_read_completed: bool,
     profile_read_completed: bool,
     save_completed: bool,
+    saved_project_path: Option<String>,
+    saved_content: Option<String>,
 }
 
 fn redbox_fs_profile_read_completed(arguments: &Value) -> bool {
@@ -5636,16 +5727,8 @@ fn manuscript_save_result_path(result: &Value) -> Option<&str> {
         })
 }
 
-fn manuscript_save_result_has_content(result: &Value) -> bool {
+fn manuscript_save_result_content(result: &Value) -> Option<&str> {
     let data = tool_result_data(result);
-    let saved_bytes = data
-        .get("savedBytes")
-        .and_then(Value::as_i64)
-        .or_else(|| data.get("saved_bytes").and_then(Value::as_i64))
-        .unwrap_or(0);
-    if saved_bytes > 0 {
-        return true;
-    }
     let string_paths = [
         &["content"][..],
         &["body"][..],
@@ -5656,20 +5739,29 @@ fn manuscript_save_result_has_content(result: &Value) -> bool {
         &["result", "script", "body"][..],
         &["result", "script", "content"][..],
     ];
-    string_paths.iter().any(|path| {
+    string_paths.iter().find_map(|path| {
         let mut value = data;
         for key in *path {
-            let Some(next) = value.get(*key) else {
-                return false;
-            };
-            value = next;
+            value = value.get(*key)?;
         }
         value
             .as_str()
             .map(str::trim)
             .filter(|text| !text.is_empty())
-            .is_some()
     })
+}
+
+fn manuscript_save_result_has_content(result: &Value) -> bool {
+    let data = tool_result_data(result);
+    let saved_bytes = data
+        .get("savedBytes")
+        .and_then(Value::as_i64)
+        .or_else(|| data.get("saved_bytes").and_then(Value::as_i64))
+        .unwrap_or(0);
+    if saved_bytes > 0 {
+        return true;
+    }
+    manuscript_save_result_content(result).is_some()
 }
 
 fn normalized_app_cli_action_key(arguments: &Value) -> String {
@@ -5940,6 +6032,17 @@ fn interactive_execution_progress_observe_success(
     arguments: &Value,
     result: &Value,
 ) {
+    if contract.require_save && manuscript_write_current_completed(tool_name, arguments, result) {
+        progress.save_completed = true;
+        progress.saved_project_path = manuscript_save_result_path(result)
+            .map(normalize_relative_path)
+            .filter(|path| !path.is_empty())
+            .or_else(|| progress.saved_project_path.clone());
+        progress.saved_content = manuscript_save_result_content(result)
+            .map(ToString::to_string)
+            .or_else(|| progress.saved_content.clone());
+    }
+
     match tool_name {
         "resource" => {
             let action = tool_action_name(arguments)
@@ -5992,11 +6095,33 @@ fn interactive_execution_progress_observe_success(
                     .unwrap_or(command_matches);
                 if command_matches || result_matches {
                     progress.save_completed = true;
+                    progress.saved_project_path = manuscript_save_result_path(result)
+                        .map(normalize_relative_path)
+                        .filter(|path| !path.is_empty())
+                        .or_else(|| progress.saved_project_path.clone());
+                    progress.saved_content = manuscript_save_result_content(result)
+                        .map(ToString::to_string)
+                        .or_else(|| progress.saved_content.clone());
                 }
             }
         }
         _ => {}
     }
+}
+
+fn manuscript_write_current_completed(tool_name: &str, arguments: &Value, result: &Value) -> bool {
+    if !manuscript_save_result_has_content(result) {
+        return false;
+    }
+    if normalized_app_cli_action_key(arguments) == "manuscriptswritecurrent" {
+        return true;
+    }
+    if tool_name == "Write" {
+        return payload_string(arguments, "path")
+            .map(|path| path.trim().eq_ignore_ascii_case("manuscripts://current"))
+            .unwrap_or(false);
+    }
+    false
 }
 
 #[derive(Debug, Clone)]
@@ -6137,11 +6262,12 @@ fn append_authoring_saved_path_link(
     if content.contains(&canonical_link) {
         return content.to_string();
     }
+    let markdown_href = markdown_angle_link_href(&canonical_link);
     let label = std::path::Path::new(&project_path)
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(project_path.as_str());
-    format!("{content}\n\n保存路径：[{label}]({canonical_link})")
+    format!("{content}\n\n保存路径：[{label}]({markdown_href})")
 }
 
 fn is_authoring_project_link_target(project_path: &str) -> bool {
@@ -6170,6 +6296,23 @@ fn should_replace_authoring_final_content_with_summary(content: &str) -> bool {
     content.chars().count() > 600 || content.trim_start().starts_with('#')
 }
 
+fn looks_like_authoring_status_summary(content: &str) -> bool {
+    let normalized = content.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+    let lowered = normalized.to_ascii_lowercase();
+    normalized.contains("运行总结")
+        && normalized.contains("稿件链接")
+        && (normalized.contains("稿件已保存")
+            || normalized.contains("已完成创作并保存")
+            || lowered.contains("manuscripts://current"))
+}
+
+fn markdown_angle_link_href(href: &str) -> String {
+    format!("<{}>", href.trim().replace('>', "%3E"))
+}
+
 fn authoring_saved_final_summary(project_path: &str, saved_content: &str) -> String {
     let normalized = normalize_relative_path(project_path);
     let label = std::path::Path::new(&normalized)
@@ -6177,9 +6320,8 @@ fn authoring_saved_final_summary(project_path: &str, saved_content: &str) -> Str
         .and_then(|value| value.to_str())
         .unwrap_or(normalized.as_str());
     let title = authoring_title_from_content(saved_content).unwrap_or_else(|| label.to_string());
-    format!(
-        "已完成创作并保存为稿件。\n\n- 标题：{title}\n- 稿件：[{label}](manuscripts://{normalized})"
-    )
+    let href = markdown_angle_link_href(&format!("manuscripts://{normalized}"));
+    format!("已完成创作并保存为稿件。\n\n- 标题：{title}\n- 稿件：[{label}]({href})")
 }
 
 fn emit_loop_guard_checkpoint(
@@ -8092,6 +8234,7 @@ fn run_openai_interactive_chat_runtime(
                 && !execution_progress.save_completed
                 && bound_authoring_target.is_some()
                 && !final_content.trim().is_empty()
+                && !looks_like_authoring_status_summary(&final_content)
             {
                 match auto_save_interactive_authoring_content(
                     app,
@@ -8104,6 +8247,9 @@ fn run_openai_interactive_chat_runtime(
                     Ok(_) => {
                         execution_progress.save_completed = true;
                         if let Some(target) = bound_authoring_target.as_ref() {
+                            execution_progress.saved_project_path =
+                                Some(target.project_path.clone());
+                            execution_progress.saved_content = Some(final_content.clone());
                             final_content =
                                 authoring_saved_final_summary(&target.project_path, &final_content);
                         }
@@ -8158,13 +8304,19 @@ fn run_openai_interactive_chat_runtime(
                 );
                 continue;
             }
-            if execution_contract.require_save
-                && execution_progress.save_completed
-                && should_replace_authoring_final_content_with_summary(&final_content)
-            {
-                if let Some(target) = bound_authoring_target.as_ref() {
-                    final_content =
-                        authoring_saved_final_summary(&target.project_path, &final_content);
+            if execution_contract.require_save && execution_progress.save_completed {
+                let saved_content = execution_progress
+                    .saved_content
+                    .as_deref()
+                    .unwrap_or(&final_content);
+                let saved_project_path = bound_authoring_target
+                    .as_ref()
+                    .map(|target| target.project_path.as_str())
+                    .or(execution_progress.saved_project_path.as_deref());
+                if let Some(project_path) = saved_project_path {
+                    final_content = authoring_saved_final_summary(project_path, saved_content);
+                } else if should_replace_authoring_final_content_with_summary(&final_content) {
+                    final_content = final_content.trim().to_string();
                 }
             }
             final_content = append_authoring_saved_path_link(state, session_id, &final_content);

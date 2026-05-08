@@ -26,7 +26,9 @@ mod tests {
                 "remotion-best-practices",
                 "skill-creator",
                 "video-director",
+                "wander-synthesis",
                 "writing-style",
+                "xhs-title",
             ])
         );
         assert!(skills.iter().all(|item| item.is_builtin == Some(true)));

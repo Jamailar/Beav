@@ -1346,7 +1346,10 @@ export function RedClaw({
         });
     }, [runnerStatus]);
 
-    const createNewSession = useCallback(async (defaultTitle?: string): Promise<string | null> => {
+    const createNewSession = useCallback(async (
+        defaultTitle?: string,
+        options?: { onCreated?: (sessionId: string) => void },
+    ): Promise<string | null> => {
         const nextActiveSpaceId = activeSpaceId || 'default';
         const nextSpaceName = activeSpaceName || nextActiveSpaceId;
         const contextId = buildRedClawContextId(nextActiveSpaceId);
@@ -1367,6 +1370,7 @@ export function RedClaw({
             if (!session) {
                 throw new Error('create context session timed out');
             }
+            options?.onCreated?.(session.id);
             const nextItem = createContextSessionListItem(session);
             flushSync(() => {
                 const nextList = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
@@ -1540,7 +1544,10 @@ export function RedClaw({
         }
     }, []);
 
-    const ensureActiveSpeakerSessionForSend = useCallback(async (defaultTitle?: string): Promise<string | null> => {
+    const ensureActiveSpeakerSessionForSend = useCallback(async (
+        defaultTitle?: string,
+        options?: { onCreated?: (sessionId: string) => void },
+    ): Promise<string | null> => {
         if (activeAiSurface === 'advisor') {
             if (!selectedAdvisor) return null;
             const existing = advisorSessionIds[selectedAdvisor.id];
@@ -1548,7 +1555,7 @@ export function RedClaw({
             return createAdvisorSession(selectedAdvisor);
         }
         if (activeSessionIdRef.current) return activeSessionIdRef.current;
-        return createNewSession(defaultTitle);
+        return createNewSession(defaultTitle, options);
     }, [activeAiSurface, advisorSessionIds, createAdvisorSession, createNewSession, selectedAdvisor]);
 
     const switchRoom = useCallback((roomId: string) => {

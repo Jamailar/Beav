@@ -152,20 +152,24 @@ mod tests {
     #[test]
     fn resolve_skill_set_activates_turn_scoped_task_hint_skill() {
         let resolved = resolve_skill_set(
-            &[turn_scoped_skill("writing-style", "[redclaw, wander]")],
+            &[
+                turn_scoped_skill("writing-style", "[redclaw, wander]"),
+                turn_scoped_skill("xhs-title", "[redclaw, wander]"),
+            ],
             "redclaw",
             Some(&serde_json::json!({
-                "activeSkills": ["writing-style"],
+                "activeSkills": ["writing-style", "xhs-title"],
                 "taskHints": {
-                    "activeSkills": ["writing-style"],
-                    "requiredSkill": "writing-style"
+                    "activeSkills": ["writing-style", "xhs-title"],
+                    "requiredSkill": ["writing-style", "xhs-title"]
                 }
             })),
             &["workflow".to_string()],
         );
 
-        assert_eq!(resolved.active_skills.len(), 1);
+        assert_eq!(resolved.active_skills.len(), 2);
         assert_eq!(resolved.active_skills[0].name, "writing-style");
+        assert_eq!(resolved.active_skills[1].name, "xhs-title");
     }
 
     #[test]

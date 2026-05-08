@@ -133,9 +133,16 @@ pub(crate) fn interactive_runtime_context_bundle(
         .map(|value| value.display().to_string())
         .unwrap_or_default();
     let subjects_section = build_asset_library_tool_section(&workspace_root_value);
-    let memory_section =
-        crate::memory::build_memory_prompt_section(state, runtime_mode, session_id, 8);
-    let account_context_section = crate::accounts::build_account_prompt_section(state);
+    let memory_section = if runtime_mode == "wander" {
+        None
+    } else {
+        crate::memory::build_memory_prompt_section(state, runtime_mode, session_id, 8)
+    };
+    let account_context_section = if runtime_mode == "wander" {
+        None
+    } else {
+        crate::accounts::build_account_prompt_section(state)
+    };
     let runtime_agent_overlay = runtime_agent_overlay_prompt(runtime_mode);
     let video_analysis_section = video_analysis_prompt_section();
     if runtime_mode == "wander" {
@@ -145,22 +152,11 @@ pub(crate) fn interactive_runtime_context_bundle(
         }
         sections.push(
             [
-                "You are the app's wander ideation agent.",
-                "Your only job is to inspect the provided material folders/files, discover hidden connections, extract reusable viral-content patterns, and return strict JSON for a truly usable topic.",
-                "Use only the available inspection tools in this runtime.",
-                "When the host already preloaded a material bundle, use that bundle first and do not repeat exploratory file reads by default.",
-                "Keep the process lean: use List/Search/Read on workspace paths only when the preloaded material bundle is clearly insufficient.",
-                "The output must be publication-grade, not placeholders.",
-                "Treat materials as inspiration and evidence candidates, not mandatory ingredients.",
-                "Do not force every material into the final topic; weak materials may be dropped, and strong materials may be used only for hook, angle, tension, structure, or tone learning.",
-                "Quality, novelty, and publishability are more important than material coverage.",
-                "Never output generic titles such as '从某素材延展出的内容选题' or '未命名选题'.",
-                "The final title must stay within 20 Chinese characters or the equivalent concise length in other languages.",
-                "Never output generic directions such as '围绕这组素材提炼一个方向'.",
-                "A valid result must include direction_frame.target_reader, direction_frame.core_tension, direction_frame.angle, and direction_frame.material_entry before you finalize title and content_direction.",
-                "A valid content_direction must state the target audience, the core conflict/tension, the angle, and how the inspected materials informed that angle or sharpened its hook.",
-                "Do not suggest pseudo tools or imaginary commands; call only the tools actually exposed in available_tools.",
-                "Do not invent fs aliases such as fs read, knowledge_read, workflow fs ..., or resource(...); use only the visible tools.",
+                "You are the app's wander ideation runtime.",
+                "The host supplies a small random material set and may preload excerpts.",
+                "Follow activated skills for the synthesis workflow and quality checks.",
+                "Return only the JSON shape requested by the user task.",
+                "Call only visible tools, and only when the preloaded material bundle is insufficient.",
             ]
             .join(" "),
         );
@@ -178,12 +174,6 @@ pub(crate) fn interactive_runtime_context_bundle(
         }
         if !skills_section.trim().is_empty() {
             sections.push(format!("Skill guidance:\n{}", skills_section.trim()));
-        }
-        if let Some(memory_section) = memory_section.as_ref() {
-            sections.push(memory_section.summary.trim().to_string());
-        }
-        if let Some(account_context_section) = account_context_section.as_ref() {
-            sections.push(account_context_section.trim().to_string());
         }
         if !explicit_knowledge_section.trim().is_empty() {
             sections.push(explicit_knowledge_section.trim().to_string());

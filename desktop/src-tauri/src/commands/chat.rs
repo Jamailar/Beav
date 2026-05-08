@@ -19,8 +19,9 @@ use crate::skills::{
     requested_skill_names_from_task_hints, SkillActivationSource,
 };
 use crate::{
-    append_debug_log_state, append_debug_trace_state, log_timing_event, make_id, now_i64, now_iso,
-    now_ms, payload_field, payload_string, session_title_from_message, AppState,
+    append_debug_log_state, append_debug_trace_state, append_session_transcript, log_timing_event,
+    make_id, now_i64, now_iso, now_ms, payload_field, payload_string, session_title_from_message,
+    AppState, ChatMessageRecord,
 };
 
 const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[
@@ -121,6 +122,76 @@ fn payload_knowledge_references(payload: &Value) -> Vec<Value> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn chat_user_message_metadata(
+    advisor_id: Option<&str>,
+    knowledge_references: &[Value],
+) -> Option<Value> {
+    let mut references = Vec::<Value>::new();
+    if let Some(member_id) = advisor_id.map(str::trim).filter(|value| !value.is_empty()) {
+        references.push(json!({
+            "type": "member",
+            "memberId": member_id,
+            "routeMode": "respond",
+        }));
+    }
+    references.extend(knowledge_references.iter().cloned());
+    if references.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "references": references,
+        "explicitKnowledgeRefs": knowledge_references,
+    }))
+}
+
+fn persist_chat_user_message_before_run(
+    state: &State<'_, AppState>,
+    session_id: &str,
+    message: &str,
+    display_content: &str,
+    attachment: Option<Value>,
+    advisor_id: Option<&str>,
+    knowledge_references: &[Value],
+) -> Result<(), String> {
+    let metadata = chat_user_message_metadata(advisor_id, knowledge_references);
+    with_store_mut(state, |store| {
+        store.chat_messages.push(ChatMessageRecord {
+            id: make_id("message"),
+            session_id: session_id.to_string(),
+            role: "user".to_string(),
+            content: message.to_string(),
+            display_content: if display_content.trim().is_empty() {
+                None
+            } else {
+                Some(display_content.to_string())
+            },
+            attachment: attachment.clone(),
+            metadata: metadata.clone(),
+            created_at: now_iso(),
+        });
+        if let Some(session) = store
+            .chat_sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        {
+            session.updated_at = now_iso();
+        }
+        append_session_transcript(
+            store,
+            session_id,
+            "message",
+            "user",
+            message.to_string(),
+            Some(json!({
+                "displayContent": display_content,
+                "attachment": attachment,
+                "metadata": metadata,
+            })),
+        );
+        Ok(())
+    })
 }
 
 fn apply_chat_turn_session_metadata(
@@ -450,13 +521,25 @@ pub fn handle_send_channel(
                 })
                 .cloned()
                 .or_else(|| payload_field(&payload, "attachment").cloned());
-            let turn = build_chat_send_turn(
+            if let Some(active_session_id) = session_id.as_deref() {
+                persist_chat_user_message_before_run(
+                    state,
+                    active_session_id,
+                    &message,
+                    &display_content,
+                    runtime_attachment.clone(),
+                    advisor_id.as_deref(),
+                    &knowledge_references,
+                )?;
+            }
+            let mut turn = build_chat_send_turn(
                 session_id.clone(),
                 message.clone(),
                 display_content.clone(),
                 payload_field(&payload, "modelConfig"),
                 runtime_attachment.clone(),
             );
+            turn.request.persist_user_message = false;
             let prepared_turn = PreparedSessionAgentTurn::chat_send(turn);
             let completed_result = run_chat_send_turn(app, state, &prepared_turn, &message);
             if let Some((restore_session_id, previous_metadata)) = turn_metadata_restore {
