@@ -683,12 +683,6 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("video.analyze"),
         ),
-        ("video", "create") => app_cli_action_call(
-            "video.projectCreate",
-            payload,
-            Some("Operate"),
-            Some("video.projectCreate"),
-        ),
         ("skill" | "skills", "list") => {
             app_cli_action_call("skills.list", payload, Some("Operate"), Some("skill.list"))
         }
@@ -1465,7 +1459,6 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         }
         ["image", "generate", ..] => Some("image.generate"),
         ["video", "generate", ..] => Some("video.generate"),
-        ["video", "project-create", ..] => Some("video.projectCreate"),
         _ => None,
     };
     match translated_action {
@@ -2012,30 +2005,6 @@ mod tests {
                 .get("payload")
                 .and_then(|value| value.get("url")),
             Some(&json!("https://example.com"))
-        );
-    }
-
-    #[test]
-    fn normalizes_redbox_video_create_to_project_create_action() {
-        let normalized = normalize_tool_call(
-            "Operate",
-            &json!({
-                "resource": "video",
-                "operation": "create",
-                "input": { "explicitProjectWorkflow": true, "title": "Launch" }
-            }),
-        );
-        assert_eq!(normalized.name, "workflow");
-        assert_eq!(
-            normalized.arguments.get("action"),
-            Some(&json!("video.projectCreate"))
-        );
-        assert_eq!(
-            normalized
-                .arguments
-                .get("payload")
-                .and_then(|value| value.get("explicitProjectWorkflow")),
-            Some(&json!(true))
         );
     }
 
