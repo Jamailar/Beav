@@ -37,6 +37,7 @@ export function FeedbackReportDialog({
   const [priority, setPriority] = useState<'medium' | 'high'>('medium');
   const [includeAdvancedContext, setIncludeAdvancedContext] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [validationError, setValidationError] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -45,21 +46,27 @@ export function FeedbackReportDialog({
     setContact('');
     setPriority('medium');
     setIncludeAdvancedContext(false);
+    setValidationError('');
   }, [context, open]);
 
   const sourcePage = useMemo(() => contextValue(context, 'sourcePage') || 'desktop', [context]);
 
   if (!open) return null;
 
-  const canSubmit = content.trim().length >= 4 && !isSubmitting;
-
   const submit = async () => {
-    if (!canSubmit) return;
+    if (isSubmitting) return;
+    const nextTitle = title.trim();
+    const nextContent = content.trim() || nextTitle;
+    if (nextContent.length < 2) {
+      setValidationError('请填写问题描述');
+      return;
+    }
     setIsSubmitting(true);
+    setValidationError('');
     try {
       const result = await window.ipcRenderer.logs.createFeedbackReport({
-        title: title.trim() || content.trim().slice(0, 40),
-        content: content.trim(),
+        title: nextTitle || nextContent.slice(0, 40),
+        content: nextContent,
         contact: contact.trim(),
         category: 'desktop_bug',
         priority,
@@ -113,7 +120,10 @@ export function FeedbackReportDialog({
             <label className="mb-1.5 block text-xs font-medium text-text-secondary">标题</label>
             <input
               value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                setValidationError('');
+              }}
               placeholder="哪里出了问题"
               className="w-full rounded-md border border-border bg-surface-secondary/30 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
             />
@@ -122,11 +132,17 @@ export function FeedbackReportDialog({
             <label className="mb-1.5 block text-xs font-medium text-text-secondary">问题描述</label>
             <textarea
               value={content}
-              onChange={(event) => setContent(event.target.value)}
+              onChange={(event) => {
+                setContent(event.target.value);
+                setValidationError('');
+              }}
               placeholder="发生了什么，期望结果是什么"
               rows={5}
               className="w-full resize-none rounded-md border border-border bg-surface-secondary/30 px-3 py-2 text-sm leading-5 text-text-primary outline-none transition-colors focus:border-accent-primary"
             />
+            {validationError ? (
+              <div className="mt-1.5 text-xs text-red-500">{validationError}</div>
+            ) : null}
           </div>
           <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
             <div>
@@ -176,7 +192,7 @@ export function FeedbackReportDialog({
           <button
             type="button"
             onClick={() => void submit()}
-            disabled={!canSubmit}
+            disabled={isSubmitting}
             className="inline-flex items-center gap-2 rounded-md bg-accent-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-primary/90 disabled:opacity-60"
           >
             {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
