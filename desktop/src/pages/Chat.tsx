@@ -765,7 +765,7 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
     action: normalizedTitle.includes('余额不足')
       || normalizedTitle.includes('登陆失效')
       || normalizedTitle.includes('登录失效')
-      ? { label: '去登录页', target: 'settings-login' }
+      ? { label: '查看账号', target: 'settings-login' }
       : undefined,
   };
 }

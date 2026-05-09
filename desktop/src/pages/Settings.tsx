@@ -272,6 +272,7 @@ function TeamSettingsSection({
   loading,
   busyAdvisorId,
   draggingAdvisorId,
+  onCreateAdvisor,
   onToggleVisible,
   onOpenSettings,
   onDragStart,
@@ -282,6 +283,7 @@ function TeamSettingsSection({
   loading: boolean;
   busyAdvisorId: string | null;
   draggingAdvisorId: string | null;
+  onCreateAdvisor: () => void;
   onToggleVisible: (advisor: Advisor) => void;
   onOpenSettings: (advisor: Advisor) => void;
   onDragStart: (advisorId: string) => void;
@@ -290,9 +292,19 @@ function TeamSettingsSection({
 }) {
   return (
     <section className="space-y-4">
-      <div>
-        <h2 className="text-lg font-medium text-text-primary">团队</h2>
-        <p className="mt-1 text-sm text-text-tertiary">管理 {APP_BRAND.aiDisplayName} 新对话里出现的成员和顺序。</p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-medium text-text-primary">团队</h2>
+          <p className="mt-1 text-sm text-text-tertiary">管理 {APP_BRAND.aiDisplayName} 新对话里出现的成员和顺序。</p>
+        </div>
+        <button
+          type="button"
+          onClick={onCreateAdvisor}
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          新增成员
+        </button>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-surface-primary">
@@ -302,7 +314,17 @@ function TeamSettingsSection({
             正在读取成员
           </div>
         ) : advisors.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-text-tertiary">暂无成员</div>
+          <div className="flex flex-col items-center gap-3 px-4 py-8 text-center text-sm text-text-tertiary">
+            <span>暂无成员</span>
+            <button
+              type="button"
+              onClick={onCreateAdvisor}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              新增成员
+            </button>
+          </div>
         ) : (
           <div className="divide-y divide-border/70">
             {advisors.map((advisor) => {
@@ -780,7 +802,7 @@ export function Settings({
   onReturn?: () => void;
 }) {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('ai');
   const [teamAdvisors, setTeamAdvisors] = useState<Advisor[]>([]);
   const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
   const [teamAdvisorBusyId, setTeamAdvisorBusyId] = useState<string | null>(null);
@@ -792,6 +814,7 @@ export function Settings({
   const [skillMarketplaceItems, setSkillMarketplaceItems] = useState<ThriveSkillMarketplaceItem[]>([]);
   const [isSkillMarketplaceLoading, setIsSkillMarketplaceLoading] = useState(false);
   const [skillMarketplaceBusyId, setSkillMarketplaceBusyId] = useState('');
+  const [isCreatingTeamAdvisor, setIsCreatingTeamAdvisor] = useState(false);
   const [editingTeamAdvisor, setEditingTeamAdvisor] = useState<Advisor | null>(null);
   const [settingsTeamAdvisor, setSettingsTeamAdvisor] = useState<Advisor | null>(null);
   const [draggingTeamAdvisorId, setDraggingTeamAdvisorId] = useState<string | null>(null);
@@ -1567,7 +1590,7 @@ export function Settings({
   // Update State
   const [appVersion, setAppVersion] = useState<string | null>(null);
 
-  const [aiModelSubTab, setAiModelSubTab] = useState<'custom' | 'login'>('custom');
+  const [showAiModelSettings, setShowAiModelSettings] = useState(false);
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
   const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
@@ -1577,8 +1600,8 @@ export function Settings({
     if (navigationTarget.tab) {
       setActiveTab(navigationTarget.tab);
     }
-    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab) {
-      setAiModelSubTab(navigationTarget.aiModelSubTab);
+    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'custom') {
+      setShowAiModelSettings(true);
     }
   }, [navigationTarget]);
 
@@ -1604,7 +1627,6 @@ export function Settings({
     if (!hasOfficialAiPanel) {
       setOfficialAiPanelEnabled(false);
       setOfficialAiPanelComponent(null);
-      setAiModelSubTab('custom');
       return;
     }
     setOfficialAiPanelEnabled(true);
@@ -1612,20 +1634,17 @@ export function Settings({
 
   useEffect(() => {
     if (!hasOfficialAiPanel || !officialAiPanelEnabled) return;
-    if (activeTab !== 'ai' || aiModelSubTab !== 'login' || OfficialAiPanelComponent) return;
+    if (activeTab !== 'ai' || OfficialAiPanelComponent) return;
     let canceled = false;
     void loadOfficialAiPanelModule().then((module) => {
       if (canceled) return;
       const nextComponent = module?.default || null;
       setOfficialAiPanelComponent(() => nextComponent);
-      if (!nextComponent) {
-        setAiModelSubTab('custom');
-      }
     });
     return () => {
       canceled = true;
     };
-  }, [OfficialAiPanelComponent, activeTab, aiModelSubTab, officialAiPanelEnabled]);
+  }, [OfficialAiPanelComponent, activeTab, officialAiPanelEnabled]);
 
   const isDashscopeImageTemplate = useMemo(() => {
     const template = inferImageTemplateByProvider(formData.image_provider, formData.image_provider_template);
@@ -4790,6 +4809,11 @@ export function Settings({
     setIsTeamSystemPromptExpanded(false);
   }, []);
 
+  const handleCreateTeamAdvisor = useCallback(() => {
+    setEditingTeamAdvisor(null);
+    setIsCreatingTeamAdvisor(true);
+  }, []);
+
   const handleDeleteTeamAdvisor = useCallback(async (advisor: Advisor) => {
     if (!(await appConfirm('确定要删除这个智囊团成员吗？', { title: '删除成员', confirmLabel: '删除', tone: 'danger' }))) return;
     try {
@@ -4910,18 +4934,45 @@ export function Settings({
 
   const handleSaveTeamAdvisor = useCallback(async (
     data: Omit<Advisor, 'id' | 'createdAt' | 'knowledgeFiles'>,
+    youtubeParams?: { url: string; count: number; channelId?: string },
+    knowledgeFilePaths?: string[],
   ) => {
-    if (!editingTeamAdvisor) return;
-    await window.ipcRenderer.advisors.update({
-      ...data,
-      id: editingTeamAdvisor.id,
-      redclawVisible: editingTeamAdvisor.redclawVisible !== false,
-      redclawOrder: editingTeamAdvisor.redclawOrder,
-    });
+    let advisorId = editingTeamAdvisor?.id;
+    if (editingTeamAdvisor) {
+      await window.ipcRenderer.advisors.update({
+        ...data,
+        id: editingTeamAdvisor.id,
+        redclawVisible: editingTeamAdvisor.redclawVisible !== false,
+        redclawOrder: editingTeamAdvisor.redclawOrder,
+      });
+    } else {
+      const createData: Record<string, unknown> = { ...data };
+      if (youtubeParams?.url) {
+        createData.youtubeChannel = {
+          url: youtubeParams.url,
+          channelId: youtubeParams.channelId || '',
+        };
+      }
+      const result = await window.ipcRenderer.advisors.create(createData) as { success?: boolean; id?: string; error?: string };
+      if (result?.success === false) {
+        throw new Error(result.error || '创建成员失败');
+      }
+      advisorId = result?.id;
+      if (advisorId && Array.isArray(knowledgeFilePaths) && knowledgeFilePaths.length > 0) {
+        await window.ipcRenderer.advisors.uploadKnowledge({
+          advisorId,
+          filePaths: knowledgeFilePaths,
+        });
+      }
+    }
     setEditingTeamAdvisor(null);
-    await refreshTeamAdvisor(editingTeamAdvisor.id);
+    setIsCreatingTeamAdvisor(false);
+    await loadTeamAdvisors();
+    if (advisorId) {
+      await refreshTeamAdvisor(advisorId);
+    }
     window.dispatchEvent(new Event('redclaw:team-settings-changed'));
-  }, [editingTeamAdvisor, refreshTeamAdvisor]);
+  }, [editingTeamAdvisor, loadTeamAdvisors, refreshTeamAdvisor]);
 
   const ensureTabResourcesLoaded = useCallback(async (tab: SettingsTab, force = false) => {
     if (!isActive) return;
@@ -4958,13 +5009,10 @@ export function Settings({
             loadRuntimeRoles(),
           ]);
         }
-      } else if (tab === 'ai' && aiModelSubTab === 'login' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
+      } else if (tab === 'ai' && officialAiPanelEnabled && !OfficialAiPanelComponent) {
         const module = await loadOfficialAiPanelModule();
         const nextComponent = module?.default || null;
         setOfficialAiPanelComponent(() => nextComponent);
-        if (!nextComponent) {
-          setAiModelSubTab('custom');
-        }
       }
       tabWarmRef.current[tab] = true;
     } finally {
@@ -4972,7 +5020,6 @@ export function Settings({
     }
   }, [
     OfficialAiPanelComponent,
-    aiModelSubTab,
     formData.developer_mode_enabled,
     isActive,
     loadRedclawProfileBundle,
@@ -5591,40 +5638,32 @@ export function Settings({
                 <section className="space-y-6">
                   <h2 className="text-lg font-medium text-text-primary mb-6">{t('settings.ai.title')}</h2>
 
-                  <div className="flex justify-center">
-                    <div className="inline-flex items-center rounded-full border border-border bg-surface-secondary/40 p-1 shadow-sm">
-                      <button
-                        type="button"
-                        onClick={() => setAiModelSubTab('custom')}
-                        className={clsx(
-                          'px-6 py-2 text-xs rounded-full transition-colors',
-                          aiModelSubTab === 'custom'
-                            ? 'bg-surface-primary text-text-primary border border-border shadow-sm'
-                            : 'text-text-secondary hover:text-text-primary'
-                        )}
-                      >
-                        自定义
-                      </button>
-                      {officialAiPanelEnabled && (
-                        <button
-                          type="button"
-                          onClick={() => setAiModelSubTab('login')}
-                          className={clsx(
-                            'px-6 py-2 text-xs rounded-full transition-colors',
-                            aiModelSubTab === 'login'
-                              ? 'bg-surface-primary text-text-primary border border-border shadow-sm'
-                              : 'text-text-secondary hover:text-text-primary'
-                          )}
-                        >
-                          登录
-                        </button>
+                  {officialAiPanelEnabled && (
+                    <div className="space-y-4">
+                      {OfficialAiPanelComponent ? (
+                        <OfficialAiPanelComponent onReloadSettings={reloadCustomAiSettings} />
+                      ) : (
+                        <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">
+                          正在加载账号信息...
+                        </div>
                       )}
                     </div>
-                  </div>
+                  )}
 
-                  <>
-                  {aiModelSubTab === 'custom' && (
-                  <>
+                  <div className="rounded-xl border border-border bg-surface-secondary/20 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setShowAiModelSettings((prev) => !prev)}
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-surface-secondary/40"
+                      aria-expanded={showAiModelSettings}
+                      aria-controls="ai-model-settings-panel"
+                    >
+                      <span className="text-sm font-medium text-text-primary">模型设置</span>
+                      <ChevronDown className={clsx('h-4 w-4 text-text-tertiary transition-transform', showAiModelSettings && 'rotate-180')} />
+                    </button>
+
+                    {showAiModelSettings && (
+                      <div id="ai-model-settings-panel" className="space-y-4 border-t border-border/70 p-4">
                   <div className="space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -5829,11 +5868,11 @@ export function Settings({
                               {isOfficialSourceUnavailable ? (
                                 <button
                                   type="button"
-                                  onClick={() => setAiModelSubTab('login')}
+                                  onClick={() => setShowAiModelSettings(false)}
                                   className="px-2 py-1 text-[11px] border rounded transition-colors border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary"
                                   disabled={isOfficialSourcePending}
                                 >
-                                  {isOfficialSourcePending ? '检查中' : '去登录'}
+                                  {isOfficialSourcePending ? '检查中' : '查看账号'}
                                 </button>
                               ) : (
                                 <>
@@ -5894,10 +5933,10 @@ export function Settings({
                                     {!isOfficialSourcePending && (
                                       <button
                                         type="button"
-                                        onClick={() => setAiModelSubTab('login')}
+                                        onClick={() => setShowAiModelSettings(false)}
                                         className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                                       >
-                                        前往登录
+                                        查看账号
                                       </button>
                                     )}
                                   </div>
@@ -6577,20 +6616,9 @@ export function Settings({
                       </div>
                     </div>
                   </div>
-                  </>
-                  )}
-                  {officialAiPanelEnabled && (
-                    <div className={aiModelSubTab === 'login' ? 'space-y-4' : 'hidden'} aria-hidden={aiModelSubTab !== 'login'}>
-                      {OfficialAiPanelComponent ? (
-                        <OfficialAiPanelComponent onReloadSettings={reloadCustomAiSettings} />
-                      ) : (
-                        <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 text-sm text-text-tertiary">
-                          正在加载登录面板...
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  </>
+                      </div>
+                    )}
+                  </div>
 
                 </section>
               </div>
@@ -6602,6 +6630,7 @@ export function Settings({
                 loading={isTeamAdvisorsLoading}
                 busyAdvisorId={teamAdvisorBusyId}
                 draggingAdvisorId={draggingTeamAdvisorId}
+                onCreateAdvisor={handleCreateTeamAdvisor}
                 onToggleVisible={handleToggleTeamAdvisorVisible}
                 onOpenSettings={handleOpenTeamAdvisorSettings}
                 onDragStart={handleTeamAdvisorDragStart}
@@ -7354,11 +7383,15 @@ export function Settings({
               status={status}
             />
           </form>
-          {editingTeamAdvisor && (
+          {(editingTeamAdvisor || isCreatingTeamAdvisor) && (
             <AdvisorModal
               advisor={editingTeamAdvisor}
+              defaultMode="manual"
               onSave={handleSaveTeamAdvisor}
-              onClose={() => setEditingTeamAdvisor(null)}
+              onClose={() => {
+                setEditingTeamAdvisor(null);
+                setIsCreatingTeamAdvisor(false);
+              }}
             />
           )}
           {settingsTeamAdvisor && (

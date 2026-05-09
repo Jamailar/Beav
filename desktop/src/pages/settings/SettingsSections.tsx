@@ -462,6 +462,7 @@ function FileIndexSettingsPanel({
     loading: boolean;
     onRefresh: () => Promise<void>;
 }) {
+    const [isExpanded, setIsExpanded] = useState(false);
     const overall = dashboard?.overall;
     const lanes = dashboard?.lanes || [];
     const scopes = dashboard?.scopes || [];
@@ -473,16 +474,22 @@ function FileIndexSettingsPanel({
     return (
         <div className="rounded-lg border border-border bg-surface-secondary/30 p-4">
             <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
+                <button
+                    type="button"
+                    onClick={() => setIsExpanded((value) => !value)}
+                    className="min-w-0 flex-1 text-left"
+                    aria-expanded={isExpanded}
+                >
                     <h3 className="flex items-center gap-2 text-sm font-medium text-text-primary">
                         <Database className="h-4 w-4" />
                         文件索引
+                        <ChevronDown className={clsx('h-4 w-4 text-text-tertiary transition-transform', isExpanded && 'rotate-180')} />
                     </h3>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-tertiary">
                         <FileIndexStatusBadge status={overall?.status || 'idle'} />
                         <span>{summaryText}</span>
                     </div>
-                </div>
+                </button>
                 <button
                     type="button"
                     onClick={() => void onRefresh()}
@@ -494,56 +501,58 @@ function FileIndexSettingsPanel({
                 </button>
             </div>
 
-            <div className="mt-4 grid gap-4">
-                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
-                    <div className="grid grid-cols-[minmax(0,1fr)_80px_120px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
-                        <span>索引类型</span>
-                        <span>状态</span>
-                        <span className="text-right">进度</span>
+            {isExpanded && (
+                <div className="mt-4 grid gap-4">
+                    <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                        <div className="grid grid-cols-[minmax(0,1fr)_80px_120px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                            <span>索引类型</span>
+                            <span>状态</span>
+                            <span className="text-right">进度</span>
+                        </div>
+                        {lanes.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-text-tertiary">暂无索引记录</div>
+                        ) : (
+                            lanes.map((lane) => (
+                                <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_120px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                    <span className="truncate text-xs text-text-primary">{lane.label}</span>
+                                    <FileIndexStatusBadge status={lane.status} />
+                                    <span className="text-right">
+                                        <FileIndexProgressText
+                                            done={lane.done}
+                                            total={lane.total}
+                                            failed={lane.failed}
+                                            metadataOnly={lane.metadataOnly || 0}
+                                        />
+                                    </span>
+                                </div>
+                            ))
+                        )}
                     </div>
-                    {lanes.length === 0 ? (
-                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无索引记录</div>
-                    ) : (
-                        lanes.map((lane) => (
-                            <div key={lane.lane} className="grid grid-cols-[minmax(0,1fr)_80px_120px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
-                                <span className="truncate text-xs text-text-primary">{lane.label}</span>
-                                <FileIndexStatusBadge status={lane.status} />
-                                <span className="text-right">
-                                    <FileIndexProgressText
-                                        done={lane.done}
-                                        total={lane.total}
-                                        failed={lane.failed}
-                                        metadataOnly={lane.metadataOnly || 0}
-                                    />
-                                </span>
-                            </div>
-                        ))
-                    )}
-                </div>
 
-                <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
-                    <div className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
-                        <span>知识库</span>
-                        <span>类型</span>
-                        <span className="text-right">文件</span>
-                        <span className="text-right">状态</span>
+                    <div className="overflow-hidden rounded-md border border-border bg-surface-primary">
+                        <div className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] border-b border-border px-3 py-2 text-[11px] font-medium text-text-tertiary">
+                            <span>知识库</span>
+                            <span>类型</span>
+                            <span className="text-right">文件</span>
+                            <span className="text-right">状态</span>
+                        </div>
+                        {scopes.length === 0 ? (
+                            <div className="px-3 py-3 text-xs text-text-tertiary">暂无知识库索引记录</div>
+                        ) : (
+                            scopes.map((scope) => (
+                                <div key={scope.scopeId} className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
+                                    <span className="truncate text-xs text-text-primary" title={scope.name}>{scope.name}</span>
+                                    <span className="text-[11px] text-text-tertiary">{fileIndexScopeLabel(scope.scopeType)}</span>
+                                    <span className="text-right font-mono text-[11px] text-text-tertiary">{scope.fileCount}</span>
+                                    <span className="text-right">
+                                        <FileIndexStatusBadge status={scope.status} />
+                                    </span>
+                                </div>
+                            ))
+                        )}
                     </div>
-                    {scopes.length === 0 ? (
-                        <div className="px-3 py-3 text-xs text-text-tertiary">暂无知识库索引记录</div>
-                    ) : (
-                        scopes.map((scope) => (
-                            <div key={scope.scopeId} className="grid grid-cols-[minmax(0,1fr)_56px_54px_84px] items-center border-b border-border/60 px-3 py-2 last:border-b-0">
-                                <span className="truncate text-xs text-text-primary" title={scope.name}>{scope.name}</span>
-                                <span className="text-[11px] text-text-tertiary">{fileIndexScopeLabel(scope.scopeType)}</span>
-                                <span className="text-right font-mono text-[11px] text-text-tertiary">{scope.fileCount}</span>
-                                <span className="text-right">
-                                    <FileIndexStatusBadge status={scope.status} />
-                                </span>
-                            </div>
-                        ))
-                    )}
                 </div>
-            </div>
+            )}
         </div>
     );
 }
@@ -2592,6 +2601,7 @@ export function ToolsSettingsSection({
 }: ToolsSettingsSectionProps) {
     const [runtimeSessionQuery, setRuntimeSessionQuery] = useState('');
     const [isThrivePluginMarketplaceOpen, setIsThrivePluginMarketplaceOpen] = useState(false);
+    const [isCliRuntimeExpanded, setIsCliRuntimeExpanded] = useState(false);
     const mcpRuntimeMap = useMemo(
         () =>
             Object.fromEntries(
@@ -2932,14 +2942,23 @@ export function ToolsSettingsSection({
         <section className="space-y-5">
             <h2 className="text-lg font-medium text-text-primary">外部工具</h2>
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
+            <div className="bg-surface-secondary/30 rounded-lg border border-border overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+                    <button
+                        type="button"
+                        onClick={() => setIsCliRuntimeExpanded((prev) => !prev)}
+                        className="min-w-0 flex flex-1 items-center gap-2 text-left"
+                        aria-expanded={isCliRuntimeExpanded}
+                        aria-controls="tools-cli-runtime-panel"
+                    >
+                        <ChevronDown className={clsx('h-4 w-4 shrink-0 text-text-tertiary transition-transform', !isCliRuntimeExpanded && '-rotate-90')} />
+                        <div className="min-w-0">
                         <h3 className="text-sm font-medium text-text-primary">本机 CLI</h3>
                         <div className="mt-1 text-xs text-text-tertiary">
                             {cliRuntimeTools.length} 个工具 · {cliRuntimeEnvironments.length} 个环境 · {cliRuntimeExecutionMode === 'unrestricted' ? '完全访问' : cliRuntimeExecutionMode === 'managed' ? '安全模式' : '兼容模式'}
                         </div>
-                    </div>
+                        </div>
+                    </button>
                     <button
                         type="button"
                         onClick={() => void handleRefreshCliRuntime()}
@@ -2950,6 +2969,8 @@ export function ToolsSettingsSection({
                     </button>
                 </div>
 
+                {isCliRuntimeExpanded && (
+                <div id="tools-cli-runtime-panel" className="space-y-4 border-t border-border/70 p-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                     {[
                         ['managed', '安全模式', '最小文件权限，无网络除非命令申请。'],
@@ -3070,9 +3091,9 @@ export function ToolsSettingsSection({
                     ) : null}
                 </div>
 
-                <details className="rounded border border-border bg-surface-primary/40 p-3">
-                    <summary className="cursor-pointer text-xs font-medium text-text-secondary">
-                        高级设置
+	                <details className="rounded border border-border bg-surface-primary/40 p-3">
+	                    <summary className="cursor-pointer text-xs font-medium text-text-secondary">
+	                        高级设置
                     </summary>
 
                     <div className="mt-4 space-y-4">
@@ -3198,12 +3219,14 @@ export function ToolsSettingsSection({
                                     </div>
                                 ))}
                             </div>
-                        ) : null}
-                    </div>
-                </details>
+	                        ) : null}
+	                    </div>
+	                </details>
+                </div>
+                )}
             </div>
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
+            <div className="hidden bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-3">
                     <div>
                         <h3 className="text-sm font-medium text-text-primary">MCP 数据源中台</h3>
@@ -5116,7 +5139,7 @@ export function ToolsSettingsSection({
 }
 
 interface SettingsSaveBarProps {
-    activeTab: 'general' | 'ai' | 'team' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
+    activeTab: 'general' | 'ai' | 'team' | 'skills' | 'mcp' | 'tools' | 'profile' | 'memory' | 'remote' | 'experimental';
     status: 'idle' | 'saving' | 'saved' | 'error';
 }
 
@@ -5129,7 +5152,7 @@ export function SettingsSaveBar({ activeTab, status }: SettingsSaveBarProps) {
     const buttonLabel = activeTab === 'profile' ? t('settings.save.profile') : t('settings.save.config');
 
     return (
-        <div className="sticky bottom-0 -mx-8 mt-8 flex items-center justify-between border-t border-border bg-surface-primary/95 px-8 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.06)] backdrop-blur-xl transition-all">
+        <div className="fixed bottom-0 left-48 right-0 z-20 flex items-center justify-between border-t border-border bg-surface-primary/95 px-8 py-4 shadow-[0_-12px_30px_rgba(15,23,42,0.06)] backdrop-blur-xl transition-all">
             <div className="text-xs">
                 {status === 'saved' && <span className="text-status-success">{t('settings.save.saved')}</span>}
                 {status === 'error' && <span className="text-status-error">{t('settings.save.error')}</span>}

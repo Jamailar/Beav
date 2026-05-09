@@ -191,7 +191,7 @@ const getHumanStatusText = (toolName: string, actionName: string, status: Status
     return statusVerb(status, `正在处理 ${APP_BRAND.aiDisplayName} 任务`, `已处理 ${APP_BRAND.aiDisplayName} 任务`, `${APP_BRAND.aiDisplayName} 任务处理失败`);
   }
   if (normalizedAction === 'runtime.resume') {
-    return statusVerb(status, '正在继续上次任务', '已继续上次任务', '恢复任务失败');
+    return statusVerb(status, '正在接收后台回复', '已接收后台回复', '后台回复恢复失败');
   }
   if (normalizedAction.startsWith('manuscripts.')) {
     return statusVerb(status, '正在处理稿件', '已处理稿件', '稿件处理失败');
@@ -287,7 +287,7 @@ const buildStatusLine = (item: ProcessItem): StatusLine | null => {
       detail: truncateDetail(item.content || ''),
       preserveDetail: true,
       forceDanger: true,
-      action: shouldShowLoginSettingsAction(title) ? { label: '去登录页', target: 'settings-login' } : undefined,
+      action: shouldShowLoginSettingsAction(title) ? { label: '查看账号', target: 'settings-login' } : undefined,
     };
   }
 
