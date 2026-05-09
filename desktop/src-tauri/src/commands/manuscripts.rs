@@ -7153,7 +7153,7 @@ pub fn handle_manuscripts_channel(
                     return Ok(json!({ "success": false, "error": "Not a manuscript package" }));
                 }
                 if get_package_kind_from_manifest(&full_path).as_deref() != Some("video") {
-                    return Ok(json!({ "success": false, "error": "ffmpeg_edit 仅支持视频稿件" }));
+                    return Ok(json!({ "success": false, "error": "当前类型不支持 ffmpeg_edit" }));
                 }
                 let operations = payload
                     .get("operations")
@@ -9144,9 +9144,9 @@ pub fn handle_manuscripts_channel(
                     .cloned()
                     .unwrap_or_else(|| build_default_remotion_scene(&title, &clips));
                 let prompt = format!(
-                    "请基于当前视频脚本、时间线和当前 Remotion 工程状态，为当前视频工程设计一份 Remotion JSON 动画方案。\n\
+                    "请基于当前脚本、时间线和当前 Remotion 状态，设计一份 Remotion JSON 动画方案。\n\
 要求：\n\
-1. 一个视频工程对应一个 Remotion 工程文件；默认只维护一个主 scene（通常就是 scene-1），后续动画默认都加到这个 scene 里，而不是按底层片段数量机械拆多个场景。\n\
+1. 默认只维护一个主 scene（通常就是 scene-1），后续动画默认都加到这个 scene 里，而不是按底层片段数量机械拆多个场景。\n\
 2. 先确定动画主体元素，再设计动画表达。像“苹果下落”必须先落成一个 element，例如 `shape=apple`，再给它配置 `fall-bounce` 等动画；不要退化成说明性文字。\n\
 3. 只有当脚本明确要求动画跟随某个现有镜头时，才填写 clipId / assetId；否则它们保持为空，让动画独立存在于默认 scene / M1 动画轨道。\n\
 4. Remotion 的时序是按帧控制的；请用 durationInFrames 和 overlay.startFrame / overlay.durationInFrames 表达节奏，不要描述宿主不存在的自由动画系统。\n\

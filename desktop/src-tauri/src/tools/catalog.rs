@@ -1755,10 +1755,6 @@ fn video_generate_input_schema() -> Value {
                 string_schema("Optional driving audio path."),
             ),
             (
-                "videoProjectPath",
-                string_schema("Optional bound video project path."),
-            ),
-            (
                 "waitForCompletion",
                 bool_schema(
                     "Whether to block until the generation job completes. Defaults to false.",
