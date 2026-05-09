@@ -456,6 +456,8 @@ fn pinned_direct_app_cli_actions(
     if wants_host_cli || (!media_intent && matches!(runtime_mode, "team" | "redclaw" | "knowledge"))
     {
         &[
+            "video.analyze",
+            "image.generate",
             "skills.invoke",
             "skills.installFromRepo",
             "skills.uninstall",
@@ -851,6 +853,7 @@ mod tests {
             ..ToolRegistryPlanParams::default()
         });
 
+        assert!(plan.has_direct_app_cli_action("video.analyze"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
@@ -868,6 +871,7 @@ mod tests {
             ..ToolRegistryPlanParams::default()
         });
 
+        assert!(plan.has_direct_app_cli_action("video.analyze"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));

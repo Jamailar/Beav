@@ -1542,11 +1542,11 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 mod tests {
     use super::{
         append_generated_media_markdown, asset_preview_url_from_result,
-        authoring_saved_final_summary, build_subject_record_for_workspace,
-        clear_interactive_execution_contract_metadata, decode_command_json_stdout,
-        guess_mime_and_kind, interactive_attachment_inline_data_url,
+        authoring_saved_final_summary, build_interactive_user_turn_messages,
+        build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
+        decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
         interactive_base64_payload_size, interactive_execution_contract_instruction,
-        interactive_execution_progress_observe_success,
+        interactive_execution_progress_observe_success, interactive_history_attachment_note,
         interactive_model_supports_direct_attachment, interactive_skill_activation_continuation,
         interactive_skill_activations, interactive_tool_panic_message,
         is_authoring_project_link_target, json_value_to_path_list,
@@ -1592,6 +1592,58 @@ mod tests {
             "image",
             "image/jpeg"
         ));
+    }
+
+    #[test]
+    fn video_tool_read_attachment_prompt_names_required_operate_call() {
+        let attachment = json!({
+            "type": "uploaded-file",
+            "name": "video.mp4",
+            "kind": "video",
+            "workspaceRelativePath": "knowledge/redbook/demo/video.mp4",
+            "deliveryPlan": {
+                "mode": "media-tool",
+                "requiresTool": true,
+                "toolPath": "knowledge/redbook/demo/video.mp4"
+            }
+        });
+
+        let (prompt_message, history_message) = build_interactive_user_turn_messages(
+            "分析一下这个视频",
+            Some(&attachment),
+            "openai",
+            "qwen3.5-plus",
+        )
+        .expect("turn messages");
+        let prompt = prompt_message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let history = history_message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        assert!(prompt.contains("Operate(resource=\"video\", operation=\"analyze\""));
+        assert!(prompt.contains("\"toolPath\":\"knowledge/redbook/demo/video.mp4\""));
+        assert!(prompt.contains("不要先用 `Read`、`bash`"));
+        assert!(history.contains("Operate(resource=\"video\", operation=\"analyze\""));
+        assert!(history.contains("不要用 Read/bash/meta.json 代替视频分析"));
+    }
+
+    #[test]
+    fn video_history_attachment_note_keeps_tool_path() {
+        let attachment = json!({
+            "name": "video.mp4",
+            "kind": "video",
+            "workspaceRelativePath": "knowledge/redbook/demo/video.mp4"
+        });
+        let note =
+            interactive_history_attachment_note(&attachment, false).expect("history attachment");
+
+        assert!(note.contains("video.mp4"));
+        assert!(note.contains("Operate(resource=\"video\", operation=\"analyze\""));
+        assert!(note.contains("\"toolPath\":\"knowledge/redbook/demo/video.mp4\""));
     }
 
     #[test]
@@ -4752,12 +4804,19 @@ fn interactive_attachment_tool_read_note(
             .unwrap_or("workspace-tool");
         let tool_hint = match delivery_mode {
             "document-tool" => "优先使用文档解析/知识库导入工具抽取正文；如果只能使用 workspace.read，先读取并如实说明无法解析的格式边界。",
-            "media-tool" if kind == "video" => "必须优先调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary|shot_breakdown|speech_extract|highlight_clips|talking_head_cut|smart_edit\"})`，让专用 Video Analysis Agent 读取真实视频内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始视频。",
+            "media-tool" if kind == "video" => "必须立即调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"})`，让专用 Video Analysis Agent 读取真实视频内容。不要先用 `Read`、`bash`、目录列表、`meta.json` 或文案元数据替代视频分析；这些只能作为 video.analyze 失败后的辅助证据。",
             "media-tool" => "优先使用对应的媒体、转写或视频处理工具读取真实媒体内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始媒体。",
             _ => "先调用 `Read(path=\"workspace://...\")` 或相关 workspace 工具读取。",
         };
+        let concrete_video_call = if delivery_mode == "media-tool" && kind == "video" {
+            format!(
+                " 具体调用：`Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})`。"
+            )
+        } else {
+            String::new()
+        };
         return Some(format!(
-            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`，处理方式 `{delivery_mode}`。如果任务依赖它的真实内容，{tool_hint} 不要假装已经看过文件内容。"
+            "{prefix}本轮还附带了一个未直接嵌入模型的附件：文件名 `{name}`，类型 `{kind}`，工作区路径 `{relative_path}`，处理方式 `{delivery_mode}`。如果任务依赖它的真实内容，{tool_hint}{concrete_video_call} 不要假装已经看过文件内容。"
         ));
     }
     interactive_attachment_string_field(attachment, "absolutePath").map(|absolute_path| {
@@ -4774,11 +4833,21 @@ fn interactive_history_attachment_note(
     let name = interactive_attachment_string_field(attachment, "name")
         .unwrap_or_else(|| "attachment".to_string());
     let kind = interactive_attachment_kind(attachment);
+    let relative_path = interactive_attachment_string_field(attachment, "workspaceRelativePath")
+        .or_else(|| interactive_attachment_string_field(attachment, "toolPath"))
+        .or_else(|| interactive_attachment_string_field(attachment, "relativePath"));
     let mode_label = if embedded_directly {
         "已直接输入给模型"
     } else {
         "需通过工具读取"
     };
+    if !embedded_directly && kind == "video" {
+        if let Some(relative_path) = relative_path {
+            return Some(format!(
+                "附件：`{name}`（video，需通过 `Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})` 读取；不要用 Read/bash/meta.json 代替视频分析）"
+            ));
+        }
+    }
     Some(format!("附件：`{name}`（{kind}，{mode_label}）"))
 }
 

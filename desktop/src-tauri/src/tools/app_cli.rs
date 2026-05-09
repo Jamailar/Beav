@@ -287,6 +287,17 @@ fn app_cli_error_json(
         .unwrap_or_else(|_| format!(r#"{{"ok":false,"error":{{"code":"{code}","message":"{message}","retryable":{retryable}}}}}"#))
 }
 
+fn app_cli_action_error(action: &str, message: &str) -> String {
+    let parsed = serde_json::from_str::<Value>(message).ok();
+    if parsed.as_ref().is_some_and(|value| {
+        value.get("ok").and_then(Value::as_bool) == Some(false)
+            && value.get("error").is_some_and(Value::is_object)
+    }) {
+        return message.to_string();
+    }
+    app_cli_error_json(Some(action), "ACTION_FAILED", message, false, None)
+}
+
 fn bool_payload_field(payload: &Value, key: &str) -> bool {
     payload.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
@@ -1000,9 +1011,7 @@ impl<'a> AppCliExecutor<'a> {
                 ))
             }
         };
-        result.map_err(|message| {
-            app_cli_error_json(Some(action), "ACTION_FAILED", &message, false, None)
-        })
+        result.map_err(|message| app_cli_action_error(action, &message))
     }
 
     fn execute_legacy_command(&self, command: &str, payload: &Value) -> Result<Value, String> {
@@ -6071,6 +6080,29 @@ mod tests {
         assert_eq!(parsed.get("action"), Some(&json!("memory.search")));
         assert_eq!(parsed.pointer("/error/code"), Some(&json!("ACTION_FAILED")));
         assert_eq!(parsed.pointer("/error/retryable"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn app_cli_action_error_preserves_structured_tool_errors() {
+        let nested = app_cli_error_json(
+            Some("video.analyze"),
+            "PROVIDER_ERROR",
+            "provider rejected video input",
+            true,
+            Some(json!({ "protocol": "openai" })),
+        );
+        let preserved = app_cli_action_error("video.analyze", &nested);
+        let parsed: Value = serde_json::from_str(&preserved).expect("structured JSON");
+
+        assert_eq!(
+            parsed.pointer("/error/code"),
+            Some(&json!("PROVIDER_ERROR"))
+        );
+        assert_eq!(parsed.pointer("/error/retryable"), Some(&json!(true)));
+        assert_eq!(
+            parsed.pointer("/error/details/protocol"),
+            Some(&json!("openai"))
+        );
     }
 
     #[test]

@@ -505,11 +505,37 @@ pub(crate) fn invoke_video_analysis_by_protocol(
     mime_type: &str,
     base64_data: &str,
 ) -> Result<String, String> {
-    if protocol != "gemini" {
-        return Err(format!(
-            "video analysis direct input currently requires a Gemini-compatible provider, got {protocol}"
-        ));
+    if protocol == "gemini" {
+        return invoke_gemini_video_analysis(
+            base_url,
+            api_key,
+            model_name,
+            system_prompt,
+            user_prompt,
+            mime_type,
+            base64_data,
+        );
     }
+    invoke_openai_video_analysis(
+        base_url,
+        api_key,
+        model_name,
+        system_prompt,
+        user_prompt,
+        mime_type,
+        base64_data,
+    )
+}
+
+fn invoke_gemini_video_analysis(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    mime_type: &str,
+    base64_data: &str,
+) -> Result<String, String> {
     let body = json!({
         "system_instruction": {
             "parts": [{ "text": system_prompt }]
@@ -562,6 +588,105 @@ pub(crate) fn invoke_video_analysis_by_protocol(
         return Err("Video Analysis Agent returned an empty response".to_string());
     }
     Ok(text)
+}
+
+fn invoke_openai_video_analysis(
+    base_url: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    mime_type: &str,
+    base64_data: &str,
+) -> Result<String, String> {
+    let endpoint = format!("{}/chat/completions", normalize_base_url(base_url));
+    let body = openai_video_analysis_body(
+        model_name,
+        system_prompt,
+        user_prompt,
+        mime_type,
+        base64_data,
+    );
+    let response = run_curl_json_response("POST", &endpoint, api_key, &[], Some(body), Some(120))?;
+    let response = ensure_successful_ai_response(
+        "openai",
+        "video-analysis",
+        "POST",
+        &endpoint,
+        model_name,
+        response,
+    )?;
+    let text = openai_chat_message_content(&response);
+    if text.trim().is_empty() {
+        return Err("Video Analysis Agent returned an empty response".to_string());
+    }
+    Ok(text)
+}
+
+fn openai_video_analysis_body(
+    model_name: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    mime_type: &str,
+    base64_data: &str,
+) -> Value {
+    let data_url = if model_name.to_ascii_lowercase().contains("qwen") {
+        format!("data:;base64,{base64_data}")
+    } else {
+        format!("data:{mime_type};base64,{base64_data}")
+    };
+    json!({
+        "model": model_name,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_url",
+                        "video_url": {
+                            "url": data_url
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": user_prompt
+                    }
+                ]
+            }
+        ],
+        "modalities": ["text"],
+        "stream": false
+    })
+}
+
+fn openai_chat_message_content(response: &Value) -> String {
+    let Some(content) = response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+    else {
+        return String::new();
+    };
+    if let Some(text) = content.as_str() {
+        return text.to_string();
+    }
+    content
+        .as_array()
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| {
+                    part.get("text")
+                        .or_else(|| part.get("content"))
+                        .and_then(Value::as_str)
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) fn fetch_models_by_protocol(
@@ -1299,6 +1424,49 @@ mod tests {
         assert!(sources
             .iter()
             .any(|item| item.get("id").and_then(Value::as_str) == Some("custom-source")));
+    }
+
+    #[test]
+    fn openai_video_analysis_body_uses_openai_compatible_video_url() {
+        let body = openai_video_analysis_body(
+            "qwen3.5-omni-flash",
+            "system",
+            "inspect video",
+            "video/mp4",
+            "BASE64",
+        );
+
+        assert_eq!(body.get("model"), Some(&json!("qwen3.5-omni-flash")));
+        assert_eq!(body.get("modalities"), Some(&json!(["text"])));
+        assert_eq!(body.get("stream"), Some(&json!(false)));
+        assert_eq!(
+            body.pointer("/messages/1/content/0/type"),
+            Some(&json!("video_url"))
+        );
+        assert_eq!(
+            body.pointer("/messages/1/content/0/video_url/url"),
+            Some(&json!("data:;base64,BASE64"))
+        );
+        assert_eq!(
+            body.pointer("/messages/1/content/1/text"),
+            Some(&json!("inspect video"))
+        );
+    }
+
+    #[test]
+    fn openai_chat_message_content_accepts_array_parts() {
+        let response = json!({
+            "choices": [{
+                "message": {
+                    "content": [
+                        { "type": "text", "text": "hello" },
+                        { "type": "text", "text": " world" }
+                    ]
+                }
+            }]
+        });
+
+        assert_eq!(openai_chat_message_content(&response), "hello world");
     }
 
     #[test]

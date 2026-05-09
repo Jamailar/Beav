@@ -367,7 +367,7 @@ fn capability_summary_for_plan_tool(tool_name: &str, plan: &ToolRegistryPlan) ->
         if !plan.deferred_action_namespaces.is_empty() {
             summary.push_str(" | deferred=");
             summary.push_str(&plan.deferred_action_namespaces.join(","));
-            summary.push_str(" | discover=Operate(resource=tools, operation=search)");
+            summary.push_str(" | discover=tool_search");
         }
         return Some(summary);
     }
