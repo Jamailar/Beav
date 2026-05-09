@@ -15,6 +15,7 @@ import {
 import { useNotificationStore } from './store';
 import { showSystemNotification } from './systemAdapter';
 import { showNotificationToast } from './toastAdapter';
+import { notificationClient } from './notificationClient';
 import {
   DEFAULT_NOTIFICATION_SETTINGS,
   parseNotificationSettings,
@@ -139,6 +140,72 @@ export function NotificationsHost({ currentView, children = null }: Notification
       window.ipcRenderer.off('redclaw:task-event', handleRedclawTaskEvent);
     };
   }, [currentView, openCenter, push]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const syncIfForeground = (reason: 'login' | 'focus' | 'business_action') => {
+      if (!mounted) return;
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return;
+      void notificationClient.sync(reason);
+      notificationClient.startForegroundPolling();
+    };
+
+    void notificationClient.hydrate()
+      .finally(() => {
+        if (mounted) {
+          syncIfForeground('login');
+        }
+      });
+
+    const handleFocus = () => syncIfForeground('focus');
+    const handleBlur = () => notificationClient.stopPolling();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncIfForeground('focus');
+      } else {
+        notificationClient.stopPolling();
+      }
+    };
+    const handleBusinessAction = () => syncIfForeground('business_action');
+    const handleAuthStateChanged = (
+      event:
+        | { payload?: { status?: string; loggedIn?: boolean } | null }
+        | { status?: string; loggedIn?: boolean }
+        | null
+        | undefined,
+      payloadArg?: { status?: string; loggedIn?: boolean } | null,
+    ) => {
+      const payload = payloadArg !== undefined
+        ? payloadArg
+        : (event && typeof event === 'object' && 'payload' in event)
+          ? event.payload
+          : event;
+      const snapshot = (payload || null) as { status?: string; loggedIn?: boolean } | null;
+      const status = String(snapshot?.status || '');
+      if (snapshot?.loggedIn && status !== 'anonymous' && status !== 'reauthRequired') {
+        void notificationClient.hydrate().finally(() => syncIfForeground('login'));
+        return;
+      }
+      notificationClient.stopPolling();
+      notificationClient.clearLocalState();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('redbox:feedback-report-submitted', handleBusinessAction);
+    window.ipcRenderer.auth.onStateChanged(handleAuthStateChanged);
+    return () => {
+      mounted = false;
+      notificationClient.stopPolling();
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('redbox:feedback-report-submitted', handleBusinessAction);
+      window.ipcRenderer.auth.offStateChanged(handleAuthStateChanged);
+    };
+  }, []);
 
   return <>{children}</>;
 }

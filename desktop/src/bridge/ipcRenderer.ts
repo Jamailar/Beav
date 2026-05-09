@@ -873,6 +873,41 @@ function createIpcRenderer() {
           fallback: { success: false, error: 'System notifications unavailable' },
         },
       ),
+      syncRemote: (payload?: { cursor?: string | null; limit?: number; unreadOnly?: boolean }) => invokeCommandGuarded(
+        'notifications_sync_remote',
+        {
+          cursor: payload?.cursor || null,
+          limit: payload?.limit,
+          unreadOnly: payload?.unreadOnly,
+        },
+        {
+          fallback: { success: false, error: 'Notification sync unavailable' },
+        },
+      ),
+      listRemote: (payload?: { limit?: number; unreadOnly?: boolean }) => invokeCommandGuarded(
+        'notifications_list_remote',
+        {
+          limit: payload?.limit,
+          unreadOnly: payload?.unreadOnly,
+        },
+        {
+          fallback: { success: false, error: 'Notification list unavailable' },
+        },
+      ),
+      markRemoteRead: (payload: { notificationId: string }) => invokeCommandGuarded(
+        'notifications_mark_remote_read',
+        { notificationId: payload.notificationId },
+        {
+          fallback: { success: false, error: 'Notification read unavailable' },
+        },
+      ),
+      markAllRemoteRead: () => invokeCommandGuarded(
+        'notifications_mark_all_remote_read',
+        undefined,
+        {
+          fallback: { success: false, error: 'Notification read-all unavailable' },
+        },
+      ),
     },
 
     saveSettings: (settings: unknown) => invokeChannel('db:save-settings', settings),
