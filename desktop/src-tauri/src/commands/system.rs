@@ -641,7 +641,7 @@ pub fn handle_system_channel(
                             .unwrap_or_default(),
                         4000,
                     );
-                    if content.chars().count() < 4 {
+                    if content.chars().count() < 2 {
                         return Err("请填写问题描述".to_string());
                     }
                     let title = truncate_chars(
