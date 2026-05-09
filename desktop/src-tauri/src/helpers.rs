@@ -1143,6 +1143,15 @@ mod tests {
     }
 
     #[test]
+    fn file_url_for_path_encodes_unicode_windows_user_paths() {
+        let url = file_url_for_path(Path::new(r#"C:\Users\张三\RedBox\图片 1.png"#));
+        assert_eq!(
+            url,
+            "file:///C:/Users/%E5%BC%A0%E4%B8%89/RedBox/%E5%9B%BE%E7%89%87%201.png"
+        );
+    }
+
+    #[test]
     fn render_host_runtime_context_section_contains_key_fields() {
         let section = render_host_runtime_context_section(&HostRuntimeContext {
             os_family: "windows",

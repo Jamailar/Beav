@@ -13,11 +13,14 @@ use crate::logging::{
     list_pending_reports_value, log_renderer_event, recent_value,
     status_value as logging_status_value, update_upload_consent, upload_pending_report,
 };
-use crate::persistence::{with_store, with_store_mut};
+use crate::persistence::{
+    apply_workspace_hydration_snapshot, load_workspace_hydration_snapshot, with_store,
+    with_store_mut,
+};
 use crate::{
-    app_brand_display_name, now_iso, payload_field, payload_string, payload_value_as_string,
-    pick_files_native, refresh_runtime_warm_state, store_root, update_workspace_root_cache,
-    AppState,
+    app_brand_display_name, is_same_path, now_iso, payload_field, payload_string,
+    payload_value_as_string, pick_files_native, refresh_runtime_warm_state, store_root,
+    update_workspace_root_cache, workspace_root_from_snapshot, AppState,
 };
 
 const APP_UPDATE_DOWNLOAD_PAGE_URL: &str = "https://redbox.ziz.hk/download";
@@ -348,6 +351,24 @@ fn normalize_default_ai_route_settings(settings: &mut Value) {
     }
 }
 
+fn merged_settings_payload(current: &Value, payload: &Value) -> Value {
+    let mut next =
+        if let (Some(current), Some(payload)) = (current.as_object(), payload.as_object()) {
+            let mut merged = current.clone();
+            for (key, value) in payload {
+                if matches!(key.as_str(), "redbox_auth_session_json") {
+                    continue;
+                }
+                merged.insert(key.to_string(), value.clone());
+            }
+            Value::Object(merged)
+        } else {
+            payload.clone()
+        };
+    normalize_default_ai_route_settings(&mut next);
+    next
+}
+
 fn bundled_html_resource_path(
     app: &AppHandle,
     file_name: &str,
@@ -475,26 +496,31 @@ pub fn handle_system_channel(
                     Ok(projected)
                 }),
                 "db:save-settings" => {
-                    let active_space_id = with_store_mut(state, |store| {
-                        if let (Some(current), Some(next)) =
-                            (store.settings.as_object(), payload.as_object())
-                        {
-                            let mut merged = current.clone();
-                            for (key, value) in next {
-                                if matches!(key.as_str(), "redbox_auth_session_json") {
-                                    continue;
-                                }
-                                merged.insert(key.to_string(), value.clone());
-                            }
-                            store.settings = Value::Object(merged);
-                            normalize_default_ai_route_settings(&mut store.settings);
-                        } else {
-                            store.settings = payload.clone();
-                            normalize_default_ai_route_settings(&mut store.settings);
-                        }
-                        Ok(store.active_space_id.clone())
+                    let previous_workspace_root = with_store(state, |store| {
+                        Ok(workspace_root_from_snapshot(
+                            &store.settings,
+                            &store.active_space_id,
+                            &state.store_path,
+                        )
+                        .ok())
                     })?;
-                    let _ = update_workspace_root_cache(state, payload, &active_space_id);
+                    let (active_space_id, settings_snapshot) = with_store_mut(state, |store| {
+                        store.settings = merged_settings_payload(&store.settings, payload);
+                        Ok((store.active_space_id.clone(), store.settings.clone()))
+                    })?;
+                    let workspace_root =
+                        update_workspace_root_cache(state, &settings_snapshot, &active_space_id)?;
+                    let workspace_changed = previous_workspace_root
+                        .as_ref()
+                        .map(|previous| !is_same_path(previous, &workspace_root))
+                        .unwrap_or(true);
+                    if workspace_changed {
+                        let snapshot = load_workspace_hydration_snapshot(&workspace_root);
+                        with_store_mut(state, |store| {
+                            apply_workspace_hydration_snapshot(store, snapshot);
+                            Ok(())
+                        })?;
+                    }
                     let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
                     let _ = app.emit(
                         "settings:updated",
@@ -675,5 +701,50 @@ mod tests {
         assert_eq!(settings["api_endpoint"], json!("https://next.example/v1"));
         assert_eq!(settings["api_key"], json!("next-key"));
         assert_eq!(settings["model_name"], json!("next-model"));
+    }
+
+    #[test]
+    fn merged_settings_payload_preserves_custom_workspace_dir_for_partial_updates() {
+        let current = json!({
+            "workspace_dir": "/Volumes/RedBox Workspace",
+            "default_ai_source_id": "official",
+            "theme": "dark"
+        });
+        let payload = json!({
+            "theme": "light"
+        });
+
+        let merged = merged_settings_payload(&current, &payload);
+
+        assert_eq!(
+            merged.get("workspace_dir").and_then(Value::as_str),
+            Some("/Volumes/RedBox Workspace")
+        );
+        assert_eq!(merged.get("theme").and_then(Value::as_str), Some("light"));
+    }
+
+    #[test]
+    fn merged_settings_payload_does_not_overwrite_auth_session_from_renderer_payload() {
+        let current = json!({
+            "workspace_dir": "/Volumes/RedBox Workspace",
+            "redbox_auth_session_json": "{\"token\":\"current\"}"
+        });
+        let payload = json!({
+            "redbox_auth_session_json": "{\"token\":\"stale\"}",
+            "theme": "light"
+        });
+
+        let merged = merged_settings_payload(&current, &payload);
+
+        assert_eq!(
+            merged
+                .get("redbox_auth_session_json")
+                .and_then(Value::as_str),
+            Some("{\"token\":\"current\"}")
+        );
+        assert_eq!(
+            merged.get("workspace_dir").and_then(Value::as_str),
+            Some("/Volumes/RedBox Workspace")
+        );
     }
 }
