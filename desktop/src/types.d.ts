@@ -1716,6 +1716,38 @@ declare global {
         getPermissionState: () => Promise<NotificationPermissionState>;
         requestPermission: () => Promise<NotificationPermissionState>;
         showSystem: (payload: { title: string; body?: string; sound?: string }) => Promise<{ success: boolean; error?: string }>;
+        syncRemote: (payload?: { cursor?: string | null; limit?: number; unreadOnly?: boolean }) => Promise<{
+          success: boolean;
+          status?: number;
+          data?: Record<string, unknown>;
+          raw?: Record<string, unknown>;
+          context?: { appSlug?: string; userId?: string; realm?: string; baseUrl?: string };
+          error?: string;
+        }>;
+        listRemote: (payload?: { limit?: number; unreadOnly?: boolean }) => Promise<{
+          success: boolean;
+          status?: number;
+          data?: Record<string, unknown>;
+          raw?: Record<string, unknown>;
+          context?: { appSlug?: string; userId?: string; realm?: string; baseUrl?: string };
+          error?: string;
+        }>;
+        markRemoteRead: (payload: { notificationId: string }) => Promise<{
+          success: boolean;
+          status?: number;
+          data?: Record<string, unknown>;
+          raw?: Record<string, unknown>;
+          context?: { appSlug?: string; userId?: string; realm?: string; baseUrl?: string };
+          error?: string;
+        }>;
+        markAllRemoteRead: () => Promise<{
+          success: boolean;
+          status?: number;
+          data?: Record<string, unknown>;
+          raw?: Record<string, unknown>;
+          context?: { appSlug?: string; userId?: string; realm?: string; baseUrl?: string };
+          error?: string;
+        }>;
       };
 
       // YouTube Import

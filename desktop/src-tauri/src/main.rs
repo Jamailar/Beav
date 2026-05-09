@@ -9806,6 +9806,10 @@ fn main() {
             commands::notifications::notifications_permission_state,
             commands::notifications::notifications_request_permission,
             commands::notifications::notifications_show_system,
+            commands::notifications::notifications_sync_remote,
+            commands::notifications::notifications_list_remote,
+            commands::notifications::notifications_mark_remote_read,
+            commands::notifications::notifications_mark_all_remote_read,
             commands::redclaw::redclaw_runner_status
         ])
         .setup(|app| {

@@ -1,7 +1,8 @@
 import { Bell, CheckCheck, ExternalLink, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { runNotificationAction } from '../notifications/actionRouter';
+import { notificationClient } from '../notifications/notificationClient';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import type { NotificationLevel } from '../notifications/types';
 
@@ -20,9 +21,17 @@ export function NotificationCenterDrawer() {
   const markAllRead = useNotificationStore((state) => state.markAllRead);
   const clearRead = useNotificationStore((state) => state.clearRead);
   const unreadCount = useNotificationStore(selectNotificationUnreadCount);
+  const isSyncingRemote = useNotificationStore((state) => state.isSyncingRemote);
+  const remoteLastError = useNotificationStore((state) => state.remoteLastError);
+  const remoteLastSyncAt = useNotificationStore((state) => state.remoteLastSyncAt);
 
   const hasItems = items.length > 0;
   const title = useMemo(() => unreadCount > 0 ? `通知 (${unreadCount})` : '通知', [unreadCount]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    void notificationClient.list(50);
+  }, [drawerOpen]);
 
   if (!drawerOpen) return null;
 
@@ -41,7 +50,10 @@ export function NotificationCenterDrawer() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={markAllRead}
+              onClick={() => {
+                markAllRead();
+                void notificationClient.markAllRead();
+              }}
               className="h-7 px-2 rounded-md border border-border text-[11px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary"
             >
               <span className="inline-flex items-center gap-1">
@@ -61,7 +73,13 @@ export function NotificationCenterDrawer() {
 
         <div className="px-3 py-2.5 border-b border-border flex items-center justify-between gap-2">
           <div className="text-xs text-text-tertiary">
-            最近保留 {items.length} 条通知
+            {isSyncingRemote
+              ? '正在同步'
+              : remoteLastError
+                ? '同步失败'
+                : remoteLastSyncAt
+                  ? `已同步 ${new Date(remoteLastSyncAt).toLocaleTimeString()}`
+                  : `最近保留 ${items.length} 条通知`}
           </div>
           <button
             type="button"
@@ -115,8 +133,12 @@ export function NotificationCenterDrawer() {
                       key={action.id}
                       type="button"
                       onClick={() => {
-                        markRead(item.id);
-                        void runNotificationAction(action);
+                        if (item.source === 'server') {
+                          void notificationClient.open(item);
+                        } else {
+                          markRead(item.id);
+                          void runNotificationAction(action);
+                        }
                       }}
                       className="h-7 px-2 rounded-md border border-border text-[11px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary inline-flex items-center gap-1"
                     >
@@ -128,7 +150,13 @@ export function NotificationCenterDrawer() {
                 {!item.read && (
                   <button
                     type="button"
-                    onClick={() => markRead(item.id)}
+                    onClick={() => {
+                      if (item.source === 'server') {
+                        void notificationClient.markRead(item.id);
+                      } else {
+                        markRead(item.id);
+                      }
+                    }}
                     className="h-7 px-2 rounded-md border border-border text-[11px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary"
                   >
                     标记已读
