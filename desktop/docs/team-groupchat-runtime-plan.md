@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: not_started
-last_updated: 2026-04-26
+last_updated: 2026-05-09
 owner: codex
 scope:
   - desktop/src-tauri/src/runtime/collab_runtime.rs
@@ -317,7 +317,6 @@ TeamMember {
     current_task_id: Option<String>,
     allowed_tools: Vec<String>,
     runtime_binding: Option<TeamRuntimeBinding>,
-    speaker_binding: Option<TeamSpeakerBinding>,
     executor_pool: TeamExecutorPoolState,
     member_plan_ref: Option<String>,
     last_seen_at: Option<i64>,
@@ -341,13 +340,11 @@ TeamMember {
 
 No CLI transport is required for MVP. Keep `transportKind` so future process or remote workers do not require a data model rewrite.
 
-`TeamSpeakerBinding`:
+Speaker state is not a separate runtime/session. It is a mode on the member runtime:
 
 ```json
 {
-  "speakerSessionId": "session-...",
-  "speakerRuntimeId": "runtime-...",
-  "personaPromptHash": "sha256-...",
+  "turnMode": "speak",
   "speechPolicy": "event_driven",
   "lastSpokeAt": 1777178200000
 }
@@ -479,7 +476,7 @@ Speech queue entry:
 }
 ```
 
-The speaker runtime may rewrite `suggestedMessage` into the member's voice, but it must not invent progress that is not present in plan/event/evidence state.
+The member runtime may rewrite `suggestedMessage` in `turnMode=speak`, but it must not invent progress that is not present in plan/event/evidence state.
 
 Completion claim shape:
 
@@ -793,7 +790,6 @@ Long-running team work needs runtime state beyond chat messages. Add a durable s
   },
   "leader": {
     "memberId": "collab-member-leader",
-    "speakerSessionId": "session-...",
     "status": "waiting"
   },
   "members": [
@@ -902,13 +898,13 @@ Location:
 
 Responsibilities:
 
-- Maintain one logical member identity across speaker and executor runtimes.
+- Maintain one logical member identity with one runtime and explicit `speak` / `execute` modes.
 - Manage member-level executor pool.
 - Enforce `maxConcurrentExecutorsPerMember = 5`.
 - Decide whether a new task should reuse an existing executor, spawn a new executor, or queue.
 - Update member task plan JSON.
-- Route execution events into the speaker speech queue.
-- Wake the speaker only when speech policy is triggered.
+- Route execution events into the member speech queue.
+- Wake the member runtime in `speak` mode only when speech policy is triggered.
 
 Executor selection:
 
@@ -1381,7 +1377,7 @@ team.member.plan.enqueue_speech
 team.member.plan.clear_speech
 ```
 
-Only the member's speaker/executor runtimes, leader, scheduler, and verifier should access these actions. Normal group members should not freely edit another member's plan.
+Only the member runtime, leader, scheduler, and verifier should access these actions. Normal group members should not freely edit another member's plan.
 
 Plan updates must be patch-like and bounded:
 
@@ -1732,8 +1728,8 @@ Tasks:
 3. Add team group chat overlay to system prompt composition.
 4. Add close/cancel path for active member runtime.
 5. Add resume path from persisted child session/runtime metadata.
-6. Add speaker/executor binding metadata.
-7. Enforce one logical member identity across speaker and executor runtimes.
+6. Add explicit `turnMode=speak|execute` member metadata.
+7. Enforce one logical member identity across speak and execute turns.
 
 Acceptance:
 
@@ -1742,7 +1738,7 @@ Acceptance:
 - Closing a member releases lease and updates member/task status.
 - Speaker persona can summarize executor state without executing the task inline.
 
-### 13.2.1 Member Runtime Split
+### 13.2.1 Member Runtime Modes
 
 Files:
 
@@ -1752,15 +1748,15 @@ Files:
 
 Tasks:
 
-1. Add `TeamSpeakerBinding` metadata.
+1. Add `turnMode=speak|execute` metadata.
 2. Add `TeamExecutorPoolState` metadata.
 3. Add member task plan JSON helpers.
 4. Add per-member executor cap with default 5.
 5. Add member assignment decision: reuse, spawn, queue.
 6. Add speech queue in member task plan.
-7. Wake speaker from speech queue events.
+7. Wake the member runtime in `speak` mode from speech queue events.
 8. Add executor progress and completion claim writers.
-9. Add speaker summary reader for plan/event/evidence state.
+9. Add speak-mode summary reader for plan/event/evidence state.
 
 Acceptance:
 
@@ -2008,7 +2004,7 @@ TeamEvent + team.event.await
 + canonical group chat metadata
 + durable TeamRuntimeState
 + TeamAgentControl binding groupChatId/memberId/taskId
-+ TeamMemberRuntime speaker/executor split
++ TeamMemberRuntime speak/execute mode contract
 + member task plan JSON
 + TeamEventBus
 + TeamRecovery startup scan

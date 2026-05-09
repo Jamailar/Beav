@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: not_started
-last_updated: 2026-04-28
+last_updated: 2026-05-09
 owner: ai-runtime
 scope:
   - desktop/src-tauri/src/runtime/collab_runtime.rs
@@ -128,7 +128,7 @@ TeamMember
   -> Executor runtime: does work with tools and evidence
 ```
 
-Start with one child runtime per member. Do not create separate speaker/executor runtimes in the first implementation unless a task needs background execution. The contract must still distinguish speaking from working so the UI and prompts do not collapse into generic chat.
+Start with one child runtime per member. Do not create separate communication/execution runtimes; use explicit `turnMode=speak|execute` and shared member state instead. The contract must still distinguish speaking from working so the UI and prompts do not collapse into generic chat.
 
 Member metadata should include:
 

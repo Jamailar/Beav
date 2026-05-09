@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-04-26
+last_updated: 2026-05-09
 owner: ai-runtime
 scope: desktop
 target_files:
@@ -14,7 +14,7 @@ target_files:
   - desktop/src/pages/Workboard.tsx
   - desktop/src/pages/Chat.tsx
   - desktop/src/bridge/ipcRenderer.ts
-status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external adapter boundary, report tick, and Workboard collaboration UI are implemented. The 2026-04-26 V2 addendum is implemented across runtime contract, bridge, MCP, and Workboard controls: persistent group-chat coordination, speaker/executor separation contract, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, task-scoped user comments, and lightweight UI actions.
+status_note: Host-owned collaboration runtime, team-runtime IPC, mailbox/task/report state machine, team tools, real subagent-to-board projection, agent backend registry, redbox-team MCP contract, external adapter boundary, report tick, and Workboard collaboration UI are implemented. The current contract keeps one member runtime and uses explicit speak/execute responsibility modes, member agent cards, member task-plan continuity, executor capacity checks, deterministic member matching, completion claims, artifact/blocker helpers, task-scoped user comments, and lightweight UI actions.
 ---
 
 # ACP Team Workboard Collaboration Plan

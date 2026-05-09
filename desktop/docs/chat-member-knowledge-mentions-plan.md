@@ -1,7 +1,7 @@
 ---
 doc_type: plan
 execution_status: in_progress
-last_updated: 2026-04-29
+last_updated: 2026-05-09
 owner: chat-runtime
 scope: desktop
 target_files:
@@ -79,7 +79,7 @@ success_metrics:
 每轮最多 1 个 @成员
 每轮允许 0..N 个 #知识库引用
 无 @ 时使用当前默认聊天 runtime
-有 @ 时使用该成员的 speaker runtime / member skill overlay
+有 @ 时在当前会话里使用该成员的 speak mode / member skill overlay
 有 # 时把显式知识引用加入上下文
 ```
 
@@ -972,7 +972,7 @@ explicitKnowledgeRefs = 用户选择的 # 知识
 ### 8.2 有 `@成员`
 
 ```text
-actor = member speaker runtime
+actor = current chat runtime with member speak mode
 memberId = selected member
 memberSkillRef = selected member skill ref
 explicitKnowledgeRefs = 用户选择的 # 知识
@@ -1178,7 +1178,7 @@ UI 可用于显示：
 
 ### 13.0 2026-04-29 当前实现状态
 
-- `@成员`：已接入 ChatComposer、Chat 发送链路、消息 metadata、assistant 成员头像/名称展示、RedClaw member speaker runtime overlay。
+- `@成员`：已接入 ChatComposer、Chat 发送链路、消息 metadata、assistant 成员头像/名称展示、RedClaw member speak-mode overlay。
 - `#知识库内容`：已接入 ChatComposer 大弹窗、知识库画廊式列表、本地搜索过滤、鼠标选择、方向键/Enter 选择、多选、输入框知识卡片。
 - `#` 数据源：当前使用 `knowledge.listPage({ limit: 200, sort: 'updated-desc' })` 读取知识库 catalog，再在前端做轻量过滤；后续如果知识库规模继续扩大，可替换为 host-side `knowledge:mention-search`。
 - 发送链路：`Chat.tsx` 会把 `knowledgeReferences` 放入 `chat:send-message` payload，并在 optimistic message 和历史消息中展示知识卡片。

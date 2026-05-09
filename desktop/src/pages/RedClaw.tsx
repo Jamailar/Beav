@@ -80,8 +80,6 @@ interface RedClawTeamRoom {
 }
 
 const REDCLAW_AI_SURFACE_STORAGE_KEY = 'redbox:redclaw-ai-surface:v1';
-const ADVISOR_CHAT_CONTEXT_TYPE = 'advisor-discussion';
-
 function readInitialRedClawAiSurface(): RedClawAiSurface {
     if (typeof window === 'undefined') return 'redclaw';
     const saved = String(window.localStorage.getItem(REDCLAW_AI_SURFACE_STORAGE_KEY) || '').trim();
@@ -120,28 +118,6 @@ function isRenderableAdvisorAvatar(advisor: AdvisorProfile): boolean {
 
 function advisorRedClawOrder(advisor: AdvisorProfile, index: number): number {
     return Number.isFinite(advisor.redclawOrder) ? Number(advisor.redclawOrder) : index;
-}
-
-function buildAdvisorInitialContext(advisor: AdvisorProfile): string {
-    const sections = [
-        `当前对话绑定成员：${advisor.name}`,
-        advisor.personality ? `成员定位：${advisor.personality}` : null,
-        `知识库语言：${advisor.knowledgeLanguage || '中文'}`,
-        Array.isArray(advisor.knowledgeFiles) && advisor.knowledgeFiles.length > 0 ? `已接入知识文件：${advisor.knowledgeFiles.length} 个` : '当前暂无知识文件',
-        advisor.memberSkillRef ? `成员技能：${advisor.memberSkillRef}（${advisor.memberSkillStatus || 'ready'}）` : null,
-        '请始终以该成员身份回答，保持表达风格、专业倾向和角色设定一致。',
-        advisor.systemPrompt ? `系统设定：\n${advisor.systemPrompt}` : null,
-    ];
-    return sections.filter(Boolean).join('\n\n');
-}
-
-function buildAdvisorSessionMetadata(advisor: AdvisorProfile): Record<string, unknown> {
-    const metadata: Record<string, unknown> = { advisorId: advisor.id };
-    if (advisor.memberSkillRef) {
-        metadata.memberSkillRef = advisor.memberSkillRef;
-        metadata.activeSkills = [advisor.memberSkillRef];
-    }
-    return metadata;
 }
 
 function sessionTimestampMs(value: unknown): number {
@@ -528,7 +504,6 @@ export function RedClaw({
     }, []);
     const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
     const [sessionList, setSessionList] = useState<ContextChatSessionListItem[]>([]);
-    const [advisorHistorySessions, setAdvisorHistorySessions] = useState<RedClawHistoryListItem[]>([]);
     const [sessionActivityById, setSessionActivityById] = useState<Record<string, RedClawHistorySessionActivity>>({});
     const [isSessionLoading, setIsSessionLoading] = useState(true);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -544,8 +519,6 @@ export function RedClaw({
     const [advisors, setAdvisors] = useState<AdvisorProfile[]>([]);
     const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     const [selectedAdvisorId, setSelectedAdvisorId] = useState<string | null>(null);
-    const [advisorSessionIds, setAdvisorSessionIds] = useState<Record<string, string>>({});
-    const [speakerSessionLoading, setSpeakerSessionLoading] = useState(false);
     const [advisorCreateModalOpen, setAdvisorCreateModalOpen] = useState(false);
     const [roomCreateModalOpen, setRoomCreateModalOpen] = useState(false);
     const [roomCreateName, setRoomCreateName] = useState('');
@@ -624,7 +597,6 @@ export function RedClaw({
     const sessionRequestIdRef = useRef(0);
     const isActiveRef = useRef(isActive);
     const activeSessionIdRef = useRef<string | null>(null);
-    const activeSpeakerSessionIdRef = useRef<string | null>(null);
     const sessionListRef = useRef<ContextChatSessionListItem[]>([]);
     const runnerStatusRequestIdRef = useRef(0);
     const skillsRequestIdRef = useRef(0);
@@ -649,7 +621,7 @@ export function RedClaw({
         if (!safeSessionId) return;
         setSessionActivityById((prev) => {
             const next = { ...prev };
-            if (isActiveRef.current && activeSpeakerSessionIdRef.current === safeSessionId) {
+            if (isActiveRef.current && activeSessionIdRef.current === safeSessionId) {
                 delete next[safeSessionId];
             } else {
                 next[safeSessionId] = 'unread-complete';
@@ -803,52 +775,6 @@ export function RedClaw({
         }
     }, [advisors, selectedAdvisorId]);
 
-    useEffect(() => {
-        if (!shouldLoadHistory || advisors.length === 0) return;
-        let cancelled = false;
-
-        const loadAdvisorHistories = async () => {
-            try {
-                const results = await Promise.all(advisors.map(async (advisor) => {
-                    const list = await window.ipcRenderer.invokeGuarded<ContextChatSessionListItem[] | null>('chat:list-context-sessions', {
-                        contextId: advisor.id,
-                        contextType: ADVISOR_CHAT_CONTEXT_TYPE,
-                    }, {
-                        timeoutMs: 3200,
-                        fallback: null,
-                        normalize: (value) => Array.isArray(value) ? value as ContextChatSessionListItem[] : [],
-                    });
-                    return (Array.isArray(list) ? list : []).map((session): RedClawHistoryListItem => ({
-                        ...session,
-                        surface: 'advisor',
-                        speakerLabel: advisor.name || '成员',
-                        advisorId: advisor.id,
-                    }));
-                }));
-                if (cancelled) return;
-                const items = results.flat();
-                setAdvisorHistorySessions(items);
-                setAdvisorSessionIds((prev) => {
-                    const next = { ...prev };
-                    items.forEach((item) => {
-                        if (item.advisorId && item.id && !next[item.advisorId]) {
-                            next[item.advisorId] = item.id;
-                        }
-                    });
-                    return next;
-                });
-            } catch (error) {
-                if (cancelled) return;
-                console.error('Failed to load RedClaw advisor histories:', error);
-            }
-        };
-
-        void loadAdvisorHistories();
-        return () => {
-            cancelled = true;
-        };
-    }, [advisors, shouldLoadHistory]);
-
     const selectedAdvisor = useMemo(
         () => advisors.find((advisor) => advisor.id === selectedAdvisorId) || null,
         [advisors, selectedAdvisorId],
@@ -864,19 +790,15 @@ export function RedClaw({
                 surface: 'redclaw',
                 speakerLabel: REDCLAW_DISPLAY_NAME,
             })),
-            ...advisorHistorySessions,
         ].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
-    ), [advisorHistorySessions, sessionList]);
-    const activeSpeakerSessionId = activeAiSurface === 'advisor' && selectedAdvisorId
-        ? advisorSessionIds[selectedAdvisorId] || null
-        : activeSessionId;
+    ), [sessionList]);
+    const activeChatSessionId = activeAiSurface === 'room' ? null : activeSessionId;
     useEffect(() => {
-        activeSpeakerSessionIdRef.current = activeSpeakerSessionId;
-        if (isActive && activeSpeakerSessionId) {
-            clearSessionActivity(activeSpeakerSessionId);
+        if (isActive && activeChatSessionId) {
+            clearSessionActivity(activeChatSessionId);
         }
-    }, [activeSpeakerSessionId, clearSessionActivity, isActive]);
-    const activeSpeakerMention = activeAiSurface === 'advisor' && selectedAdvisor ? {
+    }, [activeChatSessionId, clearSessionActivity, isActive]);
+    const activeMemberMention = activeAiSurface === 'advisor' && selectedAdvisor ? {
         id: selectedAdvisor.id,
         name: selectedAdvisor.name,
         avatar: selectedAdvisor.avatar,
@@ -950,7 +872,6 @@ export function RedClaw({
                 setSessionList((prev) => sortContextSessionItems([nextItem, ...prev.filter((item) => item.id !== session.id)]));
                 sessionListRef.current = sortContextSessionItems([nextItem, ...sessionListRef.current.filter((item) => item.id !== session.id)]);
                 activeSessionIdRef.current = session.id;
-                activeSpeakerSessionIdRef.current = session.id;
                 setActiveSessionId(session.id);
                 hasSessionSnapshotRef.current = true;
                 routedPendingMessageRef.current = pendingMessage;
@@ -1019,7 +940,6 @@ export function RedClaw({
                     setSessionList([]);
                     sessionListRef.current = [];
                     activeSessionIdRef.current = null;
-                    activeSpeakerSessionIdRef.current = null;
                     setActiveSessionId(null);
                 }
                 return;
@@ -1054,7 +974,6 @@ export function RedClaw({
                         setSessionList([]);
                         sessionListRef.current = [];
                         activeSessionIdRef.current = null;
-                        activeSpeakerSessionIdRef.current = null;
                         setActiveSessionId(null);
                     }
                     return;
@@ -1070,7 +989,6 @@ export function RedClaw({
             setSessionList(items);
             sessionListRef.current = items;
             activeSessionIdRef.current = nextActiveSessionId;
-            activeSpeakerSessionIdRef.current = nextActiveSessionId;
             setActiveSessionId(nextActiveSessionId);
             hasSessionSnapshotRef.current = true;
             debugUi('sessions:loaded', {
@@ -1085,7 +1003,6 @@ export function RedClaw({
                 setSessionList([]);
                 sessionListRef.current = [];
                 activeSessionIdRef.current = null;
-                activeSpeakerSessionIdRef.current = null;
                 setActiveSessionId(null);
             }
         } finally {
@@ -1381,7 +1298,6 @@ export function RedClaw({
                 hasSessionSnapshotRef.current = true;
             });
             activeSessionIdRef.current = session.id;
-            activeSpeakerSessionIdRef.current = session.id;
             debugUi('sessions:create_done', { sessionId: session.id, activeSpaceId: nextActiveSpaceId });
             return session.id;
         } catch (error) {
@@ -1397,7 +1313,6 @@ export function RedClaw({
         onOpenChatSurface?.();
         setActiveAiSurface('redclaw');
         activeSessionIdRef.current = null;
-        activeSpeakerSessionIdRef.current = null;
         setActiveSessionId(null);
         setPreviewTarget(null);
         setChatRefreshKey((value) => value + 1);
@@ -1423,7 +1338,6 @@ export function RedClaw({
         if (!nextSessionId) return;
         setActiveAiSurface('redclaw');
         activeSessionIdRef.current = nextSessionId;
-        activeSpeakerSessionIdRef.current = nextSessionId;
         setActiveSessionId(nextSessionId);
         debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
     }, [activeSpaceId, debugUi]);
@@ -1446,9 +1360,6 @@ export function RedClaw({
                 }
         );
         setSessionList((prev) => sortContextSessionItems(prev.map(updateItem)));
-        setAdvisorHistorySessions((prev) => (
-            [...prev.map(updateItem)].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
-        ));
     }, []);
 
     const applyHistorySessionTitle = useCallback((sessionId: string, title: string) => {
@@ -1470,9 +1381,6 @@ export function RedClaw({
                 }
         );
         setSessionList((prev) => sortContextSessionItems(prev.map(updateItem)));
-        setAdvisorHistorySessions((prev) => (
-            [...prev.map(updateItem)].sort((left, right) => sessionUpdatedAtMs(right) - sessionUpdatedAtMs(left))
-        ));
     }, []);
 
     const renameUnifiedHistorySession = useCallback(async (session: RedClawHistoryListItem, title: string) => {
@@ -1487,12 +1395,6 @@ export function RedClaw({
         if (!session?.id) return;
         onOpenChatSurface?.();
         clearSessionActivity(session.id);
-        if (session.surface === 'advisor' && session.advisorId) {
-            setSelectedAdvisorId(session.advisorId);
-            setAdvisorSessionIds((prev) => ({ ...prev, [session.advisorId!]: session.id }));
-            setActiveAiSurface('advisor');
-            return;
-        }
         if (session.surface === 'room' && session.roomId) {
             setSelectedRoomId(session.roomId);
             setActiveAiSurface('room');
@@ -1501,62 +1403,13 @@ export function RedClaw({
         switchSession(session.id);
     }, [clearSessionActivity, onOpenChatSurface, switchSession]);
 
-    const createAdvisorSession = useCallback(async (advisor: AdvisorProfile): Promise<string | null> => {
-        setSpeakerSessionLoading(true);
-        try {
-            const created = await window.ipcRenderer.invokeGuarded<ChatSession | null>('chat:create-context-session', {
-                contextId: advisor.id,
-                contextType: ADVISOR_CHAT_CONTEXT_TYPE,
-                title: `与 ${advisor.name} 聊聊`,
-                initialContext: buildAdvisorInitialContext(advisor),
-                metadata: buildAdvisorSessionMetadata(advisor),
-            }, {
-                timeoutMs: 3200,
-                fallback: null,
-            });
-            if (!created) return null;
-            setSelectedAdvisorId(advisor.id);
-            setAdvisorSessionIds((prev) => ({ ...prev, [advisor.id]: created.id }));
-            setAdvisorHistorySessions((prev) => ([{
-                id: created.id,
-                messageCount: 0,
-                summary: '',
-                transcriptCount: 0,
-                checkpointCount: 0,
-                chatSession: {
-                    id: created.id,
-                    title: created.title,
-                    updatedAt: created.updatedAt,
-                    createdAt: created.createdAt,
-                },
-                surface: 'advisor',
-                speakerLabel: advisor.name || '成员',
-                advisorId: advisor.id,
-            }, ...prev.filter((item) => item.id !== created.id)]));
-            setActiveAiSurface('advisor');
-            return created.id;
-        } catch (error) {
-            console.error('Failed to create advisor session:', error);
-            setChatActionMessage('成员会话创建失败');
-            return null;
-        } finally {
-            setSpeakerSessionLoading(false);
-        }
-    }, []);
-
-    const ensureActiveSpeakerSessionForSend = useCallback(async (
+    const ensureActiveChatSessionForSend = useCallback(async (
         defaultTitle?: string,
         options?: { onCreated?: (sessionId: string) => void },
     ): Promise<string | null> => {
-        if (activeAiSurface === 'advisor') {
-            if (!selectedAdvisor) return null;
-            const existing = advisorSessionIds[selectedAdvisor.id];
-            if (existing) return existing;
-            return createAdvisorSession(selectedAdvisor);
-        }
         if (activeSessionIdRef.current) return activeSessionIdRef.current;
         return createNewSession(defaultTitle, options);
-    }, [activeAiSurface, advisorSessionIds, createAdvisorSession, createNewSession, selectedAdvisor]);
+    }, [createNewSession]);
 
     const switchRoom = useCallback((roomId: string) => {
         const room = teamRooms.find((item) => item.id === roomId);
@@ -1729,7 +1582,6 @@ export function RedClaw({
 
             if (remaining.length > 0) {
                 activeSessionIdRef.current = remaining[0].id;
-                activeSpeakerSessionIdRef.current = remaining[0].id;
                 setActiveSessionId(remaining[0].id);
                 return;
             }
@@ -1752,7 +1604,6 @@ export function RedClaw({
             sessionListRef.current = [nextItem];
             setSessionList([nextItem]);
             activeSessionIdRef.current = created.id;
-            activeSpeakerSessionIdRef.current = created.id;
             setActiveSessionId(created.id);
         } catch (error) {
             console.error('Failed to delete RedClaw session:', error);
@@ -1769,25 +1620,7 @@ export function RedClaw({
             await deleteHistorySession(session.id);
             return;
         }
-        try {
-            await window.ipcRenderer.chat.deleteSession(session.id);
-            if (session.surface === 'advisor' && session.advisorId) {
-                setAdvisorHistorySessions((prev) => prev.filter((item) => item.id !== session.id));
-                setAdvisorSessionIds((prev) => {
-                    const next = { ...prev };
-                    if (next[session.advisorId!] === session.id) delete next[session.advisorId!];
-                    return next;
-                });
-                if (activeAiSurface === 'advisor' && selectedAdvisorId === session.advisorId && activeSpeakerSessionId === session.id) {
-                    setActiveAiSurface('redclaw');
-                }
-                return;
-            }
-        } catch (error) {
-            console.error('Failed to delete unified RedClaw session:', error);
-            setChatActionMessage('删除对话失败，请稍后重试');
-        }
-    }, [activeAiSurface, activeSpeakerSessionId, deleteHistorySession, selectedAdvisorId, selectedRoomId]);
+    }, [deleteHistorySession]);
 
     const deleteRoomFromRedClaw = useCallback(async (room: RedClawTeamRoom) => {
         if (!room?.id) return;
@@ -2221,7 +2054,7 @@ export function RedClaw({
             <RedClawHistorySidebarSection
                 historyLoading={historyLoading}
                 sessionList={unifiedHistorySessions}
-                activeSessionId={activeAiSurface === 'room' ? null : activeSpeakerSessionId}
+                activeSessionId={activeChatSessionId}
                 teamRooms={teamRooms}
                 activeRoomId={selectedRoomId}
                 activeSurface={activeAiSurface}
@@ -2238,7 +2071,7 @@ export function RedClaw({
         );
     }, [
         activeAiSurface,
-        activeSpeakerSessionId,
+        activeChatSessionId,
         createRoomFromRedClaw,
         deleteRoomFromRedClaw,
         deleteUnifiedHistorySession,
@@ -2361,21 +2194,14 @@ export function RedClaw({
                                             请选择或创建团队
                                         </div>
                                     )
-                                ) : speakerSessionLoading ? (
-                                    <div className="flex h-full items-center justify-center">
-                                        <div className="flex flex-col items-center gap-3 text-text-tertiary">
-                                            <Loader2 className="h-6 w-6 animate-spin" />
-                                            <span className="text-xs">正在切换发言人...</span>
-                                        </div>
-                                    </div>
                                 ) : (
                                     <Chat
                                         isActive={isActive}
                                         onExecutionStateChange={setIsRedClawChatExecuting}
-                                        key={`redclaw:${activeAiSurface}:${activeAiSurface === 'advisor' ? selectedAdvisorId || 'advisor' : 'redclaw'}:${activeSpeakerSessionId || 'draft'}:${chatRefreshKey}`}
-                                        fixedSessionId={activeSpeakerSessionId}
-                                        fixedSessionDraft={!activeSpeakerSessionId}
-                                        onEnsureSessionForSend={ensureActiveSpeakerSessionForSend}
+                                        key={`redclaw:${activeAiSurface}:${activeAiSurface === 'advisor' ? selectedAdvisorId || 'advisor' : 'redclaw'}:${activeChatSessionId || 'draft'}:${chatRefreshKey}`}
+                                        fixedSessionId={activeChatSessionId}
+                                        fixedSessionDraft={!activeChatSessionId}
+                                        onEnsureSessionForSend={ensureActiveChatSessionForSend}
                                         pendingMessage={activeAiSurface === 'redclaw' ? resolvedPendingMessage : null}
                                         onMessageConsumed={onPendingMessageConsumed}
                                         showClearButton={false}
@@ -2416,7 +2242,7 @@ export function RedClaw({
                                         activePreviewHref={previewTarget?.href || null}
                                         keepComposerInputActive={true}
                                         placeholder="描述创作目标，使用 # 调用知识库"
-                                        fixedMemberMention={activeSpeakerMention}
+                                        fixedMemberMention={activeMemberMention}
                                         onSessionActivity={markHistorySessionActivity}
                                         messageListHeader={<RedClawImageGenerationProgressPanel jobs={activeAiSurface === 'redclaw' ? visibleImageJobs : []} />}
                                     />
