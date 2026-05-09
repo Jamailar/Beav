@@ -37,8 +37,12 @@ type RuntimeToolConfirmPayload = {
 
 type RuntimeCliEscalationPayload = {
   sessionId: string;
+  escalationId?: string;
+  executionId?: string;
+  reviewDocketId?: string;
   title: string;
   description: string;
+  reason?: string;
 };
 
 type RuntimeErrorPayload = {
@@ -242,18 +246,28 @@ export function mapRuntimeCliEscalationToNotification(
     eventKey: 'cli-escalation',
     level: 'attention',
     title: payload.title || 'CLI 任务需要额外权限',
-    body: payload.description || '后台任务需要你确认权限。',
+    body: payload.reason || payload.description || '后台任务需要你确认权限。',
     sound: 'none',
     sticky: true,
     createdAt,
     actions: [
       {
         id: 'open-runtime',
-        label: '去处理',
+        label: '去审批',
         action: 'navigate',
-        payload: { view: 'redclaw' },
+        payload: {
+          view: 'approval',
+          docketId: payload.reviewDocketId,
+          escalationId: payload.escalationId,
+        },
       },
     ],
+    meta: {
+      sessionId: payload.sessionId,
+      executionId: payload.executionId,
+      escalationId: payload.escalationId,
+      reviewDocketId: payload.reviewDocketId,
+    },
   };
   return { ...notification, sound: resolveSound(notification.level, notification.source, context, settings) };
 }

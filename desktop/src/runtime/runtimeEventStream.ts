@@ -129,6 +129,7 @@ export interface RuntimeEventStreamHandlers {
   onCliEscalationRequested?: (payload: RuntimeScopedPayload & {
     escalationId: string;
     executionId?: string;
+    reviewDocketId?: string;
     title: string;
     description: string;
     reason?: string;
@@ -460,6 +461,7 @@ function dispatchRuntimeEnvelope(handlers: RuntimeEventStreamHandlers, envelope:
       ...runtimeMeta,
       escalationId: toText(payload.escalationId || payload.id),
       executionId: toOptionalText(payload.executionId),
+      reviewDocketId: toOptionalText(payload.reviewDocketId),
       title: toText(payload.title) || 'CLI 需要额外权限',
       description: toText(payload.description || payload.message),
       reason: toOptionalText(payload.reason),

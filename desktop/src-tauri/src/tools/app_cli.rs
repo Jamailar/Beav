@@ -4,7 +4,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 
 use crate::commands;
@@ -18,7 +19,10 @@ use crate::helpers::{
 };
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
-use crate::runtime::{resolve_session_file_reference_inputs, McpServerRecord, SkillRecord};
+use crate::runtime::{
+    clear_review_docket_waiters, register_review_docket_waiter,
+    resolve_session_file_reference_inputs, McpServerRecord, SkillRecord,
+};
 use crate::skills::{
     find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
     skill_allows_runtime_mode, LoadedSkillRecord,
@@ -837,6 +841,7 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["team".to_string(), "submit-report".to_string()];
                 self.handle_runtime(&tokens, payload)
             }
+            "approvalrequest" => self.handle_approval_request(payload),
             "cliruntimedetect" => {
                 let tokens = vec!["detect".to_string()];
                 self.handle_cli_runtime(&tokens, payload)
@@ -887,6 +892,26 @@ impl<'a> AppCliExecutor<'a> {
             }
             "mcplist" => {
                 let tokens = vec!["list".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpadd" => {
+                let tokens = vec!["add".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpget" => {
+                let tokens = vec!["get".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpremove" | "mcpdelete" => {
+                let tokens = vec!["remove".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpenable" => {
+                let tokens = vec!["enable".to_string()];
+                self.handle_mcp(&tokens, payload)
+            }
+            "mcpdisable" => {
+                let tokens = vec!["disable".to_string()];
                 self.handle_mcp(&tokens, payload)
             }
             "mcpsessions" => {
@@ -1003,6 +1028,13 @@ impl<'a> AppCliExecutor<'a> {
             "web" => self.handle_web(args, payload),
             "redclaw" => self.handle_redclaw(args, payload),
             "runtime" => self.handle_runtime(args, payload),
+            "approval" => {
+                let action = args.first().map(String::as_str).unwrap_or("request");
+                match action {
+                    "request" => self.handle_approval_request(payload),
+                    other => Err(format!("unsupported approval action: {other}")),
+                }
+            }
             "cli-runtime" | "cli_runtime" => self.handle_cli_runtime(args, payload),
             "settings" => self.handle_settings(args, payload),
             "skills" => self.handle_skills(args, payload),
@@ -2267,6 +2299,98 @@ impl<'a> AppCliExecutor<'a> {
         }
     }
 
+    fn handle_approval_request(&self, payload: &Value) -> Result<Value, String> {
+        let title = payload_string(payload, "title").unwrap_or_else(|| "需要人工审批".to_string());
+        let summary = payload_string(payload, "summary")
+            .or_else(|| payload_string(payload, "description"))
+            .unwrap_or_else(|| title.clone());
+        let body = payload_string(payload, "body")
+            .or_else(|| payload_string(payload, "details"))
+            .unwrap_or_else(|| summary.clone());
+        let wait_for_decision = payload
+            .get("waitForDecision")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let timeout_ms = payload
+            .get("timeoutMs")
+            .and_then(Value::as_u64)
+            .unwrap_or(30 * 60 * 1000)
+            .clamp(1_000, 6 * 60 * 60 * 1000);
+        let call_id = self
+            .tool_call_id
+            .map(ToString::to_string)
+            .unwrap_or_else(|| make_id("approval-call"));
+        let mut docket_payload = payload.as_object().cloned().unwrap_or_default();
+        docket_payload
+            .entry("sourceKind".to_string())
+            .or_insert_with(|| json!("agent_approval"));
+        docket_payload
+            .entry("sourceId".to_string())
+            .or_insert_with(|| json!(call_id.clone()));
+        docket_payload
+            .entry("callId".to_string())
+            .or_insert_with(|| json!(call_id.clone()));
+        docket_payload
+            .entry("sessionId".to_string())
+            .or_insert_with(|| json!(self.session_id.unwrap_or_default()));
+        docket_payload.insert("title".to_string(), json!(title));
+        docket_payload.insert("summary".to_string(), json!(summary));
+        docket_payload.insert("body".to_string(), json!(body));
+        docket_payload
+            .entry("decisionType".to_string())
+            .or_insert_with(|| json!("approve_reject"));
+        docket_payload
+            .entry("priority".to_string())
+            .or_insert_with(|| json!("normal"));
+        docket_payload
+            .entry("riskLevel".to_string())
+            .or_insert_with(|| json!("medium"));
+        docket_payload
+            .entry("proposedAction".to_string())
+            .or_insert_with(|| json!({ "kind": "agent_approval", "callId": call_id }));
+
+        let docket = self.call_channel(
+            "team-runtime:create-review-docket",
+            Value::Object(docket_payload),
+        )?;
+        let docket_id = docket
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "approval.request did not receive a docket id".to_string())?
+            .to_string();
+        if !wait_for_decision {
+            return Ok(json!({
+                "success": true,
+                "status": "pending",
+                "approvalId": docket_id,
+                "docket": docket,
+            }));
+        }
+        let receiver = register_review_docket_waiter(self.state, &docket_id)?;
+        match receiver.recv_timeout(Duration::from_millis(timeout_ms)) {
+            Ok(outcome) => Ok(json!({
+                "success": true,
+                "status": "resolved",
+                "approvalId": docket_id,
+                "docket": docket,
+                "outcome": outcome,
+            })),
+            Err(RecvTimeoutError::Timeout) => {
+                clear_review_docket_waiters(self.state, &docket_id)?;
+                Ok(json!({
+                    "success": false,
+                    "status": "timeout",
+                    "approvalId": docket_id,
+                    "docket": docket,
+                    "message": "approval.request timed out before the user made a decision",
+                }))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                Err("approval.request waiter disconnected".to_string())
+            }
+        }
+    }
+
     fn handle_cli_runtime(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
         let Some(action) = tokens.first().map(String::as_str) else {
             return Ok(help_response(Some("cli_runtime")));
@@ -2670,6 +2794,45 @@ impl<'a> AppCliExecutor<'a> {
         };
         match action {
             "list" => commands::mcp_tools::mcp_list_value(self.state),
+            "add" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(object) = request.as_object_mut() {
+                    if !object.contains_key("name") {
+                        if let Some(name) = args.positionals.first() {
+                            object.insert("name".to_string(), Value::String(name.clone()));
+                        }
+                    }
+                    if !object.contains_key("command") && !object.contains_key("url") {
+                        if let Some(command) = args.positionals.get(1) {
+                            object.insert("command".to_string(), Value::String(command.clone()));
+                        }
+                    }
+                    if !object.contains_key("args") && args.positionals.len() > 2 {
+                        object.insert(
+                            "args".to_string(),
+                            json!(args.positionals.iter().skip(2).cloned().collect::<Vec<_>>()),
+                        );
+                    }
+                }
+                commands::mcp_tools::mcp_add_value(self.state, &request)
+            }
+            "get" => {
+                let request = merge_mcp_target_payload(&args, payload, "mcp get requires --id")?;
+                commands::mcp_tools::mcp_get_value(self.state, &request)
+            }
+            "remove" | "delete" => {
+                let request = merge_mcp_target_payload(&args, payload, "mcp remove requires --id")?;
+                commands::mcp_tools::mcp_remove_value(self.state, &request)
+            }
+            "enable" => {
+                let request = merge_mcp_target_payload(&args, payload, "mcp enable requires --id")?;
+                commands::mcp_tools::mcp_set_enabled_value(self.state, &request, true)
+            }
+            "disable" => {
+                let request =
+                    merge_mcp_target_payload(&args, payload, "mcp disable requires --id")?;
+                commands::mcp_tools::mcp_set_enabled_value(self.state, &request, false)
+            }
             "sessions" => commands::mcp_tools::mcp_sessions_value(self.state),
             "oauth-status" => commands::mcp_tools::mcp_oauth_status_value(
                 self.state,
@@ -4267,6 +4430,28 @@ fn merge_payload(options: &Map<String, Value>, payload: &Value) -> Value {
         }
     }
     Value::Object(merged)
+}
+
+fn merge_mcp_target_payload(
+    args: &CliArgs,
+    payload: &Value,
+    missing_message: &str,
+) -> Result<Value, String> {
+    let mut request = merge_payload(&args.options, payload);
+    if let Some(object) = request.as_object_mut() {
+        if !object.contains_key("serverId")
+            && !object.contains_key("id")
+            && !object.contains_key("name")
+        {
+            let target = args
+                .positionals
+                .first()
+                .cloned()
+                .ok_or_else(|| missing_message.to_string())?;
+            object.insert("serverId".to_string(), Value::String(target));
+        }
+    }
+    Ok(request)
 }
 
 fn memory_action_request(

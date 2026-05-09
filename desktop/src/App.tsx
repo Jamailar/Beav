@@ -30,8 +30,9 @@ const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/Cove
 const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages/GenerationStudio')).GenerationStudio }));
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
+const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
 
-export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation';
+export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation' | 'approval';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'team-workbench' | 'members';
 type SettingsNavigationTarget = {
@@ -40,7 +41,7 @@ type SettingsNavigationTarget = {
   nonce: number;
 };
 type RedClawNavigationAction = {
-  action: 'new' | 'open-team';
+  action: 'new' | 'open-team' | 'open-session';
   sessionId?: string;
   nonce: number;
 };
@@ -79,6 +80,7 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'generation-studio',
   'subjects',
   'automation',
+  'approval',
 ]);
 const CLIPBOARD_POLL_BOOT_DELAY_MS = 4000;
 const OFFICIAL_AUTH_NOTICE_ENABLED = false;
@@ -363,6 +365,7 @@ function AuthenticatedApp() {
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
   const [knowledgeTitleBarContent, setKnowledgeTitleBarContent] = useState<ReactNode>(null);
+  const [approvalTargetDocketId, setApprovalTargetDocketId] = useState('');
 
   const lastClipboardTextRef = useRef('');
   const clipboardPollingRef = useRef(false);
@@ -461,6 +464,7 @@ function AuthenticatedApp() {
         aiModelSubTab?: SettingsNavigationTarget['aiModelSubTab'];
         redclawAction?: RedClawNavigationAction['action'];
         teamSessionId?: string;
+        docketId?: string;
       }>).detail;
       const nextView = detail?.view;
       if (!nextView) return;
@@ -485,6 +489,9 @@ function AuthenticatedApp() {
           sessionId: detail.teamSessionId,
           nonce: Date.now(),
         });
+      }
+      if (nextView === 'approval') {
+        setApprovalTargetDocketId(String(detail.docketId || ''));
       }
       navigateToView(nextView);
     };
@@ -570,6 +577,19 @@ function AuthenticatedApp() {
   const openRedClawChatSurface = useCallback(() => {
     setActiveManuscriptEditorFile(null);
     setImmersiveMode(false);
+    setCurrentView('redclaw');
+  }, []);
+
+  const openRedClawSession = useCallback((sessionId: string) => {
+    const nextSessionId = String(sessionId || '').trim();
+    if (!nextSessionId) return;
+    setActiveManuscriptEditorFile(null);
+    setImmersiveMode(false);
+    setRedClawNavigationAction({
+      action: 'open-session',
+      sessionId: nextSessionId,
+      nonce: Date.now(),
+    });
     setCurrentView('redclaw');
   }, []);
 
@@ -952,7 +972,20 @@ function AuthenticatedApp() {
         {shouldRenderView(mountedViews, currentView, persistentViews, 'automation') && (
           <div className={currentView === 'automation' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
             <Suspense fallback={currentView === 'automation' ? <ViewLoadingFallback /> : null}>
-              <AutomationPage isActive={currentView === 'automation'} />
+              <AutomationPage
+                isActive={currentView === 'automation'}
+                onOpenRedClawSession={openRedClawSession}
+              />
+            </Suspense>
+          </div>
+        )}
+        {shouldRenderView(mountedViews, currentView, persistentViews, 'approval') && (
+          <div className={currentView === 'approval' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
+            <Suspense fallback={currentView === 'approval' ? <ViewLoadingFallback /> : null}>
+              <ApprovalPage
+                isActive={currentView === 'approval'}
+                targetDocketId={approvalTargetDocketId}
+              />
             </Suspense>
           </div>
         )}
