@@ -458,6 +458,7 @@ fn pinned_direct_app_cli_actions(
         &[
             "skills.invoke",
             "skills.installFromRepo",
+            "skills.uninstall",
             "web.fetch",
             "cli_runtime.inspect",
             "cli_runtime.diagnose",

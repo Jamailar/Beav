@@ -1529,6 +1529,24 @@ fn skills_install_from_repo_input_schema() -> Value {
     )
 }
 
+fn skills_uninstall_input_schema() -> Value {
+    object_schema(
+        &[
+            ("name", string_schema("Skill name to uninstall.")),
+            (
+                "scope",
+                json!({
+                    "type": "string",
+                    "enum": ["user", "workspace"],
+                    "description": "Optional install scope to delete from. Defaults to the catalog record scope.",
+                }),
+            ),
+        ],
+        &["name"],
+        Some("Uninstall a user or workspace skill by deleting its managed skill directory."),
+    )
+}
+
 fn skills_list_input_schema() -> Value {
     no_payload_schema()
 }
@@ -3092,6 +3110,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "skills",
         description: "Install one or more skills from a GitHub repository, git URL, owner/repo shorthand, or local repo path by discovering SKILL.md files.",
         input_schema: skills_install_from_repo_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "skills.uninstall",
+        namespace: "skills",
+        description: "Uninstall a user or workspace skill by deleting its managed skill directory. Built-in skills are refused.",
+        input_schema: skills_uninstall_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,
