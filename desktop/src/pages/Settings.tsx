@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
-import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft } from 'lucide-react';
+import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft, Server, Store, X } from 'lucide-react';
 import clsx from 'clsx';
 import {
   AI_SOURCE_PRESETS,
@@ -70,6 +70,7 @@ import type {
   DiagnosticsLogStatus,
   DiagnosticsPendingReport,
   NotificationSettingsPayload,
+  ThriveSkillMarketplaceItem,
   ThrivePluginMarketplaceItem,
   ThrivePluginSummary,
 } from '../types';
@@ -132,12 +133,94 @@ const RUNTIME_PERF_PRESETS: RuntimePerfPreset[] = [
   },
 ];
 
-type SettingsTab = 'general' | 'ai' | 'team' | 'tools' | 'profile' | 'remote' | 'experimental';
+type SettingsTab = 'general' | 'ai' | 'team' | 'skills' | 'mcp' | 'tools' | 'profile' | 'remote' | 'experimental';
 type SettingsNavigationTarget = {
   tab?: SettingsTab;
   aiModelSubTab?: 'custom' | 'login';
   nonce?: number;
 };
+
+type SettingsSkill = {
+  name: string;
+  description: string;
+  location: string;
+  sourceScope?: string;
+  isBuiltin?: boolean;
+  disabled?: boolean;
+};
+
+type McpServerDraft = McpServerConfig & {
+  envPassthrough: string[];
+};
+
+function formatSettingsSkillSource(scope?: string) {
+  switch (scope) {
+    case 'builtin':
+      return '内置';
+    case 'workspace':
+      return '当前空间';
+    case 'user':
+      return '用户目录';
+    case 'market':
+      return '市场';
+    default:
+      return scope?.startsWith('thrive-plugin:') ? '插件' : scope || '技能';
+  }
+}
+
+function formatMcpTime(value?: number) {
+  if (!value) return '未使用';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '未使用' : date.toLocaleString();
+}
+
+function mcpDraftFromServer(server?: McpServerConfig): McpServerDraft {
+  const base = server || { ...createDefaultMcpServer(), name: '' };
+  return {
+    ...base,
+    name: base.name === 'New MCP Server' ? '' : base.name,
+    enabled: base.enabled !== false,
+    transport: base.transport || 'stdio',
+    command: base.command || '',
+    args: Array.isArray(base.args) ? base.args : [],
+    env: base.env || {},
+    cwd: base.cwd || '',
+    url: base.url || '',
+    oauth: {
+      ...(base.oauth || {}),
+      redbox: {
+        ...(base.oauth?.redbox || {}),
+        envPassthrough: base.oauth?.redbox?.envPassthrough || [],
+      },
+    },
+    envPassthrough: base.oauth?.redbox?.envPassthrough || [],
+  };
+}
+
+function mcpServerFromDraft(draft: McpServerDraft): McpServerConfig {
+  const env = Object.fromEntries(
+    Object.entries(draft.env || {})
+      .map(([key, value]) => [key.trim(), String(value || '').trim()])
+      .filter(([key, value]) => Boolean(key && value)),
+  );
+  const envPassthrough = draft.envPassthrough.map((item) => item.trim()).filter(Boolean);
+  return {
+    ...draft,
+    name: draft.name.trim() || 'MCP Server',
+    command: draft.transport === 'stdio' ? String(draft.command || '').trim() : '',
+    args: draft.transport === 'stdio' ? (draft.args || []).map((item) => item.trim()).filter(Boolean) : [],
+    env,
+    cwd: draft.transport === 'stdio' ? String(draft.cwd || '').trim() : '',
+    url: draft.transport === 'stdio' ? '' : String(draft.url || '').trim(),
+    oauth: {
+      ...(draft.oauth || {}),
+      redbox: {
+        ...(draft.oauth?.redbox || {}),
+        envPassthrough,
+      },
+    },
+  };
+}
 
 function normalizeVisualIndexPromptVersion(value: unknown): string {
   const text = String(value || '').trim();
@@ -701,6 +784,14 @@ export function Settings({
   const [teamAdvisors, setTeamAdvisors] = useState<Advisor[]>([]);
   const [isTeamAdvisorsLoading, setIsTeamAdvisorsLoading] = useState(false);
   const [teamAdvisorBusyId, setTeamAdvisorBusyId] = useState<string | null>(null);
+  const [settingsSkills, setSettingsSkills] = useState<SettingsSkill[]>([]);
+  const [isSettingsSkillsLoading, setIsSettingsSkillsLoading] = useState(false);
+  const [settingsSkillBusyName, setSettingsSkillBusyName] = useState('');
+  const [settingsSkillStatusMessage, setSettingsSkillStatusMessage] = useState('');
+  const [isSkillMarketplaceOpen, setIsSkillMarketplaceOpen] = useState(false);
+  const [skillMarketplaceItems, setSkillMarketplaceItems] = useState<ThriveSkillMarketplaceItem[]>([]);
+  const [isSkillMarketplaceLoading, setIsSkillMarketplaceLoading] = useState(false);
+  const [skillMarketplaceBusyId, setSkillMarketplaceBusyId] = useState('');
   const [editingTeamAdvisor, setEditingTeamAdvisor] = useState<Advisor | null>(null);
   const [settingsTeamAdvisor, setSettingsTeamAdvisor] = useState<Advisor | null>(null);
   const [draggingTeamAdvisorId, setDraggingTeamAdvisorId] = useState<string | null>(null);
@@ -1069,6 +1160,8 @@ export function Settings({
     general: false,
     ai: false,
     team: false,
+    skills: false,
+    mcp: false,
     tools: false,
     profile: false,
     remote: false,
@@ -1078,6 +1171,8 @@ export function Settings({
     general: false,
     ai: false,
     team: false,
+    skills: false,
+    mcp: false,
     tools: false,
     profile: false,
     remote: false,
@@ -1462,6 +1557,12 @@ export function Settings({
   const [mcpLiveSessions, setMcpLiveSessions] = useState<McpSessionState[]>([]);
   const [mcpRuntimeItems, setMcpRuntimeItems] = useState<McpServerRuntimeItem[]>([]);
   const [mcpInspectingId, setMcpInspectingId] = useState('');
+  const [mcpDraft, setMcpDraft] = useState<McpServerDraft | null>(null);
+  const [mcpDraftOriginalId, setMcpDraftOriginalId] = useState('');
+  const settingsMcpRuntimeMap = useMemo(
+    () => Object.fromEntries(mcpRuntimeItems.map((item) => [item.server.id, item.session || null])) as Record<string, McpSessionState | null>,
+    [mcpRuntimeItems],
+  );
 
   // Update State
   const [appVersion, setAppVersion] = useState<string | null>(null);
@@ -1775,7 +1876,7 @@ export function Settings({
   }, [cliRuntimeStatusMessage]);
 
   useEffect(() => {
-    if (activeTab !== 'tools') return;
+    if (activeTab !== 'mcp') return;
     void loadMcpRuntimeData();
     for (const server of mcpServers) {
       void handleRefreshMcpOAuth(server);
@@ -2359,12 +2460,20 @@ export function Settings({
     }
   }, [loadMcpRuntimeData]);
 
-  const handleAddMcpServer = async () => {
-    const next = [...mcpServers, createDefaultMcpServer()];
-    await persistMcpServers(next, '已新增 MCP Server，请完善配置后保存');
+  const handleAddMcpServer = () => {
+    setMcpDraft(mcpDraftFromServer());
+    setMcpDraftOriginalId('');
   };
 
   const handleDeleteMcpServer = async (serverId: string) => {
+    const server = mcpServers.find((item) => item.id === serverId);
+    if (server && !(await appConfirm(`确定删除 MCP Server "${server.name || server.id}" 吗？`, {
+      title: '删除 MCP Server',
+      confirmLabel: '删除',
+      tone: 'danger',
+    }))) {
+      return;
+    }
     const next = mcpServers.filter((item) => item.id !== serverId);
     await persistMcpServers(next, '已删除 MCP Server');
   };
@@ -2372,6 +2481,41 @@ export function Settings({
   const handleUpdateMcpServer = (serverId: string, updater: (server: McpServerConfig) => McpServerConfig) => {
     setMcpServers((prev) => prev.map((server) => (server.id === serverId ? updater(server) : server)));
   };
+
+  const handleToggleMcpServer = useCallback(async (server: McpServerConfig) => {
+    const nextEnabled = !(server.enabled !== false);
+    const next = mcpServers.map((item) => (
+      item.id === server.id ? { ...item, enabled: nextEnabled } : item
+    ));
+    setMcpServers(next);
+    const saved = await persistMcpServers(next, `${server.name || server.id} 已${nextEnabled ? '打开' : '关闭'}`);
+    if (!saved) {
+      setMcpServers(mcpServers);
+    }
+  }, [mcpServers, persistMcpServers]);
+
+  const handleEditMcpServer = useCallback((server: McpServerConfig) => {
+    setMcpDraft(mcpDraftFromServer(server));
+    setMcpDraftOriginalId(server.id);
+  }, []);
+
+  const handleSaveMcpDraft = useCallback(async () => {
+    if (!mcpDraft) return;
+    const server = mcpServerFromDraft(mcpDraft);
+    const next = mcpDraftOriginalId
+      ? mcpServers.map((item) => (item.id === mcpDraftOriginalId ? server : item))
+      : [...mcpServers, server];
+    const saved = await persistMcpServers(next, mcpDraftOriginalId ? 'MCP Server 已保存' : '已新增 MCP Server');
+    if (saved) {
+      setMcpDraft(null);
+      setMcpDraftOriginalId('');
+    }
+  }, [mcpDraft, mcpDraftOriginalId, mcpServers, persistMcpServers]);
+
+  const handleCancelMcpDraft = useCallback(() => {
+    setMcpDraft(null);
+    setMcpDraftOriginalId('');
+  }, []);
 
   const handleSaveMcpServers = async () => {
     await persistMcpServers(mcpServers, 'MCP 配置已保存');
@@ -4443,6 +4587,117 @@ export function Settings({
     }
   }, []);
 
+  const loadSettingsSkills = useCallback(async () => {
+    setIsSettingsSkillsLoading(true);
+    try {
+      const list = await window.ipcRenderer.listSkills();
+      const normalized = (Array.isArray(list) ? list : [])
+        .map((skill) => ({
+          name: String(skill.name || '').trim(),
+          description: String(skill.description || '').trim(),
+          location: String(skill.location || '').trim(),
+          sourceScope: skill.sourceScope,
+          isBuiltin: Boolean(skill.isBuiltin || skill.sourceScope === 'builtin'),
+          disabled: Boolean(skill.disabled),
+        }))
+        .filter((skill) => skill.name);
+      normalized.sort((left, right) => {
+        const leftBuiltIn = left.isBuiltin ? 0 : 1;
+        const rightBuiltIn = right.isBuiltin ? 0 : 1;
+        return leftBuiltIn - rightBuiltIn || left.name.localeCompare(right.name);
+      });
+      setSettingsSkills(normalized);
+      return normalized;
+    } catch (error) {
+      console.error('Failed to load skills:', error);
+      setSettingsSkillStatusMessage('技能列表读取失败');
+      return [];
+    } finally {
+      setIsSettingsSkillsLoading(false);
+    }
+  }, []);
+
+  const handleToggleSettingsSkill = useCallback(async (skill: SettingsSkill) => {
+    if (skill.isBuiltin) return;
+    const nextDisabled = !skill.disabled;
+    setSettingsSkillBusyName(skill.name);
+    setSettingsSkillStatusMessage('');
+    setSettingsSkills((prev) => prev.map((item) => (
+      item.name === skill.name ? { ...item, disabled: nextDisabled } : item
+    )));
+    try {
+      const action = nextDisabled ? window.ipcRenderer.skills.disable : window.ipcRenderer.skills.enable;
+      const result = await action({ name: skill.name }) as { success?: boolean; error?: string };
+      if (result && result.success === false) {
+        throw new Error(result.error || '技能状态保存失败');
+      }
+      setSettingsSkillStatusMessage(nextDisabled ? `已关闭 ${skill.name}` : `已打开 ${skill.name}`);
+      await loadSettingsSkills();
+      tabWarmRef.current.skills = true;
+    } catch (error) {
+      console.error('Failed to update skill state:', error);
+      setSettingsSkills((prev) => prev.map((item) => (
+        item.name === skill.name ? { ...item, disabled: skill.disabled } : item
+      )));
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能状态保存失败');
+    } finally {
+      setSettingsSkillBusyName('');
+    }
+  }, [loadSettingsSkills]);
+
+  const loadSkillMarketplace = useCallback(async () => {
+    setIsSkillMarketplaceLoading(true);
+    try {
+      const result = await window.ipcRenderer.skills.marketplace();
+      if (result.success === false) {
+        throw new Error(result.error || '技能市场加载失败');
+      }
+      setSkillMarketplaceItems(Array.isArray(result.skills) ? result.skills : []);
+      setSettingsSkillStatusMessage('');
+    } catch (error) {
+      console.error('Failed to load skill marketplace:', error);
+      setSkillMarketplaceItems([]);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能市场加载失败');
+    } finally {
+      setIsSkillMarketplaceLoading(false);
+    }
+  }, []);
+
+  const openSkillMarketplace = useCallback(() => {
+    setIsSkillMarketplaceOpen(true);
+    void loadSkillMarketplace();
+  }, [loadSkillMarketplace]);
+
+  const handleInstallMarketplaceSkill = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
+    setSkillMarketplaceBusyId(skill.id);
+    setSettingsSkillStatusMessage(`正在安装 ${skill.name}`);
+    try {
+      const result = await window.ipcRenderer.skills.marketInstall({
+        id: skill.id,
+        repo: skill.repo,
+      }) as {
+        success?: boolean;
+        error?: string;
+        installed?: Array<{ name?: string }>;
+      };
+      if (result.success === false) {
+        throw new Error(result.error || '技能安装失败');
+      }
+      const installedName = result.installed?.[0]?.name || skill.name;
+      setSettingsSkillStatusMessage(`已安装 ${installedName}`);
+      await Promise.all([
+        loadSettingsSkills(),
+        loadSkillMarketplace(),
+      ]);
+      tabWarmRef.current.skills = true;
+    } catch (error) {
+      console.error('Failed to install marketplace skill:', error);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能安装失败');
+    } finally {
+      setSkillMarketplaceBusyId('');
+    }
+  }, [loadSettingsSkills, loadSkillMarketplace]);
+
   const persistTeamAdvisorOrder = useCallback(async (items: Advisor[]) => {
     await Promise.all(items.map((advisor, index) => (
       window.ipcRenderer.advisors.update({
@@ -4679,11 +4934,14 @@ export function Settings({
         });
       } else if (tab === 'team') {
         await loadTeamAdvisors();
+      } else if (tab === 'skills') {
+        await loadSettingsSkills();
+      } else if (tab === 'mcp') {
+        await loadMcpRuntimeData();
       } else if (tab === 'tools') {
         await Promise.all([
           loadCliRuntimeDashboard({ silent: true }),
           loadThrivePlugins(),
-          loadMcpRuntimeData(),
         ]);
         if (formData.developer_mode_enabled) {
           await Promise.all([
@@ -4719,6 +4977,7 @@ export function Settings({
     loadMcpRuntimeData,
     loadPendingDiagnosticReports,
     loadRecentDebugLogs,
+    loadSettingsSkills,
     loadTeamAdvisors,
     loadRuntimeHooks,
     loadRuntimeRoles,
@@ -4762,7 +5021,7 @@ export function Settings({
       if (activeTab === 'profile' && !redclawProfileDirtyRef.current) {
         void ensureTabResourcesLoaded('profile', true);
       }
-      if (activeTab === 'general' || activeTab === 'tools') {
+      if (activeTab === 'general' || activeTab === 'tools' || activeTab === 'skills' || activeTab === 'mcp') {
         tabWarmRef.current[activeTab] = false;
         void ensureTabResourcesLoaded(activeTab, true);
       }
@@ -4867,6 +5126,12 @@ export function Settings({
     }
     if (activeTab === 'team') {
       void ensureTabResourcesLoaded('team');
+    }
+    if (activeTab === 'skills') {
+      void ensureTabResourcesLoaded('skills');
+    }
+    if (activeTab === 'mcp') {
+      void ensureTabResourcesLoaded('mcp');
     }
     if (activeTab === 'tools') {
       void ensureTabResourcesLoaded('tools');
@@ -5215,6 +5480,8 @@ export function Settings({
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
     { id: 'general', labelKey: 'settings.tabs.general', icon: LayoutGrid },
     { id: 'team', labelKey: 'settings.tabs.team', icon: Users },
+    { id: 'skills', labelKey: 'settings.tabs.skills', icon: Star },
+    { id: 'mcp', labelKey: 'settings.tabs.mcp', icon: Server },
     { id: 'profile', labelKey: 'settings.tabs.profile', icon: FileText },
     { id: 'tools', labelKey: 'settings.tabs.tools', icon: Wrench },
     { id: 'experimental', labelKey: 'settings.tabs.experimental', icon: FlaskConical },
@@ -6323,6 +6590,515 @@ export function Settings({
                 onDragOver={handleTeamAdvisorDragOver}
                 onDragEnd={handleTeamAdvisorDragEnd}
               />
+            )}
+
+            {activeTab === 'skills' && (
+              <div className="space-y-6">
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-medium text-text-primary">技能</h2>
+                      <p className="mt-1 text-xs text-text-tertiary">管理当前可用技能。内置技能由系统依赖，始终保持打开。</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={openSkillMarketplace}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                      >
+                        <Store className="h-3.5 w-3.5" />
+                        技能市场
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void loadSettingsSkills()}
+                        disabled={isSettingsSkillsLoading}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                      >
+                        <RefreshCw className={clsx('h-3.5 w-3.5', isSettingsSkillsLoading && 'animate-spin')} />
+                        刷新
+                      </button>
+                    </div>
+                  </div>
+
+                  {settingsSkillStatusMessage && (
+                    <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
+                      {settingsSkillStatusMessage}
+                    </div>
+                  )}
+                </section>
+
+                <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                  {isSettingsSkillsLoading && settingsSkills.length === 0 ? (
+                    <div className="flex items-center gap-2 px-4 py-5 text-sm text-text-tertiary">
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                      正在读取技能
+                    </div>
+                  ) : settingsSkills.length === 0 ? (
+                    <div className="px-4 py-5 text-sm text-text-tertiary">暂无技能</div>
+                  ) : (
+                    <div className="divide-y divide-border">
+                      {settingsSkills.map((skill) => {
+                        const isBusy = settingsSkillBusyName === skill.name;
+                        const enabled = skill.isBuiltin || !skill.disabled;
+                        return (
+                          <div key={skill.location || skill.name} className="flex items-center justify-between gap-4 px-4 py-3">
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="truncate text-sm font-medium text-text-primary">{skill.name}</span>
+                                <span className={clsx(
+                                  'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                                  skill.isBuiltin
+                                    ? 'bg-accent-primary/10 text-accent-primary'
+                                    : 'bg-surface-secondary text-text-tertiary'
+                                )}>
+                                  {formatSettingsSkillSource(skill.sourceScope)}
+                                </span>
+                              </div>
+                              {skill.description && (
+                                <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+                                  {skill.description}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleSettingsSkill(skill)}
+                              disabled={skill.isBuiltin || isBusy}
+                              role="switch"
+                              aria-checked={enabled}
+                              aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
+                              title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
+                              className={clsx(
+                                'ui-switch-track shrink-0 disabled:cursor-not-allowed',
+                                skill.isBuiltin && 'opacity-70',
+                                isBusy && 'opacity-60'
+                              )}
+                              data-size="sm"
+                              data-state={enabled ? 'on' : 'off'}
+                            >
+                              <span className="ui-switch-thumb" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+
+                {isSkillMarketplaceOpen && (
+                  <div
+                    className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 px-5 py-6"
+                    onMouseDown={() => setIsSkillMarketplaceOpen(false)}
+                  >
+                    <div
+                      className="flex max-h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-surface-primary shadow-2xl"
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+                        <h3 className="text-sm font-medium text-text-primary">技能市场</h3>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void loadSkillMarketplace()}
+                            disabled={isSkillMarketplaceLoading}
+                            className="flex items-center gap-2 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                          >
+                            <RefreshCw className={clsx('h-3 w-3', isSkillMarketplaceLoading && 'animate-spin')} />
+                            刷新
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setIsSkillMarketplaceOpen(false)}
+                            className="flex h-8 w-8 items-center justify-center rounded border border-border text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                            aria-label="关闭"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-auto">
+                        {isSkillMarketplaceLoading && skillMarketplaceItems.length === 0 ? (
+                          <div className="flex items-center gap-2 px-4 py-6 text-xs text-text-tertiary">
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                            正在读取市场
+                          </div>
+                        ) : skillMarketplaceItems.length === 0 ? (
+                          <div className="px-4 py-8 text-center text-xs text-text-tertiary">市场暂无技能</div>
+                        ) : (
+                          <div className="divide-y divide-border">
+                            {skillMarketplaceItems.map((skill) => {
+                              const busy = skillMarketplaceBusyId === skill.id;
+                              return (
+                                <div key={`${skill.repo}:${skill.id}`} className="px-4 py-3">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <div className="truncate text-sm font-medium text-text-primary">{skill.name}</div>
+                                        {skill.installed ? (
+                                          <span className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500">已安装</span>
+                                        ) : null}
+                                      </div>
+                                      <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-tertiary">
+                                        {skill.description || skill.repo}
+                                      </div>
+                                      <div className="mt-2 flex flex-wrap gap-1.5">
+                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.id}</span>
+                                        <span className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-tertiary">{skill.repo}</span>
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleInstallMarketplaceSkill(skill)}
+                                      disabled={busy || Boolean(skill.installed)}
+                                      className="flex shrink-0 items-center gap-1.5 rounded bg-accent-primary px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                                    >
+                                      <Download className="h-3 w-3" />
+                                      {skill.installed ? '已安装' : busy ? '安装中' : '安装'}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'mcp' && (
+              <div className="space-y-6">
+                {mcpDraft ? (
+                  <section className="mx-auto max-w-3xl space-y-4">
+                    <button
+                      type="button"
+                      onClick={handleCancelMcpDraft}
+                      className="inline-flex items-center gap-1 text-xs text-text-tertiary transition-colors hover:text-text-primary"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      返回
+                    </button>
+                    <div>
+                      <h2 className="text-xl font-medium text-text-primary">
+                        {mcpDraftOriginalId ? '编辑 MCP Server' : '连接至自定义 MCP'}
+                      </h2>
+                    </div>
+                    <div className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                      <div className="space-y-3 border-b border-border p-3">
+                        <label className="block text-xs font-medium text-text-secondary">名称</label>
+                        <input
+                          value={mcpDraft.name}
+                          onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, name: event.target.value } : draft)}
+                          placeholder="MCP server name"
+                          className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                        />
+                        <div className="grid grid-cols-2 overflow-hidden rounded-lg border border-border bg-surface-secondary/20 p-0.5">
+                          {([
+                            ['stdio', 'STDIO'],
+                            ['streamable-http', '流式 HTTP'],
+                          ] as const).map(([transport, label]) => (
+                            <button
+                              key={transport}
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, transport } : draft)}
+                              className={clsx(
+                                'rounded-md px-3 py-2 text-xs font-medium transition-colors',
+                                mcpDraft.transport === transport
+                                  ? 'bg-surface-primary text-text-primary shadow-sm'
+                                  : 'text-text-tertiary hover:text-text-primary'
+                              )}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {mcpDraft.transport === 'stdio' ? (
+                        <>
+                          <div className="space-y-3 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">启动命令</label>
+                            <input
+                              value={mcpDraft.command || ''}
+                              onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, command: event.target.value } : draft)}
+                              placeholder="openai-dev-mcp"
+                              className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                            />
+                          </div>
+                          <div className="space-y-2 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">参数</label>
+                            {(mcpDraft.args && mcpDraft.args.length ? mcpDraft.args : ['']).map((arg, index) => (
+                              <div key={index} className="flex items-center gap-2">
+                                <input
+                                  value={arg}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const args = [...(draft.args && draft.args.length ? draft.args : [''])];
+                                    args[index] = event.target.value;
+                                    return { ...draft, args };
+                                  })}
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setMcpDraft((draft) => draft ? { ...draft, args: (draft.args || []).filter((_, itemIndex) => itemIndex !== index) } : draft)}
+                                  className="rounded-md p-2 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-600"
+                                  aria-label="删除参数"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, args: [...(draft.args || []), ''] } : draft)}
+                              className="w-full rounded-lg bg-surface-secondary/40 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                            >
+                              + 添加参数
+                            </button>
+                          </div>
+                          <div className="space-y-2 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">环境变量</label>
+                            {Object.entries(mcpDraft.env && Object.keys(mcpDraft.env).length ? mcpDraft.env : { '': '' }).map(([key, value], index) => (
+                              <div key={`${key}:${index}`} className="flex items-center gap-2">
+                                <input
+                                  value={key}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const entries = Object.entries(draft.env || {});
+                                    entries[index] = [event.target.value, entries[index]?.[1] || ''];
+                                    return { ...draft, env: Object.fromEntries(entries) };
+                                  })}
+                                  placeholder="键"
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <input
+                                  value={value}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const entries = Object.entries(draft.env || {});
+                                    entries[index] = [entries[index]?.[0] || '', event.target.value];
+                                    return { ...draft, env: Object.fromEntries(entries) };
+                                  })}
+                                  placeholder="值"
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const entries = Object.entries(draft.env || {}).filter((_, itemIndex) => itemIndex !== index);
+                                    return { ...draft, env: Object.fromEntries(entries) };
+                                  })}
+                                  className="rounded-md p-2 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-600"
+                                  aria-label="删除环境变量"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, env: { ...(draft.env || {}), '': '' } } : draft)}
+                              className="w-full rounded-lg bg-surface-secondary/40 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                            >
+                              + 添加环境变量
+                            </button>
+                          </div>
+                          <div className="space-y-2 border-b border-border p-3">
+                            <label className="block text-xs font-medium text-text-secondary">环境变量传递</label>
+                            {(mcpDraft.envPassthrough.length ? mcpDraft.envPassthrough : ['']).map((key, index) => (
+                              <div key={index} className="flex items-center gap-2">
+                                <input
+                                  value={key}
+                                  onChange={(event) => setMcpDraft((draft) => {
+                                    if (!draft) return draft;
+                                    const envPassthrough = [...(draft.envPassthrough.length ? draft.envPassthrough : [''])];
+                                    envPassthrough[index] = event.target.value;
+                                    return { ...draft, envPassthrough };
+                                  })}
+                                  className="min-w-0 flex-1 rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => setMcpDraft((draft) => draft ? { ...draft, envPassthrough: draft.envPassthrough.filter((_, itemIndex) => itemIndex !== index) } : draft)}
+                                  className="rounded-md p-2 text-text-tertiary transition-colors hover:bg-surface-secondary hover:text-red-600"
+                                  aria-label="删除传递变量"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setMcpDraft((draft) => draft ? { ...draft, envPassthrough: [...draft.envPassthrough, ''] } : draft)}
+                              className="w-full rounded-lg bg-surface-secondary/40 px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary"
+                            >
+                              + 添加变量
+                            </button>
+                          </div>
+                          <div className="space-y-3 p-3">
+                            <label className="block text-xs font-medium text-text-secondary">工作目录</label>
+                            <input
+                              value={mcpDraft.cwd || ''}
+                              onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, cwd: event.target.value } : draft)}
+                              placeholder="~/code"
+                              className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-3 p-3">
+                          <label className="block text-xs font-medium text-text-secondary">URL</label>
+                          <input
+                            value={mcpDraft.url || ''}
+                            onChange={(event) => setMcpDraft((draft) => draft ? { ...draft, url: event.target.value } : draft)}
+                            placeholder="https://your-mcp-host/mcp"
+                            className="w-full rounded-lg border border-border bg-surface-secondary/20 px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary"
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveMcpDraft()}
+                        disabled={isSyncingMcp}
+                        className="rounded-lg bg-accent-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                      >
+                        保存
+                      </button>
+                    </div>
+                  </section>
+                ) : (
+                  <>
+                    <section className="space-y-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h2 className="text-lg font-medium text-text-primary">MCP 服务器</h2>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void loadMcpRuntimeData()}
+                            disabled={isSyncingMcp}
+                            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            刷新
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDiscoverAndImportMcp()}
+                            disabled={isSyncingMcp}
+                            className="rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                          >
+                            {isSyncingMcp ? '导入中' : '导入'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleAddMcpServer}
+                            disabled={isSyncingMcp}
+                            className="rounded-md bg-accent-primary px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                          >
+                            新增
+                          </button>
+                        </div>
+                      </div>
+
+                      {mcpStatusMessage && (
+                        <div className="rounded-lg border border-border bg-surface-secondary/30 px-3 py-2 text-xs text-text-secondary">
+                          {mcpStatusMessage}
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="overflow-hidden rounded-xl border border-border bg-surface-primary">
+                      {mcpServers.length === 0 ? (
+                        <div className="px-4 py-5 text-sm text-text-tertiary">暂无 MCP Server</div>
+                      ) : (
+                        <div className="divide-y divide-border">
+                          {mcpServers.map((server) => {
+                            const enabled = server.enabled !== false;
+                            const runtime = settingsMcpRuntimeMap[server.id];
+                            const endpoint = server.transport === 'stdio'
+                              ? [server.command, ...(server.args || [])].filter(Boolean).join(' ')
+                              : server.url || '';
+                            return (
+                              <div key={server.id} className="flex items-center justify-between gap-4 px-4 py-3">
+                                <div className="min-w-0">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <span className="truncate text-sm font-medium text-text-primary">{server.name || server.id}</span>
+                                    <span className="shrink-0 rounded-full bg-surface-secondary px-2 py-0.5 text-[10px] font-medium text-text-tertiary">
+                                      {server.transport}
+                                    </span>
+                                    {runtime && (
+                                      <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600">
+                                        已连接
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="mt-1 truncate font-mono text-xs text-text-tertiary">
+                                    {endpoint || server.id}
+                                  </div>
+                                  {runtime && (
+                                    <div className="mt-1 text-[11px] text-text-tertiary">
+                                      calls {runtime.callCount} · tools {runtime.toolCount} · last {formatMcpTime(runtime.lastUsedAt)}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEditMcpServer(server)}
+                                    disabled={isSyncingMcp}
+                                    className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                  >
+                                    编辑
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleTestMcpServer(server)}
+                                    disabled={mcpTestingId === server.id || isSyncingMcp}
+                                    className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary disabled:opacity-50"
+                                  >
+                                    {mcpTestingId === server.id ? '测试中' : '测试'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDeleteMcpServer(server.id)}
+                                    disabled={isSyncingMcp}
+                                    className="rounded-md border border-red-500/30 px-2.5 py-1.5 text-xs text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-50"
+                                  >
+                                    删除
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleToggleMcpServer(server)}
+                                    disabled={isSyncingMcp}
+                                    role="switch"
+                                    aria-checked={enabled}
+                                    aria-label={`${enabled ? '关闭' : '打开'} MCP Server ${server.name || server.id}`}
+                                    title={enabled ? '关闭 MCP Server' : '打开 MCP Server'}
+                                    className="ui-switch-track shrink-0 disabled:cursor-not-allowed disabled:opacity-60"
+                                    data-size="sm"
+                                    data-state={enabled ? 'on' : 'off'}
+                                  >
+                                    <span className="ui-switch-thumb" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
+                  </>
+                )}
+              </div>
             )}
 
             {/* Profile Tab */}
