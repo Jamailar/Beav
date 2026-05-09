@@ -730,6 +730,60 @@ fn runtime_output_schema() -> Value {
     }))
 }
 
+fn approval_request_input_schema() -> Value {
+    object_schema(
+        &[
+            ("title", string_schema("Short user-visible approval title.")),
+            (
+                "summary",
+                string_schema("One-sentence summary of what the agent needs approved."),
+            ),
+            (
+                "body",
+                string_schema("Optional detailed approval context, risks, or evidence."),
+            ),
+            (
+                "decisionType",
+                string_schema("Optional decision type, such as approve_reject, choose_option, or review_changes."),
+            ),
+            (
+                "priority",
+                string_schema("Optional priority: low, normal, high, or urgent."),
+            ),
+            (
+                "riskLevel",
+                string_schema("Optional risk level: low, medium, or high."),
+            ),
+            (
+                "proposedAction",
+                json!({
+                    "type": "object",
+                    "description": "Structured action metadata to resume or route after decision.",
+                    "additionalProperties": true,
+                }),
+            ),
+            (
+                "options",
+                json!({
+                    "type": "array",
+                    "description": "Optional structured decision options.",
+                    "items": { "type": "object", "additionalProperties": true },
+                }),
+            ),
+            (
+                "waitForDecision",
+                bool_schema("Whether the tool should wait for the user's decision before returning."),
+            ),
+            (
+                "timeoutMs",
+                integer_schema("Wait timeout in milliseconds.", 1000, 21_600_000),
+            ),
+        ],
+        &["title", "summary"],
+        Some("Create a generic human approval request and optionally wait for the decision."),
+    )
+}
+
 fn tools_search_input_schema() -> Value {
     object_schema(
         &[
@@ -1412,6 +1466,10 @@ fn mcp_server_target_input_schema() -> Value {
             ("serverId", string_schema("Target MCP server id.")),
             ("id", string_schema("Alias for serverId.")),
             (
+                "name",
+                string_schema("Alias for serverId using the configured MCP server name."),
+            ),
+            (
                 "server",
                 json!({
                     "type": "object",
@@ -1422,6 +1480,56 @@ fn mcp_server_target_input_schema() -> Value {
         ],
         &[],
         None,
+    )
+}
+
+fn mcp_add_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "name",
+                string_schema("MCP server name. Use ASCII letters, numbers, '-' or '_'."),
+            ),
+            (
+                "url",
+                string_schema("Streamable HTTP or SSE MCP endpoint URL."),
+            ),
+            ("command", string_schema("Stdio MCP server command.")),
+            (
+                "args",
+                json!({
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Arguments passed to a stdio MCP command."
+                }),
+            ),
+            (
+                "env",
+                json!({
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Environment variables passed to a stdio MCP command."
+                }),
+            ),
+            (
+                "cwd",
+                string_schema("Optional working directory for a stdio MCP command."),
+            ),
+            (
+                "transport",
+                string_schema("Optional transport override: stdio, streamable-http, or sse."),
+            ),
+            (
+                "enabled",
+                bool_schema("Whether the server is enabled after saving."),
+            ),
+            (
+                "bearerTokenEnvVar",
+                string_schema("Optional environment variable containing an HTTP bearer token."),
+            ),
+        ],
+        &["name"],
+        Some("Provide either url for an HTTP MCP server or command for a stdio MCP server."),
     )
 }
 
@@ -2809,6 +2917,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "approval.request",
+        namespace: "approval",
+        description: "Ask the user to approve, reject, or choose a structured option, then return the decision to the current agent loop.",
+        input_schema: approval_request_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "cli_runtime.detect",
         namespace: "cli_runtime",
         description: "Detect available CLI tools from the host PATH and managed environments.",
@@ -2948,6 +3067,61 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: generic_state_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.add",
+        namespace: "mcp",
+        description: "Add or update one MCP server by name, using either a stdio command or a streamable HTTP/SSE URL.",
+        input_schema: mcp_add_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.get",
+        namespace: "mcp",
+        description: "Get one saved MCP server record by id or name.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.remove",
+        namespace: "mcp",
+        description: "Remove one saved MCP server by id or name and disconnect its active session.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.enable",
+        namespace: "mcp",
+        description: "Enable one saved MCP server by id or name.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "mcp.disable",
+        namespace: "mcp",
+        description: "Disable one saved MCP server by id or name and disconnect its active session.",
+        input_schema: mcp_server_target_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -4063,6 +4237,9 @@ mod tests {
         assert!(actions.contains(&"cli_runtime.discover"));
         assert!(actions.contains(&"cli_runtime.execution.get"));
         assert!(actions.contains(&"mcp.list"));
+        assert!(actions.contains(&"mcp.add"));
+        assert!(actions.contains(&"mcp.get"));
+        assert!(actions.contains(&"mcp.remove"));
         assert!(actions.contains(&"mcp.discoverLocal"));
         assert!(actions.contains(&"mcp.importLocal"));
         assert!(actions.contains(&"mcp.save"));
@@ -4084,6 +4261,11 @@ mod tests {
 
         for action in [
             "mcp.list",
+            "mcp.add",
+            "mcp.get",
+            "mcp.remove",
+            "mcp.enable",
+            "mcp.disable",
             "mcp.discoverLocal",
             "mcp.importLocal",
             "mcp.save",
@@ -4284,9 +4466,9 @@ mod tests {
             "cli_runtime.execution.get",
             "mcp.list",
             "mcp.discoverLocal",
-            "mcp.importLocal",
-            "mcp.save",
-            "mcp.test",
+            "mcp.add",
+            "mcp.get",
+            "mcp.remove",
             "mcp.listTools",
         ] {
             assert!(actions.iter().any(|item| item == action), "{action}");

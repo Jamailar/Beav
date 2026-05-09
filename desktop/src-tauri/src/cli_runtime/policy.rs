@@ -12,6 +12,7 @@ use crate::cli_runtime::{
     CliExecutionRecord, CliExecutionStatus, CliPermissionGrantSet,
 };
 use crate::persistence::{with_store, with_store_mut};
+use crate::runtime::create_review_docket;
 use crate::{make_id, now_i64, AppState, AppStore};
 
 #[derive(Debug, Clone)]
@@ -109,6 +110,86 @@ pub fn upsert_cli_escalation_record(
     with_store_mut(state, |store| {
         Ok(upsert_escalation_record_in_store(store, record.clone()))
     })
+}
+
+fn ensure_cli_escalation_review_docket(
+    state: &State<'_, AppState>,
+    escalation: &mut CliEscalationRequestRecord,
+) -> Result<(), String> {
+    let existing_id = metadata_string(escalation.metadata.as_ref(), "reviewDocketId");
+    let docket = with_store_mut(state, |store| {
+        if let Some(existing_id) = existing_id.as_deref() {
+            if let Some(existing) = store
+                .review_dockets
+                .iter()
+                .find(|docket| docket.id == existing_id)
+                .cloned()
+            {
+                return Ok(existing);
+            }
+        }
+        if let Some(existing) = store
+            .review_dockets
+            .iter()
+            .find(|docket| {
+                docket.source_kind == "cli_escalation"
+                    && docket.source_id.as_deref() == Some(escalation.id.as_str())
+            })
+            .cloned()
+        {
+            return Ok(existing);
+        }
+        let metadata = escalation.metadata.as_ref();
+        let command_preview = metadata_string(metadata, "commandPreview").unwrap_or_default();
+        let description = metadata_string(metadata, "description")
+            .unwrap_or_else(|| "CLI 执行需要额外权限后才能继续。".to_string());
+        let permission_summary = metadata
+            .and_then(|value| value.get("permissionSummary"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let body = [
+            description.as_str(),
+            if command_preview.trim().is_empty() {
+                ""
+            } else {
+                "\n命令预览："
+            },
+            command_preview.as_str(),
+        ]
+        .join("\n")
+        .trim()
+        .to_string();
+        create_review_docket(
+            store,
+            &json!({
+                "sourceKind": "cli_escalation",
+                "sourceId": escalation.id.as_str(),
+                "title": "CLI 需要额外权限",
+                "summary": description,
+                "body": body,
+                "decisionType": "approve_reject",
+                "priority": "high",
+                "riskLevel": "high",
+                "proposedAction": {
+                    "kind": "cli_escalation",
+                    "escalationId": escalation.id.as_str(),
+                    "executionId": escalation.execution_id.as_str(),
+                    "defaultScope": "once",
+                },
+                "evidenceRefs": permission_summary,
+                "options": [
+                    { "id": "once", "label": "仅这一次", "description": "只为当前命令扩权" },
+                    { "id": "session", "label": "当前会话", "description": "本次会话内复用授权" },
+                    { "id": "always", "label": "始终允许", "description": "持久化同类授权策略" }
+                ],
+            }),
+        )
+    })?;
+    let metadata = escalation_metadata_object_mut(&mut escalation.metadata);
+    metadata.insert("reviewDocketId".to_string(), json!(docket.id));
+    upsert_cli_escalation_record(state, escalation.clone())?;
+    Ok(())
 }
 
 pub fn find_cli_escalation_by_id(
@@ -650,7 +731,8 @@ pub fn authorize_cli_execution(
             "toolId": request.tool_id,
         })),
     };
-    let escalation = upsert_cli_escalation_record(state, escalation)?;
+    let mut escalation = upsert_cli_escalation_record(state, escalation)?;
+    ensure_cli_escalation_review_docket(state, &mut escalation)?;
     Ok(CliPolicyCheckResult {
         allowed: false,
         escalation: Some(escalation),

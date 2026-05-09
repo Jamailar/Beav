@@ -9,6 +9,8 @@ export type NotificationAction =
       action: 'navigate';
       payload: {
         view: NotificationView;
+        docketId?: string;
+        escalationId?: string;
         settingsTab?: 'general' | 'ai' | 'tools' | 'profile' | 'remote' | 'experimental';
         aiModelSubTab?: 'custom' | 'login';
       };
@@ -28,6 +30,7 @@ export type NotificationAction =
 
 export type NotificationView =
   | 'redclaw'
+  | 'approval'
   | 'generation-studio'
   | 'manuscripts'
   | 'settings';

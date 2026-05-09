@@ -203,6 +203,7 @@ pub fn emit_cli_escalation_requested<R: Runtime>(
             "commandPreview": escalation_metadata_string(escalation, "commandPreview"),
             "permissionSummary": escalation_metadata_strings(escalation, "permissionSummary"),
             "scopeOptions": escalation_metadata_strings(escalation, "scopeOptions"),
+            "reviewDocketId": escalation_metadata_string(escalation, "reviewDocketId"),
             "createdAt": escalation.created_at,
         }),
     );

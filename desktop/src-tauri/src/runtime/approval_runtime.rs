@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,10 +87,11 @@ pub struct RuntimeApprovalSnapshot {
     pub recent: Vec<RuntimeApprovalRecord>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct ApprovalRuntimeState {
     pending: HashMap<String, RuntimeApprovalRecord>,
     recent: Vec<RuntimeApprovalRecord>,
+    review_waiters: HashMap<String, Vec<Sender<Value>>>,
 }
 
 impl ApprovalRuntimeState {
@@ -158,6 +160,28 @@ impl ApprovalRuntimeState {
             pending,
             recent,
         }
+    }
+
+    pub fn register_review_docket_waiter(&mut self, docket_id: &str) -> Receiver<Value> {
+        let (sender, receiver) = mpsc::channel();
+        self.review_waiters
+            .entry(docket_id.to_string())
+            .or_default()
+            .push(sender);
+        receiver
+    }
+
+    pub fn resolve_review_docket_waiters(&mut self, docket_id: &str, outcome: Value) {
+        let Some(waiters) = self.review_waiters.remove(docket_id) else {
+            return;
+        };
+        for waiter in waiters {
+            let _ = waiter.send(outcome.clone());
+        }
+    }
+
+    pub fn clear_review_docket_waiters(&mut self, docket_id: &str) {
+        self.review_waiters.remove(docket_id);
     }
 
     fn finalize_resolution(&mut self, approval: &mut RuntimeApprovalRecord, confirmed: bool) {
@@ -247,6 +271,42 @@ pub fn runtime_approval_confirmed_by_call_id(
         .recent
         .iter()
         .any(|item| item.call_id.as_deref() == Some(call_id) && item.confirmed == Some(true)))
+}
+
+pub fn register_review_docket_waiter(
+    state: &State<'_, AppState>,
+    docket_id: &str,
+) -> Result<Receiver<Value>, String> {
+    let mut approvals = state
+        .approval_runtime
+        .lock()
+        .map_err(|_| "approval runtime lock 已损坏".to_string())?;
+    Ok(approvals.register_review_docket_waiter(docket_id))
+}
+
+pub fn resolve_review_docket_waiters(
+    state: &State<'_, AppState>,
+    docket_id: &str,
+    outcome: Value,
+) -> Result<(), String> {
+    let mut approvals = state
+        .approval_runtime
+        .lock()
+        .map_err(|_| "approval runtime lock 已损坏".to_string())?;
+    approvals.resolve_review_docket_waiters(docket_id, outcome);
+    Ok(())
+}
+
+pub fn clear_review_docket_waiters(
+    state: &State<'_, AppState>,
+    docket_id: &str,
+) -> Result<(), String> {
+    let mut approvals = state
+        .approval_runtime
+        .lock()
+        .map_err(|_| "approval runtime lock 已损坏".to_string())?;
+    approvals.clear_review_docket_waiters(docket_id);
+    Ok(())
 }
 
 #[cfg(test)]

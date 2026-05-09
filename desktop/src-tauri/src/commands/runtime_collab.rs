@@ -1,6 +1,7 @@
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, State};
 
+use crate::commands::cli_runtime::handle_cli_runtime_channel;
 use crate::commands::redclaw::redclaw_task_control;
 use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
@@ -10,9 +11,11 @@ use crate::runtime::{
     ensure_collab_session_coordinator, get_review_docket, list_collab_members,
     list_collab_messages, list_collab_reports, list_collab_sessions, list_collab_tasks,
     list_review_dockets, pin_collab_task_session, post_collab_message, read_collab_mailbox,
-    rename_collab_member, request_collab_report, retry_collab_task, review_docket_stats,
-    set_collab_session_coordinator, shutdown_collab_member, submit_collab_report,
-    transition_collab_task, update_collab_session_status, update_collab_task, ReviewDocketRecord,
+    rename_collab_member, request_collab_report, request_runtime_approval,
+    resolve_review_docket_waiters, resolve_runtime_approval_by_approval_id, retry_collab_task,
+    review_docket_stats, set_collab_session_coordinator, shutdown_collab_member,
+    submit_collab_report, transition_collab_task, update_collab_session_status, update_collab_task,
+    ReviewDocketRecord, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
 use crate::subagents::{execute_team_tool, team_tool_descriptors, tick_team_wake_runtime};
 use crate::{parse_timestamp_ms, payload_string, AppState};
@@ -49,6 +52,55 @@ fn emit_collab_event(
     payload: Value,
 ) {
     emit_runtime_event(app, event_type, owner_session_id, None, payload);
+}
+
+fn request_review_docket_runtime_approval(
+    state: &State<'_, AppState>,
+    docket: &ReviewDocketRecord,
+    call_id: Option<&str>,
+) -> Result<RuntimeApprovalRecord, String> {
+    let description = if !docket.summary.trim().is_empty() {
+        docket.summary.clone()
+    } else if !docket.body.trim().is_empty() {
+        docket.body.clone()
+    } else {
+        docket.title.clone()
+    };
+    request_runtime_approval(
+        state,
+        RuntimeApprovalRecord::pending(
+            docket.id.clone(),
+            "review_docket",
+            docket.id.clone(),
+            docket.decision_type.clone(),
+            RuntimeApprovalDetails {
+                r#type: docket.decision_type.clone(),
+                title: docket.title.clone(),
+                description,
+                impact: Some(format!(
+                    "source={}, risk={}, priority={}",
+                    docket.source_kind, docket.risk_level, docket.priority
+                )),
+            },
+        )
+        .with_scope(
+            docket.session_id.as_deref(),
+            docket.task_id.as_deref(),
+            None,
+            call_id,
+        )
+        .with_metadata(Some(json!({
+            "docketId": docket.id,
+            "sourceKind": docket.source_kind,
+            "sourceId": docket.source_id,
+            "decisionType": docket.decision_type,
+            "riskLevel": docket.risk_level,
+            "priority": docket.priority,
+            "proposedAction": docket.proposed_action,
+            "artifactRefs": docket.artifact_refs,
+            "options": docket.options,
+        }))),
+    )
 }
 
 pub fn list_sessions_value(state: &State<'_, AppState>) -> Result<Value, String> {
@@ -594,11 +646,21 @@ pub fn create_review_docket_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let docket = with_store_mut(state, |store| create_review_docket(store, payload))?;
+    let call_id = payload_string(payload, "callId").or_else(|| {
+        payload
+            .get("proposedAction")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("callId"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+    });
+    let approval = request_review_docket_runtime_approval(state, &docket, call_id.as_deref())?;
+    let docket_id = docket.id.clone();
     emit_collab_event(
         app,
         "runtime:review-docket-changed",
         None,
-        json!({ "docketId": docket.id, "docket": docket }),
+        json!({ "docketId": docket_id, "docket": docket.clone(), "approval": approval }),
     );
     Ok(json!(docket))
 }
@@ -609,14 +671,19 @@ pub fn decide_review_docket_value(
     payload: &Value,
 ) -> Result<Value, String> {
     let decision = with_store_mut(state, |store| decide_review_docket(store, payload))?;
-    let action_result =
-        route_review_docket_action(app, state, &decision.docket_id, &decision.decision)?;
-    emit_collab_event(
-        app,
-        "runtime:review-docket-changed",
-        None,
-        json!({ "docketId": decision.docket_id, "decision": decision, "actionResult": action_result.json() }),
-    );
+    let docket_id = decision.docket_id.clone();
+    let action_result = route_review_docket_action(app, state, &docket_id, &decision)?;
+    let confirmed = decision.decision == "approved";
+    let runtime_approval = resolve_runtime_approval_by_approval_id(state, &docket_id, confirmed)?;
+    let outcome = json!({
+        "docketId": docket_id,
+        "decision": decision.clone(),
+        "confirmed": confirmed,
+        "runtimeApproval": runtime_approval,
+        "actionResult": action_result.json(),
+    });
+    resolve_review_docket_waiters(state, &docket_id, outcome.clone())?;
+    emit_collab_event(app, "runtime:review-docket-changed", None, outcome);
     Ok(json!(decision))
 }
 
@@ -631,7 +698,7 @@ fn route_review_docket_action(
     app: &AppHandle,
     state: &State<'_, AppState>,
     docket_id: &str,
-    decision: &str,
+    decision: &crate::runtime::ReviewDecisionRecord,
 ) -> Result<ApprovalActionRouteResult, String> {
     let docket = with_store(state, |store| {
         get_review_docket(&store, docket_id).ok_or_else(|| "审批项不存在".to_string())
@@ -645,7 +712,15 @@ fn route_review_docket_action(
     };
 
     match kind {
-        "redclaw_task_draft" => apply_redclaw_task_draft_approval(app, state, &docket, decision),
+        "redclaw_task_draft" => {
+            apply_redclaw_task_draft_approval(app, state, &docket, &decision.decision)
+        }
+        "cli_escalation" => apply_cli_escalation_approval(app, state, &docket, decision),
+        "agent_approval" => Ok(ApprovalActionRouteResult {
+            kind: kind.to_string(),
+            status: "resolved",
+            message: Some("通用 agent 审批已回填到等待中的 runtime。".to_string()),
+        }),
         "collab_task_completion" => Ok(ApprovalActionRouteResult {
             kind: kind.to_string(),
             status: "already_applied",
@@ -659,6 +734,68 @@ fn route_review_docket_action(
             message: Some("审批动作 kind 尚未注册业务处理器。".to_string()),
         }),
     }
+}
+
+fn apply_cli_escalation_approval(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    docket: &ReviewDocketRecord,
+    decision: &crate::runtime::ReviewDecisionRecord,
+) -> Result<ApprovalActionRouteResult, String> {
+    let action = docket
+        .proposed_action
+        .as_ref()
+        .and_then(Value::as_object)
+        .ok_or_else(|| "CLI 审批项缺少 proposedAction".to_string())?;
+    let escalation_id = action
+        .get("escalationId")
+        .and_then(Value::as_str)
+        .or(docket.source_id.as_deref())
+        .ok_or_else(|| "CLI 审批项缺少 escalationId".to_string())?;
+    if decision.decision == "approved" {
+        let scope = decision
+            .selected_option_id
+            .as_deref()
+            .or_else(|| action.get("defaultScope").and_then(Value::as_str))
+            .unwrap_or("once");
+        let _ = handle_cli_runtime_channel(
+            app,
+            state,
+            "cli-runtime:approve-escalation",
+            &json!({
+                "escalationId": escalation_id,
+                "scope": scope,
+            }),
+        )
+        .ok_or_else(|| "CLI 审批处理器不可用".to_string())??;
+        return Ok(ApprovalActionRouteResult {
+            kind: "cli_escalation".to_string(),
+            status: "succeeded",
+            message: Some(format!("CLI 权限已按 {scope} 范围批准。")),
+        });
+    }
+    if decision.decision == "rejected" {
+        let _ = handle_cli_runtime_channel(
+            app,
+            state,
+            "cli-runtime:deny-escalation",
+            &json!({
+                "escalationId": escalation_id,
+                "reason": decision.comment,
+            }),
+        )
+        .ok_or_else(|| "CLI 审批处理器不可用".to_string())??;
+        return Ok(ApprovalActionRouteResult {
+            kind: "cli_escalation".to_string(),
+            status: "succeeded",
+            message: Some("CLI 权限请求已拒绝。".to_string()),
+        });
+    }
+    Ok(ApprovalActionRouteResult {
+        kind: "cli_escalation".to_string(),
+        status: "ignored",
+        message: Some("该决定不会自动批准或拒绝 CLI 权限。".to_string()),
+    })
 }
 
 fn apply_redclaw_task_draft_approval(
@@ -715,12 +852,20 @@ pub fn archive_review_docket_value(
     status: &str,
 ) -> Result<Value, String> {
     let docket = with_store_mut(state, |store| archive_review_docket(store, payload, status))?;
-    emit_collab_event(
-        app,
-        "runtime:review-docket-changed",
-        None,
-        json!({ "docketId": docket.id, "docket": docket }),
-    );
+    let docket_id = docket.id.clone();
+    let runtime_approval = resolve_runtime_approval_by_approval_id(state, &docket_id, false)?;
+    let outcome = json!({
+        "docketId": docket_id,
+        "docket": docket.clone(),
+        "confirmed": false,
+        "runtimeApproval": runtime_approval,
+        "actionResult": {
+            "kind": "archive",
+            "status": status,
+        },
+    });
+    resolve_review_docket_waiters(state, &docket_id, outcome.clone())?;
+    emit_collab_event(app, "runtime:review-docket-changed", None, outcome);
     Ok(json!(docket))
 }
 
