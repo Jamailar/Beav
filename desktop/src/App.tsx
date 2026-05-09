@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, lazy, Suspense, type ReactNode } from 'react';
-import { FileText, Link2, Loader2, ShieldCheck } from 'lucide-react';
+import { FileText, Link2, Loader2, MessageSquareWarning, ShieldCheck } from 'lucide-react';
 import QRCode from 'qrcode';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
 import { FirstRunTour } from './components/FirstRunTour';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
+import { FeedbackReportDialog, OPEN_FEEDBACK_REPORT_EVENT, type FeedbackReportContext } from './components/FeedbackReportDialog';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import { useOfficialAuthState } from './hooks/useOfficialAuthState';
 import { NotificationsHost } from './notifications/NotificationsHost';
@@ -361,6 +362,8 @@ function AuthenticatedApp() {
   const [startupMigrationBusy, setStartupMigrationBusy] = useState(false);
   const [startupMigrationDismissed, setStartupMigrationDismissed] = useState(false);
   const [globalAuthNotice, setGlobalAuthNotice] = useState<string | null>(null);
+  const [feedbackReportOpen, setFeedbackReportOpen] = useState(false);
+  const [feedbackReportContext, setFeedbackReportContext] = useState<FeedbackReportContext | null>(null);
   const [settingsNavigationTarget, setSettingsNavigationTarget] = useState<SettingsNavigationTarget | null>(null);
   const [redClawNavigationAction, setRedClawNavigationAction] = useState<RedClawNavigationAction | null>(null);
   const [wanderTitleBarContent, setWanderTitleBarContent] = useState<ReactNode>(null);
@@ -399,6 +402,23 @@ function AuthenticatedApp() {
     setImmersiveMode(false);
     setCurrentView(view);
   }, [openSubjectsModal]);
+
+  const openFeedbackReport = useCallback((context?: FeedbackReportContext | null) => {
+    setFeedbackReportContext({
+      sourcePage: currentView,
+      ...(context || {}),
+    });
+    setFeedbackReportOpen(true);
+  }, [currentView]);
+
+  useEffect(() => {
+    const handleOpenFeedbackReport = (event: Event) => {
+      const detail = event instanceof CustomEvent ? event.detail : null;
+      openFeedbackReport(detail && typeof detail === 'object' ? detail as FeedbackReportContext : null);
+    };
+    window.addEventListener(OPEN_FEEDBACK_REPORT_EVENT, handleOpenFeedbackReport);
+    return () => window.removeEventListener(OPEN_FEEDBACK_REPORT_EVENT, handleOpenFeedbackReport);
+  }, [openFeedbackReport]);
 
   useEffect(() => {
     let mounted = true;
@@ -834,7 +854,18 @@ function AuthenticatedApp() {
           return null;
         }}
         renderTitleBarActions={({ currentView }) => (
-          currentView === 'redclaw' && !isManuscriptEditorActive ? redClawTitleBarActions : null
+          <>
+            {currentView === 'redclaw' && !isManuscriptEditorActive ? redClawTitleBarActions : null}
+            <button
+              type="button"
+              onClick={() => openFeedbackReport({ sourcePage: currentView })}
+              className="app-titlebar-button"
+              title="反馈问题"
+              aria-label="反馈问题"
+            >
+              <MessageSquareWarning className="w-[13px] h-[13px]" strokeWidth={1.75} />
+            </button>
+          </>
         )}
       >
         {isManuscriptEditorActive && activeManuscriptEditorFile && (
@@ -1060,6 +1091,12 @@ function AuthenticatedApp() {
           </div>
         </div>
       )}
+      <FeedbackReportDialog
+        open={feedbackReportOpen}
+        context={feedbackReportContext}
+        onClose={() => setFeedbackReportOpen(false)}
+        onSubmitted={() => window.dispatchEvent(new CustomEvent('redbox:feedback-report-submitted'))}
+      />
       <StartupMigrationModal
         open={shouldShowStartupMigration}
         state={startupMigration}

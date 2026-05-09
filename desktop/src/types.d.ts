@@ -1067,6 +1067,7 @@ declare global {
         openDir: () => Promise<{ success: boolean; error?: string; path: string }>;
         listPendingReports: () => Promise<DiagnosticsPendingReport[]>;
         exportBundle: (reportId?: string, payload?: { includeAdvancedContext?: boolean }) => Promise<{ success: boolean; reportId: string; path: string; error?: string }>;
+        createFeedbackReport: (payload: { title?: string; content: string; category?: string; priority?: 'low' | 'medium' | 'high' | 'urgent'; source?: string; contact?: string; includeAdvancedContext?: boolean; uploadNow?: boolean; context?: Record<string, unknown> }) => Promise<{ success: boolean; uploaded?: boolean; report?: DiagnosticsPendingReport; response?: unknown; error?: string }>;
         uploadReport: (reportId: string) => Promise<{ success: boolean; report?: DiagnosticsPendingReport; response?: { reportId: string; receivedAt: string; retentionDays: number; dedupeKey: string }; error?: string }>;
         dismissReport: (reportId: string) => Promise<{ success: boolean; reportId: string; error?: string }>;
         setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => Promise<{ success: boolean; error?: string }>;

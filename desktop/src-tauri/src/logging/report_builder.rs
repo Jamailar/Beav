@@ -60,6 +60,19 @@ fn log_slice(root: &Path, sink_name: &str, config: &LoggingConfig) -> String {
     lines.join("\n")
 }
 
+pub fn feedback_log_text(root: &Path, config: &LoggingConfig) -> String {
+    let limit = upload_log_slice_limit(config, false);
+    let host_logs = redact_text_for_upload(&log_slice(root, "host", config), limit / 2);
+    let renderer_logs = redact_text_for_upload(&log_slice(root, "renderer", config), limit / 2);
+    format!(
+        "[host]\n{}\n\n[renderer]\n{}",
+        host_logs.trim(),
+        renderer_logs.trim()
+    )
+    .trim()
+    .to_string()
+}
+
 fn build_advanced_context(state: &State<'_, AppState>) -> Value {
     let Ok(store) = state.store.lock() else {
         return Value::Null;

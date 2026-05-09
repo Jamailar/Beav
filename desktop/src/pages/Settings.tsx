@@ -2752,6 +2752,15 @@ export function Settings({
     }
   }, [formData.debug_log_enabled, formData.diagnostics_include_advanced_context, loadLoggingStatus, loadPendingDiagnosticReports]);
 
+  const handleOpenFeedbackReport = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+      detail: {
+        sourcePage: 'settings',
+        operation: 'manual_feedback',
+      },
+    }));
+  }, []);
+
   const handleUploadPendingReport = useCallback(async (reportId: string) => {
     setDiagnosticsActionBusy(reportId);
     try {
@@ -5096,9 +5105,17 @@ export function Settings({
         loadPendingDiagnosticReports(),
       ]);
     };
+    const handleFeedbackReportSubmitted = () => {
+      void Promise.all([
+        loadLoggingStatus(),
+        loadPendingDiagnosticReports(),
+      ]);
+    };
     window.ipcRenderer.on('diagnostics:report-pending', handleDiagnosticsReportPending);
+    window.addEventListener('redbox:feedback-report-submitted', handleFeedbackReportSubmitted);
     return () => {
       window.ipcRenderer.off('diagnostics:report-pending', handleDiagnosticsReportPending);
+      window.removeEventListener('redbox:feedback-report-submitted', handleFeedbackReportSubmitted);
     };
   }, [loadLoggingStatus, loadPendingDiagnosticReports]);
 
@@ -5550,6 +5567,7 @@ export function Settings({
                 logStatus={logStatus}
                 pendingReports={pendingDiagnosticReports}
                 diagnosticsActionBusy={diagnosticsActionBusy}
+                handleOpenFeedbackReport={handleOpenFeedbackReport}
                 handleExportDiagnosticBundle={handleExportDiagnosticBundle}
                 handleUploadPendingReport={handleUploadPendingReport}
                 handleDismissPendingReport={handleDismissPendingReport}
