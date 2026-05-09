@@ -25,5 +25,6 @@ pub mod skills_ai;
 pub mod spaces;
 pub mod subjects;
 pub mod system;
+pub mod video_editor_v2;
 pub mod wechat_official;
 pub mod workspace_data;
