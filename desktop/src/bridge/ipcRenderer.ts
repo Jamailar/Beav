@@ -682,7 +682,7 @@ function createIpcRenderer() {
         },
       ),
       switch: (spaceId: string) => invokeChannel('spaces:switch', spaceId),
-      create: (name: string) => invokeChannel('spaces:create', name),
+      create: () => Promise.resolve({ success: false, error: '创建新空间功能已关闭' }),
       rename: (payload: { id: string; name: string }) => invokeChannel('spaces:rename', payload),
       delete: (spaceId: string) => invokeChannel('spaces:delete', spaceId),
     },

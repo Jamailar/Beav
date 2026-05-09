@@ -1121,15 +1121,10 @@ impl<'a> AppCliExecutor<'a> {
                     .cloned();
                 Ok(json!({ "success": space.is_some(), "space": space }))
             }
-            "create" => self.call_channel(
-                "spaces:create",
-                json!({
-                    "name": args
-                        .string(&["name"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "spaces create requires --name".to_string())?
-                }),
-            ),
+            "create" => Ok(json!({
+                "success": false,
+                "error": commands::spaces::SPACE_CREATION_DISABLED_ERROR,
+            })),
             "rename" => self.call_channel(
                 "spaces:rename",
                 json!({
@@ -5194,7 +5189,6 @@ fn help_response(namespace: Option<&str>) -> Value {
         "spaces" => vec![
             "spaces list",
             "spaces get --id <spaceId>",
-            "spaces create --name <name>",
             "spaces rename --id <spaceId> --name <newName>",
             "spaces delete --id <spaceId>",
             "spaces switch --id <spaceId>",
