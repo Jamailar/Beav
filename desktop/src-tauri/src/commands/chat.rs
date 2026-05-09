@@ -246,6 +246,7 @@ fn apply_chat_turn_session_metadata(
             );
             let mut active_speaker = json!({
                 "type": "member",
+                "turnMode": "speak",
                 "speakerId": advisor_id,
                 "memberId": advisor_id,
                 "displayName": advisor_name,
