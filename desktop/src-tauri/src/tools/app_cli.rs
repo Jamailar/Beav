@@ -945,6 +945,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["invoke".to_string()];
                 self.handle_skills(&tokens, payload)
             }
+            "skillsinstallfromrepo" | "skillsinstallfromgithub" => {
+                let tokens = vec!["install-from-repo".to_string()];
+                self.handle_skills(&tokens, payload)
+            }
             "imagegenerate" => {
                 let tokens = vec!["generate".to_string()];
                 self.handle_image(&tokens, payload)
@@ -2599,6 +2603,26 @@ impl<'a> AppCliExecutor<'a> {
                         .string(&["slug"])
                         .or_else(|| args.positionals.first().cloned())
                         .ok_or_else(|| "skills market-install requires --slug".to_string())?
+                }),
+            ),
+            "install-from-repo" | "install-from-github" => self.call_channel(
+                "skills:install-from-repo",
+                json!({
+                    "source": args
+                        .string(&["source", "url", "repo"])
+                        .or_else(|| args.positionals.first().cloned())
+                        .or_else(|| payload_string_alias(payload, &["source", "url", "repo"]))
+                        .ok_or_else(|| "skills install-from-repo requires --source".to_string())?,
+                    "ref": args
+                        .string(&["ref"])
+                        .or_else(|| payload_string_alias(payload, &["ref", "refName"])),
+                    "path": args
+                        .string(&["path"])
+                        .or_else(|| payload_string_alias(payload, &["path"])),
+                    "paths": payload_field(payload, "paths").cloned().unwrap_or(Value::Null),
+                    "scope": args
+                        .string(&["scope"])
+                        .or_else(|| payload_string_alias(payload, &["scope"])),
                 }),
             ),
             _ => Err(format!("unsupported skills action: {action}")),
@@ -5316,6 +5340,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "skills save --location <path> --content \"...\"",
             "skills enable --name <skill>",
             "skills disable --name <skill>",
+            "skills install-from-repo --source <github-url-or-owner/repo> [--ref <ref>] [--path <path>] [--scope user|workspace]",
             "skills market-install --slug <slug>  # placeholder registration only; use cli_runtime.* to provision external tools",
         ],
         "mcp" => vec![
