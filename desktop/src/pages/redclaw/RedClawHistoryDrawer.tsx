@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent, type ReactNode } from 'react';
-import { ChevronRight, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
+import { ChevronRight, Clock3, Edit3, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, History, Loader2, MoreHorizontal, Pin, Plus, RefreshCw, Trash2, Users, X } from 'lucide-react';
 import { clsx } from 'clsx';
 import { REDCLAW_DISPLAY_NAME } from './config';
 import { appAlert, appConfirm } from '../../utils/appDialogs';
@@ -40,6 +40,23 @@ function displaySessionTitle(title: string, surface: RedClawHistorySurface): str
     return title.replace(legacyAiPrefix, `${REDCLAW_DISPLAY_NAME}$1`);
 }
 
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+}
+
+function isAutomationHistorySession(session: RedClawHistoryListItem): boolean {
+    if (session.surface !== 'redclaw') return false;
+    const sessionId = String(session.id || session.chatSession?.id || '').toLowerCase();
+    if (sessionId.includes('automation')) return true;
+    const context = recordFromUnknown(session.context);
+    const contextId = String(context.contextId || context.context_id || context.id || '').toLowerCase();
+    const contextType = String(context.contextType || context.context_type || context.type || '').toLowerCase();
+    const sourceKind = String(context.sourceKind || context.source_kind || '').toLowerCase();
+    return contextId.includes('automation') || contextType === 'automation' || sourceKind === 'scheduled';
+}
+
 interface RedClawHistorySidebarSectionProps {
     historyLoading: boolean;
     sessionList: RedClawHistoryListItem[];
@@ -66,7 +83,7 @@ type HistoryItemMenuTarget =
     | { type: 'session'; id: string }
     | { type: 'manuscript'; path: string };
 
-type ManuscriptDraftKind = 'article' | 'markdown';
+type ManuscriptDraftKind = 'longform' | 'post' | 'video' | 'audio';
 
 type ManuscriptDialogState =
     | { mode: 'create-folder'; parentPath: string }
@@ -80,10 +97,20 @@ type ManuscriptContextMenuState = {
     node?: RedClawManuscriptNode;
 };
 
-const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string; kind?: string }> = [
-    { id: 'article', label: '长文', extension: '', kind: 'article' },
-    { id: 'markdown', label: 'Markdown', extension: '.md' },
+const MANUSCRIPT_DRAFT_KIND_OPTIONS: Array<{ id: ManuscriptDraftKind; label: string; extension: string; kind?: string; disabled?: boolean }> = [
+    { id: 'longform', label: '长文', extension: '', kind: 'longform' },
+    { id: 'post', label: '图文稿', extension: '', kind: 'post' },
+    { id: 'video', label: '视频脚本', extension: '', kind: 'video', disabled: true },
+    { id: 'audio', label: '音频脚本', extension: '', kind: 'audio', disabled: true },
 ];
+
+function buildDefaultManuscriptTitle(label: string): string {
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, '0');
+    const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+    const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    return `${label}-${date}-${time}`;
+}
 
 function readPinnedIds(storageKey: string): string[] {
     if (typeof window === 'undefined') return [];
@@ -194,7 +221,7 @@ export function RedClawHistorySidebarSection({
     const [expandedManuscriptPaths, setExpandedManuscriptPaths] = useState<Set<string>>(() => new Set());
     const [manuscriptDialog, setManuscriptDialog] = useState<ManuscriptDialogState | null>(null);
     const [manuscriptDialogName, setManuscriptDialogName] = useState('');
-    const [manuscriptDraftKind, setManuscriptDraftKind] = useState<ManuscriptDraftKind>('article');
+    const [manuscriptDraftKind, setManuscriptDraftKind] = useState<ManuscriptDraftKind>('longform');
     const [manuscriptDialogError, setManuscriptDialogError] = useState('');
     const [manuscriptContextMenu, setManuscriptContextMenu] = useState<ManuscriptContextMenuState | null>(null);
     const [isSubmittingManuscriptDialog, setIsSubmittingManuscriptDialog] = useState(false);
@@ -240,6 +267,7 @@ export function RedClawHistorySidebarSection({
 
     useEffect(() => {
         if (!manuscriptDialog) return;
+        if (manuscriptDialog.mode === 'create-file') return;
         const timer = window.setTimeout(() => {
             manuscriptDialogInputRef.current?.focus();
             manuscriptDialogInputRef.current?.select();
@@ -359,7 +387,7 @@ export function RedClawHistorySidebarSection({
             setManuscriptDialogName(manuscriptNodeLabel(dialog.node));
         } else {
             setManuscriptDialogName('');
-            setManuscriptDraftKind('article');
+            setManuscriptDraftKind('longform');
         }
     };
 
@@ -395,10 +423,14 @@ export function RedClawHistorySidebarSection({
         });
     };
 
-    const submitManuscriptDialog = async () => {
+    const submitManuscriptDialog = async (selectedDraftKind?: ManuscriptDraftKind) => {
         if (!manuscriptDialog || isSubmittingManuscriptDialog) return;
-        const name = manuscriptDialogName.trim();
-        if (!name) {
+        const draftKind = MANUSCRIPT_DRAFT_KIND_OPTIONS.find((option) => option.id === (selectedDraftKind || manuscriptDraftKind)) || MANUSCRIPT_DRAFT_KIND_OPTIONS[0];
+        if (draftKind.disabled) return;
+        const name = manuscriptDialog.mode === 'create-file'
+            ? buildDefaultManuscriptTitle(draftKind.label)
+            : manuscriptDialogName.trim();
+        if (!name && manuscriptDialog.mode !== 'create-file') {
             setManuscriptDialogError('请输入名称');
             return;
         }
@@ -413,7 +445,6 @@ export function RedClawHistorySidebarSection({
                 });
                 expandManuscriptPath(manuscriptDialog.parentPath);
             } else if (manuscriptDialog.mode === 'create-file') {
-                const draftKind = MANUSCRIPT_DRAFT_KIND_OPTIONS.find((option) => option.id === manuscriptDraftKind) || MANUSCRIPT_DRAFT_KIND_OPTIONS[0];
                 const fileName = draftKind.extension && !name.endsWith(draftKind.extension)
                     ? `${name}${draftKind.extension}`
                     : name;
@@ -1000,6 +1031,7 @@ export function RedClawHistorySidebarSection({
                             const isPinned = pinnedSessionIdSet.has(session.id);
                             const menuOpen = menuTarget?.type === 'session' && menuTarget.id === session.id;
                             const activity = sessionActivityById[session.id];
+                            const isAutomationSession = isAutomationHistorySession(session);
 
                             return (
                                 <div
@@ -1050,18 +1082,29 @@ export function RedClawHistorySidebarSection({
                                         >
                                             <Pin className="h-3.5 w-3.5" />
                                         </button>
-                                        <h4 className={clsx(
-                                            'min-w-0 flex-1 truncate pr-8 text-[13px] font-bold leading-tight transition-colors',
-                                            isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
-                                        )}>
-                                            {title}
-                                        </h4>
+                                        <div className="min-w-0 flex flex-1 items-center gap-1.5 pr-8">
+                                            <h4 className={clsx(
+                                                'min-w-0 truncate text-[13px] font-bold leading-tight transition-colors',
+                                                isActive ? 'text-text-primary' : 'text-text-secondary group-hover:text-text-primary'
+                                            )}>
+                                                {title}
+                                            </h4>
+                                            {isAutomationSession && (
+                                                <Clock3
+                                                    className="h-3.5 w-3.5 shrink-0 text-text-tertiary/80"
+                                                    strokeWidth={1.75}
+                                                    aria-label="定时任务"
+                                                />
+                                            )}
+                                        </div>
 
                                         {activity === 'running' && (
                                             <span
-                                                className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border-2 border-text-tertiary/30 border-t-text-tertiary/80 animate-spin transition-opacity group-hover:opacity-0"
+                                                className="absolute right-3 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center transition-opacity group-hover:opacity-0"
                                                 aria-label="正在执行"
-                                            />
+                                            >
+                                                <span className="h-4 w-4 rounded-full border-2 border-text-tertiary/30 border-t-text-tertiary/80 animate-spin" />
+                                            </span>
                                         )}
                                         {activity === 'unread-complete' && (
                                             <span
@@ -1275,71 +1318,81 @@ export function RedClawHistorySidebarSection({
                         </div>
 
                         {manuscriptDialog.mode === 'create-file' && (
-                            <div className="mt-5 flex rounded-xl border border-border bg-surface-secondary p-1">
+                            <div className="mt-5 grid grid-cols-2 gap-2">
                                 {MANUSCRIPT_DRAFT_KIND_OPTIONS.map((option) => (
                                     <button
                                         key={option.id}
                                         type="button"
-                                        onClick={() => setManuscriptDraftKind(option.id)}
-                                        disabled={isSubmittingManuscriptDialog}
+                                        onClick={() => {
+                                            if (option.disabled) return;
+                                            setManuscriptDraftKind(option.id);
+                                            void submitManuscriptDialog(option.id);
+                                        }}
+                                        disabled={isSubmittingManuscriptDialog || option.disabled}
                                         className={clsx(
-                                            'h-8 flex-1 rounded-lg text-xs font-bold transition-colors disabled:opacity-50',
+                                            'flex h-20 items-center justify-between rounded-xl border px-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                                             manuscriptDraftKind === option.id
-                                                ? 'bg-surface-primary text-text-primary shadow-sm'
-                                                : 'text-text-tertiary hover:text-text-primary'
+                                                ? 'border-accent-primary/30 bg-accent-primary/8 text-text-primary'
+                                                : 'border-border bg-surface-secondary text-text-secondary hover:border-accent-primary/25 hover:bg-surface-elevated hover:text-text-primary'
                                         )}
                                     >
-                                        {option.label}
+                                        <span className="text-sm font-bold">{option.label}</span>
+                                        {isSubmittingManuscriptDialog && manuscriptDraftKind === option.id ? (
+                                            <Loader2 className="h-4 w-4 animate-spin text-accent-primary" />
+                                        ) : (
+                                            <FileText className="h-4 w-4 text-text-tertiary" />
+                                        )}
                                     </button>
                                 ))}
                             </div>
                         )}
 
-                        <input
-                            ref={manuscriptDialogInputRef}
-                            value={manuscriptDialogName}
-                            onChange={(event) => {
-                                setManuscriptDialogName(event.target.value);
-                                if (manuscriptDialogError) setManuscriptDialogError('');
-                            }}
-                            onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
-                                    event.preventDefault();
-                                    void submitManuscriptDialog();
-                                } else if (event.key === 'Escape') {
-                                    closeManuscriptDialog();
-                                }
-                            }}
-                            disabled={isSubmittingManuscriptDialog}
-                            className={clsx(
-                                'h-11 w-full rounded-xl border border-border bg-surface-secondary px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15 disabled:opacity-60',
-                                manuscriptDialog.mode === 'create-file' ? 'mt-3' : 'mt-5'
-                            )}
-                            placeholder={manuscriptDialog.mode === 'create-folder' ? '文件夹名称' : '稿件名称'}
-                            maxLength={100}
-                        />
+                        {manuscriptDialog.mode !== 'create-file' && (
+                            <input
+                                ref={manuscriptDialogInputRef}
+                                value={manuscriptDialogName}
+                                onChange={(event) => {
+                                    setManuscriptDialogName(event.target.value);
+                                    if (manuscriptDialogError) setManuscriptDialogError('');
+                                }}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                        event.preventDefault();
+                                        void submitManuscriptDialog();
+                                    } else if (event.key === 'Escape') {
+                                        closeManuscriptDialog();
+                                    }
+                                }}
+                                disabled={isSubmittingManuscriptDialog}
+                                className="mt-5 h-11 w-full rounded-xl border border-border bg-surface-secondary px-3 text-sm text-text-primary outline-none transition focus:border-accent-primary focus:ring-2 focus:ring-accent-primary/15 disabled:opacity-60"
+                                placeholder={manuscriptDialog.mode === 'create-folder' ? '文件夹名称' : '新名称'}
+                                maxLength={100}
+                            />
+                        )}
                         {manuscriptDialogError && (
                             <div className="mt-2 text-xs text-red-500">{manuscriptDialogError}</div>
                         )}
-                        <div className="mt-5 flex items-center justify-end gap-2">
-                            <button
-                                type="button"
-                                onClick={closeManuscriptDialog}
-                                disabled={isSubmittingManuscriptDialog}
-                                className="h-9 rounded-xl border border-border px-4 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
-                            >
-                                取消
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => void submitManuscriptDialog()}
-                                disabled={isSubmittingManuscriptDialog || !manuscriptDialogName.trim()}
-                                className="inline-flex h-9 items-center gap-2 rounded-xl bg-text-primary px-4 text-sm font-medium text-white transition-colors hover:bg-text-primary/90 disabled:opacity-50"
-                            >
-                                {isSubmittingManuscriptDialog && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                                保存
-                            </button>
-                        </div>
+                        {manuscriptDialog.mode !== 'create-file' && (
+                            <div className="mt-5 flex items-center justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={closeManuscriptDialog}
+                                    disabled={isSubmittingManuscriptDialog}
+                                    className="h-9 rounded-xl border border-border px-4 text-sm text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary disabled:opacity-50"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => void submitManuscriptDialog()}
+                                    disabled={isSubmittingManuscriptDialog || !manuscriptDialogName.trim()}
+                                    className="inline-flex h-9 items-center gap-2 rounded-xl bg-text-primary px-4 text-sm font-medium text-white transition-colors hover:bg-text-primary/90 disabled:opacity-50"
+                                >
+                                    {isSubmittingManuscriptDialog && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                                    保存
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
