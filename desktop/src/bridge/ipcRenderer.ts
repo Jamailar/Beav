@@ -1356,6 +1356,16 @@ function createIpcRenderer() {
       enable: (payload: { name: string }) => invokeChannel('skills:enable', payload),
       disable: (payload: { name: string }) => invokeChannel('skills:disable', payload),
       marketInstall: (payload: { slug: string; tag?: string }) => invokeChannel('skills:market-install', payload),
+      installFromRepo: (payload: {
+        source?: string;
+        url?: string;
+        repo?: string;
+        ref?: string;
+        refName?: string;
+        path?: string;
+        paths?: string[];
+        scope?: 'user' | 'workspace' | string;
+      }) => invokeChannel('skills:install-from-repo', payload),
     },
     toolDiagnostics: {
       list: () => invokeChannel('tools:diagnostics:list'),

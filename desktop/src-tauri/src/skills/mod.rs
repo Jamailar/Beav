@@ -8,6 +8,8 @@ mod catalog;
 mod executor;
 #[path = "hooks.rs"]
 mod hooks;
+#[path = "installer.rs"]
+mod installer;
 #[path = "loader.rs"]
 mod loader;
 #[path = "permissions.rs"]
@@ -28,6 +30,7 @@ pub use bundled::*;
 pub use catalog::*;
 pub use executor::*;
 pub use hooks::*;
+pub use installer::*;
 pub use loader::*;
 pub use permissions::*;
 pub use prompt::*;

@@ -1488,6 +1488,47 @@ fn skills_invoke_input_schema() -> Value {
     )
 }
 
+fn skills_install_from_repo_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "source",
+                string_schema(
+                    "GitHub repository URL, git URL, owner/repo shorthand, or local repository path.",
+                ),
+            ),
+            (
+                "ref",
+                string_schema("Optional branch, tag, or commit to install from."),
+            ),
+            (
+                "path",
+                string_schema("Optional repository-relative skill directory or bundle subdirectory."),
+            ),
+            (
+                "paths",
+                json!({
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                    },
+                    "description": "Optional list of repository-relative skill directories or bundle subdirectories.",
+                }),
+            ),
+            (
+                "scope",
+                json!({
+                    "type": "string",
+                    "enum": ["user", "workspace"],
+                    "description": "Install into the user skill root by default, or into the current workspace skills directory.",
+                }),
+            ),
+        ],
+        &["source"],
+        Some("Install one or more Codex-style skills from a repository."),
+    )
+}
+
 fn skills_list_input_schema() -> Value {
     no_payload_schema()
 }
@@ -3040,6 +3081,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         namespace: "skills",
         description: "Activate one skill in the current session.",
         input_schema: skills_invoke_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "skills.installFromRepo",
+        namespace: "skills",
+        description: "Install one or more skills from a GitHub repository, git URL, owner/repo shorthand, or local repo path by discovering SKILL.md files.",
+        input_schema: skills_install_from_repo_input_schema,
         output_schema: generic_state_output_schema,
         mutating: true,
         concurrency_safe: false,

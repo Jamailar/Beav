@@ -1,9 +1,10 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
     build_market_file_skill_record, build_workspace_skill_record,
-    compute_skill_discovery_fingerprint, invoke_skill, refresh_skill_store_catalog,
-    resolve_skill_file_path, skill_catalog_changed, skills_catalog_list_value,
-    write_skill_record_to_path, SkillInvokeRequest,
+    compute_skill_discovery_fingerprint, install_skills_from_repo, invoke_skill,
+    preferred_user_skill_root, refresh_skill_store_catalog, resolve_skill_file_path,
+    skill_catalog_changed, skills_catalog_list_value, write_skill_record_to_path,
+    InstallSkillsFromRepoRequest, SkillInvokeRequest,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -59,6 +60,22 @@ fn requested_skill_name(payload: &Value) -> String {
         .unwrap_or_default()
 }
 
+fn payload_string_list(payload: &Value, key: &str) -> Vec<String> {
+    payload
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn handle_skills_ai_channel(
     _app: &AppHandle,
     state: &State<'_, AppState>,
@@ -74,6 +91,7 @@ pub fn handle_skills_ai_channel(
             | "skills:disable"
             | "skills:enable"
             | "skills:market-install"
+            | "skills:install-from-repo"
             | "ai:roles:list"
             | "ai:detect-protocol"
             | "ai:test-connection"
@@ -258,6 +276,45 @@ pub fn handle_skills_ai_channel(
                     "placeholder": true,
                     "requiresCliRuntimeBootstrap": true,
                     "summary": "Market skill registered as a placeholder only. External CLI tools and runtimes must be provisioned through cli_runtime.*."
+                }))
+            }
+            "skills:install-from-repo" => {
+                let source = payload_string(payload, "source")
+                    .or_else(|| payload_string(payload, "url"))
+                    .or_else(|| payload_string(payload, "repo"))
+                    .unwrap_or_default();
+                if source.trim().is_empty() {
+                    return Ok(json!({ "success": false, "error": "缺少技能仓库 URL" }));
+                }
+                let paths = {
+                    let mut paths = payload_string_list(payload, "paths");
+                    if let Some(path) = payload_string(payload, "path") {
+                        paths.push(path);
+                    }
+                    paths
+                };
+                let scope = payload_string(payload, "scope");
+                let workspace = workspace_root(state).ok();
+                let outcome = install_skills_from_repo(
+                    InstallSkillsFromRepoRequest {
+                        source,
+                        ref_name: payload_string(payload, "ref")
+                            .or_else(|| payload_string(payload, "refName")),
+                        paths,
+                        scope,
+                        workspace_root: workspace.clone(),
+                    },
+                    &preferred_user_skill_root(),
+                )?;
+                let _ = refresh_skill_store_catalog(state);
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
+                Ok(json!({
+                    "success": true,
+                    "source": outcome.source,
+                    "refName": outcome.ref_name,
+                    "scope": outcome.scope,
+                    "installRoot": outcome.install_root,
+                    "installed": outcome.installed,
                 }))
             }
             "ai:roles:list" => Ok(json!([
