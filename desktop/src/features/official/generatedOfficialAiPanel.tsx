@@ -803,32 +803,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
 
   return (
     <div className="rounded-xl border border-border bg-surface-secondary/20 p-4 space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-text-primary">官方账号登录</h3>
-          <p className="text-[11px] text-text-tertiary mt-1">登录后自动同步官方模型与推荐配置。</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void refreshProfileAndPoints()}
-            disabled={refreshControlsDisabled}
-            title="刷新信息"
-            className="p-1.5 text-text-tertiary hover:text-accent-primary transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={clsx('w-3.5 h-3.5', refreshing && 'animate-spin')} />
-          </button>
-          <button
-            type="button"
-            onClick={() => void logout()}
-            disabled={logoutDisabled || !session}
-            className="px-2.5 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50/70 transition-colors disabled:opacity-50"
-          >
-            退出
-          </button>
-        </div>
-      </div>
-
       {!session ? (
         !bootstrapped ? (
           <div className="rounded-lg border border-border bg-surface-primary p-4 text-sm text-text-secondary">
@@ -975,13 +949,12 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
           <div className="rounded-lg border border-dashed border-border bg-surface-primary/50 p-4 flex flex-col justify-center">
             <div className="flex items-center gap-2 text-sm font-medium text-text-primary">
               <UserRound className="w-4 h-4" />
-              登录后可用
+              等待全局登录
             </div>
             <ul className="mt-3 text-xs text-text-secondary space-y-1">
               <li>1. 自动绑定官方 API Key</li>
               <li>2. 自动同步模型与推荐配置</li>
               <li>3. 查看积分余额与调用记录</li>
-              <li>4. 浏览器跳转充值积分</li>
             </ul>
           </div>
         </div>
@@ -1011,9 +984,6 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
                 </button>
               </div>
             </div>
-            <p className="text-[11px] text-text-tertiary">
-              用户：{userName || '未命名用户'} · 模型 {models.length} 个 · 余额单位为积分（1 元 = {pointsPerYuan} 积分）
-            </p>
             <div className="flex flex-wrap items-center gap-2">
               {[20, 50, 100].map((amount) => (
                 <button
@@ -1112,13 +1082,26 @@ const OfficialAiPanel = ({ onReloadSettings }: OfficialAiPanelProps) => {
               : 'border-border bg-surface-primary text-text-tertiary',
         )}
       >
-        {notice || '登录后可自动同步官方源并托管调用凭据。'}
+        {notice || '官方源会自动托管调用凭据。'}
       </div>
+
+      {session ? (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => void logout()}
+            disabled={logoutDisabled}
+            className="px-2.5 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50/70 transition-colors disabled:opacity-50"
+          >
+            退出登录
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 };
 
-export const tabLabel = '登录';
+export const tabLabel = '官方账号';
 export const hasOfficialAiPanel = true;
 
 export default OfficialAiPanel;
