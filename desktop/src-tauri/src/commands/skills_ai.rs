@@ -7,8 +7,146 @@ use crate::skills::{
     InstallSkillsFromRepoRequest, SkillInvokeRequest, UninstallSkillRequest,
 };
 use crate::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, State};
+
+const THRIVE_SKILL_DEFAULT_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/ThrivingOS/Thrive-release/main/community-skills.json";
+const THRIVE_SKILL_HTTP_USER_AGENT: &str =
+    "Thrive/SkillMarketplace (+https://github.com/ThrivingOS/Thrive-release)";
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct ThriveSkillMarketplaceRequest {
+    url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct ThriveSkillMarketInstallRequest {
+    slug: Option<String>,
+    id: Option<String>,
+    repo: Option<String>,
+    ref_name: Option<String>,
+    #[serde(rename = "ref")]
+    ref_alias: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThriveSkillMarketplaceEntry {
+    id: String,
+    name: String,
+    author: String,
+    description: String,
+    repo: String,
+}
+
+fn skill_marketplace_http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent(THRIVE_SKILL_HTTP_USER_AGENT)
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+fn is_safe_skill_marketplace_url(url: &str) -> bool {
+    url.starts_with("https://raw.githubusercontent.com/")
+        || url.starts_with("https://github.com/")
+        || url.starts_with("https://api.github.com/")
+}
+
+fn skill_marketplace_registry_url(
+    request: &ThriveSkillMarketplaceRequest,
+) -> Result<String, String> {
+    let url = request
+        .url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(THRIVE_SKILL_DEFAULT_REGISTRY_URL);
+    if !is_safe_skill_marketplace_url(url) {
+        return Err("skill marketplace registry must be a GitHub HTTPS URL".to_string());
+    }
+    Ok(url.to_string())
+}
+
+fn http_get_skill_marketplace_json<T: for<'de> Deserialize<'de>>(url: &str) -> Result<T, String> {
+    if !is_safe_skill_marketplace_url(url) {
+        return Err("skill marketplace request must use a GitHub HTTPS URL".to_string());
+    }
+    let response = skill_marketplace_http_client()?
+        .get(url)
+        .send()
+        .map_err(|error| format!("failed to request `{url}`: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("request `{url}` failed with HTTP {status}"));
+    }
+    response
+        .json::<T>()
+        .map_err(|error| format!("failed to parse `{url}`: {error}"))
+}
+
+fn load_skill_marketplace_entries(
+    request: &ThriveSkillMarketplaceRequest,
+) -> Result<(String, Vec<ThriveSkillMarketplaceEntry>), String> {
+    let registry_url = skill_marketplace_registry_url(request)?;
+    let entries =
+        http_get_skill_marketplace_json::<Vec<ThriveSkillMarketplaceEntry>>(&registry_url)?;
+    Ok((registry_url, entries))
+}
+
+fn list_skill_marketplace(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+    let request: ThriveSkillMarketplaceRequest = serde_json::from_value(payload.clone())
+        .map_err(|error| format!("skills:marketplace payload invalid: {error}"))?;
+    let (registry_url, entries) = load_skill_marketplace_entries(&request)?;
+    let installed_names = with_store(state, |store| {
+        Ok(store
+            .skills
+            .iter()
+            .map(|skill| skill.name.to_ascii_lowercase())
+            .collect::<std::collections::HashSet<_>>())
+    })?;
+    let skills = entries
+        .into_iter()
+        .map(|entry| {
+            let installed = installed_names.contains(&entry.id.to_ascii_lowercase())
+                || installed_names.contains(&entry.name.to_ascii_lowercase());
+            json!({
+                "id": entry.id,
+                "name": entry.name,
+                "author": entry.author,
+                "description": entry.description,
+                "repo": entry.repo,
+                "installed": installed,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "success": true,
+        "registryUrl": registry_url,
+        "skills": skills,
+    }))
+}
+
+fn resolve_market_install_entry(
+    request: &ThriveSkillMarketInstallRequest,
+) -> Result<Option<ThriveSkillMarketplaceEntry>, String> {
+    let id = request
+        .id
+        .as_deref()
+        .or(request.slug.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let (_registry_url, entries) =
+        load_skill_marketplace_entries(&ThriveSkillMarketplaceRequest::default())?;
+    Ok(entries.into_iter().find(|entry| entry.id == id))
+}
 
 fn is_likely_image_model_id(model_id: &str) -> bool {
     let normalized = model_id.trim().to_lowercase();
@@ -90,6 +228,7 @@ pub fn handle_skills_ai_channel(
             | "skills:save"
             | "skills:disable"
             | "skills:enable"
+            | "skills:marketplace"
             | "skills:market-install"
             | "skills:install-from-repo"
             | "skills:uninstall"
@@ -249,6 +388,12 @@ pub fn handle_skills_ai_channel(
                     let Some(skill) = store.skills.iter_mut().find(|item| item.name == name) else {
                         return Ok(json!({ "success": false, "error": "技能不存在" }));
                     };
+                    let is_builtin = skill.is_builtin.unwrap_or(false)
+                        || skill.source_scope.as_deref() == Some("builtin");
+                    if disabled && is_builtin {
+                        skill.disabled = Some(false);
+                        return Ok(json!({ "success": false, "error": "内置技能不可关闭" }));
+                    }
                     skill.disabled = Some(disabled);
                     Ok(json!({ "success": true }))
                 })
@@ -257,8 +402,49 @@ pub fn handle_skills_ai_channel(
                     value
                 })
             }
+            "skills:marketplace" => list_skill_marketplace(state, payload),
             "skills:market-install" => {
-                let slug = payload_string(payload, "slug").unwrap_or_default();
+                let request: ThriveSkillMarketInstallRequest =
+                    serde_json::from_value(payload.clone()).map_err(|error| {
+                        format!("skills:market-install payload invalid: {error}")
+                    })?;
+                let repo = request
+                    .repo
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        resolve_market_install_entry(&request)
+                            .ok()
+                            .flatten()
+                            .map(|entry| entry.repo)
+                    });
+                if let Some(repo) = repo {
+                    let workspace = workspace_root(state).ok();
+                    let outcome = install_skills_from_repo(
+                        InstallSkillsFromRepoRequest {
+                            source: repo,
+                            ref_name: request.ref_name.or(request.ref_alias),
+                            paths: Vec::new(),
+                            scope: Some("user".to_string()),
+                            workspace_root: workspace,
+                        },
+                        &preferred_user_skill_root(),
+                    )?;
+                    let _ = refresh_skill_store_catalog(state);
+                    let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
+                    return Ok(json!({
+                        "success": true,
+                        "source": outcome.source,
+                        "refName": outcome.ref_name,
+                        "scope": outcome.scope,
+                        "installRoot": outcome.install_root,
+                        "installed": outcome.installed,
+                    }));
+                }
+
+                let slug = request.slug.or(request.id).unwrap_or_default();
                 if slug.is_empty() {
                     return Ok(json!({ "success": false, "error": "缺少技能 slug" }));
                 }

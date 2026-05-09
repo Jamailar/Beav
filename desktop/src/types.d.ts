@@ -120,6 +120,22 @@ export interface ThrivePluginMarketplaceResponse {
   error?: string;
 }
 
+export interface ThriveSkillMarketplaceItem {
+  id: string;
+  name: string;
+  author: string;
+  description: string;
+  repo: string;
+  installed?: boolean;
+}
+
+export interface ThriveSkillMarketplaceResponse {
+  success: boolean;
+  registryUrl?: string;
+  skills: ThriveSkillMarketplaceItem[];
+  error?: string;
+}
+
 export interface ThrivePluginHomeWidget {
   id: string;
   pluginId: string;
@@ -1578,7 +1594,19 @@ declare global {
         create: (payload: { name: string }) => Promise<unknown>;
         enable: (payload: { name: string }) => Promise<unknown>;
         disable: (payload: { name: string }) => Promise<unknown>;
-        marketInstall: (payload: { slug: string; tag?: string }) => Promise<unknown>;
+        uninstall: (payload: { name: string; scope?: 'user' | 'workspace' | string }) => Promise<unknown>;
+        marketplace: (payload?: { url?: string }) => Promise<ThriveSkillMarketplaceResponse>;
+        marketInstall: (payload: { slug?: string; id?: string; repo?: string; tag?: string; ref?: string; refName?: string }) => Promise<unknown>;
+        installFromRepo: (payload: {
+          source?: string;
+          url?: string;
+          repo?: string;
+          ref?: string;
+          refName?: string;
+          path?: string;
+          paths?: string[];
+          scope?: 'user' | 'workspace' | string;
+        }) => Promise<unknown>;
       };
       cover: {
         saveTemplateImage: (payload: { imageSource: string }) => Promise<unknown>;

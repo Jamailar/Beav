@@ -1356,7 +1356,9 @@ function createIpcRenderer() {
       enable: (payload: { name: string }) => invokeChannel('skills:enable', payload),
       disable: (payload: { name: string }) => invokeChannel('skills:disable', payload),
       uninstall: (payload: { name: string; scope?: 'user' | 'workspace' | string }) => invokeChannel('skills:uninstall', payload),
-      marketInstall: (payload: { slug: string; tag?: string }) => invokeChannel('skills:market-install', payload),
+      marketplace: (payload?: { url?: string }) => invokeChannel('skills:marketplace', payload || {}),
+      marketInstall: (payload: { slug?: string; id?: string; repo?: string; tag?: string; ref?: string; refName?: string }) =>
+        invokeChannel('skills:market-install', payload),
       installFromRepo: (payload: {
         source?: string;
         url?: string;
@@ -1375,6 +1377,21 @@ function createIpcRenderer() {
     },
     mcp: {
       list: () => invokeChannel('mcp:list'),
+      add: (payload: {
+        name: string;
+        url?: string;
+        command?: string;
+        args?: string[];
+        env?: Record<string, string>;
+        cwd?: string;
+        transport?: string;
+        enabled?: boolean;
+        bearerTokenEnvVar?: string;
+      }) => invokeChannel('mcp:add', payload),
+      get: (serverId: string) => invokeChannel('mcp:get', { serverId }),
+      remove: (serverId: string) => invokeChannel('mcp:remove', { serverId }),
+      enable: (serverId: string) => invokeChannel('mcp:enable', { serverId }),
+      disable: (serverId: string) => invokeChannel('mcp:disable', { serverId }),
       save: (servers: unknown[]) => invokeChannel('mcp:save', { servers }),
       test: (server: unknown) => invokeChannel('mcp:test', { server }),
       call: (server: unknown, method: string, params?: unknown) => invokeChannel('mcp:call', { server, method, params: params ?? {} }),
