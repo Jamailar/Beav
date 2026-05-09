@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import {
     AudioLines,
     Clapperboard,
-    ExternalLink,
     FileAudio,
     FileText,
     Folder,
@@ -16,7 +15,6 @@ import {
     Play,
     RefreshCw,
     Search,
-    Scissors,
     Trash2,
     Upload,
     X,
@@ -45,9 +43,6 @@ import {
     stripManuscriptExtension,
 } from '../../../shared/manuscriptFiles';
 
-const VideoDraftWorkbench = lazy(async () => ({
-    default: (await import('./ExperimentalVideoWorkbench')).ExperimentalVideoWorkbench,
-}));
 const VideoEditorV2Workbench = lazy(async () => ({
     default: (await import('../video-editor-v2/VideoEditorV2Workbench')).VideoEditorV2Workbench,
 }));
@@ -802,7 +797,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
     const [videoGenError, setVideoGenError] = useState('');
     const [generatedVideoAssets, setGeneratedVideoAssets] = useState<GeneratedAsset[]>([]);
     const [activeVideoJobId, setActiveVideoJobId] = useState<string | null>(null);
-    const [videoWorkbenchVersion, setVideoWorkbenchVersion] = useState<'v2' | 'legacy'>('legacy');
     const [packageState, setPackageState] = useState<PackageState | null>(null);
     const [isGeneratingRemotion, setIsGeneratingRemotion] = useState(false);
     const [isRenderingRemotion, setIsRenderingRemotion] = useState(false);
@@ -2790,50 +2784,6 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                             </div>
                         )}
 
-                        {isVideoDraft && (
-                            <div className="flex items-center gap-1 rounded-xl border border-border bg-surface-secondary/50 p-1">
-                                <button
-                                    type="button"
-                                    onClick={() => setVideoWorkbenchVersion('v2')}
-                                    className={clsx(
-                                        'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-black transition-all active:scale-95',
-                                        videoWorkbenchVersion === 'v2'
-                                            ? 'bg-accent-primary text-white shadow-sm shadow-accent-primary/20'
-                                            : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                    )}
-                                >
-                                    <Scissors className="h-3.5 w-3.5" />
-                                    V2 自动剪辑
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setVideoWorkbenchVersion('legacy')}
-                                    className={clsx(
-                                        'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-black transition-all active:scale-95',
-                                        videoWorkbenchVersion === 'legacy'
-                                            ? 'bg-surface-primary text-text-primary shadow-sm'
-                                            : 'text-text-tertiary hover:bg-surface-secondary/80 hover:text-text-primary'
-                                    )}
-                                >
-                                    旧工作台
-                                </button>
-                            </div>
-                        )}
-                        
-                        {isVideoPackage && (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    void handleRenderRemotionVideo();
-                                }}
-                                disabled={isRenderingRemotion || !isScriptConfirmed}
-                                title={isScriptConfirmed ? '导出当前视频' : '先确认脚本，再导出视频'}
-                                className="inline-flex items-center gap-2 rounded-xl bg-accent-primary px-4 py-2 text-[12px] font-bold text-white shadow-lg shadow-accent-primary/20 hover:bg-accent-hover transition-all active:scale-95 disabled:opacity-40"
-                            >
-                                {isRenderingRemotion ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
-                                {isRenderingRemotion ? 'EXPORTING...' : '导出视频'}
-                            </button>
-                        )}
                         {isAudioPackage && (
                             <button
                                 type="button"
@@ -2848,60 +2798,12 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         )}
                     </div>
                 </div>
-                {isVideoDraft && videoWorkbenchVersion === 'v2' ? (
-                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">V2 自动剪辑工作台加载中...</div>}>
+                {isVideoDraft ? (
+                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 视频剪辑工作台加载中...</div>}>
                         <VideoEditorV2Workbench
                             isActive={isActive}
                             title={currentDescriptor.title}
                             editorFile={editorFile}
-                        />
-                    </Suspense>
-                ) : isVideoDraft ? (
-                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">视频工作台加载中...</div>}>
-                        <VideoDraftWorkbench
-                            isActive={isActive}
-                            title={currentDescriptor.title}
-                            editorFile={editorFile}
-                            packageAssets={packageAssets}
-                            packageState={packageState}
-                            packagePreviewAssets={packagePreviewAssets}
-                            primaryVideoAsset={primaryVideoAsset}
-                            timelineClipCount={timelineClipCount}
-                            timelineTrackNames={timelineTrackNames}
-                            timelineClips={timelineClips}
-                            editorBody={editorBody}
-                            editorBodyDirty={editorBodyDirty}
-                            isSavingEditorBody={isSavingEditorBody}
-                            materialsCollapsed={immersiveMaterialsCollapsed}
-                            timelineCollapsed={immersiveTimelineCollapsed}
-                            editorChatSessionId={editorChatSessionId}
-                            remotionComposition={packageState?.remotion || null}
-                            remotionRenderPath={packageState?.remotion?.render?.outputPath || null}
-                            isGeneratingRemotion={isGeneratingRemotion}
-                            isRenderingRemotion={isRenderingRemotion}
-                            onEditorBodyChange={(value) => {
-                                setEditorBody(value);
-                                setEditorBodyDirty(true);
-                            }}
-                            onOpenBindAssets={() => {
-                                void handleImportAndBindAssetsToPackage();
-                            }}
-                            onPackageStateChange={(state) => applyPackageState(editorFile, state as PackageState)}
-                            onConfirmScript={() => {
-                                void handleConfirmEditorScript();
-                            }}
-                            onGenerateRemotionScene={(instructions) => {
-                                void handleGenerateRemotionScene(instructions);
-                            }}
-                            onSaveRemotionScene={(scene) => {
-                                void handleSaveRemotionScene(scene);
-                            }}
-                            onRenderRemotionVideo={() => {
-                                void handleRenderRemotionVideo();
-                            }}
-                            onOpenRenderedVideo={() => {
-                                void handleOpenRenderedRemotionVideo();
-                            }}
                         />
                     </Suspense>
                 ) : isAudioDraft ? (
