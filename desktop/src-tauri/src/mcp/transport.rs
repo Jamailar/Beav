@@ -97,6 +97,13 @@ impl StdioMcpTransport {
         let effective = build_effective_environment(&host, None, Some(&custom_env));
         let mut process = std::process::Command::new(command);
         process.args(server.args.clone().unwrap_or_default());
+        if let Some(cwd) = server
+            .cwd
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            process.current_dir(cwd);
+        }
         process.env_clear();
         process.envs(&effective.env);
         configure_background_command(&mut process);
@@ -193,6 +200,7 @@ pub fn mcp_stdio_effective_environment_metadata(server: &McpServerRecord) -> Opt
         "effectiveEnvironment": effective.metadata_value(),
         "command": server.command.clone(),
         "args": server.args.clone(),
+        "cwd": server.cwd.clone(),
     }))
 }
 
@@ -229,10 +237,11 @@ impl StatelessMcpTransport {
                     .as_deref()
                     .filter(|value| !value.trim().is_empty())
                     .ok_or_else(|| "缺少 MCP URL".to_string())?;
+                let api_key = mcp_bearer_token_from_env(&self.server);
                 run_curl_json(
                     "POST",
                     url,
-                    None,
+                    api_key.as_deref(),
                     &[],
                     Some(json!({
                         "jsonrpc": "2.0",
@@ -249,11 +258,32 @@ impl StatelessMcpTransport {
                     .as_deref()
                     .filter(|value| !value.trim().is_empty())
                     .ok_or_else(|| "缺少 MCP URL".to_string())?;
-                run_sse_mcp_method(url, method, params)
+                let api_key = mcp_bearer_token_from_env(&self.server);
+                run_sse_mcp_method(url, method, params, api_key.as_deref())
             }
             other => Err(format!("不支持的 transport: {}", other)),
         }
     }
+}
+
+fn mcp_bearer_token_from_env(server: &McpServerRecord) -> Option<String> {
+    let env_var = server
+        .oauth
+        .as_ref()
+        .and_then(|value| value.pointer("/redbox/bearerTokenEnvVar"))
+        .or_else(|| {
+            server
+                .oauth
+                .as_ref()
+                .and_then(|value| value.get("bearerTokenEnvVar"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    std::env::var(env_var)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn initialize_params() -> Value {
@@ -318,6 +348,10 @@ fn extract_mcp_servers_from_json(value: &Value) -> Vec<McpServerRecord> {
                         .collect::<std::collections::HashMap<_, _>>()
                 })
             }),
+            cwd: config
+                .get("cwd")
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string),
             url: config
                 .get("url")
                 .and_then(|value| value.as_str())

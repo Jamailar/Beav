@@ -965,12 +965,17 @@ pub(crate) fn resolve_sse_post_url(url: &str) -> String {
     format!("{normalized}/message")
 }
 
-pub(crate) fn run_sse_mcp_method(url: &str, method: &str, params: Value) -> Result<Value, String> {
+pub(crate) fn run_sse_mcp_method(
+    url: &str,
+    method: &str,
+    params: Value,
+    api_key: Option<&str>,
+) -> Result<Value, String> {
     let post_url = resolve_sse_post_url(url);
     run_curl_json(
         "POST",
         &post_url,
-        None,
+        api_key,
         &[],
         Some(json!({
             "jsonrpc": "2.0",

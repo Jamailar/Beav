@@ -468,9 +468,9 @@ fn pinned_direct_app_cli_actions(
             "cli_runtime.execution.get",
             "mcp.list",
             "mcp.discoverLocal",
-            "mcp.importLocal",
-            "mcp.save",
-            "mcp.test",
+            "mcp.add",
+            "mcp.get",
+            "mcp.remove",
             "mcp.listTools",
         ]
     } else {
@@ -886,9 +886,9 @@ mod tests {
 
         assert!(plan.has_direct_app_cli_action("mcp.list"));
         assert!(plan.has_direct_app_cli_action("mcp.discoverLocal"));
-        assert!(plan.has_direct_app_cli_action("mcp.importLocal"));
-        assert!(plan.has_direct_app_cli_action("mcp.save"));
-        assert!(plan.has_direct_app_cli_action("mcp.test"));
+        assert!(plan.has_direct_app_cli_action("mcp.add"));
+        assert!(plan.has_direct_app_cli_action("mcp.get"));
+        assert!(plan.has_direct_app_cli_action("mcp.remove"));
         assert!(plan.has_direct_app_cli_action("mcp.listTools"));
     }
 
