@@ -562,6 +562,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (
     channel === 'logs:open-dir'
     || channel === 'logs:export-bundle'
+    || channel === 'logs:create-feedback-report'
     || channel === 'logs:upload-report'
     || channel === 'logs:dismiss-report'
     || channel === 'logs:set-upload-consent'
@@ -889,6 +890,7 @@ function createIpcRenderer() {
       openDir: () => invokeChannel('logs:open-dir'),
       listPendingReports: () => invokeChannel('logs:list-pending-reports'),
       exportBundle: (reportId?: string, payload?: { includeAdvancedContext?: boolean }) => invokeChannel('logs:export-bundle', { reportId, ...(payload || {}) }),
+      createFeedbackReport: (payload: { title?: string; content: string; category?: string; priority?: 'low' | 'medium' | 'high' | 'urgent'; source?: string; contact?: string; includeAdvancedContext?: boolean; uploadNow?: boolean; context?: Record<string, unknown> }) => invokeChannel('logs:create-feedback-report', payload),
       uploadReport: (reportId: string) => invokeChannel('logs:upload-report', { reportId }),
       dismissReport: (reportId: string) => invokeChannel('logs:dismiss-report', { reportId }),
       setUploadConsent: (payload: { consent: 'none' | 'prompt' | 'approved'; autoSendSameCrash?: boolean }) => invokeChannel('logs:set-upload-consent', payload),

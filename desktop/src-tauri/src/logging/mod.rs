@@ -17,7 +17,7 @@ use self::memory_sink::RecentLogBuffer;
 use self::panic_hook::{install_panic_hook, mark_runtime_clean_shutdown, mark_runtime_started};
 use self::redaction::{redact_json_local, redact_text_local};
 use self::report_builder::{
-    build_report_bundle, create_pending_report, create_startup_recovery_report,
+    build_report_bundle, create_pending_report, create_startup_recovery_report, feedback_log_text,
 };
 use self::upload_queue::{
     delete_report, ensure_report_dirs, list_reports, load_report, move_report, persist_report,
@@ -397,4 +397,67 @@ pub fn upload_pending_report(
         "report": report,
         "response": response,
     }))
+}
+
+pub fn create_feedback_report(
+    state: &State<'_, AppState>,
+    title: &str,
+    content: &str,
+    category: &str,
+    priority: &str,
+    source: &str,
+    include_advanced_context: bool,
+    metadata: Value,
+) -> Result<(DiagnosticReportRecord, String), String> {
+    let settings = with_store(state, |store| Ok(store.settings.clone()))?;
+    let runtime =
+        LoggingRuntime::global().ok_or_else(|| "Logging runtime unavailable".to_string())?;
+    let config = logging_config_from_settings(&settings);
+    let log_text = feedback_log_text(runtime.root(), &config);
+    let report = create_pending_report(
+        runtime.root(),
+        state,
+        &config,
+        "user_feedback",
+        title,
+        include_advanced_context,
+        json!({
+            "kind": "user_feedback",
+            "title": title,
+            "content": content,
+            "category": category,
+            "priority": priority,
+            "source": source,
+            "submittedAt": crate::now_iso(),
+            "feedback": metadata,
+        }),
+    )?;
+    Ok((report, log_text))
+}
+
+pub fn mark_feedback_report_uploaded(
+    report_id: &str,
+    response: Value,
+) -> Result<DiagnosticReportRecord, String> {
+    let runtime =
+        LoggingRuntime::global().ok_or_else(|| "Logging runtime unavailable".to_string())?;
+    let mut report = load_report(runtime.root(), "pending", report_id)?;
+    report.status = "uploaded".to_string();
+    report.updated_at = crate::now_iso();
+    report.uploaded_at = Some(crate::now_iso());
+    report.last_attempt_at = Some(crate::now_iso());
+    if let Some(dedupe_key) = response
+        .get("dedupe_key")
+        .or_else(|| response.get("dedupeKey"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        report.dedupe_key = Some(dedupe_key.to_string());
+    }
+    report.metadata = json!({
+        "original": report.metadata,
+        "officialFeedbackResponse": response,
+    });
+    move_report(runtime.root(), "pending", "uploaded", &report)?;
+    Ok(report)
 }

@@ -3857,6 +3857,20 @@ export function Chat({
                           <>
                             <div className="font-medium">请求失败</div>
                             <div className="mt-1 text-xs leading-5 text-red-700/85 dark:text-red-300/90">{errorNotice}</div>
+                            <button
+                              type="button"
+                              onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+                                detail: {
+                                  title: '请求失败',
+                                  content: errorNotice,
+                                  sourcePage: 'chat',
+                                  operation: 'chat_request',
+                                },
+                              }))}
+                              className="mt-3 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                            >
+                              反馈问题
+                            </button>
                           </>
                         ) : (
                           <>
@@ -3883,6 +3897,20 @@ export function Chat({
                                 {errorNotice.action.label}
                               </button>
                             )}
+                            <button
+                              type="button"
+                              onClick={() => window.dispatchEvent(new CustomEvent('redbox:open-feedback-report', {
+                                detail: {
+                                  title: errorNotice.title,
+                                  content: [errorNotice.hint, errorNotice.detail].filter(Boolean).join('\n\n') || errorNotice.title,
+                                  sourcePage: 'chat',
+                                  operation: 'chat_request',
+                                },
+                              }))}
+                              className="mt-3 ml-2 inline-flex items-center rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-500/15 dark:text-red-200"
+                            >
+                              反馈问题
+                            </button>
                           </>
                         )}
                       </div>

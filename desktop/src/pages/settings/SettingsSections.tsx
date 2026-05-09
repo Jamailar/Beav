@@ -355,6 +355,7 @@ interface GeneralSettingsSectionProps {
     logStatus: DiagnosticsLogStatus | null;
     pendingReports: DiagnosticsPendingReport[];
     diagnosticsActionBusy: string | null;
+    handleOpenFeedbackReport: () => void;
     handleExportDiagnosticBundle: (reportId?: string) => Promise<void>;
     handleUploadPendingReport: (reportId: string) => Promise<void>;
     handleDismissPendingReport: (reportId: string) => Promise<void>;
@@ -567,6 +568,7 @@ function GeneralSettingsSectionInner({
     logStatus,
     pendingReports,
     diagnosticsActionBusy,
+    handleOpenFeedbackReport,
     handleExportDiagnosticBundle,
     handleUploadPendingReport,
     handleDismissPendingReport,
@@ -910,6 +912,13 @@ function GeneralSettingsSectionInner({
                                 className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
                             >
                                 {isDebugLogsLoading ? '刷新中...' : '刷新预览'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleOpenFeedbackReport}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                            >
+                                反馈问题
                             </button>
                             <button
                                 type="button"
