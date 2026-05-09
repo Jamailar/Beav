@@ -549,12 +549,9 @@ export function RedClaw({
             .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
     ), [activeSessionId, trackedJobsById]);
     const visibleImageJobs = useMemo(() => {
-        const now = Date.now();
         return trackedImageJobs.filter((job) => {
             if (isMediaJobSuccessful(job.status)) return false;
-            if (!isMediaJobTerminal(job.status)) return true;
-            const updatedAt = Date.parse(job.updatedAt || job.completedAt || job.createdAt);
-            return Number.isFinite(updatedAt) && now - updatedAt < 10 * 60_000;
+            return !isMediaJobTerminal(job.status);
         }).slice(0, 3);
     }, [trackedImageJobs]);
     const imageJobSubscriptionIds = useMemo(() => [], []);

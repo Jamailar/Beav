@@ -2864,7 +2864,21 @@ fn run_image_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<R
     let result = run_image_job_sync(&app, &loaded)
         .and_then(|assets| complete_image_job(&app, &job_id, &assets));
     if let Err(error) = result {
-        let _ = schedule_stage_retry_or_dead_letter(&app, &job_id, "image-submit", &error, None);
+        let state = app.state::<AppState>();
+        let partial_artifact_count = open_media_runtime_connection(&state)
+            .and_then(|conn| artifact_count_for_job(&conn, &job_id))
+            .unwrap_or(0);
+        if partial_artifact_count > 0 {
+            let result_json = json!({
+                "error": error.clone(),
+                "partial": true,
+                "completedImages": partial_artifact_count,
+            });
+            let _ = fail_job(&app, &job_id, &error, Some(&result_json));
+        } else {
+            let _ =
+                schedule_stage_retry_or_dead_letter(&app, &job_id, "image-submit", &error, None);
+        }
         emit_job_log(
             &app,
             &job_id,
