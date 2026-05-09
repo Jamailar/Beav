@@ -13,6 +13,7 @@ const VIDEO_TASK_POLL_INTERVAL_MS: u64 = 3000;
 const VIDEO_TASK_POLL_TIMEOUT_MS: u64 = 6 * 60 * 1000;
 const IMAGE_TASK_POLL_INTERVAL_MS: u64 = 2000;
 const IMAGE_TASK_POLL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+const IMAGE_REQUEST_TIMEOUT_SECONDS: u64 = 240;
 
 pub(crate) fn resolve_image_generation_settings(
     settings: &Value,
@@ -976,7 +977,14 @@ fn run_openai_image_request(
         "openai-images.generate",
         "POST",
         &request_url,
-        run_curl_json_response("POST", &request_url, api_key, &[], Some(body), None)?,
+        run_curl_json_response(
+            "POST",
+            &request_url,
+            api_key,
+            &[],
+            Some(body),
+            Some(IMAGE_REQUEST_TIMEOUT_SECONDS),
+        )?,
     )
 }
 
@@ -1149,7 +1157,14 @@ fn run_openai_json_image_request(
         "openai-images.generate",
         "POST",
         endpoint,
-        run_curl_json_response("POST", endpoint, api_key, &[], Some(body), None)?,
+        run_curl_json_response(
+            "POST",
+            endpoint,
+            api_key,
+            &[],
+            Some(body),
+            Some(IMAGE_REQUEST_TIMEOUT_SECONDS),
+        )?,
     )
 }
 

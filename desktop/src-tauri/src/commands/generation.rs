@@ -5,6 +5,7 @@ use crate::*;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use tauri::{AppHandle, State};
 
 fn is_redbox_official_video_endpoint(endpoint: &str) -> bool {
@@ -289,9 +290,11 @@ fn generate_planned_image_batch(
             .enumerate()
             .collect::<Vec<_>>();
         for chunk in indexed_items.chunks(IMAGE_BATCH_PARALLELISM) {
+            let (tx, rx) = mpsc::channel();
             let handles = chunk
                 .iter()
                 .map(|(index, item)| {
+                    let tx = tx.clone();
                     let request_payload = payload.clone();
                     let media_root_path = media_root_path.to_path_buf();
                     let endpoint = endpoint.clone();
@@ -308,7 +311,7 @@ fn generate_planned_image_batch(
                     let item = item.clone();
                     let index = *index;
                     tauri::async_runtime::spawn_blocking(move || {
-                        execute_planned_image_generation_item(
+                        let result = execute_planned_image_generation_item(
                             request_payload,
                             media_root_path,
                             index,
@@ -327,20 +330,35 @@ fn generate_planned_image_batch(
                             quality,
                             mime_type,
                             placeholder_fallback_allowed,
-                        )
+                        );
+                        let _ = tx.send(result);
                     })
                 })
                 .collect::<Vec<_>>();
-            let mut chunk_results = Vec::with_capacity(handles.len());
-            for handle in handles {
-                let result = tauri::async_runtime::block_on(handle)
-                    .map_err(|error| format!("planned image batch worker failed: {error}"))??;
-                chunk_results.push(result);
+            drop(tx);
+
+            let mut first_error: Option<String> = None;
+            for result in rx.iter().take(handles.len()) {
+                match result {
+                    Ok((index, asset)) => {
+                        on_asset_created(&asset, index + 1, total)?;
+                        created.push(asset);
+                    }
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(error);
+                        }
+                    }
+                }
             }
-            chunk_results.sort_by_key(|(index, _)| *index);
-            for (index, asset) in chunk_results {
-                on_asset_created(&asset, index + 1, total)?;
-                created.push(asset);
+
+            for handle in handles {
+                tauri::async_runtime::block_on(handle)
+                    .map_err(|error| format!("planned image batch worker failed: {error}"))?;
+            }
+
+            if let Some(error) = first_error {
+                return Err(error);
             }
         }
         created.sort_by_key(|asset| asset.relative_path.clone().unwrap_or_default());

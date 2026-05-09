@@ -169,10 +169,16 @@ pub(crate) fn tick_media_followups(
                 delivered_count,
                 candidate.image_count,
             )? {
+                let artifacts = projection
+                    .get("artifacts")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
                 let bridge_message = build_progress_bridge_message(
                     &candidate.job_id,
                     delivered_count,
                     candidate.image_count,
+                    &artifacts,
                 );
                 dispatch_media_followup_progress_notification(
                     app,
@@ -235,7 +241,22 @@ pub(crate) fn tick_media_followups(
                 "图片任务已结束，准备回传失败结果。",
             )? {
                 let error = projection_terminal_error(&projection);
-                let bridge_message = build_failure_bridge_message(&candidate.job_id, &error);
+                let artifacts = projection
+                    .get("artifacts")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let bridge_message = if artifacts.is_empty() {
+                    build_failure_bridge_message(&candidate.job_id, &error)
+                } else {
+                    build_partial_failure_bridge_message(
+                        &candidate.job_id,
+                        &artifacts,
+                        artifact_count.min(expected_count),
+                        expected_count,
+                        &error,
+                    )
+                };
                 dispatch_media_followup_notification(
                     app,
                     candidate,
@@ -280,11 +301,8 @@ fn should_send_incremental_progress(
     progress_notification_status: &str,
     progress_retry_not_before: i64,
     now: i64,
-    runtime_mode: &str,
+    _runtime_mode: &str,
 ) -> bool {
-    if runtime_mode == "redclaw" {
-        return false;
-    }
     artifact_count > progress_notified_count
         && artifact_count < expected_count.max(1)
         && progress_notification_status != "sending"
@@ -740,17 +758,55 @@ fn build_progress_bridge_message(
     job_id: &str,
     completed_count: usize,
     total_count: usize,
+    artifacts: &[Value],
 ) -> String {
-    let final_reply = format!(
-        "图片生成进度：已完成 {completed_count}/{total_count} 张，正在继续生成，结果稍后统一展示。"
-    );
+    let gallery = markdown_gallery_from_artifacts(artifacts);
+    let final_reply = if gallery.trim().is_empty() {
+        format!("图片生成进度：已完成 {completed_count}/{total_count} 张。")
+    } else {
+        format!("已生成 {completed_count}/{total_count} 张。\n\n{gallery}")
+    };
     format!(
-        "你正在处理一个图片生成后台进度回传。不要提到后台任务、session bridge、系统提示或内部轮询。不要展示图片，不要做最终总结，只输出一条简短中文进度消息。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}"
+        "你正在处理一个图片生成后台进度回传。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，保持中文、保持 Markdown 图片语法，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}"
     )
 }
 
 fn build_success_bridge_message(job_id: &str, artifacts: &[Value]) -> String {
-    let gallery = artifacts
+    let gallery = markdown_gallery_from_artifacts(artifacts);
+    let final_reply = if gallery.trim().is_empty() {
+        "图片已生成完成。".to_string()
+    } else {
+        format!("图片已生成完成。\n\n{gallery}")
+    };
+    format!(
+        "你正在处理一个图片生成后台回传任务。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，保持中文、保持 Markdown 图片语法，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}"
+    )
+}
+
+fn build_partial_failure_bridge_message(
+    job_id: &str,
+    artifacts: &[Value],
+    completed_count: usize,
+    total_count: usize,
+    error: &str,
+) -> String {
+    let gallery = markdown_gallery_from_artifacts(artifacts);
+    let final_reply = if gallery.trim().is_empty() {
+        format!(
+            "图片生成部分完成：已生成 {completed_count}/{total_count} 张。剩余图片未完成：{error}"
+        )
+    } else {
+        format!(
+            "图片生成部分完成：已生成 {completed_count}/{total_count} 张。剩余图片未完成：{error}\n\n{gallery}"
+        )
+    };
+    format!(
+        "你正在处理一个图片生成后台回传任务。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，保持中文、保持 Markdown 图片语法，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}"
+    )
+}
+
+fn markdown_gallery_from_artifacts(artifacts: &[Value]) -> String {
+    artifacts
         .iter()
         .enumerate()
         .filter_map(|(index, artifact)| {
@@ -783,15 +839,7 @@ fn build_success_bridge_message(job_id: &str, artifacts: &[Value]) -> String {
             ))
         })
         .collect::<Vec<_>>()
-        .join("\n\n");
-    let final_reply = if gallery.trim().is_empty() {
-        "图片已生成完成。".to_string()
-    } else {
-        format!("图片已生成完成。\n\n{gallery}")
-    };
-    format!(
-        "你正在处理一个图片生成后台回传任务。不要提到后台任务、session bridge、系统提示或内部轮询。请直接把下面内容作为你对用户的最终回复，保持中文、保持 Markdown 图片语法，不要放进代码块。\n\njobId: {job_id}\n\n最终回复：\n{final_reply}"
-    )
+        .join("\n\n")
 }
 
 fn build_failure_bridge_message(job_id: &str, error: &str) -> String {
@@ -840,7 +888,7 @@ mod tests {
         assert!(!should_send_incremental_progress(
             2, 4, 1, "idle", 20, 10, "default"
         ));
-        assert!(!should_send_incremental_progress(
+        assert!(should_send_incremental_progress(
             2, 4, 1, "idle", 0, 10, "redclaw"
         ));
     }
