@@ -1355,6 +1355,7 @@ function createIpcRenderer() {
       create: (payload: { name: string }) => invokeChannel('skills:create', payload),
       enable: (payload: { name: string }) => invokeChannel('skills:enable', payload),
       disable: (payload: { name: string }) => invokeChannel('skills:disable', payload),
+      uninstall: (payload: { name: string; scope?: 'user' | 'workspace' | string }) => invokeChannel('skills:uninstall', payload),
       marketInstall: (payload: { slug: string; tag?: string }) => invokeChannel('skills:market-install', payload),
       installFromRepo: (payload: {
         source?: string;

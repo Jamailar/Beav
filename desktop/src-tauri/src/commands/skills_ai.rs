@@ -4,7 +4,7 @@ use crate::skills::{
     compute_skill_discovery_fingerprint, install_skills_from_repo, invoke_skill,
     preferred_user_skill_root, refresh_skill_store_catalog, resolve_skill_file_path,
     skill_catalog_changed, skills_catalog_list_value, write_skill_record_to_path,
-    InstallSkillsFromRepoRequest, SkillInvokeRequest,
+    InstallSkillsFromRepoRequest, SkillInvokeRequest, UninstallSkillRequest,
 };
 use crate::*;
 use serde_json::{json, Value};
@@ -92,6 +92,7 @@ pub fn handle_skills_ai_channel(
             | "skills:enable"
             | "skills:market-install"
             | "skills:install-from-repo"
+            | "skills:uninstall"
             | "ai:roles:list"
             | "ai:detect-protocol"
             | "ai:test-connection"
@@ -315,6 +316,47 @@ pub fn handle_skills_ai_channel(
                     "scope": outcome.scope,
                     "installRoot": outcome.install_root,
                     "installed": outcome.installed,
+                }))
+            }
+            "skills:uninstall" => {
+                let name = requested_skill_name(payload);
+                if name.is_empty() {
+                    return Ok(json!({ "success": false, "error": "技能名称不能为空" }));
+                }
+                let workspace = workspace_root(state).ok();
+                let existing = with_store(state, |store| {
+                    Ok(store.skills.iter().find(|item| item.name == name).cloned())
+                })?;
+                let Some(skill) = existing else {
+                    return Ok(json!({ "success": false, "error": "技能不存在" }));
+                };
+                let is_builtin = skill.is_builtin.unwrap_or(false)
+                    || skill.source_scope.as_deref() == Some("builtin");
+                if is_builtin {
+                    return Ok(json!({ "success": false, "error": "内置技能不可删除" }));
+                }
+                let scope = payload_string(payload, "scope").or_else(|| {
+                    match skill.source_scope.as_deref() {
+                        Some("workspace") => Some("workspace".to_string()),
+                        _ => Some("user".to_string()),
+                    }
+                });
+                let outcome = crate::skills::uninstall_skill(
+                    UninstallSkillRequest {
+                        name,
+                        scope,
+                        workspace_root: workspace.clone(),
+                    },
+                    &preferred_user_skill_root(),
+                )?;
+                let _ = refresh_skill_store_catalog(state);
+                let _ = refresh_runtime_warm_state(state, &["wander", "redclaw", "team"]);
+                Ok(json!({
+                    "success": true,
+                    "name": outcome.name,
+                    "scope": outcome.scope,
+                    "installRoot": outcome.install_root,
+                    "removedPath": outcome.removed_path,
                 }))
             }
             "ai:roles:list" => Ok(json!([

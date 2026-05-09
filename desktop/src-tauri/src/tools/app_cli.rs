@@ -949,6 +949,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["install-from-repo".to_string()];
                 self.handle_skills(&tokens, payload)
             }
+            "skillsuninstall" | "skillsdelete" => {
+                let tokens = vec!["uninstall".to_string()];
+                self.handle_skills(&tokens, payload)
+            }
             "imagegenerate" => {
                 let tokens = vec!["generate".to_string()];
                 self.handle_image(&tokens, payload)
@@ -2594,6 +2598,16 @@ impl<'a> AppCliExecutor<'a> {
                 json!({
                     "name": skill_name_from_args_or_payload(&args, payload)
                         .ok_or_else(|| "skills disable requires --name".to_string())?
+                }),
+            ),
+            "uninstall" | "delete" => self.call_channel(
+                "skills:uninstall",
+                json!({
+                    "name": skill_name_from_args_or_payload(&args, payload)
+                        .ok_or_else(|| "skills uninstall requires --name".to_string())?,
+                    "scope": args
+                        .string(&["scope"])
+                        .or_else(|| payload_string_alias(payload, &["scope"])),
                 }),
             ),
             "market-install" => self.call_channel(
@@ -5340,6 +5354,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "skills save --location <path> --content \"...\"",
             "skills enable --name <skill>",
             "skills disable --name <skill>",
+            "skills uninstall --name <skill> [--scope user|workspace]",
             "skills install-from-repo --source <github-url-or-owner/repo> [--ref <ref>] [--path <path>] [--scope user|workspace]",
             "skills market-install --slug <slug>  # placeholder registration only; use cli_runtime.* to provision external tools",
         ],

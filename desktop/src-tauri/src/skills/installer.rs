@@ -46,6 +46,23 @@ pub struct InstallSkillsFromRepoOutcome {
     pub installed: Vec<InstalledRepoSkill>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UninstallSkillRequest {
+    pub name: String,
+    pub scope: Option<String>,
+    pub workspace_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UninstallSkillOutcome {
+    pub name: String,
+    pub scope: String,
+    pub install_root: String,
+    pub removed_path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RepoSource {
     Git {
@@ -125,12 +142,84 @@ pub fn install_skills_from_repo(
     })
 }
 
+pub fn uninstall_skill(
+    request: UninstallSkillRequest,
+    user_skill_root: &Path,
+) -> Result<UninstallSkillOutcome, String> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err("skill name must not be empty".to_string());
+    }
+    let scope = normalized_install_scope(request.scope.as_deref())?;
+    let install_root = match scope.as_str() {
+        "workspace" => request
+            .workspace_root
+            .as_ref()
+            .ok_or_else(|| "workspace scope requires workspaceRoot".to_string())?
+            .join("skills"),
+        "user" => user_skill_root.to_path_buf(),
+        _ => unreachable!("validated scope"),
+    };
+    let target = install_root.join(slug_from_relative_path(name));
+    validate_skill_dir_for_delete(&install_root, &target)?;
+    fs::remove_dir_all(&target).map_err(|err| {
+        format!(
+            "failed to remove skill directory {}: {err}",
+            target.display()
+        )
+    })?;
+    Ok(UninstallSkillOutcome {
+        name: name.to_string(),
+        scope,
+        install_root: install_root.display().to_string(),
+        removed_path: target.display().to_string(),
+    })
+}
+
 fn normalized_install_scope(scope: Option<&str>) -> Result<String, String> {
     match scope.unwrap_or("user").trim().to_ascii_lowercase().as_str() {
         "" | "user" | "global" => Ok("user".to_string()),
         "workspace" | "project" => Ok("workspace".to_string()),
         other => Err(format!("unsupported skill install scope `{other}`")),
     }
+}
+
+fn validate_skill_dir_for_delete(root: &Path, target: &Path) -> Result<(), String> {
+    let root = fs::canonicalize(root).map_err(|err| {
+        format!(
+            "failed to resolve skill install root {}: {err}",
+            root.display()
+        )
+    })?;
+    if !target.exists() {
+        return Err(format!(
+            "skill directory does not exist: {}",
+            target.display()
+        ));
+    }
+    let target = fs::canonicalize(target).map_err(|err| {
+        format!(
+            "failed to resolve skill directory before delete {}: {err}",
+            target.display()
+        )
+    })?;
+    if !target.starts_with(&root) || target == root {
+        return Err("refusing to delete a path outside the skill install root".to_string());
+    }
+    if target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == INSTALL_STAGING_DIR)
+    {
+        return Err("refusing to delete the skill install staging directory".to_string());
+    }
+    if !target.join(SKILL_FILENAME).is_file() {
+        return Err(format!(
+            "refusing to delete directory without {SKILL_FILENAME}: {}",
+            target.display()
+        ));
+    }
+    Ok(())
 }
 
 fn source_ref_name(source: &RepoSource) -> Option<String> {
@@ -657,6 +746,48 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("inside the repository"));
         let _ = fs::remove_dir_all(repo);
+        let _ = fs::remove_dir_all(install_root);
+    }
+
+    #[test]
+    fn uninstall_skill_removes_managed_skill_dir() {
+        let install_root = temp_root("uninstall");
+        let skill_dir = install_root.join("alpha-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "# Alpha\n\nUse alpha.").unwrap();
+
+        let outcome = uninstall_skill(
+            UninstallSkillRequest {
+                name: "alpha-skill".to_string(),
+                ..Default::default()
+            },
+            &install_root,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.name, "alpha-skill");
+        assert!(!skill_dir.exists());
+        let _ = fs::remove_dir_all(install_root);
+    }
+
+    #[test]
+    fn uninstall_skill_refuses_non_skill_dir() {
+        let install_root = temp_root("uninstall-non-skill");
+        let skill_dir = install_root.join("alpha-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("README.md"), "not a skill").unwrap();
+
+        let err = uninstall_skill(
+            UninstallSkillRequest {
+                name: "alpha-skill".to_string(),
+                ..Default::default()
+            },
+            &install_root,
+        )
+        .unwrap_err();
+
+        assert!(err.contains("without SKILL.md"));
+        assert!(skill_dir.exists());
         let _ = fs::remove_dir_all(install_root);
     }
 }
