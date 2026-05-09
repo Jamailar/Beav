@@ -8,9 +8,11 @@ use crate::persistence::{
 };
 use crate::{
     active_space_workspace_root_from_store, emit_space_changed, emit_space_renamed,
-    ensure_redclaw_space_writing_style_skill, make_id, now_iso, payload_string,
-    payload_value_as_string, update_workspace_root_cache, AppState, SpaceRecord,
+    ensure_redclaw_space_writing_style_skill, now_iso, payload_string, payload_value_as_string,
+    update_workspace_root_cache, AppState,
 };
+
+pub(crate) const SPACE_CREATION_DISABLED_ERROR: &str = "创建新空间功能已关闭";
 
 pub(crate) fn spaces_list_value(state: &State<'_, AppState>) -> Result<Value, String> {
     with_store(state, |store| {
@@ -43,53 +45,7 @@ pub fn handle_spaces_channel(
         match channel {
             "spaces:list" => spaces_list_value(state),
             "spaces:create" => {
-                let name = payload_value_as_string(payload)
-                    .or_else(|| payload_string(payload, "name"))
-                    .unwrap_or_default();
-                if name.is_empty() {
-                    return Ok(json!({ "success": false, "error": "空间名称不能为空" }));
-                }
-
-                let result = with_store_mut(state, |store| {
-                    let timestamp = now_iso();
-                    let space = SpaceRecord {
-                        id: make_id("space"),
-                        name,
-                        created_at: timestamp.clone(),
-                        updated_at: timestamp,
-                    };
-                    store.active_space_id = space.id.clone();
-                    store.spaces.push(space.clone());
-                    Ok(
-                        json!({ "success": true, "space": space, "activeSpaceId": store.active_space_id }),
-                    )
-                })?;
-
-                if let Some(root) = with_store(state, |store| {
-                    Ok(Some(active_space_workspace_root_from_store(
-                        &store,
-                        &store.active_space_id,
-                        &state.store_path,
-                    )?))
-                })? {
-                    let snapshot = load_workspace_hydration_snapshot(&root);
-                    let _ = with_store_mut(state, |store| {
-                        apply_workspace_hydration_snapshot(store, snapshot);
-                        Ok(())
-                    });
-                }
-
-                if let Some(active_space_id) =
-                    result.get("activeSpaceId").and_then(|value| value.as_str())
-                {
-                    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-                    let _ =
-                        update_workspace_root_cache(state, &settings_snapshot, active_space_id)?;
-                    let _ = ensure_redclaw_space_writing_style_skill(state)?;
-                    emit_space_changed(app, active_space_id);
-                }
-
-                Ok(result)
+                Ok(json!({ "success": false, "error": SPACE_CREATION_DISABLED_ERROR }))
             }
             "spaces:rename" => {
                 let Some(id) = payload_string(payload, "id") else {

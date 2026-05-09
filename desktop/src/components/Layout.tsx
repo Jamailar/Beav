@@ -1,5 +1,5 @@
 import { Dispatch, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Plus, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Folder, FolderOpen, Dices, Pencil, ChevronDown, Users, Sun, Moon, X, Download, AlertCircle, Bell, Home, PanelLeft, Search, Clock3, Edit, BookOpenText, Trash2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -61,7 +61,6 @@ interface AppUpdateNoticePayload {
   body: string;
 }
 
-type SpaceDialogMode = 'create' | 'rename';
 type GlobalKnowledgeSearchItem = {
   itemId?: string;
   kind?: 'redbook-note' | 'youtube-video' | 'document-source' | string;
@@ -229,7 +228,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [isSpaceMenuOpen, setIsSpaceMenuOpen] = useState(false);
   const [hoveredSpaceId, setHoveredSpaceId] = useState<string | null>(null);
   const [isSpaceDialogOpen, setIsSpaceDialogOpen] = useState(false);
-  const [spaceDialogMode, setSpaceDialogMode] = useState<SpaceDialogMode>('create');
   const [spaceDialogName, setSpaceDialogName] = useState('');
   const [spaceDialogTargetId, setSpaceDialogTargetId] = useState<string | null>(null);
   const [isSpaceDialogSubmitting, setIsSpaceDialogSubmitting] = useState(false);
@@ -467,17 +465,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     }
   }, [activeSpaceId, t]);
 
-  const openCreateSpaceDialog = useCallback(() => {
-    setIsSpaceMenuOpen(false);
-    setSpaceDialogMode('create');
-    setSpaceDialogTargetId(null);
-    setSpaceDialogName('');
-    setIsSpaceDialogOpen(true);
-  }, []);
-
   const openRenameSpaceDialog = useCallback((space: WorkspaceSpace) => {
     setIsSpaceMenuOpen(false);
-    setSpaceDialogMode('rename');
     setSpaceDialogTargetId(space.id);
     setSpaceDialogName(space.name);
     setIsSpaceDialogOpen(true);
@@ -631,20 +620,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
     setIsSpaceDialogSubmitting(true);
     try {
-      if (spaceDialogMode === 'create') {
-        const result = await window.ipcRenderer.spaces.create(trimmedName) as { success?: boolean; space?: WorkspaceSpace; error?: string } | null;
-        if (!result?.success || !result.space) {
-          void appAlert(result?.error || t('layout.createSpaceFailed'));
-          return;
-        }
-        setIsSpaceDialogOpen(false);
-        setSpaceDialogName('');
-        setSpaceDialogTargetId(null);
-        await loadSpaces();
-        await handleSwitchSpace(result.space.id);
-        return;
-      }
-
       if (!spaceDialogTargetId) {
         void appAlert(t('layout.renameSpaceMissing'));
         return;
@@ -662,11 +637,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       await loadSpaces();
     } catch (error) {
       console.error('Failed to submit space dialog:', error);
-      void appAlert(spaceDialogMode === 'create' ? t('layout.createSpaceFailedRetry') : t('layout.renameSpaceFailedRetry'));
+      void appAlert(t('layout.renameSpaceFailedRetry'));
     } finally {
       setIsSpaceDialogSubmitting(false);
     }
-  }, [handleSwitchSpace, loadSpaces, spaceDialogMode, spaceDialogName, spaceDialogTargetId, t]);
+  }, [loadSpaces, spaceDialogName, spaceDialogTargetId, t]);
 
   const handleSidebarNavigate = useCallback((item: SidebarNavItem) => {
     if (item.settingsTab || item.redclawAction) {
@@ -929,18 +904,6 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        openCreateSpaceDialog();
-                      }}
-                      className="w-full h-9 px-2.5 border-t border-border text-[12px] text-text-secondary hover:text-text-primary hover:bg-surface-secondary flex items-center gap-1.5"
-                    >
-                      <Plus className="w-[12px] h-[12px]" strokeWidth={1.75} />
-                      {t('layout.createSpace')}
-                    </button>
                   </div>
                 )}
               </div>
@@ -989,7 +952,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             onMouseDown={(event) => event.stopPropagation()}
           >
             <div className="text-sm font-medium text-text-primary">
-              {spaceDialogMode === 'create' ? t('layout.createSpace') : t('layout.renameSpace')}
+              {t('layout.renameSpace')}
             </div>
             <input
               autoFocus

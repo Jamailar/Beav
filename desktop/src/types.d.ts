@@ -1607,7 +1607,7 @@ declare global {
           spaces?: Array<{ id: string; name: string; createdAt?: string; updatedAt?: string }>;
         }>;
         switch: (spaceId: string) => Promise<unknown>;
-        create: (name: string) => Promise<unknown>;
+        create: () => Promise<unknown>;
         rename: (payload: { id: string; name: string }) => Promise<unknown>;
         delete: (spaceId: string) => Promise<unknown>;
       };
