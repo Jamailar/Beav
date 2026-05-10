@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, PenLine, RefreshCw, Send, Sparkles, Wand2, X } from 'lucide-react';
+import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, Mic2, PenLine, RefreshCw, Send, Sparkles, X } from 'lucide-react';
 import { ApprovalPanel } from './Approval';
 import { CreatorProfilesPanel } from './CreatorProfiles';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
@@ -9,6 +9,7 @@ interface HomeProps {
     isActive?: boolean;
     onNavigateToCoverStudio?: () => void;
     onNavigateToGenerationStudio?: (mode: 'image' | 'video') => void;
+    onNavigateToAudioStudio?: () => void;
     onNavigateToRedClaw?: (message: {
         content: string;
         displayContent?: string;
@@ -318,7 +319,7 @@ function PluginHomeWidgetCard({
     );
 }
 
-export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToRedClaw }: HomeProps) {
+export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToAudioStudio, onNavigateToRedClaw }: HomeProps) {
     const [stats, setStats] = useState<HomeStats>(EMPTY_STATS);
     const [recentManuscripts, setRecentManuscripts] = useState<RecentManuscript[]>([]);
     const [pluginHomeWidgets, setPluginHomeWidgets] = useState<ThrivePluginHomeWidget[]>([]);
@@ -542,11 +543,11 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                             onClick={() => onNavigateToGenerationStudio?.('video')}
                         />
                         <QuickAppButton
-                            label="找灵感"
-                            description="让 AI 先给出内容方向"
-                            icon={Wand2}
+                            label="生音频"
+                            description="用角色音色合成旁白"
+                            icon={Mic2}
                             tintClassName="bg-amber-500/10 text-amber-700"
-                            onClick={() => sendAiSuggestion('帮我基于当前内容资产，生成 10 个适合今天推进的选题。', '找灵感')}
+                            onClick={() => onNavigateToAudioStudio?.()}
                         />
                     </section>
 
