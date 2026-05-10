@@ -866,6 +866,11 @@ export function Settings({
     image_endpoint: '',
     image_api_key: '',
     image_model: 'gpt-image-1',
+    voice_endpoint: '',
+    voice_api_key: '',
+    voice_tts_model: 'speech-2.8-turbo',
+    tts_model: 'speech-2.8-turbo',
+    voice_clone_model: 'minimax-voice-clone',
     video_endpoint: '',
     video_api_key: '',
     video_model: String(REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video']),
@@ -911,6 +916,7 @@ export function Settings({
   const [visualIndexSourceId, setVisualIndexSourceId] = useState('');
   const [videoAnalysisSourceId, setVideoAnalysisSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
+  const [voiceSourceId, setVoiceSourceId] = useState('');
   const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
   const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -1390,7 +1396,7 @@ export function Settings({
     return { provider: 'openai-compatible', template: 'openai-images' };
   }, []);
 
-  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'visual' | 'videoAnalysis' | 'image' | 'video', nextSourceId: string) => {
+  const handleLinkedSourceChange = useCallback((feature: 'transcription' | 'embedding' | 'visual' | 'videoAnalysis' | 'image' | 'voice' | 'video', nextSourceId: string) => {
     const source = getAiSourceById(nextSourceId);
     if (!source) return;
 
@@ -1399,6 +1405,7 @@ export function Settings({
     if (feature === 'visual') setVisualIndexSourceId(nextSourceId);
     if (feature === 'videoAnalysis') setVideoAnalysisSourceId(nextSourceId);
     if (feature === 'image') setImageSourceId(nextSourceId);
+    if (feature === 'voice') setVoiceSourceId(nextSourceId);
     setFormData((prev) => {
       if (feature === 'transcription') {
         return {
@@ -1436,6 +1443,16 @@ export function Settings({
       }
       if (feature === 'video') {
         return prev;
+      }
+      if (feature === 'voice') {
+        const ttsModel = pickBestModelForSource(source, prev.voice_tts_model || prev.tts_model, 'audio');
+        return {
+          ...prev,
+          voice_endpoint: String(source.baseURL || '').trim(),
+          voice_api_key: String(source.apiKey || '').trim(),
+          voice_tts_model: ttsModel || prev.voice_tts_model || 'speech-2.8-turbo',
+          tts_model: ttsModel || prev.tts_model || 'speech-2.8-turbo',
+        };
       }
 
       const nextRouting = inferImageRoutingFromSource(source);
@@ -1475,6 +1492,10 @@ export function Settings({
     return getAiSourceById(imageSourceId);
   }, [getAiSourceById, imageSourceId]);
 
+  const selectedVoiceSource = useMemo(() => {
+    return getAiSourceById(voiceSourceId);
+  }, [getAiSourceById, voiceSourceId]);
+
   const transcriptionSourceModels = useMemo(() => {
     return selectedTranscriptionSource ? filterAiModelsByCapability(getSourceModelList(selectedTranscriptionSource), 'transcription') : [];
   }, [getSourceModelList, selectedTranscriptionSource]);
@@ -1494,6 +1515,10 @@ export function Settings({
   const imageSourceModels = useMemo(() => {
     return selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
   }, [getSourceModelList, selectedImageSource]);
+
+  const voiceSourceModels = useMemo(() => {
+    return selectedVoiceSource ? filterAiModelsByCapability(getSourceModelList(selectedVoiceSource), 'audio') : [];
+  }, [getSourceModelList, selectedVoiceSource]);
 
   const allConfiguredModels = useMemo(() => {
     const collected: string[] = [];
@@ -3711,6 +3736,12 @@ export function Settings({
           model: String(settings.image_model || '').trim(),
           fallbackId: normalizedDefaultId,
         });
+        const resolvedVoiceSourceId = resolveLinkedSourceIdFromList({
+          endpoint: String(settings.voice_endpoint || settings.tts_endpoint || settings.api_endpoint || '').trim(),
+          apiKey: String(settings.voice_api_key || settings.tts_api_key || settings.api_key || '').trim(),
+          model: String(settings.voice_tts_model || settings.tts_model || '').trim(),
+          fallbackId: normalizedDefaultId,
+        });
         const unlockedAt = String(settings.developer_mode_unlocked_at || '').trim();
         const unlockedAtMs = unlockedAt ? Date.parse(unlockedAt) : NaN;
         const developerModeEnabled = Boolean(settings.developer_mode_enabled)
@@ -3766,6 +3797,7 @@ export function Settings({
         setVisualIndexSourceId(resolvedVisualIndexSourceId);
         setVideoAnalysisSourceId(resolvedVideoAnalysisSourceId);
         setImageSourceId(resolvedImageSourceId);
+        setVoiceSourceId(resolvedVoiceSourceId);
         setNotificationSettings(parseNotificationSettings(settings.notifications_json));
         clearAiSourceDraftDirty();
         console.log('[settings][ai] loadSettings-applied', {
@@ -3776,6 +3808,7 @@ export function Settings({
           visualIndexSourceId: resolvedVisualIndexSourceId,
           videoAnalysisSourceId: resolvedVideoAnalysisSourceId,
           imageSourceId: resolvedImageSourceId,
+          voiceSourceId: resolvedVoiceSourceId,
         });
 
         setFormData({
@@ -3837,6 +3870,11 @@ export function Settings({
             }
             return settings.image_model || 'gpt-image-1';
           })(),
+          voice_endpoint: settings.voice_endpoint || settings.tts_endpoint || '',
+          voice_api_key: settings.voice_api_key || settings.tts_api_key || '',
+          voice_tts_model: settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo',
+          tts_model: settings.tts_model || settings.voice_tts_model || 'speech-2.8-turbo',
+          voice_clone_model: settings.voice_clone_model || 'minimax-voice-clone',
           video_endpoint: REDBOX_OFFICIAL_VIDEO_BASE_URL,
           video_api_key: settings.video_api_key || '',
           video_model: settings.video_model || REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'],
@@ -5362,11 +5400,14 @@ export function Settings({
       const resolvedVisualIndexSource = getAiSourceById(visualIndexSourceId) || defaultSource || null;
       const resolvedVideoAnalysisSource = getAiSourceById(videoAnalysisSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
+      const resolvedVoiceSource = getAiSourceById(voiceSourceId) || defaultSource || null;
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
       const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
       const resolvedVideoAnalysisModel = String(formData.video_analysis_model || pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource) || '').trim();
       const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
+      const resolvedVoiceTtsModel = String(formData.voice_tts_model || formData.tts_model || pickBestModelForSource(resolvedVoiceSource, '', 'audio') || 'speech-2.8-turbo').trim();
+      const resolvedVoiceCloneModel = String(formData.voice_clone_model || 'minimax-voice-clone').trim();
       const resolvedVideoModel = REDBOX_OFFICIAL_VIDEO_MODEL_LIST.includes(String(formData.video_model || '').trim() as typeof REDBOX_OFFICIAL_VIDEO_MODEL_LIST[number])
         ? String(formData.video_model || '').trim()
         : REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'];
@@ -5483,6 +5524,12 @@ export function Settings({
         image_endpoint: String(resolvedImageSource?.baseURL || formData.image_endpoint || '').trim(),
         image_api_key: String(resolvedImageSource?.apiKey || formData.image_api_key || '').trim(),
         image_model: resolvedImageModel,
+        voice_provider: 'voice',
+        voice_endpoint: String(resolvedVoiceSource?.baseURL || formData.voice_endpoint || formData.api_endpoint || '').trim(),
+        voice_api_key: String(resolvedVoiceSource?.apiKey || formData.voice_api_key || formData.api_key || '').trim(),
+        voice_tts_model: resolvedVoiceTtsModel,
+        tts_model: resolvedVoiceTtsModel,
+        voice_clone_model: resolvedVoiceCloneModel,
         video_endpoint: REDBOX_OFFICIAL_VIDEO_BASE_URL,
         video_api_key: String(formData.video_api_key || formData.api_key || '').trim(),
         video_model: resolvedVideoModel,
@@ -6538,6 +6585,58 @@ export function Settings({
                           <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['first-last-frame']}</div>
                         </div>
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border">
+                    <h3 className="text-sm font-medium text-text-primary mb-4">TTS / 声音复刻模型设置</h3>
+
+                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            语音 AI 源
+                          </label>
+                          <AiSourceSelect
+                            value={voiceSourceId}
+                            sources={aiSources}
+                            onChange={(nextSourceId) => handleLinkedSourceChange('voice', nextSourceId)}
+                            className="w-full"
+                          />
+                        </div>
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            TTS 发声模型
+                          </label>
+                          <AiModelSelect
+                            value={formData.voice_tts_model || formData.tts_model || 'speech-2.8-turbo'}
+                            onChange={(modelId) => setFormData((d) => ({ ...d, voice_tts_model: modelId, tts_model: modelId }))}
+                            className="w-full"
+                            disabled={!voiceSourceModels.length}
+                            placeholder="请先在该源中添加音频模型"
+                            options={voiceSourceModels.map((model) => ({
+                              id: model.id,
+                              label: model.id,
+                              badges: buildModelCapabilityBadges(model.capabilities),
+                              inputIcons: buildModelInputIcons(model.inputCapabilities),
+                            }))}
+                          />
+                        </div>
+                        <div className="group">
+                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                            声音复刻模型
+                          </label>
+                          <input
+                            value={formData.voice_clone_model || 'minimax-voice-clone'}
+                            onChange={(event) => setFormData((d) => ({ ...d, voice_clone_model: event.target.value }))}
+                            className="w-full rounded-md border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                            placeholder="minimax-voice-clone"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-text-tertiary">
+                        TTS 和声音复刻会复用所选语音 AI 源的 Endpoint 与 API Key；生成结果进入媒体库，人物音频样本会自动记录平台 voice_id。
+                      </p>
                     </div>
                   </div>
 
