@@ -72,14 +72,6 @@ function summarizeRuntimeMode(runtimeMode: string): string {
   return runtimeMode || '运行时';
 }
 
-function shouldMuteSuccessForForeground(context: NotificationContextSnapshot, source: string): boolean {
-  if (!context.hasFocus || context.visibilityState !== 'visible') return false;
-  if (source === 'runtime' && context.currentView === 'redclaw') return true;
-  if (source === 'generation' && context.currentView === 'generation-studio') return true;
-  if (source === 'redclaw' && context.currentView === 'redclaw') return true;
-  return false;
-}
-
 function withinQuietHours(settings: NotificationSettings, now: Date): boolean {
   if (!settings.quietHours.enabled) return false;
   const [startHour, startMinute] = settings.quietHours.start.split(':').map((value) => Number(value) || 0);
@@ -97,7 +89,7 @@ function withinQuietHours(settings: NotificationSettings, now: Date): boolean {
 function resolveSound(
   level: NotificationEnvelope['level'],
   source: NotificationEnvelope['source'],
-  context: NotificationContextSnapshot,
+  _context: NotificationContextSnapshot,
   settings: NotificationSettings,
 ): NotificationSound {
   const quiet = withinQuietHours(settings, new Date());
@@ -105,7 +97,7 @@ function resolveSound(
   if (level === 'attention') return 'attention';
   if (level === 'success') {
     if (quiet) return 'none';
-    if (shouldMuteSuccessForForeground(context, source)) return 'none';
+    if (source !== 'runtime' && source !== 'redclaw') return 'none';
     return 'success';
   }
   return 'none';
@@ -113,6 +105,11 @@ function resolveSound(
 
 export function buildNotificationFingerprint(notification: NotificationEnvelope): string {
   return `${notification.source}:${notification.entityId}:${notification.eventKey}`;
+}
+
+export function shouldShowInNotificationCenter(notification: NotificationEnvelope): boolean {
+  return notification.showInCenter !== false
+    && (notification.level === 'attention' || notification.level === 'error');
 }
 
 export function shouldShowSystemNotification(
@@ -385,6 +382,7 @@ export function mapGenerationProjectionToNotification(
     sound: 'none',
     sticky: !isSuccess,
     createdAt,
+    showInCenter: !isSuccess,
     actions,
     meta: {
       kind: projection.kind,
