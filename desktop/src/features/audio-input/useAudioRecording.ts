@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   type AudioCaptureCapability,
@@ -19,78 +19,103 @@ export function useAudioRecording({ onCaptured }: UseAudioRecordingOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState('');
+  const capabilityRef = useRef<AudioCaptureCapability | null>(null);
+  const isRecordingRef = useRef(false);
+  const isWorkingRef = useRef(false);
+  const onCapturedRef = useRef(onCaptured);
+
+  useEffect(() => {
+    onCapturedRef.current = onCaptured;
+  }, [onCaptured]);
+
+  const setRecordingActive = useCallback((next: boolean) => {
+    isRecordingRef.current = next;
+    setIsRecording(next);
+  }, []);
+
+  const setWorkingActive = useCallback((next: boolean) => {
+    isWorkingRef.current = next;
+    setIsWorking(next);
+  }, []);
 
   const refreshCapability = useCallback(async () => {
     const next = await getAudioCaptureCapability();
+    capabilityRef.current = next;
     setCapability(next);
+    if (!next?.activeRecording && isRecordingRef.current) {
+      setRecordingActive(false);
+    }
     return next;
-  }, []);
+  }, [setRecordingActive]);
 
   useEffect(() => {
     void refreshCapability();
   }, [refreshCapability]);
 
   useEffect(() => () => {
-    if (!isRecording) return;
+    if (!isRecordingRef.current && !isWorkingRef.current) return;
     void cancelHostAudioRecording().catch(() => undefined);
-  }, [isRecording]);
+  }, []);
 
   const startRecording = useCallback(async () => {
-    if (isRecording || isWorking) return false;
-    setIsWorking(true);
+    if (isRecordingRef.current || isWorkingRef.current) return false;
+    setWorkingActive(true);
     setError('');
     try {
       await startHostAudioRecording();
-      setIsRecording(true);
+      setRecordingActive(true);
       await refreshCapability();
       return true;
     } catch (captureError) {
-      const nextCapability = await refreshCapability().catch(() => capability);
+      const nextCapability = await refreshCapability().catch(() => capabilityRef.current);
       setError(describeAudioCaptureFailure(captureError, nextCapability));
-      setIsRecording(false);
+      setRecordingActive(false);
       return false;
     } finally {
-      setIsWorking(false);
+      setWorkingActive(false);
     }
-  }, [capability, isRecording, isWorking, refreshCapability]);
+  }, [refreshCapability, setRecordingActive, setWorkingActive]);
 
   const stopRecording = useCallback(async () => {
-    if (!isRecording || isWorking) return null;
-    setIsWorking(true);
+    if (!isRecordingRef.current || isWorkingRef.current) return null;
+    setWorkingActive(true);
     try {
       const clip = await stopHostAudioRecording();
-      setIsRecording(false);
+      setRecordingActive(false);
       setError('');
       await refreshCapability();
-      await onCaptured(clip);
+      await onCapturedRef.current(clip);
       return clip;
     } catch (captureError) {
-      setError(describeAudioCaptureFailure(captureError, capability));
-      setIsRecording(false);
+      setError(describeAudioCaptureFailure(captureError, capabilityRef.current));
+      setRecordingActive(false);
       await refreshCapability().catch(() => undefined);
       return null;
     } finally {
-      setIsWorking(false);
+      setWorkingActive(false);
     }
-  }, [capability, isRecording, isWorking, onCaptured, refreshCapability]);
+  }, [refreshCapability, setRecordingActive, setWorkingActive]);
 
   const cancelRecording = useCallback(async () => {
-    if (!isRecording && !isWorking) return false;
-    setIsWorking(true);
+    if (!isRecordingRef.current && !isWorkingRef.current) return false;
+    setWorkingActive(true);
     try {
       await cancelHostAudioRecording();
-      setIsRecording(false);
+      setRecordingActive(false);
       await refreshCapability();
       return true;
     } catch (captureError) {
-      setError(describeAudioCaptureFailure(captureError, capability));
-      setIsRecording(false);
+      const message = describeAudioCaptureFailure(captureError, capabilityRef.current);
+      if (message !== '当前没有进行中的录音') {
+        setError(message);
+      }
+      setRecordingActive(false);
       await refreshCapability().catch(() => undefined);
       return false;
     } finally {
-      setIsWorking(false);
+      setWorkingActive(false);
     }
-  }, [capability, isRecording, isWorking, refreshCapability]);
+  }, [refreshCapability, setRecordingActive, setWorkingActive]);
 
   return {
     capability,

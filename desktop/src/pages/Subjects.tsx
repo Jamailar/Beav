@@ -719,6 +719,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             );
         },
     });
+    const audioRecordingRef = useRef(audioRecording);
+    useEffect(() => {
+        audioRecordingRef.current = audioRecording;
+    }, [audioRecording]);
     const voiceRecordingElapsedSeconds = audioRecording.isRecording
         ? Math.max(0, SUBJECT_VOICE_RECORDING_SECONDS - recordingCountdown)
         : 0;
@@ -739,10 +743,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const stopRecordingSession = useCallback(() => {
         clearRecordingTimers();
         setRecordingCountdown(0);
-        if (audioRecording.isRecording || audioRecording.isWorking) {
-            void audioRecording.cancelRecording();
+        const currentRecording = audioRecordingRef.current;
+        if (currentRecording.isRecording || currentRecording.isWorking) {
+            void currentRecording.cancelRecording();
         }
-    }, [audioRecording, clearRecordingTimers]);
+    }, [clearRecordingTimers]);
 
     const handleDraftCategoryChange = useCallback((categoryId: string) => {
         const nextCategoryName = categories.find((item) => item.id === categoryId)?.name.trim() || '';
