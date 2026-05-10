@@ -760,6 +760,34 @@ impl<'a> AppCliExecutor<'a> {
                 self.handle_manuscript_create_project(&CliArgs::default(), payload)
             }
             "manuscriptswritecurrent" => self.handle_manuscript_write_current(payload),
+            "mediaedit" => {
+                let tokens = vec!["edit".to_string()];
+                self.handle_media(&tokens, payload)
+            }
+            "mediatranscribe" => {
+                let tokens = vec!["transcribe".to_string()];
+                self.handle_media(&tokens, payload)
+            }
+            "voiceclone" => {
+                let tokens = vec!["clone".to_string()];
+                self.handle_voice(&tokens, payload)
+            }
+            "voicespeech" => {
+                let tokens = vec!["speech".to_string()];
+                self.handle_voice(&tokens, payload)
+            }
+            "voicelist" => {
+                let tokens = vec!["list".to_string()];
+                self.handle_voice(&tokens, payload)
+            }
+            "voiceget" => {
+                let tokens = vec!["get".to_string()];
+                self.handle_voice(&tokens, payload)
+            }
+            "voicedelete" => {
+                let tokens = vec!["delete".to_string()];
+                self.handle_voice(&tokens, payload)
+            }
             "subjectssearch" => {
                 let tokens = vec!["search".to_string()];
                 self.handle_subjects(&tokens, payload)
@@ -1029,6 +1057,7 @@ impl<'a> AppCliExecutor<'a> {
             "subjects" => self.handle_subjects(args, payload),
             "manuscripts" => self.handle_manuscripts(args, payload),
             "media" => self.handle_media(args, payload),
+            "voice" => self.handle_voice(args, payload),
             "image" => self.handle_image(args, payload),
             "video" => self.handle_video(args, payload),
             "knowledge" => self.handle_knowledge(args, payload),
@@ -1422,6 +1451,51 @@ impl<'a> AppCliExecutor<'a> {
             }
             "update" => self.call_channel("media:update", merge_payload(&args.options, payload)),
             "bind" => self.call_channel("media:bind", merge_payload(&args.options, payload)),
+            "edit" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(object) = request.as_object_mut() {
+                    if let Some(path) = args
+                        .string(&["source-path", "sourcePath", "path", "tool-path", "toolPath"])
+                        .or_else(|| args.positionals.first().cloned())
+                    {
+                        object.insert("sourcePath".to_string(), json!(path));
+                    }
+                    if let Some(summary) = args.string(&["intent-summary", "intentSummary"]) {
+                        object.insert("intentSummary".to_string(), json!(summary));
+                    }
+                }
+                commands::media_edit::execute_media_edit(
+                    self.app,
+                    self.state,
+                    self.session_id,
+                    &request,
+                )
+            }
+            "transcribe" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(object) = request.as_object_mut() {
+                    if let Some(path) = args
+                        .string(&["source-path", "sourcePath", "path", "tool-path", "toolPath"])
+                        .or_else(|| args.positionals.first().cloned())
+                    {
+                        object.insert("sourcePath".to_string(), json!(path));
+                    }
+                    if let Some(format) =
+                        args.string(&["format", "response-format", "responseFormat"])
+                    {
+                        object.insert("format".to_string(), json!(format));
+                    }
+                    if let Some(language) = args.string(&["language", "lang"]) {
+                        object.insert("language".to_string(), json!(language));
+                    }
+                }
+                commands::media_transcribe::execute_media_transcribe(
+                    self.app,
+                    self.state,
+                    self.session_id,
+                    &request,
+                )
+            }
             "delete" => self.call_channel(
                 "media:delete",
                 json!({
@@ -1432,6 +1506,76 @@ impl<'a> AppCliExecutor<'a> {
                 }),
             ),
             _ => Err(format!("unsupported media action: {action}")),
+        }
+    }
+
+    fn handle_voice(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("voice")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        match action {
+            "list" => self.call_channel("voice:list", merge_payload(&args.options, payload)),
+            "get" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(voice_id) = args
+                    .string(&["voice-id", "voiceId", "id"])
+                    .or_else(|| args.positionals.first().cloned())
+                {
+                    if let Some(object) = request.as_object_mut() {
+                        object.insert("voiceId".to_string(), json!(voice_id));
+                    }
+                }
+                self.call_channel("voice:get", request)
+            }
+            "clone" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(object) = request.as_object_mut() {
+                    if let Some(path) = args
+                        .string(&["sample-path", "samplePath", "path", "file-path", "filePath"])
+                        .or_else(|| args.positionals.first().cloned())
+                    {
+                        object.insert("samplePath".to_string(), json!(path));
+                    }
+                    if let Some(asset_id) =
+                        args.string(&["owner-asset-id", "ownerAssetId", "asset-id", "assetId"])
+                    {
+                        object.insert("ownerAssetId".to_string(), json!(asset_id));
+                    }
+                }
+                self.call_channel("voice:clone", request)
+            }
+            "speech" | "tts" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(object) = request.as_object_mut() {
+                    if let Some(input) = args.string(&["input", "text"]).or_else(|| {
+                        if args.positionals.is_empty() {
+                            None
+                        } else {
+                            Some(args.positionals.join(" "))
+                        }
+                    }) {
+                        object.entry("input".to_string()).or_insert(json!(input));
+                    }
+                    if let Some(voice_id) = args.string(&["voice-id", "voiceId", "voice"]) {
+                        object.insert("voiceId".to_string(), json!(voice_id));
+                    }
+                }
+                self.call_channel("voice:speech", request)
+            }
+            "delete" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(voice_id) = args
+                    .string(&["voice-id", "voiceId", "id"])
+                    .or_else(|| args.positionals.first().cloned())
+                {
+                    if let Some(object) = request.as_object_mut() {
+                        object.insert("voiceId".to_string(), json!(voice_id));
+                    }
+                }
+                self.call_channel("voice:delete", request)
+            }
+            _ => Err(format!("unsupported voice action: {action}")),
         }
     }
 
@@ -3738,6 +3882,11 @@ Pass `--explicit-project-workflow true` or `payload.explicitProjectWorkflow=true
             return result;
         }
         if let Some(result) =
+            commands::voice::handle_voice_channel(self.app, self.state, channel, &payload)
+        {
+            return result;
+        }
+        if let Some(result) =
             commands::advisor_ops::handle_advisor_channel(self.app, self.state, channel, &payload)
         {
             return result;
@@ -5396,7 +5545,8 @@ fn help_response(namespace: Option<&str>) -> Value {
             "assets list|get|search|categories list|create|update|delete",
             "subjects list|get|search|categories list|create|update|delete",
             "manuscripts list|read|write|create|delete|theme apply|preview|create|save|delete|background-upload|previews|layout get|save",
-            "media list|get|update|bind|delete",
+            "media list|get|edit|transcribe|update|bind|delete",
+            "voice list|get|clone|speech|delete",
             "image generate|history list|get|providers|models",
             "video generate",
             "knowledge list|search",
@@ -5448,9 +5598,18 @@ fn help_response(namespace: Option<&str>) -> Value {
         "media" => vec![
             "media list",
             "media get --id <assetId>",
+            "media edit --source-path <videoPath> [payload.operations]",
+            "media transcribe --source-path <videoPath> [--format srt|vtt|text|json]",
             "media update --asset-id <assetId> [--title ...]",
             "media bind --asset-id <assetId> --manuscript-path <path>",
             "media delete --asset-id <assetId>",
+        ],
+        "voice" => vec![
+            "voice list",
+            "voice get --voice-id <voiceId>",
+            "voice clone --sample-path <audioPath> [--owner-asset-id <assetId>]",
+            "voice speech --voice-id <voiceId> --input \"text\"",
+            "voice delete --voice-id <voiceId>",
         ],
         "image" => vec![
             "image generate --prompt \"...\" [--mode reference-guided] [--reference-images /abs/a.png,/abs/b.png]",

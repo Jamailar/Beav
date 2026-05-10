@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub fn handle_subjects_channel(
-    _app: &AppHandle,
+    app: &AppHandle,
     state: &State<'_, AppState>,
     channel: &str,
     payload: &Value,
@@ -33,8 +33,8 @@ pub fn handle_subjects_channel(
                 Ok(json!({ "success": true, "asset": subject.clone(), "subject": subject }))
             })
         }
-        "subjects:create" => handle_subject_create(payload.clone(), state),
-        "subjects:update" => handle_subject_update(payload.clone(), state),
+        "subjects:create" => handle_subject_create(payload.clone(), app, state),
+        "subjects:update" => handle_subject_update(payload.clone(), app, state),
         "subjects:delete" => handle_subject_delete(payload.clone(), state),
         "subjects:search" => {
             let _ = ensure_store_hydrated_for_subjects(state);
