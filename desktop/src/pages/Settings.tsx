@@ -3842,7 +3842,7 @@ export function Settings({
           video_model: settings.video_model || REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'],
           image_aspect_ratio: settings.image_aspect_ratio || '3:4',
           image_size: '',
-          image_quality: settings.image_quality || 'auto',
+          image_quality: settings.image_quality === 'low' ? 'auto' : settings.image_quality || 'auto',
           model_name_wander: settings.model_name_wander || '',
           model_name_chatroom: settings.model_name_chatroom || '',
           model_name_knowledge: settings.model_name_knowledge || '',
@@ -6276,6 +6276,22 @@ export function Settings({
                                   inputIcons: buildModelInputIcons(model.inputCapabilities),
                                 }))}
                             />
+                          </div>
+                          <div className="group">
+                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
+                              默认清晰度
+                            </label>
+                            <select
+                              value={formData.image_quality || 'auto'}
+                              onChange={(event) => setFormData((d) => ({ ...d, image_quality: event.target.value }))}
+                              className="w-full rounded-md border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
+                            >
+                              <option value="auto">默认（2K / medium）</option>
+                              <option value="medium">medium</option>
+                              <option value="high">high</option>
+                              <option value="standard">standard</option>
+                              <option value="hd">hd</option>
+                            </select>
                           </div>
                         </div>
                         <p className="text-[11px] text-text-tertiary">

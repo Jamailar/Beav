@@ -187,13 +187,19 @@ const IMAGE_SIZE_OPTIONS = [
     { value: '1024x1024', label: '1k' },
     { value: '1024x1536', label: '1k 竖图' },
     { value: '1536x1024', label: '1k 横图' },
+    { value: '1536x2048', label: '2k 竖图' },
+    { value: '2048x1536', label: '2k 横图' },
+    { value: '1152x2048', label: '2k 竖屏' },
+    { value: '2048x1152', label: '2k 宽屏' },
     { value: 'auto', label: 'Auto' },
 ] as const;
 
 const IMAGE_QUALITY_OPTIONS = [
-    { value: 'standard', label: '标准' },
+    { value: 'auto', label: '默认' },
+    { value: 'medium', label: 'Medium' },
     { value: 'high', label: '高质量' },
-    { value: 'auto', label: 'Auto' },
+    { value: 'standard', label: '标准' },
+    { value: 'hd', label: 'HD' },
 ] as const;
 
 const IMAGE_COUNT_OPTIONS = [
@@ -1754,7 +1760,7 @@ export function GenerationStudio({
             setImageModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || '') : prev));
             setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
-            setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality || 'auto') : prev));
+            setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality === 'low' ? 'auto' : normalizedSettings.image_quality || 'auto') : prev));
         } catch (error) {
             console.error('Failed to load generation studio context:', error);
         }

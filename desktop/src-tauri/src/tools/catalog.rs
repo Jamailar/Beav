@@ -139,7 +139,7 @@ fn image_size_schema(description: &str) -> Value {
     json!({
         "type": "string",
         "description": description,
-        "enum": ["auto", "1024x1024", "1024x1536", "1536x1024"],
+        "enum": ["auto", "1024x1024", "1024x1536", "1536x1024", "1536x2048", "2048x1536", "1152x2048", "2048x1152"],
     })
 }
 
@@ -147,7 +147,7 @@ fn image_quality_schema(description: &str) -> Value {
     json!({
         "type": "string",
         "description": description,
-        "enum": ["auto", "standard", "high", "hd", "medium", "low"],
+        "enum": ["auto", "standard", "medium", "high", "hd"],
     })
 }
 

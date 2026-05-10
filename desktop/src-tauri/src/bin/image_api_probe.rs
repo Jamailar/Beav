@@ -371,7 +371,8 @@ fn resolve_probe_cases(config: &ProbeConfig) -> Vec<ProbeCase> {
 
 fn normalize_quality_for_probe(raw: &str) -> Option<String> {
     match raw.trim() {
-        "" | "auto" | "standard" => None,
+        "" | "auto" | "low" => Some("medium".to_string()),
+        "standard" => None,
         other => Some(other.to_string()),
     }
 }
