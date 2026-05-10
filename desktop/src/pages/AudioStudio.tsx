@@ -372,7 +372,7 @@ export function AudioStudio({ isActive = true, onReturnHome }: AudioStudioProps)
                         </div>
                     </section>
 
-                    <aside className="space-y-4 xl:sticky xl:top-5 xl:self-start">
+                    <aside className="min-h-0 space-y-4 xl:sticky xl:top-5 xl:max-h-[calc(100vh-132px)] xl:self-start xl:overflow-y-auto xl:pr-1">
                         <section className="overflow-hidden rounded-[22px] border border-border bg-surface-primary shadow-[var(--ui-shadow-1)]">
                             <div className="flex items-center justify-between border-b border-border/70 px-4 py-3.5">
                                 <div className="flex items-center gap-2">
@@ -431,12 +431,11 @@ export function AudioStudio({ isActive = true, onReturnHome }: AudioStudioProps)
                             <div className="space-y-3 p-4">
                                 <label className="block">
                                     <span className="mb-1.5 block text-[12px] font-semibold text-text-secondary">模型</span>
-                                    <input
-                                        value={model}
-                                        onChange={(event) => setModel(event.target.value)}
-                                        placeholder="speech-2.8-turbo"
-                                        className="h-10 w-full rounded-xl border border-border bg-surface-secondary/55 px-3 text-[13px] text-text-primary outline-none transition placeholder:text-text-tertiary focus:border-accent-primary/40 focus:bg-white focus:ring-4 focus:ring-accent-primary/10"
-                                    />
+                                    <div className="flex h-10 w-full items-center rounded-xl border border-border bg-surface-secondary/55 px-3">
+                                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-primary">
+                                            {model || 'speech-2.8-turbo'}
+                                        </span>
+                                    </div>
                                 </label>
                                 <div className="grid grid-cols-2 gap-3">
                                     <label className="block">
