@@ -72,7 +72,7 @@ export function ImageGen() {
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' ? 'auto' : next.image_quality || 'auto');
         } catch (e) {
             console.error('Failed to load image settings:', e);
             setSettings({});
@@ -292,6 +292,10 @@ export function ImageGen() {
                             <option value="1024x1024">1024x1024</option>
                             <option value="1024x1536">1024x1536</option>
                             <option value="1536x1024">1536x1024</option>
+                            <option value="1536x2048">1536x2048</option>
+                            <option value="2048x1536">2048x1536</option>
+                            <option value="1152x2048">1152x2048</option>
+                            <option value="2048x1152">2048x1152</option>
                             <option value="auto">auto</option>
                         </select>
                         <select
@@ -299,9 +303,11 @@ export function ImageGen() {
                             onChange={(event) => setQuality(event.target.value)}
                             className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none focus:ring-1 focus:ring-accent-primary"
                         >
-                            <option value="standard">standard</option>
+                            <option value="auto">默认（2K / medium）</option>
+                            <option value="medium">medium</option>
                             <option value="high">high</option>
-                            <option value="auto">auto</option>
+                            <option value="standard">standard</option>
+                            <option value="hd">hd</option>
                         </select>
                         <select
                             value={count}

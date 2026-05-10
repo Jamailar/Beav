@@ -1051,7 +1051,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             setModel(next.image_model || 'gpt-image-1');
             setAspectRatio(next.image_aspect_ratio || '3:4');
             setSize(next.image_size || '');
-            setQuality(next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' ? 'auto' : next.image_quality || 'auto');
         } catch (settingsError) {
             console.error('Failed to load image settings:', settingsError);
         }

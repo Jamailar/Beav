@@ -437,7 +437,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
         setTemplateImage(null);
         setCount(1);
         setModel(settings.image_model || 'gpt-image-1');
-        setQuality(settings.image_quality || 'auto');
+        setQuality(settings.image_quality === 'low' ? 'auto' : settings.image_quality || 'auto');
         setBaseImage(null);
         setPromptSwitches(DEFAULT_PROMPT_SWITCHES);
         setTitleInputMode('titles');
@@ -453,7 +453,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
             setSettings(next);
             setSpaceId(next.active_space_id || 'default');
             setModel(next.image_model || 'gpt-image-1');
-            setQuality(next.image_quality || 'auto');
+            setQuality(next.image_quality === 'low' ? 'auto' : next.image_quality || 'auto');
         } catch (error) {
             console.error('Failed to load cover settings:', error);
         }
@@ -591,7 +591,7 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
         setActiveTemplateId(template.id);
         setCount(Math.max(1, Math.min(4, Number(template.count) || 1)));
         setModel(template.model || 'gpt-image-1');
-        setQuality(template.quality || 'auto');
+        setQuality(template.quality === 'low' ? 'auto' : template.quality || 'auto');
         setPromptSwitches(normalizePromptSwitches(template.promptSwitches));
         setTemplateImage(template.templateImage
             ? { name: `${template.name}-模板图`, dataUrl: template.templateImage }
@@ -1137,9 +1137,11 @@ export function CoverStudio({ isActive = false, onExecutionStateChange, onReturn
                                     onChange={(event) => setQuality(event.target.value)}
                                     className="px-3 py-2 text-sm rounded-md border border-border bg-surface-secondary/20 focus:outline-none"
                                 >
-                                    <option value="standard">standard</option>
+                                    <option value="auto">默认（2K / medium）</option>
+                                    <option value="medium">medium</option>
                                     <option value="high">high</option>
-                                    <option value="auto">auto</option>
+                                    <option value="standard">standard</option>
+                                    <option value="hd">hd</option>
                                 </select>
                                 <select
                                     value={count}

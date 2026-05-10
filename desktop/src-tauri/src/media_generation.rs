@@ -399,16 +399,15 @@ fn map_quality_to_strict_openai(
     if is_openai_gpt_image_model(&normalized_model) {
         return match normalized_quality {
             "high" | "hd" => Some("high".to_string()),
-            "medium" => Some("medium".to_string()),
-            "low" => Some("low".to_string()),
-            _ => None,
+            "medium" | "standard" | "low" | "auto" | "" => Some("medium".to_string()),
+            _ => Some("medium".to_string()),
         };
     }
     if normalized_model == "dall-e-3" && !is_edit {
         return match normalized_quality {
             "high" | "hd" => Some("hd".to_string()),
-            "standard" => Some("standard".to_string()),
-            _ => None,
+            "standard" | "medium" | "low" | "auto" | "" => Some("standard".to_string()),
+            _ => Some("standard".to_string()),
         };
     }
     None
@@ -464,19 +463,16 @@ fn infer_aspect_ratio_from_size(size: Option<&str>) -> Option<&'static str> {
 fn map_quality_to_openai(quality: Option<&str>) -> Option<String> {
     match quality.map(str::trim).unwrap_or_default() {
         "high" | "hd" => Some("high".to_string()),
-        "medium" => Some("medium".to_string()),
-        "low" => Some("low".to_string()),
-        "standard" | "auto" | "" => None,
+        "medium" | "low" | "auto" | "" => Some("medium".to_string()),
+        "standard" => None,
         other => Some(other.to_string()),
     }
 }
 
 fn map_quality_to_jimeng_resolution(quality: Option<&str>) -> Option<String> {
     match quality.map(str::trim).unwrap_or_default() {
-        "high" | "hd" => Some("2k".to_string()),
+        "high" | "hd" | "low" | "auto" | "" => Some("2k".to_string()),
         "standard" | "medium" => Some("1k".to_string()),
-        "low" => Some("512".to_string()),
-        "auto" | "" => None,
         other => Some(other.to_string()),
     }
 }
@@ -2302,6 +2298,31 @@ mod tests {
         assert!(fields
             .iter()
             .any(|(key, value)| key == "size" && value == "1536x1024"));
+    }
+
+    #[test]
+    fn image_quality_defaults_never_resolve_to_low() {
+        assert_eq!(
+            map_quality_to_strict_openai("gpt-image-1", Some("auto"), false).as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            map_quality_to_strict_openai("gpt-image-1", Some("low"), false).as_deref(),
+            Some("medium")
+        );
+        assert_eq!(map_quality_to_openai(Some("")).as_deref(), Some("medium"));
+        assert_eq!(
+            map_quality_to_openai(Some("low")).as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            map_quality_to_jimeng_resolution(Some("auto")).as_deref(),
+            Some("2k")
+        );
+        assert_eq!(
+            map_quality_to_jimeng_resolution(Some("low")).as_deref(),
+            Some("2k")
+        );
     }
 
     #[test]
