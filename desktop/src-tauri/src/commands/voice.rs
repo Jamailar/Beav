@@ -13,6 +13,9 @@ pub fn handle_voice_channel(
         "voice:list" => voice_service::list_voices(state, payload),
         "voice:get" => voice_service::get_voice(state, payload),
         "voice:clone" => voice_service::clone_voice(state, payload),
+        "voice:bind-asset" | "assets:bind-voice" => {
+            voice_service::bind_subject_voice(state, payload)
+        }
         "voice:speech" => voice_service::synthesize_speech(state, payload),
         "voice:delete" => voice_service::delete_voice(state, payload),
         _ => return None,
