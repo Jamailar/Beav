@@ -9,6 +9,7 @@ pub mod redclaw;
 pub mod runtime;
 pub mod subjects;
 pub mod team;
+pub mod voice;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionExposurePolicy {
@@ -39,6 +40,7 @@ pub fn default_direct_namespaces(
             subjects::NAMESPACE,
             "skills",
             "media",
+            voice::NAMESPACE,
         ],
         "knowledge" => vec![subjects::NAMESPACE, memory::NAMESPACE, "skills"],
         "redclaw" => vec![
@@ -46,6 +48,8 @@ pub fn default_direct_namespaces(
             redclaw::PROFILE_NAMESPACE,
             image::NAMESPACE,
             "video_analysis",
+            "media",
+            voice::NAMESPACE,
             redclaw::TASK_NAMESPACE,
             "video",
             manuscripts::NAMESPACE,
@@ -64,6 +68,8 @@ pub fn default_direct_namespaces(
             "video_analysis",
             image::NAMESPACE,
             "video",
+            "media",
+            voice::NAMESPACE,
             subjects::NAMESPACE,
             cli_runtime::NAMESPACE,
             cli_runtime::EXECUTION_NAMESPACE,
@@ -79,6 +85,8 @@ pub fn default_direct_namespaces(
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",
+            "media",
+            voice::NAMESPACE,
         ],
         _ => vec![
             subjects::NAMESPACE,
@@ -87,6 +95,8 @@ pub fn default_direct_namespaces(
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",
+            "media",
+            voice::NAMESPACE,
         ],
     };
     match task_intent
@@ -102,6 +112,10 @@ pub fn default_direct_namespaces(
             prepend_namespace(&mut namespaces, "video_analysis")
         }
         "video" | "video-generation" => prepend_namespace(&mut namespaces, "video"),
+        "voice" | "tts" | "speech" => prepend_namespace(&mut namespaces, voice::NAMESPACE),
+        "video-edit" | "video_edit" | "media-edit" | "media_edit" => {
+            prepend_namespace(&mut namespaces, "media")
+        }
         "redclaw-task" | "scheduled-task" => {
             prepend_namespace(&mut namespaces, redclaw::TASK_NAMESPACE)
         }
@@ -149,6 +163,8 @@ pub fn action_family_for_action(action: &str) -> Option<&'static str> {
         "image" => Some(image::FAMILY),
         "video_analysis" => Some("video_analysis"),
         "video" => Some("video"),
+        "media" => Some("media"),
+        "voice" => Some(voice::FAMILY),
         "manuscripts" => Some(manuscripts::FAMILY),
         "memory" => Some(memory::FAMILY),
         "assets" | "subjects" => Some(subjects::FAMILY),

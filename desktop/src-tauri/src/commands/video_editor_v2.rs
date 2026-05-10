@@ -36,11 +36,13 @@ pub fn handle_video_editor_v2_channel(
                         .to_string()
                 });
                 let project_id = deterministic_project_id(&manuscript_path);
-                let project = get_or_create_project(state, &project_id, &title, Some(&manuscript_path))?;
+                let project =
+                    get_or_create_project(state, &project_id, &title, Some(&manuscript_path))?;
                 Ok(json!({ "success": true, "project": project }))
             }
             "videoEditorV2:create-project" => {
-                let title = payload_string(payload, "title").unwrap_or_else(|| "视频剪辑项目".to_string());
+                let title =
+                    payload_string(payload, "title").unwrap_or_else(|| "视频剪辑项目".to_string());
                 let project_id = make_id("video_v2");
                 let project = get_or_create_project(state, &project_id, &title, None)?;
                 Ok(json!({ "success": true, "project": project }))
@@ -70,7 +72,9 @@ pub fn handle_video_editor_v2_channel(
                 "success": false,
                 "error": "当前 V2 工作台已生成 Remotion 预览配置，但 host 渲染导出尚未接入。"
             })),
-            _ => Ok(json!({ "success": false, "error": format!("Unsupported video editor V2 channel: {channel}") })),
+            _ => Ok(
+                json!({ "success": false, "error": format!("Unsupported video editor V2 channel: {channel}") }),
+            ),
         }
     })())
 }
@@ -101,7 +105,13 @@ fn deterministic_project_id(source: &str) -> String {
 fn safe_path_segment(value: &str) -> String {
     value
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
 }
 
@@ -115,7 +125,9 @@ fn get_or_create_project(
     if path.exists() {
         return Ok(read_json_value_or(&path, json!({})));
     }
-    let project_dir = path.parent().ok_or_else(|| "Invalid V2 project path".to_string())?;
+    let project_dir = path
+        .parent()
+        .ok_or_else(|| "Invalid V2 project path".to_string())?;
     fs::create_dir_all(project_dir.join("assets")).map_err(|error| error.to_string())?;
     fs::create_dir_all(project_dir.join("transcripts")).map_err(|error| error.to_string())?;
     let now = now_rfc3339();
@@ -216,7 +228,11 @@ fn handle_import_assets(state: &State<'_, AppState>, payload: &Value) -> Result<
             continue;
         }
         let asset_id = make_id("asset");
-        let duration_ms = if kind == "image" { 5_000 } else { DEFAULT_ASSET_DURATION_MS };
+        let duration_ms = if kind == "image" {
+            5_000
+        } else {
+            DEFAULT_ASSET_DURATION_MS
+        };
         let asset = json!({
             "id": asset_id,
             "kind": kind,
@@ -252,8 +268,7 @@ fn handle_import_srt(state: &State<'_, AppState>, payload: &Value) -> Result<Val
     let mut project = read_project(state, &project_id)?;
     let srt_content = payload_string(payload, "srtContent")
         .or_else(|| {
-            payload_string(payload, "srtPath")
-                .and_then(|path| fs::read_to_string(path).ok())
+            payload_string(payload, "srtPath").and_then(|path| fs::read_to_string(path).ok())
         })
         .unwrap_or_default();
     let content = if srt_content.trim().is_empty() {
@@ -265,7 +280,8 @@ fn handle_import_srt(state: &State<'_, AppState>, payload: &Value) -> Result<Val
     } else {
         srt_content
     };
-    let asset_id = payload_string(payload, "assetId").unwrap_or_else(|| first_media_asset_id(&project));
+    let asset_id =
+        payload_string(payload, "assetId").unwrap_or_else(|| first_media_asset_id(&project));
     let segments = parse_srt_segments_v2(&content, &asset_id);
     let track_id = make_id("track");
     let project_dir = project_dir(&project)?;
@@ -292,13 +308,21 @@ fn handle_import_srt(state: &State<'_, AppState>, payload: &Value) -> Result<Val
     Ok(json!({ "success": true, "project": project }))
 }
 
-fn handle_update_srt_segment(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+fn handle_update_srt_segment(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
     let project_id = payload_string(payload, "projectId").unwrap_or_default();
     let segment_id = payload_string(payload, "segmentId").unwrap_or_default();
     let mut project = read_project(state, &project_id)?;
     for track in transcript_tracks_mut(&mut project) {
         let mut changed = false;
-        for segment in track.get_mut("segments").and_then(Value::as_array_mut).into_iter().flatten() {
+        for segment in track
+            .get_mut("segments")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
             if segment.get("id").and_then(Value::as_str) == Some(segment_id.as_str()) {
                 if let Some(text) = payload_string(payload, "text") {
                     segment["text"] = json!(text);
@@ -318,7 +342,10 @@ fn handle_update_srt_segment(state: &State<'_, AppState>, payload: &Value) -> Re
     Ok(json!({ "success": true, "project": project }))
 }
 
-fn handle_merge_srt_segments(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+fn handle_merge_srt_segments(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
     let project_id = payload_string(payload, "projectId").unwrap_or_default();
     let segment_id = payload_string(payload, "segmentId").unwrap_or_default();
     let mut project = read_project(state, &project_id)?;
@@ -326,7 +353,9 @@ fn handle_merge_srt_segments(state: &State<'_, AppState>, payload: &Value) -> Re
         let Some(segments) = track.get_mut("segments").and_then(Value::as_array_mut) else {
             continue;
         };
-        if let Some(index) = segments.iter().position(|segment| segment.get("id").and_then(Value::as_str) == Some(segment_id.as_str())) {
+        if let Some(index) = segments.iter().position(|segment| {
+            segment.get("id").and_then(Value::as_str) == Some(segment_id.as_str())
+        }) {
             if index + 1 < segments.len() {
                 let next = segments.remove(index + 1);
                 let next_text = next.get("text").and_then(Value::as_str).unwrap_or("");
@@ -334,7 +363,8 @@ fn handle_merge_srt_segments(state: &State<'_, AppState>, payload: &Value) -> Re
                 let current = &mut segments[index];
                 let text = current.get("text").and_then(Value::as_str).unwrap_or("");
                 current["text"] = json!(format!("{text}{next_text}"));
-                current["endMs"] = json!(next_end.max(current.get("endMs").and_then(Value::as_i64).unwrap_or(0)));
+                current["endMs"] =
+                    json!(next_end.max(current.get("endMs").and_then(Value::as_i64).unwrap_or(0)));
                 renumber_segments(segments);
                 break;
             }
@@ -349,22 +379,34 @@ fn handle_merge_srt_segments(state: &State<'_, AppState>, payload: &Value) -> Re
 fn handle_split_srt_segment(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let project_id = payload_string(payload, "projectId").unwrap_or_default();
     let segment_id = payload_string(payload, "segmentId").unwrap_or_default();
-    let split_offset_ms = payload.get("splitOffsetMs").and_then(Value::as_i64).unwrap_or(0);
+    let split_offset_ms = payload
+        .get("splitOffsetMs")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let mut project = read_project(state, &project_id)?;
     for track in transcript_tracks_mut(&mut project) {
         let Some(segments) = track.get_mut("segments").and_then(Value::as_array_mut) else {
             continue;
         };
-        if let Some(index) = segments.iter().position(|segment| segment.get("id").and_then(Value::as_str) == Some(segment_id.as_str())) {
+        if let Some(index) = segments.iter().position(|segment| {
+            segment.get("id").and_then(Value::as_str) == Some(segment_id.as_str())
+        }) {
             let current = segments[index].clone();
             let start_ms = current.get("startMs").and_then(Value::as_i64).unwrap_or(0);
-            let end_ms = current.get("endMs").and_then(Value::as_i64).unwrap_or(start_ms + 1000);
+            let end_ms = current
+                .get("endMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(start_ms + 1000);
             let split_ms = if split_offset_ms > 0 {
                 (start_ms + split_offset_ms).clamp(start_ms + 100, end_ms - 100)
             } else {
                 start_ms + ((end_ms - start_ms) / 2).max(100)
             };
-            let text = current.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            let text = current
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let midpoint = text.len() / 2;
             segments[index]["endMs"] = json!(split_ms);
             segments[index]["text"] = json!(text[..midpoint].trim());
@@ -386,7 +428,10 @@ fn handle_split_srt_segment(state: &State<'_, AppState>, payload: &Value) -> Res
 fn handle_set_clip_disabled(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let project_id = payload_string(payload, "projectId").unwrap_or_default();
     let clip_id = payload_string(payload, "clipId").unwrap_or_default();
-    let disabled = payload.get("disabled").and_then(Value::as_bool).unwrap_or(false);
+    let disabled = payload
+        .get("disabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut project = read_project(state, &project_id)?;
     push_undo_snapshot(&mut project, "调整片段启用状态");
     for clip in timeline_clips_mut(&mut project) {
@@ -428,17 +473,34 @@ fn handle_split_clip(state: &State<'_, AppState>, payload: &Value) -> Result<Val
         let Some(clips) = track.get_mut("clips").and_then(Value::as_array_mut) else {
             continue;
         };
-        if let Some(index) = clips.iter().position(|clip| clip.get("id").and_then(Value::as_str) == Some(clip_id.as_str())) {
+        if let Some(index) = clips
+            .iter()
+            .position(|clip| clip.get("id").and_then(Value::as_str) == Some(clip_id.as_str()))
+        {
             let clip = clips[index].clone();
-            let start = clip.get("timelineStartMs").and_then(Value::as_i64).unwrap_or(0);
-            let end = clip.get("timelineEndMs").and_then(Value::as_i64).unwrap_or(start);
+            let start = clip
+                .get("timelineStartMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let end = clip
+                .get("timelineEndMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(start);
             let cut = split_ms.clamp(start + 100, end - 100);
             clips[index]["timelineEndMs"] = json!(cut);
-            clips[index]["sourceEndMs"] = json!(clip.get("sourceStartMs").and_then(Value::as_i64).unwrap_or(0) + (cut - start));
+            clips[index]["sourceEndMs"] = json!(
+                clip.get("sourceStartMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    + (cut - start)
+            );
             let mut right = clip;
             right["id"] = json!(make_id("clip"));
             right["timelineStartMs"] = json!(cut);
-            right["sourceStartMs"] = json!(clips[index].get("sourceEndMs").and_then(Value::as_i64).unwrap_or(0));
+            right["sourceStartMs"] = json!(clips[index]
+                .get("sourceEndMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(0));
             clips.insert(index + 1, right);
             break;
         }
@@ -451,14 +513,21 @@ fn handle_split_clip(state: &State<'_, AppState>, payload: &Value) -> Result<Val
 fn handle_reorder_clip(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let project_id = payload_string(payload, "projectId").unwrap_or_default();
     let clip_id = payload_string(payload, "clipId").unwrap_or_default();
-    let target_index = payload.get("targetIndex").and_then(Value::as_i64).unwrap_or(0).max(0) as usize;
+    let target_index = payload
+        .get("targetIndex")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        .max(0) as usize;
     let mut project = read_project(state, &project_id)?;
     push_undo_snapshot(&mut project, "重排片段");
     for track in timeline_tracks_mut(&mut project) {
         let Some(clips) = track.get_mut("clips").and_then(Value::as_array_mut) else {
             continue;
         };
-        if let Some(index) = clips.iter().position(|clip| clip.get("id").and_then(Value::as_str) == Some(clip_id.as_str())) {
+        if let Some(index) = clips
+            .iter()
+            .position(|clip| clip.get("id").and_then(Value::as_str) == Some(clip_id.as_str()))
+        {
             let clip = clips.remove(index);
             clips.insert(target_index.min(clips.len()), clip);
             relayout_track(clips);
@@ -476,7 +545,13 @@ fn handle_undo_timeline(state: &State<'_, AppState>, payload: &Value) -> Result<
     let undo = project
         .get_mut("undoStack")
         .and_then(Value::as_array_mut)
-        .and_then(|items| if items.is_empty() { None } else { Some(items.remove(0)) });
+        .and_then(|items| {
+            if items.is_empty() {
+                None
+            } else {
+                Some(items.remove(0))
+            }
+        });
     if let Some(record) = undo {
         if let Some(timeline) = record.get("timeline").cloned() {
             project["timeline"] = timeline;
@@ -489,9 +564,14 @@ fn handle_undo_timeline(state: &State<'_, AppState>, payload: &Value) -> Result<
     Ok(json!({ "success": true, "project": project }))
 }
 
-fn handle_generate_auto_edit(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+fn handle_generate_auto_edit(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
     let project_id = payload_string(payload, "projectId").unwrap_or_default();
-    let track_id = payload_string(payload, "trackId").unwrap_or_else(|| first_transcript_track_id(&read_project(state, &project_id).unwrap_or(json!({}))));
+    let track_id = payload_string(payload, "trackId").unwrap_or_else(|| {
+        first_transcript_track_id(&read_project(state, &project_id).unwrap_or(json!({})))
+    });
     let goal = payload_string(payload, "goal").unwrap_or_else(|| "剪成节奏紧凑的粗剪".to_string());
     let target_duration_ms = payload.get("targetDurationMs").and_then(Value::as_i64);
     let mut project = read_project(state, &project_id)?;
@@ -500,15 +580,27 @@ fn handle_generate_auto_edit(state: &State<'_, AppState>, payload: &Value) -> Re
     let mut removed = Vec::new();
     let mut used_duration = 0_i64;
     for segment in segments {
-        let segment_id = segment.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+        let segment_id = segment
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let text = segment.get("text").and_then(Value::as_str).unwrap_or("");
-        let tags = segment.get("tags").and_then(Value::as_array).cloned().unwrap_or_default();
+        let tags = segment
+            .get("tags")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         let duration = segment.get("endMs").and_then(Value::as_i64).unwrap_or(0)
             - segment.get("startMs").and_then(Value::as_i64).unwrap_or(0);
         let should_remove = tags.iter().any(|tag| {
-            tag.as_str().map(|value| matches!(value, "remove" | "filler" | "unclear")).unwrap_or(false)
+            tag.as_str()
+                .map(|value| matches!(value, "remove" | "filler" | "unclear"))
+                .unwrap_or(false)
         }) || text.trim().is_empty()
-            || target_duration_ms.map(|target| used_duration >= target).unwrap_or(false);
+            || target_duration_ms
+                .map(|target| used_duration >= target)
+                .unwrap_or(false);
         if should_remove {
             removed.push(json!({ "segmentId": segment_id, "reason": "低信息密度或超出目标时长" }));
         } else {
@@ -554,8 +646,9 @@ fn handle_apply_auto_edit(state: &State<'_, AppState>, payload: &Value) -> Resul
         .get("autoEditRuns")
         .and_then(Value::as_array)
         .and_then(|runs| {
-            runs.iter()
-                .find(|run| run_id.is_empty() || run.get("id").and_then(Value::as_str) == Some(run_id.as_str()))
+            runs.iter().find(|run| {
+                run_id.is_empty() || run.get("id").and_then(Value::as_str) == Some(run_id.as_str())
+            })
         })
         .and_then(|run| run.get("plan"))
         .and_then(|plan| plan.get("selectedSegments"))
@@ -563,7 +656,11 @@ fn handle_apply_auto_edit(state: &State<'_, AppState>, payload: &Value) -> Resul
         .map(|items| {
             items
                 .iter()
-                .filter_map(|item| item.get("segmentId").and_then(Value::as_str).map(ToString::to_string))
+                .filter_map(|item| {
+                    item.get("segmentId")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -581,7 +678,10 @@ fn handle_apply_auto_edit(state: &State<'_, AppState>, payload: &Value) -> Resul
             clip["disabled"] = json!(!keep);
         }
     }
-    if let Some(runs) = project.get_mut("autoEditRuns").and_then(Value::as_array_mut) {
+    if let Some(runs) = project
+        .get_mut("autoEditRuns")
+        .and_then(Value::as_array_mut)
+    {
         for run in runs {
             if run_id.is_empty() || run.get("id").and_then(Value::as_str) == Some(run_id.as_str()) {
                 run["status"] = json!("applied");
@@ -604,7 +704,13 @@ fn project_dir(project: &Value) -> Result<PathBuf, String> {
 }
 
 fn infer_asset_kind(path: &Path) -> &'static str {
-    match path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "mp4" | "mov" | "m4v" | "webm" | "mkv" => "video",
         "mp3" | "wav" | "m4a" | "aac" | "flac" => "audio",
         "png" | "jpg" | "jpeg" | "webp" | "gif" => "image",
@@ -663,10 +769,17 @@ fn append_primary_clip(project: &mut Value, asset_id: &str, duration_ms: i64) {
         if track.get("kind").and_then(Value::as_str) != Some("primary-video") {
             continue;
         }
-        let clips = track.get_mut("clips").and_then(Value::as_array_mut).expect("clips array");
+        let clips = track
+            .get_mut("clips")
+            .and_then(Value::as_array_mut)
+            .expect("clips array");
         let start = clips
             .iter()
-            .map(|clip| clip.get("timelineEndMs").and_then(Value::as_i64).unwrap_or(0))
+            .map(|clip| {
+                clip.get("timelineEndMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+            })
             .max()
             .unwrap_or(0);
         clips.push(json!({
@@ -692,9 +805,24 @@ fn normalize_timeline_duration(project: &mut Value) {
         .map(|tracks| {
             tracks
                 .iter()
-                .flat_map(|track| track.get("clips").and_then(Value::as_array).into_iter().flatten())
-                .filter(|clip| !clip.get("disabled").and_then(Value::as_bool).unwrap_or(false))
-                .map(|clip| clip.get("timelineEndMs").and_then(Value::as_i64).unwrap_or(0))
+                .flat_map(|track| {
+                    track
+                        .get("clips")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                })
+                .filter(|clip| {
+                    !clip
+                        .get("disabled")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .map(|clip| {
+                    clip.get("timelineEndMs")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0)
+                })
                 .max()
                 .unwrap_or(0)
         })
@@ -705,9 +833,15 @@ fn normalize_timeline_duration(project: &mut Value) {
 fn relayout_track(clips: &mut [Value]) {
     let mut cursor = 0_i64;
     for clip in clips {
-        let duration = (clip.get("timelineEndMs").and_then(Value::as_i64).unwrap_or(0)
-            - clip.get("timelineStartMs").and_then(Value::as_i64).unwrap_or(0))
-            .max(100);
+        let duration = (clip
+            .get("timelineEndMs")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            - clip
+                .get("timelineStartMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(0))
+        .max(100);
         clip["timelineStartMs"] = json!(cursor);
         clip["timelineEndMs"] = json!(cursor + duration);
         cursor += duration;
@@ -722,7 +856,12 @@ fn rebuild_subtitle_clips(project: &mut Value) {
         .cloned()
         .unwrap_or_default();
     for track in tracks {
-        for segment in track.get("segments").and_then(Value::as_array).into_iter().flatten() {
+        for segment in track
+            .get("segments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             clips.push(json!({
                 "id": format!("subtitle_{}", segment.get("id").and_then(Value::as_str).unwrap_or("segment")),
                 "assetId": segment.get("assetId").cloned().unwrap_or(Value::Null),
@@ -748,7 +887,11 @@ fn parse_srt_segments_v2(content: &str, asset_id: &str) -> Vec<Value> {
     content
         .split("\n\n")
         .filter_map(|block| {
-            let lines = block.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>();
+            let lines = block
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>();
             if lines.len() < 2 {
                 return None;
             }
@@ -790,7 +933,11 @@ fn parse_srt_timestamp(value: &str) -> Option<i64> {
     let seconds_part = chunks.pop()?;
     let mut second_chunks = seconds_part.split('.');
     let seconds = second_chunks.next()?.parse::<i64>().ok()?;
-    let millis = second_chunks.next().unwrap_or("0").parse::<i64>().unwrap_or(0);
+    let millis = second_chunks
+        .next()
+        .unwrap_or("0")
+        .parse::<i64>()
+        .unwrap_or(0);
     let minutes = chunks.pop()?.parse::<i64>().ok()?;
     let hours = chunks.pop()?.parse::<i64>().ok()?;
     Some((((hours * 60 + minutes) * 60 + seconds) * 1000) + millis)
@@ -828,7 +975,11 @@ fn find_track_segments(project: &Value, track_id: &str) -> Vec<Value> {
     project
         .get("transcriptTracks")
         .and_then(Value::as_array)
-        .and_then(|tracks| tracks.iter().find(|track| track.get("id").and_then(Value::as_str) == Some(track_id)))
+        .and_then(|tracks| {
+            tracks
+                .iter()
+                .find(|track| track.get("id").and_then(Value::as_str) == Some(track_id))
+        })
         .and_then(|track| track.get("segments"))
         .and_then(Value::as_array)
         .cloned()

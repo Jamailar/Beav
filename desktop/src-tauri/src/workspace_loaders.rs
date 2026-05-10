@@ -299,6 +299,7 @@ pub(crate) fn load_subjects_from_fs(subjects_root: &Path) -> Vec<SubjectRecord> 
                     .or_else(|| item.get("voice_script"))
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
+                voice: item.get("voice").cloned(),
                 created_at: item
                     .get("createdAt")
                     .or_else(|| item.get("created_at"))

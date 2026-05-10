@@ -55,6 +55,7 @@ interface SubjectRecord {
     imagePaths: string[];
     voicePath?: string;
     voiceScript?: string;
+    voice?: Record<string, unknown>;
     createdAt: string;
     updatedAt: string;
     absoluteImagePaths?: string[];

@@ -47,6 +47,7 @@ mod skills;
 mod startup_migration;
 mod subagents;
 mod tools;
+mod voice_service;
 mod workspace_loaders;
 
 use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
@@ -146,6 +147,7 @@ struct SubjectRecord {
     image_paths: Vec<String>,
     voice_path: Option<String>,
     voice_script: Option<String>,
+    voice: Option<Value>,
     created_at: String,
     updated_at: String,
     absolute_image_paths: Vec<String>,
@@ -823,6 +825,7 @@ struct SubjectVoiceInput {
     data_url: Option<String>,
     name: Option<String>,
     script_text: Option<String>,
+    voice: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1721,6 +1724,7 @@ mod tests {
                 data_url: Some("data:audio/webm;base64,aGVsbG8=".to_string()),
                 name: Some("voice.webm".to_string()),
                 script_text: Some("声音脚本".to_string()),
+                voice: None,
             }),
         };
         let subject =
@@ -1754,6 +1758,7 @@ mod tests {
             voice_path: None,
             absolute_voice_path: None,
             voice_preview_url: None,
+            voice: None,
             ..subject
         };
         persist_subjects_workspace(&subjects_root, &[category], &[updated])
@@ -1800,6 +1805,7 @@ mod tests {
                     image_paths: Vec::new(),
                     voice_path: None,
                     voice_script: None,
+                    voice: None,
                     created_at: "2026-04-28T00:00:00Z".to_string(),
                     updated_at: "2026-04-28T00:00:00Z".to_string(),
                     absolute_image_paths: Vec::new(),
@@ -4804,7 +4810,7 @@ fn interactive_attachment_tool_read_note(
             .unwrap_or("workspace-tool");
         let tool_hint = match delivery_mode {
             "document-tool" => "优先使用文档解析/知识库导入工具抽取正文；如果只能使用 workspace.read，先读取并如实说明无法解析的格式边界。",
-            "media-tool" if kind == "video" => "必须立即调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"})`，让专用 Video Analysis Agent 读取真实视频内容。不要先用 `Read`、`bash`、目录列表、`meta.json` 或文案元数据替代视频分析；这些只能作为 video.analyze 失败后的辅助证据。",
+            "media-tool" if kind == "video" => "必须立即调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"})`，让专用 Video Analysis Agent 读取真实视频内容。若用户随后要求字幕、转录、SRT 或按口播时间轴剪辑，应先调用 `Operate(resource=\"media\", operation=\"transcribe\", input={\"sourcePath\":\"该工作区路径\",\"format\":\"srt\"})` 生成字幕文件；若用户要求剪辑、切片、拼接、静音、变速、裁切或导出该视频，应调用 `Operate(resource=\"media\", operation=\"edit\", input={\"sourcePath\":\"该工作区路径\",\"operations\":[...]})` 直接产出剪辑文件，不要只生成 ffmpeg 命令或声称无法本地剪辑。不要先用 `Read`、`bash`、目录列表、`meta.json` 或文案元数据替代视频分析；这些只能作为 video.analyze 失败后的辅助证据。",
             "media-tool" => "优先使用对应的媒体、转写或视频处理工具读取真实媒体内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始媒体。",
             _ => "先调用 `Read(path=\"workspace://...\")` 或相关 workspace 工具读取。",
         };
@@ -4844,7 +4850,7 @@ fn interactive_history_attachment_note(
     if !embedded_directly && kind == "video" {
         if let Some(relative_path) = relative_path {
             return Some(format!(
-                "附件：`{name}`（video，需通过 `Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})` 读取；不要用 Read/bash/meta.json 代替视频分析）"
+                "附件：`{name}`（video，需通过 `Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})` 读取；如果用户要字幕/SRT/转录，调用 `Operate(resource=\"media\", operation=\"transcribe\", input={{\"sourcePath\":\"{relative_path}\",\"format\":\"srt\"}})`；如果用户要剪辑，调用 `Operate(resource=\"media\", operation=\"edit\", input={{\"sourcePath\":\"{relative_path}\",\"operations\":[...]}})` 产出剪辑文件；不要用 Read/bash/meta.json 代替视频分析或剪辑）"
             ));
         }
     }
@@ -9229,6 +9235,7 @@ fn subject_catalog_item(record: &SubjectRecord) -> Value {
         "imagePaths": record.image_paths,
         "voicePath": record.voice_path,
         "voiceScript": record.voice_script,
+        "voice": record.voice,
         "createdAt": record.created_at,
         "updatedAt": record.updated_at,
     })
@@ -9273,6 +9280,27 @@ fn build_subject_record_for_workspace(
         .and_then(|voice| voice.script_text.clone())
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let incoming_voice = input.voice.as_ref().and_then(|voice| voice.voice.clone());
+    let voice = match voice_path.as_deref() {
+        Some(sample_path) => incoming_voice
+            .or_else(|| {
+                existing.as_ref().and_then(|record| {
+                    if record.voice_path.as_deref() == Some(sample_path) {
+                        record.voice.clone()
+                    } else {
+                        None
+                    }
+                })
+            })
+            .or_else(|| {
+                Some(json!({
+                    "status": "queued",
+                    "sampleFilePath": sample_path,
+                    "updatedAt": now_iso(),
+                }))
+            }),
+        None => None,
+    };
     let created_at = existing
         .as_ref()
         .map(|item| item.created_at.clone())
@@ -9305,6 +9333,7 @@ fn build_subject_record_for_workspace(
         image_paths,
         voice_path,
         voice_script,
+        voice,
         created_at,
         updated_at: now_iso(),
         absolute_image_paths: Vec::new(),
@@ -9422,7 +9451,11 @@ fn handle_subject_category_delete(
     })
 }
 
-fn handle_subject_create(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
+fn handle_subject_create(
+    payload: Value,
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<Value, String> {
     persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectMutationInput =
         serde_json::from_value(payload).map_err(|error| format!("资产参数无效: {error}"))?;
@@ -9453,11 +9486,17 @@ fn handle_subject_create(payload: Value, state: &State<'_, AppState>) -> Result<
     with_store_mut(state, |store| {
         store.categories = categories;
         store.subjects = subjects;
-        Ok(json!({ "success": true, "subject": record }))
-    })
+        Ok(())
+    })?;
+    let _ = voice_service::spawn_subject_voice_clone_if_needed(app, &record);
+    Ok(json!({ "success": true, "subject": record }))
 }
 
-fn handle_subject_update(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
+fn handle_subject_update(
+    payload: Value,
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<Value, String> {
     persistence::ensure_store_hydrated_for_subjects(state)?;
     let input: SubjectMutationInput =
         serde_json::from_value(payload).map_err(|error| format!("资产参数无效: {error}"))?;
@@ -9490,8 +9529,10 @@ fn handle_subject_update(payload: Value, state: &State<'_, AppState>) -> Result<
     with_store_mut(state, |store| {
         store.categories = categories;
         store.subjects = subjects;
-        Ok(json!({ "success": true, "subject": record }))
-    })
+        Ok(())
+    })?;
+    let _ = voice_service::spawn_subject_voice_clone_if_needed(app, &record);
+    Ok(json!({ "success": true, "subject": record }))
 }
 
 fn handle_subject_delete(payload: Value, state: &State<'_, AppState>) -> Result<Value, String> {
@@ -9530,6 +9571,9 @@ fn handle_channel(
         return result;
     }
     if let Some(result) = commands::audio::handle_audio_channel(app, state, channel, &payload) {
+        return result;
+    }
+    if let Some(result) = commands::voice::handle_voice_channel(app, state, channel, &payload) {
         return result;
     }
     if let Some(result) = commands::official::handle_official_channel(app, state, channel, &payload)

@@ -967,6 +967,13 @@ export const MessageItem = memo(({
     return kind === 'image' || mimeType.startsWith('image/') || IMAGE_ATTACHMENT_EXT_RE.test(source);
   }, []);
 
+  const isUploadedVideoAttachment = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
+    const kind = String(attachment.kind || '').trim().toLowerCase();
+    const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+    const ext = String(attachment.ext || '').trim().replace(/^\./, '').toLowerCase();
+    return kind === 'video' || mimeType.startsWith('video/') || ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'].includes(ext);
+  }, []);
+
   const resolveUploadedAttachmentSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const preferred = String(
       attachment.thumbnailDataUrl
@@ -1111,7 +1118,11 @@ export const MessageItem = memo(({
   };
 
   const renderUploadedFileCard = (attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
-    const imageSrc = isUploadedImageAttachment(attachment) ? resolveUploadedAttachmentSource(attachment) : '';
+    const imageSrc = isUploadedImageAttachment(attachment)
+      ? resolveUploadedAttachmentSource(attachment)
+      : isUploadedVideoAttachment(attachment)
+        ? String(attachment.thumbnailDataUrl || '').trim()
+        : '';
     const actionSource = resolveUploadedAttachmentActionSource(attachment);
     if (imageSrc) {
       return (

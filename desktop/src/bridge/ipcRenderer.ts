@@ -300,6 +300,17 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (channel === 'media:list') {
     return { success: true, assets: [] };
   }
+  if (channel === 'voice:list') {
+    return { success: true, voices: [] };
+  }
+  if (
+    channel === 'voice:get'
+    || channel === 'voice:clone'
+    || channel === 'voice:speech'
+    || channel === 'voice:delete'
+  ) {
+    return { success: false, error: `${APP_BRAND.displayName} voice action failed for "${channel}": ${message}` };
+  }
   if (channel.startsWith('videoEditorV2:')) {
     return { success: false, error: `${APP_BRAND.displayName} video editor V2 action failed: ${message}` };
   }
@@ -1200,6 +1211,13 @@ function createIpcRenderer() {
         update: (payload: { id: string; name: string }) => invokeChannel('subjects:categories:update', payload),
         delete: (payload: { id: string }) => invokeChannel('subjects:categories:delete', payload)
       }
+    },
+    voice: {
+      list: (payload?: Record<string, unknown>) => invokeChannel('voice:list', payload || {}),
+      get: (payload: { voiceId: string }) => invokeChannel('voice:get', payload),
+      clone: (payload: Record<string, unknown>) => invokeChannel('voice:clone', payload),
+      speech: (payload: Record<string, unknown>) => invokeChannel('voice:speech', payload),
+      delete: (payload: { voiceId: string }) => invokeChannel('voice:delete', payload),
     },
     videoEditorV2: {
       getOrCreateForManuscript: (payload: { manuscriptPath: string; title?: string }) =>

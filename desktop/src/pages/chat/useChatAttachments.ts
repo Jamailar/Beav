@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
 import type { ChatComposerHandle, UploadedFileAttachment } from '../../components/ChatComposer';
 import { clearAttachmentDraft, loadAttachmentDraft, saveAttachmentDraft } from '../../features/chat/attachmentDraftStore';
+import { resolveAssetUrl } from '../../utils/pathManager';
 
 interface UseChatAttachmentsInput {
   allowFileUpload: boolean;
@@ -36,6 +37,90 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
     reader.readAsDataURL(file);
   });
+}
+
+function isVideoAttachment(attachment: UploadedFileAttachment | null | undefined): boolean {
+  if (!attachment) return false;
+  const kind = String(attachment.kind || '').trim().toLowerCase();
+  const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
+  const ext = String(attachment.ext || '').trim().replace(/^\./, '').toLowerCase();
+  return kind === 'video' || mimeType.startsWith('video/') || ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'].includes(ext);
+}
+
+function createVideoThumbnailDataUrl(source: string): Promise<string | null> {
+  const normalizedSource = String(source || '').trim();
+  if (!normalizedSource || typeof document === 'undefined') return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    let settled = false;
+    const cleanup = () => {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      cleanup();
+      resolve(value);
+    };
+    const timeoutId = window.setTimeout(() => finish(null), 5000);
+
+    video.muted = true;
+    video.preload = 'metadata';
+    video.playsInline = true;
+    video.onerror = () => finish(null);
+    video.onloadedmetadata = () => {
+      const seekTarget = Math.min(0.1, Math.max(0, (Number.isFinite(video.duration) ? video.duration : 0) / 2));
+      if (Math.abs((video.currentTime || 0) - seekTarget) < 0.01) {
+        video.dispatchEvent(new Event('seeked'));
+      } else {
+        video.currentTime = seekTarget;
+      }
+    };
+    video.onseeked = () => {
+      const width = video.videoWidth || 320;
+      const height = video.videoHeight || 180;
+      const maxSide = 360;
+      const scale = Math.min(1, maxSide / Math.max(width, height));
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) {
+        finish(null);
+        return;
+      }
+      try {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        finish(canvas.toDataURL('image/jpeg', 0.78));
+      } catch {
+        finish(null);
+      }
+    };
+    video.src = normalizedSource;
+    video.load();
+  });
+}
+
+async function withVideoThumbnail(
+  attachment: UploadedFileAttachment,
+  preferredSource?: string,
+): Promise<UploadedFileAttachment> {
+  if (!isVideoAttachment(attachment) || attachment.thumbnailDataUrl) return attachment;
+  const source = String(
+    preferredSource
+    || attachment.localUrl
+    || attachment.absolutePath
+    || attachment.originalAbsolutePath
+    || attachment.inlineDataUrl
+    || '',
+  ).trim();
+  if (!source) return attachment;
+  const thumbnailDataUrl = await createVideoThumbnailDataUrl(source.startsWith('blob:') || source.startsWith('data:') ? source : resolveAssetUrl(source));
+  return thumbnailDataUrl ? { ...attachment, thumbnailDataUrl } : attachment;
 }
 
 function isPersistentAttachmentDraftScope(scopeId: string): boolean {
@@ -161,7 +246,15 @@ export function useChatAttachments({
       if (!result?.success || !result.attachment) {
         throw new Error(result?.error || '上传文件失败');
       }
-      appendPendingAttachment(result.attachment);
+      let previewUrl = '';
+      if (isVideoAttachment(result.attachment)) {
+        previewUrl = URL.createObjectURL(file);
+      }
+      try {
+        appendPendingAttachment(await withVideoThumbnail(result.attachment, previewUrl));
+      } finally {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+      }
       focusComposer();
     } catch (error) {
       setErrorNotice(error instanceof Error ? error.message : String(error || '上传文件失败'));
@@ -184,7 +277,7 @@ export function useChatAttachments({
       if (!result?.success || !result.attachment) {
         throw new Error(result?.error || '上传文件失败');
       }
-      appendPendingAttachment(result.attachment);
+      appendPendingAttachment(await withVideoThumbnail(result.attachment));
       focusComposer();
     } catch (error) {
       setErrorNotice(error instanceof Error ? error.message : String(error || '上传文件失败'));
@@ -301,7 +394,7 @@ export function useChatAttachments({
       if (result.canceled) return;
       if (result.attachment) {
         setErrorNotice(null);
-        appendPendingAttachment(result.attachment);
+        appendPendingAttachment(await withVideoThumbnail(result.attachment));
         focusComposer();
       }
     } catch (error) {

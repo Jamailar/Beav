@@ -693,6 +693,60 @@ fn subjects_output_schema() -> Value {
     }))
 }
 
+fn voice_clone_input_schema() -> Value {
+    object_schema(
+        &[
+            ("samplePath", string_schema("Managed local audio sample path. Relative paths are resolved inside the workspace or the owner asset folder.")),
+            ("ownerAssetId", string_schema("Optional asset library subject id that owns this sample.")),
+            ("name", string_schema("Optional user-facing voice name.")),
+            ("language", string_schema("Optional sample language, such as zh, en, or nl.")),
+            ("model", string_schema("Optional clone model key; omit to use backend default.")),
+        ],
+        &["samplePath"],
+        Some("Clone a managed local audio sample into a reusable platform voice_id. Do not pass external URLs."),
+    )
+}
+
+fn voice_speech_input_schema() -> Value {
+    object_schema(
+        &[
+            ("input", string_schema("Text to synthesize.")),
+            ("voiceId", string_schema("Platform voice id returned by voice.clone or stored on an asset.")),
+            ("voice", string_schema("OpenAI-compatible alias for voiceId.")),
+            ("model", string_schema("Optional TTS model key; omit to use backend default.")),
+            ("languageBoost", string_schema("Optional language boost value, such as Chinese.")),
+            ("responseFormat", string_schema("Audio format, usually mp3.")),
+            ("title", string_schema("Optional media library title for the generated audio asset.")),
+            ("projectId", string_schema("Optional project id to attach to the generated media asset.")),
+            ("boundManuscriptPath", string_schema("Optional manuscript path to bind the generated audio asset.")),
+        ],
+        &["input", "voiceId"],
+        Some("Generate speech with a cloned or platform voice id and save the audio into the media library."),
+    )
+}
+
+fn voice_get_input_schema() -> Value {
+    object_schema(
+        &[("voiceId", string_schema("Platform voice id."))],
+        &["voiceId"],
+        None,
+    )
+}
+
+fn voice_output_schema() -> Value {
+    ok_output_schema(json!({
+        "type": "object",
+        "properties": {
+            "voice": { "type": "object" },
+            "voices": { "type": "array", "items": { "type": "object" } },
+            "voiceId": { "type": "string" },
+            "asset": { "type": "object" },
+            "relativePath": { "type": "string" }
+        },
+        "additionalProperties": true
+    }))
+}
+
 fn runtime_simple_input_schema() -> Value {
     object_schema(
         &[
@@ -1797,6 +1851,110 @@ fn video_analyze_input_schema() -> Value {
     )
 }
 
+fn media_edit_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "sourcePath",
+                string_schema("Workspace-relative or absolute source video path."),
+            ),
+            (
+                "toolPath",
+                string_schema(
+                    "Preferred workspace-relative path from an uploaded video attachment.",
+                ),
+            ),
+            (
+                "intentSummary",
+                string_schema("Concise summary of the requested edit."),
+            ),
+            (
+                "operations",
+                json!({
+                    "type": "array",
+                    "description": "Controlled ffmpeg recipe. Supported types: trim, concat, crop_scale, speed, mute, replace_audio.",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["trim", "concat", "crop_scale", "speed", "mute", "replace_audio"]
+                            },
+                            "startMs": { "type": "integer" },
+                            "durationMs": { "type": "integer" },
+                            "label": { "type": "string" },
+                            "inputPath": { "type": "string" },
+                            "inputPaths": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            },
+                            "speed": { "type": "number" },
+                            "audioPath": { "type": "string" }
+                        }
+                    },
+                    "minItems": 1,
+                }),
+            ),
+            (
+                "output",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["auto", "single-video", "clips"],
+                            "description": "Use clips for multiple independent short videos; use single-video when concat is desired."
+                        },
+                        "directory": { "type": "string" }
+                    }
+                }),
+            ),
+        ],
+        &["operations"],
+        None,
+    )
+}
+
+fn media_transcribe_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "sourcePath",
+                string_schema("Workspace-relative or absolute source video/audio path."),
+            ),
+            (
+                "toolPath",
+                string_schema(
+                    "Preferred workspace-relative path from an uploaded video attachment.",
+                ),
+            ),
+            (
+                "format",
+                json!({
+                    "type": "string",
+                    "enum": ["srt", "vtt", "text", "txt", "json", "verbose_json"],
+                    "description": "Transcript output format. Use srt when subtitles or editing are needed."
+                }),
+            ),
+            ("language", string_schema("Optional language hint.")),
+            (
+                "output",
+                json!({
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                        "directory": { "type": "string" }
+                    }
+                }),
+            ),
+        ],
+        &[],
+        None,
+    )
+}
+
 fn media_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -2627,6 +2785,61 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
+        action: "voice.clone",
+        namespace: "voice",
+        description: "Clone a managed local audio sample into a reusable platform voice_id. Use ownerAssetId when cloning from a person or role asset.",
+        input_schema: voice_clone_input_schema,
+        output_schema: voice_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "voice.speech",
+        namespace: "voice",
+        description: "Generate speech from text with a platform voice_id and save the audio result into the media library.",
+        input_schema: voice_speech_input_schema,
+        output_schema: voice_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "voice.list",
+        namespace: "voice",
+        description: "List platform voices available through the configured voice gateway.",
+        input_schema: no_payload_schema,
+        output_schema: voice_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "voice.get",
+        namespace: "voice",
+        description: "Read one platform voice by voiceId.",
+        input_schema: voice_get_input_schema,
+        output_schema: voice_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "voice.delete",
+        namespace: "voice",
+        description: "Delete one platform voice by voiceId. Use only when the user explicitly asks to remove a cloned voice.",
+        input_schema: voice_get_input_schema,
+        output_schema: voice_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::CompatOnly,
+    },
+    ActionDescriptor {
         action: "subjects.search",
         namespace: "subjects",
         description: "Legacy alias for assets.search.",
@@ -3327,6 +3540,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: media_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "media.edit",
+        namespace: "media",
+        description: "Edit an existing local video with controlled ffmpeg operations and register the outputs in the media library. Use for user requests to cut, trim, split, concatenate, mute, speed-change, crop, or export an uploaded video.",
+        input_schema: media_edit_input_schema,
+        output_schema: media_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: REDCLAW_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "media.transcribe",
+        namespace: "media",
+        description: "Extract audio from an existing local video/audio file and generate a transcript or subtitle file. Use before subtitle overlay, captioned exports, or semantic video cuts that need timed text.",
+        input_schema: media_transcribe_input_schema,
+        output_schema: media_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -4290,6 +4525,10 @@ mod tests {
         assert!(actions.contains(&"image.generate"));
         assert!(actions.contains(&"video.generate"));
         assert!(actions.contains(&"video.analyze"));
+        assert!(actions.contains(&"media.edit"));
+        assert!(actions.contains(&"media.transcribe"));
+        assert!(actions.contains(&"voice.clone"));
+        assert!(actions.contains(&"voice.speech"));
         assert!(!actions.contains(&"tools.search"));
     }
 

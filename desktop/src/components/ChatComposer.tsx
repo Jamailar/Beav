@@ -522,14 +522,20 @@ function ComposerAttachmentPreview({
 }: ComposerAttachmentPreviewProps) {
   const visualKind = getAttachmentVisualKind(attachment);
   const isImageAttachment = visualKind === 'image';
-  const previewSrc = visualKind === 'image' ? getAttachmentSource(attachment) : '';
+  const isVideoAttachment = visualKind === 'video';
+  const previewSrc = isImageAttachment
+    ? getAttachmentSource(attachment)
+    : isVideoAttachment
+      ? String(attachment.thumbnailDataUrl || '').trim()
+      : '';
   const extLabel = getAttachmentExtLabel(attachment);
   const sizeLabel = formatAttachmentSize(attachment.size);
   const typeLabel = getAttachmentKindLabel(visualKind);
-  const frameClass = isImageAttachment
+  const hasVisualPreview = isImageAttachment || (isVideoAttachment && Boolean(previewSrc));
+  const frameClass = hasVisualPreview
     ? variant === 'empty' ? 'h-[88px] w-[88px]' : 'h-[72px] w-[72px]'
     : variant === 'empty' ? 'h-[92px] w-[70px]' : 'h-[78px] w-[58px]';
-  const frameRadiusClass = isImageAttachment
+  const frameRadiusClass = hasVisualPreview
     ? variant === 'empty' ? 'rounded-[18px]' : 'rounded-[16px]'
     : 'rounded-[22px]';
   const metaClass = darkEmbedded ? 'text-white/34' : 'text-text-tertiary/70';
@@ -553,7 +559,7 @@ function ComposerAttachmentPreview({
             'overflow-hidden border',
             frameClass,
             frameRadiusClass,
-            isImageAttachment ? 'rotate-0' : (variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]'),
+            hasVisualPreview ? 'rotate-0' : (variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]'),
             previewShellClass,
           )}>
             <img src={previewSrc} alt={attachment.name} className="h-full w-full object-cover" />

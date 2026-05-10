@@ -1050,7 +1050,7 @@ mod tests {
         assert!(refreshed
             .body
             .contains("allowedRuntimeModes: [team, redclaw, image-generation]"));
-        assert_eq!(refreshed.disabled, Some(true));
+        assert_eq!(refreshed.disabled, Some(false));
         assert_eq!(refreshed.source_scope.as_deref(), Some("builtin"));
         assert_eq!(refreshed.is_builtin, Some(true));
     }
@@ -1169,6 +1169,7 @@ mod tests {
             image_paths: Vec::new(),
             voice_path: None,
             voice_script: None,
+            voice: None,
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             absolute_image_paths: Vec::new(),
