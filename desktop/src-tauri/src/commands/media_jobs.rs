@@ -16,6 +16,15 @@ pub fn handle_media_jobs_channel(
         "generation:submit-video" => Some(media_runtime::submit_media_job(
             app, state, "video", payload,
         )),
+        "generation:submit-audio" => Some(media_runtime::submit_media_job(
+            app, state, "audio", payload,
+        )),
+        "generation:submit-voice-clone" => Some(media_runtime::submit_media_job(
+            app,
+            state,
+            "voice_clone",
+            payload,
+        )),
         "generation:list-job-summaries" => {
             Some(media_runtime::list_media_job_summaries(state, payload))
         }

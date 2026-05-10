@@ -1,10 +1,10 @@
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
-use crate::{voice_service, AppState};
+use crate::{media_runtime, payload_field, voice_service, AppState};
 
 pub fn handle_voice_channel(
-    _app: &AppHandle,
+    app: &AppHandle,
     state: &State<'_, AppState>,
     channel: &str,
     payload: &Value,
@@ -12,11 +12,64 @@ pub fn handle_voice_channel(
     let result = match channel {
         "voice:list" => voice_service::list_voices(state, payload),
         "voice:get" => voice_service::get_voice(state, payload),
-        "voice:clone" => voice_service::clone_voice(state, payload),
+        "voice:clone" => {
+            if payload_field(payload, "runtimeBypass")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                voice_service::clone_voice(state, payload)
+            } else {
+                (|| {
+                    let submitted =
+                        media_runtime::submit_media_job(app, state, "voice_clone", payload)?;
+                    if payload_field(payload, "waitForCompletion")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        let timeout_ms = payload_field(payload, "timeoutMs")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(30 * 60 * 1000);
+                        let job_id = submitted
+                            .get("jobId")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| "voice clone job did not return jobId".to_string())?;
+                        media_runtime::await_media_job_completion(state, job_id, timeout_ms)
+                    } else {
+                        Ok(submitted)
+                    }
+                })()
+            }
+        }
         "voice:bind-asset" | "assets:bind-voice" => {
             voice_service::bind_subject_voice(state, payload)
         }
-        "voice:speech" => voice_service::synthesize_speech(state, payload),
+        "voice:speech" => {
+            if payload_field(payload, "runtimeBypass")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                voice_service::synthesize_speech(state, payload)
+            } else {
+                (|| {
+                    let submitted = media_runtime::submit_media_job(app, state, "audio", payload)?;
+                    if payload_field(payload, "waitForCompletion")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        let timeout_ms = payload_field(payload, "timeoutMs")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(30 * 60 * 1000);
+                        let job_id = submitted
+                            .get("jobId")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| "audio job did not return jobId".to_string())?;
+                        media_runtime::await_media_job_completion(state, job_id, timeout_ms)
+                    } else {
+                        Ok(submitted)
+                    }
+                })()
+            }
+        }
         "voice:delete" => voice_service::delete_voice(state, payload),
         _ => return None,
     };

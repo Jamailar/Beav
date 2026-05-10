@@ -175,10 +175,17 @@ Tauri IPC
   voice:get
   voice:delete
   voice:speech
+  generation:submit-audio
+  generation:submit-voice-clone
   assets:bind-voice
         |
         v
 desktop/src-tauri/src/commands/voice.rs
+        |
+        +--> desktop/src-tauri/src/media_runtime/mod.rs
+        |       +--> media_jobs.kind = audio
+        |       +--> media_jobs.kind = voice_clone
+        |       +--> queued / submitting / retry / completed / failed
         |
         v
 desktop/src-tauri/src/voice_service.rs
@@ -187,8 +194,17 @@ desktop/src-tauri/src/voice_service.rs
         +--> backend /audio/voices/* and /audio/speech
         +--> media asset store
         +--> asset metadata patch
-        +--> background job events
+        +--> media runtime job events
 ```
+
+`voice_service.rs` 不拥有队列。它是 provider adapter，负责执行 clone / speech 请求、归一化返回、写入最终资产。队列、重试、状态、取消、产物追踪统一放在 `media_runtime`：
+
+- 手动/AI 复刻通过 `voice:clone` 默认提交 `media_jobs.kind = "voice_clone"`。
+- TTS 使用 `voice:speech` 默认提交 `media_jobs.kind = "audio"`。
+- 资产库自动复刻使用 `media_jobs.kind = "voice_clone"`。
+- `voice:clone` 和 `voice:speech` 都支持 `waitForCompletion=true` 等待任务完成。
+- 资产上传音频后只提交 voice clone job，并把 `jobId/status` 写入人物资产 voice metadata。
+- 复刻成功后 `voice_service` 写回平台 `voiceId`；失败由 job 状态和资产 voice metadata 共同暴露。
 
 ### 4.1 New Host Modules
 
