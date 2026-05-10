@@ -704,6 +704,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     const audioRecording = useAudioRecording({
         onCaptured: async (clip) => {
+            const capturedSeconds = (clip.capturedDurationMs || 0) / 1000;
+            if (capturedSeconds > 0 && capturedSeconds < SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+                throw new Error(`实际录入音频只有 ${capturedSeconds.toFixed(1)} 秒，请重新录制至少 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒`);
+            }
             if ((clip.byteLength || 0) > 10 * 1024 * 1024) {
                 throw new Error('声音参考文件不能超过 10MB');
             }
