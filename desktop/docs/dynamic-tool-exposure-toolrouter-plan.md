@@ -523,7 +523,7 @@ Deferred Redbox actions are searchable. If you need another product operation, c
   "visibleTools": ["Read", "Search", "Redbox"],
   "visibleActions": ["image.generate", "skill.run", "subjects.search"],
   "deferredActionFamilies": ["manuscripts", "team", "memory"],
-  "activeSkills": ["redbox-image-director"]
+  "activeSkills": ["image-director"]
 }
 ```
 
@@ -596,7 +596,7 @@ maxDirectActions: 8
 
 Example:
 
-- `redbox-image-director` activates `image.generate`, `skill.run`, `subjects.search`.
+- `image-director` activates `image.generate`, `skill.run`, `subjects.search`.
 - It should not automatically expose `manuscripts.createProject` unless user asks to package or bind results.
 
 ## 8. Tool Call Lifecycle

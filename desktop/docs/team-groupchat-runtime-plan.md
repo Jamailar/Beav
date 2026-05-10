@@ -1465,7 +1465,7 @@ Image-director member should:
 - submit artifact refs and evidence
 - let verifier/reviewer inspect output
 
-Must use existing image generation runtime and `redbox-image-director` skill. Do not create a separate image pipeline inside team runtime.
+Must use existing image generation runtime and `image-director` skill. Do not create a separate image pipeline inside team runtime.
 
 ### 10.2 Video Editing
 

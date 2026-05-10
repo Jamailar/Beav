@@ -15,13 +15,12 @@ use crate::{redbox_builtin_skills_root, slug_from_relative_path, workspace_root,
 pub fn preferred_user_skill_root() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".codex")
+        .join(".agents")
         .join("skills")
 }
 
 fn additional_user_skill_roots() -> Vec<PathBuf> {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    vec![home.join(".agents").join("skills")]
+    Vec::new()
 }
 
 fn discover_external_skill_records(workspace_root: Option<&Path>) -> Vec<SkillRecord> {
@@ -74,7 +73,13 @@ fn merge_discovered_with_existing(
             .iter()
             .find(|item| canonical_skill_name(&item.name).eq_ignore_ascii_case(&record.name))
         {
-            record.disabled = existing_record.disabled.or(record.disabled);
+            let is_builtin = record.is_builtin.unwrap_or(false)
+                || record.source_scope.as_deref() == Some("builtin");
+            if is_builtin {
+                record.disabled = Some(false);
+            } else {
+                record.disabled = existing_record.disabled.or(record.disabled);
+            }
         }
     }
     for record in existing {
@@ -93,6 +98,13 @@ fn merge_discovered_with_existing(
         let is_builtin =
             record.is_builtin.unwrap_or(false) || record.source_scope.as_deref() == Some("builtin");
         if is_builtin {
+            continue;
+        }
+        let is_file_discovered_scope = matches!(
+            record.source_scope.as_deref(),
+            Some("workspace") | Some("user")
+        );
+        if is_file_discovered_scope {
             continue;
         }
         merged.push(record.clone());
@@ -202,5 +214,22 @@ mod tests {
         let existing = vec![skill("old-builtin", "builtin", false)];
         let merged = merge_discovered_with_existing(&existing, Vec::new());
         assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_discovered_with_existing_drops_removed_user_file_records() {
+        let existing = vec![skill("codex-global-skill", "user", false)];
+        let merged = merge_discovered_with_existing(&existing, Vec::new());
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_discovered_with_existing_forces_builtin_enabled() {
+        let existing = vec![skill("cover-builder", "builtin", true)];
+        let merged = merge_discovered_with_existing(
+            &existing,
+            vec![skill("cover-builder", "builtin", false)],
+        );
+        assert_eq!(merged[0].disabled, Some(false));
     }
 }

@@ -28,6 +28,7 @@ mod tests {
                 "video-director",
                 "wander-synthesis",
                 "writing-style",
+                "wwud",
                 "xhs-title",
             ])
         );

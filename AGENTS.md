@@ -94,6 +94,19 @@
 - 全局状态锁必须窄且仅内存；不要在持锁期间做文件 I/O、目录扫描、workspace hydration、序列化、索引构建等慢操作。
 - 固定模式：持锁读取最小快照 -> 释放锁 -> 锁外完成 I/O / workspace 操作 -> 重新持锁只应用最终内存变更。
 
+## Rust Mutability And Lifetime Rules
+
+- `mut` 只用于明确的状态变更边界；不要为绕过 borrow checker 到处加 `mut`、`.clone()`、`Arc<Mutex<_>>` 或全局缓存。
+- `AppStore` 变更默认走 `with_store_mut` 等集中入口；闭包内只做内存级读写、校验和小对象组装，不做 await、进程等待、网络请求、文件扫描、索引构建、序列化或大文件写入。
+- `with_store` / `with_store_mut` 闭包不要返回借用自 `AppStore` 的引用；需要跨闭包、跨 async、跨线程或跨 IPC 使用的数据必须转成 owned snapshot，如 `String`、`PathBuf`、`Vec<T>`、`serde_json::Value` 或 typed record。
+- 后台任务、`tauri::async_runtime::spawn`、`spawn_blocking`、scheduler、media runtime、RedClaw runtime、AI turn、MCP / CLI 子进程管理，不允许捕获短生命周期引用；进入任务前先 clone 必需的 `AppHandle`、id、路径、payload 和配置快照。
+- 不要把 `MutexGuard`、`&mut AppStore`、`&mut Value`、rusqlite statement/row、文件 handle 或子进程 handle 跨 await / thread / callback 保存；需要后续回写时，用 id + owned patch/result 重新获取锁并应用。
+- 多把锁必须有稳定顺序，且锁内不得调用可能再拿 `store`、runtime state、`active_chat_requests`、`knowledge_index_state`、`media_generation_runtime` 的函数；无法证明无重入时，先释放当前锁。
+- `Arc<Mutex<T>>` 只用于确实需要共享可变运行时状态的对象，如进程 handle、并发槽位、runtime lifecycle；普通业务数据优先 owned snapshot + event/result 回写。
+- 生命周期声明优先让编译器推断；只有“返回值确实借用输入”时才手写 `'a`。不要用 `'static` 掩盖设计问题；跨任务数据应改成 owned，而不是强行延长引用生命周期。
+- `serde_json::Value` 的 `&mut Value` 只适合局部 project/manifest/timeline patch；核心协议、持久化结构、AI/tool contract 和跨模块边界应优先 typed struct + schema 校验。
+- 任何新增 Rust 状态或 runtime 字段，都要先回答：谁拥有数据、谁能修改、锁持有多久、是否跨 async/thread、失败时如何回滚、是否会阻塞 UI 或 AI 事件流。
+
 ## Known Pitfalls
 
 - `desktop/src-tauri/src/main.rs` 仍然偏大；除接线外，新增逻辑优先拆到子模块。
@@ -102,6 +115,8 @@
 - 调度逻辑使用本地时间；处理 daily / weekly / cron 时不要忽视时区和 DST。
 - 不要把用户可见页面在刷新时清空成 loading 态。
 - 不要在持锁范围内做慢 I/O。
+- 不要为了修 Rust 编译错误把短生命周期数据塞进 `'static`、全局 `OnceLock` 或长期 `Arc<Mutex<_>>`；这通常会把编译期问题变成会话污染、内存泄漏或后台任务串线。
+- 不要在 chat / RedClaw / media / knowledge 这类 runtime 路径里持锁等待子进程、ffmpeg、LLM、MCP server、文件系统或索引任务完成。
 - agent 问题复盘不要跳过本地运行证据；默认去 `~/Library/Application Support/RedBox/` 对照 `session-transcripts/`、`session-bundles/` 和状态库还原实际执行链路。
 
 ## Documentation Expectations

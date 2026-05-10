@@ -4,6 +4,8 @@
 firstrestrict.md
 dev_plan.md
 *.py
+!desktop/skills/**/scripts/*.py
+!desktop/builtin-skills/**/scripts/*.py
 example
 node_modules
 *.key

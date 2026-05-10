@@ -413,9 +413,8 @@ fn ensure_builtin_skills_present(store: &mut AppStore) -> bool {
             .iter()
             .position(|skill| skill.name.eq_ignore_ascii_case(&builtin.name));
         if let Some(index) = existing {
-            let preserved_disabled = store.skills[index].disabled;
             let refreshed = SkillRecord {
-                disabled: preserved_disabled.or(builtin.disabled),
+                disabled: Some(false),
                 ..builtin
             };
             if skill_record_differs(&store.skills[index], &refreshed) {
@@ -1031,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_builtin_skills_present_refreshes_existing_builtin_body_and_preserves_disabled() {
+    fn ensure_builtin_skills_present_refreshes_existing_builtin_body_and_forces_enabled() {
         let mut store = default_store();
         let skill = store
             .skills
