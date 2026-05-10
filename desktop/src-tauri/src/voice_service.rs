@@ -4,6 +4,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
@@ -153,21 +154,75 @@ fn resolve_sample_path(
     Ok((normalize_legacy_workspace_path(&resolved), owner_asset_id))
 }
 
-fn validate_voice_clone_sample_type(path: &Path) -> Result<(), String> {
-    let extension = path
-        .extension()
+fn voice_clone_sample_extension(path: &Path) -> String {
+    path.extension()
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .trim()
-        .to_ascii_lowercase();
-    if matches!(extension.as_str(), "mp3" | "wav" | "m4a") {
-        return Ok(());
+        .to_ascii_lowercase()
+}
+
+fn is_direct_voice_clone_sample(path: &Path) -> bool {
+    matches!(voice_clone_sample_extension(path).as_str(), "mp3" | "wav" | "m4a")
+}
+
+fn is_transcodable_voice_clone_sample(path: &Path) -> bool {
+    matches!(
+        voice_clone_sample_extension(path).as_str(),
+        "aac" | "flac" | "ogg" | "opus" | "webm"
+    )
+}
+
+fn transcode_voice_clone_sample_to_wav(path: &Path) -> Result<PathBuf, String> {
+    let output_path = std::env::temp_dir().join(format!("{}-voice-clone.wav", make_id("redbox")));
+    let output = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(path)
+        .arg("-vn")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg("24000")
+        .arg("-f")
+        .arg("wav")
+        .arg(&output_path)
+        .output()
+        .map_err(|error| {
+            format!("声音复刻样本需要转成 wav，但无法启动 ffmpeg：{error}。请改用 mp3、wav 或 m4a 文件。")
+        })?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let _ = fs::remove_file(&output_path);
+        return Err(if detail.is_empty() {
+            "声音复刻样本转码失败，请改用 mp3、wav 或 m4a 文件。".to_string()
+        } else {
+            format!("声音复刻样本转码失败：{detail}")
+        });
     }
+    Ok(output_path)
+}
+
+fn prepare_voice_clone_sample_upload(path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+    if is_direct_voice_clone_sample(path) {
+        return Ok((path.to_path_buf(), None));
+    }
+    if is_transcodable_voice_clone_sample(path) {
+        let converted = transcode_voice_clone_sample_to_wav(path)?;
+        return Ok((converted.clone(), Some(converted)));
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown");
     Err(format!(
         "声音复刻样本格式不支持：{}。请使用 mp3、wav 或 m4a 文件。",
         path.file_name()
             .and_then(|value| value.to_str())
-            .unwrap_or("voice sample")
+            .unwrap_or(extension)
     ))
 }
 
@@ -191,19 +246,22 @@ pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Resul
         );
     }
     let (sample_path, owner_asset_id) = resolve_sample_path(state, payload)?;
-    validate_voice_clone_sample_type(&sample_path)?;
-    let bytes = fs::read(&sample_path).map_err(|error| {
+    let (upload_path, temporary_upload_path) = prepare_voice_clone_sample_upload(&sample_path)?;
+    let bytes = fs::read(&upload_path).map_err(|error| {
         format!(
             "failed to read voice sample {}: {error}",
-            sample_path.display()
+            upload_path.display()
         )
     })?;
-    let file_name = sample_path
+    let file_name = upload_path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("voice-sample.wav")
         .to_string();
-    let (mime_type, _, _) = guess_mime_and_kind(&sample_path);
+    let (mime_type, _, _) = guess_mime_and_kind(&upload_path);
+    if let Some(temp_path) = temporary_upload_path.as_deref() {
+        let _ = fs::remove_file(temp_path);
+    }
     let part = match multipart::Part::bytes(bytes.clone())
         .file_name(file_name.clone())
         .mime_str(&mime_type)
