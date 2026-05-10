@@ -247,12 +247,26 @@ pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Resul
     }
     let (sample_path, owner_asset_id) = resolve_sample_path(state, payload)?;
     let (upload_path, temporary_upload_path) = prepare_voice_clone_sample_upload(&sample_path)?;
+    let expected_bytes = fs::metadata(&upload_path)
+        .map_err(|error| {
+            format!(
+                "failed to read voice sample metadata {}: {error}",
+                upload_path.display()
+            )
+        })?
+        .len();
     let bytes = fs::read(&upload_path).map_err(|error| {
         format!(
             "failed to read voice sample {}: {error}",
             upload_path.display()
         )
     })?;
+    if bytes.len() as u64 != expected_bytes {
+        return Err(format!(
+            "音频采样文件读取不完整：{expected_bytes} 字节预期，实际 {} 字节",
+            bytes.len()
+        ));
+    }
     let file_name = upload_path
         .file_name()
         .and_then(|value| value.to_str())
