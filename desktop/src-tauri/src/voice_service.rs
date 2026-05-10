@@ -730,7 +730,6 @@ fn patch_subject_voice_state(
         for (key, value) in source {
             target.insert(key.clone(), value.clone());
         }
-        target.insert("status".to_string(), json!("ready"));
         target.insert("updatedAt".to_string(), json!(now_iso()));
         target.remove("lastError");
     }
