@@ -17,6 +17,7 @@ export interface AudioRecordingClip {
   mimeType: string;
   fileName: string;
   durationMs?: number;
+  capturedDurationMs?: number;
   byteLength?: number;
   sampleRate?: number;
   channels?: number;

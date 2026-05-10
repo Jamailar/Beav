@@ -1,6 +1,6 @@
 use base64::Engine;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{SampleFormat, StreamConfig};
+use cpal::{SampleFormat, SampleRate, StreamConfig};
 use serde_json::{json, Value};
 use std::io::Cursor;
 use std::sync::mpsc;
@@ -10,6 +10,11 @@ use std::time::Instant;
 use tauri::{AppHandle, State};
 
 use crate::{now_ms, AppState};
+
+const PREFERRED_INPUT_SAMPLE_RATE: u32 = 48_000;
+const MIN_REASONABLE_INPUT_SAMPLE_RATE: u32 = 8_000;
+const MAX_REASONABLE_INPUT_SAMPLE_RATE: u32 = 96_000;
+const MAX_RECORDING_CAPTURE_DRIFT_MS: u64 = 3_000;
 
 struct ActiveAudioRecording {
     stop_tx: mpsc::Sender<()>,
@@ -178,6 +183,56 @@ fn build_input_stream(
     }
 }
 
+fn choose_recording_input_config(
+    device: &cpal::Device,
+) -> Result<(StreamConfig, SampleFormat), String> {
+    let default_config = device.default_input_config().map_err(|error| error.to_string())?;
+    let default_rate = default_config.sample_rate().0;
+    let default_channels = default_config.channels();
+    if (MIN_REASONABLE_INPUT_SAMPLE_RATE..=MAX_REASONABLE_INPUT_SAMPLE_RATE)
+        .contains(&default_rate)
+        && (1..=2).contains(&default_channels)
+    {
+        return Ok((default_config.config(), default_config.sample_format()));
+    }
+
+    let mut fallback = None;
+    let supported_configs = device
+        .supported_input_configs()
+        .map_err(|error| error.to_string())?;
+    for config_range in supported_configs {
+        if !matches!(
+            config_range.sample_format(),
+            SampleFormat::F32 | SampleFormat::I16 | SampleFormat::U16
+        ) {
+            continue;
+        }
+        let min_rate = config_range.min_sample_rate().0;
+        let max_rate = config_range.max_sample_rate().0;
+        if max_rate < MIN_REASONABLE_INPUT_SAMPLE_RATE
+            || min_rate > MAX_REASONABLE_INPUT_SAMPLE_RATE
+        {
+            continue;
+        }
+        let target_rate = if min_rate <= PREFERRED_INPUT_SAMPLE_RATE
+            && max_rate >= PREFERRED_INPUT_SAMPLE_RATE
+        {
+            PREFERRED_INPUT_SAMPLE_RATE
+        } else {
+            max_rate.min(MAX_REASONABLE_INPUT_SAMPLE_RATE).max(min_rate)
+        };
+        let supported_config = config_range.with_sample_rate(SampleRate(target_rate));
+        let config = supported_config.config();
+        let sample_format = supported_config.sample_format();
+        if (1..=2).contains(&config.channels) {
+            return Ok((config, sample_format));
+        }
+        fallback.get_or_insert((config, sample_format));
+    }
+
+    Ok(fallback.unwrap_or_else(|| (default_config.config(), default_config.sample_format())))
+}
+
 fn encode_wav_bytes(samples: &[i16], sample_rate: u32, channels: u16) -> Result<Vec<u8>, String> {
     let spec = hound::WavSpec {
         channels,
@@ -216,15 +271,13 @@ fn spawn_recording_thread(
                 .default_input_device()
                 .ok_or_else(|| "未检测到可用麦克风设备".to_string())?;
             let device_name = device.name().unwrap_or_else(|_| "默认输入设备".to_string());
-            let supported_config = device
-                .default_input_config()
-                .map_err(|error| error.to_string())?;
-            let sample_rate = supported_config.sample_rate().0;
-            let channels = supported_config.channels();
+            let (config, sample_format) = choose_recording_input_config(&device)?;
+            let sample_rate = config.sample_rate.0;
+            let channels = config.channels;
             let stream = build_input_stream(
                 &device,
-                &supported_config.config(),
-                supported_config.sample_format(),
+                &config,
+                sample_format,
                 Arc::clone(&samples),
                 Arc::clone(&last_error),
             )?;
@@ -354,6 +407,34 @@ fn stop_recording(discard: bool) -> Result<Value, String> {
         }));
     }
 
+    if let Some(error) = runtime_error {
+        return Ok(json!({
+            "success": false,
+            "reason": classify_audio_error(&error),
+            "error": format!("录音流中途中断，请重新录制：{error}"),
+            "durationMs": duration_ms,
+        }));
+    }
+
+    let captured_duration_ms = if active.sample_rate == 0 || active.channels == 0 {
+        0
+    } else {
+        samples.len() as u64 * 1000 / active.sample_rate as u64 / active.channels as u64
+    };
+    if duration_ms.saturating_sub(captured_duration_ms) > MAX_RECORDING_CAPTURE_DRIFT_MS {
+        return Ok(json!({
+            "success": false,
+            "reason": "capture_duration_mismatch",
+            "error": format!(
+                "录音采样不完整：计时约 {:.1} 秒，实际音频约 {:.1} 秒，请重新录制",
+                duration_ms as f64 / 1000.0,
+                captured_duration_ms as f64 / 1000.0
+            ),
+            "durationMs": duration_ms,
+            "capturedDurationMs": captured_duration_ms,
+        }));
+    }
+
     let bytes = encode_wav_bytes(&samples, active.sample_rate, active.channels)?;
     Ok(json!({
         "success": true,
@@ -362,6 +443,7 @@ fn stop_recording(discard: bool) -> Result<Value, String> {
             "mimeType": "audio/wav",
             "fileName": format!("redbox-audio-{}.wav", now_ms()),
             "durationMs": duration_ms,
+            "capturedDurationMs": captured_duration_ms,
             "byteLength": bytes.len(),
             "sampleRate": active.sample_rate,
             "channels": active.channels,
