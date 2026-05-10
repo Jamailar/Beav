@@ -772,6 +772,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["clone".to_string()];
                 self.handle_voice(&tokens, payload)
             }
+            "voicebindasset" => {
+                let tokens = vec!["bind-asset".to_string()];
+                self.handle_voice(&tokens, payload)
+            }
             "voicespeech" => {
                 let tokens = vec!["speech".to_string()];
                 self.handle_voice(&tokens, payload)
@@ -1542,8 +1546,27 @@ impl<'a> AppCliExecutor<'a> {
                     {
                         object.insert("ownerAssetId".to_string(), json!(asset_id));
                     }
+                    if let Some(sample_file_key) =
+                        args.string(&["sample-file-key", "sampleFileKey", "sample_file_key"])
+                    {
+                        object.insert("sampleFileKey".to_string(), json!(sample_file_key));
+                    }
                 }
                 self.call_channel("voice:clone", request)
+            }
+            "bind-asset" | "bind" => {
+                let mut request = merge_payload(&args.options, payload);
+                if let Some(object) = request.as_object_mut() {
+                    if let Some(asset_id) =
+                        args.string(&["owner-asset-id", "ownerAssetId", "asset-id", "assetId"])
+                    {
+                        object.insert("ownerAssetId".to_string(), json!(asset_id));
+                    }
+                    if let Some(voice_id) = args.string(&["voice-id", "voiceId", "voice"]) {
+                        object.insert("voiceId".to_string(), json!(voice_id));
+                    }
+                }
+                self.call_channel("voice:bind-asset", request)
             }
             "speech" | "tts" => {
                 let mut request = merge_payload(&args.options, payload);
@@ -5546,7 +5569,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "subjects list|get|search|categories list|create|update|delete",
             "manuscripts list|read|write|create|delete|theme apply|preview|create|save|delete|background-upload|previews|layout get|save",
             "media list|get|edit|transcribe|update|bind|delete",
-            "voice list|get|clone|speech|delete",
+            "voice list|get|clone|bind-asset|speech|delete",
             "image generate|history list|get|providers|models",
             "video generate",
             "knowledge list|search",
@@ -5608,6 +5631,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "voice list",
             "voice get --voice-id <voiceId>",
             "voice clone --sample-path <audioPath> [--owner-asset-id <assetId>]",
+            "voice bind-asset --owner-asset-id <assetId> --voice-id <voiceId>",
             "voice speech --voice-id <voiceId> --input \"text\"",
             "voice delete --voice-id <voiceId>",
         ],

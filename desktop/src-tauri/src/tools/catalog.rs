@@ -697,13 +697,46 @@ fn voice_clone_input_schema() -> Value {
     object_schema(
         &[
             ("samplePath", string_schema("Managed local audio sample path. Relative paths are resolved inside the workspace or the owner asset folder.")),
+            ("sampleFileKey", string_schema("Managed OSS sample file key. Use only for samples already uploaded to the platform.")),
             ("ownerAssetId", string_schema("Optional asset library subject id that owns this sample.")),
             ("name", string_schema("Optional user-facing voice name.")),
             ("language", string_schema("Optional sample language, such as zh, en, or nl.")),
             ("model", string_schema("Optional clone model key; omit to use backend default.")),
+            ("writeBack", bool_schema("Whether to write the resulting voiceId back to ownerAssetId. Defaults to true.")),
         ],
-        &["samplePath"],
+        &[],
         Some("Clone a managed local audio sample into a reusable platform voice_id. Do not pass external URLs."),
+    )
+}
+
+fn voice_bind_asset_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "ownerAssetId",
+                string_schema("Asset library subject id that should receive this voice binding."),
+            ),
+            (
+                "voiceId",
+                string_schema("Platform voice id to bind to the asset."),
+            ),
+            ("name", string_schema("Optional user-facing voice name.")),
+            ("language", string_schema("Optional voice language.")),
+            (
+                "sampleFileKey",
+                string_schema("Optional managed OSS sample key."),
+            ),
+            (
+                "sampleFilePath",
+                string_schema("Optional local sample path relative to the asset folder."),
+            ),
+            (
+                "status",
+                string_schema("Optional binding status. Defaults to ready."),
+            ),
+        ],
+        &["ownerAssetId", "voiceId"],
+        Some("Bind an existing platform voice_id to a person or role asset."),
     )
 }
 
@@ -2787,8 +2820,19 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "voice.clone",
         namespace: "voice",
-        description: "Clone a managed local audio sample into a reusable platform voice_id. Use ownerAssetId when cloning from a person or role asset.",
+        description: "Clone a managed local or OSS audio sample into a reusable platform voice_id. Use ownerAssetId when cloning from a person or role asset so the result is written back.",
         input_schema: voice_clone_input_schema,
+        output_schema: voice_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "voice.bindAsset",
+        namespace: "voice",
+        description: "Bind an existing platform voice_id to a person or role asset without cloning a new sample.",
+        input_schema: voice_bind_asset_input_schema,
         output_schema: voice_output_schema,
         mutating: true,
         concurrency_safe: false,
@@ -4528,6 +4572,7 @@ mod tests {
         assert!(actions.contains(&"media.edit"));
         assert!(actions.contains(&"media.transcribe"));
         assert!(actions.contains(&"voice.clone"));
+        assert!(actions.contains(&"voice.bindAsset"));
         assert!(actions.contains(&"voice.speech"));
         assert!(!actions.contains(&"tools.search"));
     }

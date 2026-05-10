@@ -32,6 +32,11 @@ fn payload_string_alias(payload: &Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| payload_string(payload, key))
 }
 
+fn payload_bool_alias(payload: &Value, keys: &[&str]) -> Option<bool> {
+    keys.iter()
+        .find_map(|key| payload_field(payload, key).and_then(Value::as_bool))
+}
+
 fn clean_base_url(value: String) -> String {
     value.trim().trim_end_matches('/').to_string()
 }
@@ -153,6 +158,20 @@ pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Resul
     let Some(api_key) = config.api_key.as_deref() else {
         return Err("voice clone requires an API key".to_string());
     };
+    let owner_asset_id = payload_string_alias(payload, &["ownerAssetId", "assetId", "subjectId"]);
+    if let Some(sample_file_key) =
+        payload_string_alias(payload, &["sampleFileKey", "sample_file_key"])
+            .filter(|value| !value.trim().is_empty())
+    {
+        return clone_voice_from_managed_key(
+            state,
+            payload,
+            &config,
+            api_key,
+            owner_asset_id,
+            sample_file_key,
+        );
+    }
     let (sample_path, owner_asset_id) = resolve_sample_path(state, payload)?;
     let bytes = fs::read(&sample_path).map_err(|error| {
         format!(
@@ -209,11 +228,84 @@ pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Resul
     }
     let raw = serde_json::from_str::<Value>(&body).map_err(|error| error.to_string())?;
     let voice = normalize_voice_response(raw.clone(), name)?;
+    if owner_asset_id.is_some()
+        && payload_bool_alias(payload, &["writeBack", "write_back"]).unwrap_or(true)
+    {
+        if let Some(subject_id) = owner_asset_id.as_deref() {
+            patch_subject_voice_state(state, subject_id, voice.clone())?;
+        }
+    }
     Ok(json!({
         "success": true,
         "voice": voice,
         "ownerAssetId": owner_asset_id,
         "samplePath": sample_path.display().to_string(),
+        "raw": raw,
+    }))
+}
+
+fn clone_voice_from_managed_key(
+    state: &State<'_, AppState>,
+    payload: &Value,
+    config: &VoiceGatewayConfig,
+    api_key: &str,
+    owner_asset_id: Option<String>,
+    sample_file_key: String,
+) -> Result<Value, String> {
+    let model = payload_string(payload, "model").unwrap_or_else(|| config.clone_model.clone());
+    let name = payload_string(payload, "name");
+    let mut body = Map::new();
+    body.insert(
+        "sample_file_key".to_string(),
+        json!(sample_file_key.clone()),
+    );
+    if let Some(value) = name.as_deref().filter(|value| !value.trim().is_empty()) {
+        body.insert("name".to_string(), json!(value));
+    }
+    if let Some(value) =
+        payload_string(payload, "language").filter(|value| !value.trim().is_empty())
+    {
+        body.insert("language".to_string(), json!(value));
+    }
+    if !model.trim().is_empty() {
+        body.insert("model".to_string(), json!(model));
+    }
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = authorized_request(
+        &client,
+        reqwest::Method::POST,
+        &gateway_url(config, "/audio/voices/clone"),
+        Some(api_key),
+    )
+    .json(&Value::Object(body))
+    .send()
+    .map_err(|error| error.to_string())?;
+    let status = response.status();
+    let body = response.text().map_err(|error| error.to_string())?;
+    if !status.is_success() {
+        return Err(format!("voice clone failed with HTTP {status}: {body}"));
+    }
+    let raw = serde_json::from_str::<Value>(&body).map_err(|error| error.to_string())?;
+    let mut voice = normalize_voice_response(raw.clone(), name)?;
+    if let Some(object) = voice.as_object_mut() {
+        object.insert("sampleFileKey".to_string(), json!(sample_file_key.clone()));
+    }
+    if owner_asset_id.is_some()
+        && payload_bool_alias(payload, &["writeBack", "write_back"]).unwrap_or(true)
+    {
+        if let Some(subject_id) = owner_asset_id.as_deref() {
+            patch_subject_voice_state(state, subject_id, voice.clone())?;
+        }
+    }
+    Ok(json!({
+        "success": true,
+        "voice": voice,
+        "ownerAssetId": owner_asset_id,
+        "sampleFileKey": sample_file_key,
         "raw": raw,
     }))
 }
@@ -506,6 +598,7 @@ fn clone_voice_for_subject(
         "ownerAssetId": subject.id,
         "samplePath": relative_path,
         "name": subject.name,
+        "writeBack": false,
     });
     if let Some(language) = subject
         .voice
@@ -555,6 +648,46 @@ fn patch_subject_voice_state(
         store.subjects = subjects;
         Ok(())
     })
+}
+
+pub(crate) fn bind_subject_voice(
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
+    let subject_id = payload_string_alias(payload, &["ownerAssetId", "assetId", "subjectId", "id"])
+        .ok_or_else(|| "voice.bindAsset requires ownerAssetId".to_string())?;
+    let voice_id = payload_string_alias(payload, &["voiceId", "voice_id", "voice"])
+        .ok_or_else(|| "voice.bindAsset requires voiceId".to_string())?;
+    ensure_store_hydrated_for_subjects(state)?;
+    let exists = with_store(state, |store| {
+        Ok(store
+            .subjects
+            .iter()
+            .any(|subject| subject.id == subject_id))
+    })?;
+    if !exists {
+        return Ok(json!({ "success": false, "error": "资产不存在" }));
+    }
+    let mut voice = json!({
+        "voiceId": voice_id,
+        "voice_id": voice_id,
+        "status": payload_string(payload, "status").unwrap_or_else(|| "ready".to_string()),
+        "updatedAt": now_iso(),
+    });
+    for key in [
+        "name",
+        "language",
+        "cloneModel",
+        "provider",
+        "sampleFileKey",
+        "sampleFilePath",
+    ] {
+        if let Some(value) = payload_field(payload, key).cloned() {
+            voice[key] = value;
+        }
+    }
+    patch_subject_voice_state(state, &subject_id, voice.clone())?;
+    Ok(json!({ "success": true, "ownerAssetId": subject_id, "voice": voice }))
 }
 
 fn patch_subject_voice_failure(

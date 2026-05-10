@@ -306,6 +306,8 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (
     channel === 'voice:get'
     || channel === 'voice:clone'
+    || channel === 'voice:bind-asset'
+    || channel === 'assets:bind-voice'
     || channel === 'voice:speech'
     || channel === 'voice:delete'
   ) {
@@ -1216,6 +1218,7 @@ function createIpcRenderer() {
       list: (payload?: Record<string, unknown>) => invokeChannel('voice:list', payload || {}),
       get: (payload: { voiceId: string }) => invokeChannel('voice:get', payload),
       clone: (payload: Record<string, unknown>) => invokeChannel('voice:clone', payload),
+      bindAsset: (payload: Record<string, unknown>) => invokeChannel('voice:bind-asset', payload),
       speech: (payload: Record<string, unknown>) => invokeChannel('voice:speech', payload),
       delete: (payload: { voiceId: string }) => invokeChannel('voice:delete', payload),
     },
