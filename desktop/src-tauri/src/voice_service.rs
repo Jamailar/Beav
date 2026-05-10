@@ -135,6 +135,14 @@ fn voice_list_item_id(value: &Value) -> Option<String> {
     })
 }
 
+fn voice_list_item_name(value: &Value) -> Option<String> {
+    payload_string_alias(value, &["name", "title", "voiceName"]).or_else(|| {
+        value.get("data").and_then(|data| {
+            payload_string_alias(data, &["name", "title", "voiceName"])
+        })
+    })
+}
+
 fn voice_list_item_is_usable(value: &Value) -> bool {
     let status = payload_string(value, "status")
         .or_else(|| value.get("data").and_then(|data| payload_string(data, "status")))
@@ -145,6 +153,27 @@ fn voice_list_item_is_usable(value: &Value) -> bool {
         status.as_str(),
         "failed" | "error" | "dead_lettered" | "deleted" | "cancelled" | "canceled"
     )
+}
+
+fn delete_platform_voice(config: &VoiceGatewayConfig, voice_id: &str) -> Result<(), String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = authorized_request(
+        &client,
+        reqwest::Method::DELETE,
+        &gateway_url(config, &format!("/audio/voices/{voice_id}")),
+        config.api_key.as_deref(),
+    )
+    .send()
+    .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        return Err(format!("voice delete failed with HTTP {status}: {body}"));
+    }
+    Ok(())
 }
 
 fn voice_list_items_from_value(value: &Value) -> Vec<Value> {
@@ -195,6 +224,18 @@ fn subject_voice_list_items(state: &State<'_, AppState>) -> Result<Vec<Value>, S
                 }))
             })
             .collect())
+    })
+}
+
+fn subject_voice_id(state: &State<'_, AppState>, subject_id: &str) -> Result<Option<String>, String> {
+    ensure_store_hydrated_for_subjects(state)?;
+    with_store(state, |store| {
+        Ok(store
+            .subjects
+            .iter()
+            .find(|subject| subject.id == subject_id)
+            .and_then(|subject| subject.voice.as_ref())
+            .and_then(|voice| payload_string_alias(voice, &["voiceId", "voice_id"])))
     })
 }
 
@@ -395,7 +436,16 @@ pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Resul
         && payload_bool_alias(payload, &["writeBack", "write_back"]).unwrap_or(true)
     {
         if let Some(subject_id) = owner_asset_id.as_deref() {
+            let previous_voice_id = subject_voice_id(state, subject_id)?;
             patch_subject_voice_state(state, subject_id, voice.clone())?;
+            if let (Some(previous), Some(next)) = (
+                previous_voice_id,
+                payload_string_alias(&voice, &["voiceId", "voice_id"]),
+            ) {
+                if previous != next {
+                    let _ = delete_platform_voice(&config, &previous);
+                }
+            }
         }
     }
     Ok(json!({
@@ -461,7 +511,16 @@ fn clone_voice_from_managed_key(
         && payload_bool_alias(payload, &["writeBack", "write_back"]).unwrap_or(true)
     {
         if let Some(subject_id) = owner_asset_id.as_deref() {
+            let previous_voice_id = subject_voice_id(state, subject_id)?;
             patch_subject_voice_state(state, subject_id, voice.clone())?;
+            if let (Some(previous), Some(next)) = (
+                previous_voice_id,
+                payload_string_alias(&voice, &["voiceId", "voice_id"]),
+            ) {
+                if previous != next {
+                    let _ = delete_platform_voice(config, &previous);
+                }
+            }
         }
     }
     Ok(json!({
@@ -476,8 +535,12 @@ fn clone_voice_from_managed_key(
 pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let mut voices = Vec::new();
     let mut seen = HashSet::new();
+    let mut local_subject_voice_names = HashSet::new();
     for item in subject_voice_list_items(state)? {
         if voice_list_item_is_usable(&item) {
+            if let Some(name) = voice_list_item_name(&item) {
+                local_subject_voice_names.insert(name.trim().to_ascii_lowercase());
+            }
             if let Some(id) = voice_list_item_id(&item) {
                 if seen.insert(id) {
                     voices.push(item);
@@ -486,9 +549,21 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
         }
     }
 
-    let push_remote_voice = |voices: &mut Vec<Value>, seen: &mut HashSet<String>, item: Value| {
+    let push_remote_voice = |voices: &mut Vec<Value>,
+                             seen: &mut HashSet<String>,
+                             local_subject_voice_names: &HashSet<String>,
+                             config: &VoiceGatewayConfig,
+                             item: Value| {
         if !voice_list_item_is_usable(&item) {
+            if let Some(id) = voice_list_item_id(&item) {
+                let _ = delete_platform_voice(config, &id);
+            }
             return;
+        }
+        if let Some(name) = voice_list_item_name(&item) {
+            if local_subject_voice_names.contains(&name.trim().to_ascii_lowercase()) {
+                return;
+            }
         }
         if let Some(id) = voice_list_item_id(&item) {
             if seen.insert(id) {
@@ -535,7 +610,7 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     }
     let parsed = serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "raw": body }));
     for item in voice_list_items_from_value(&parsed) {
-        push_remote_voice(&mut voices, &mut seen, item);
+        push_remote_voice(&mut voices, &mut seen, &local_subject_voice_names, &config, item);
     }
     Ok(json!({ "success": true, "voices": voices, "raw": parsed }))
 }
