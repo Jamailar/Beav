@@ -135,6 +135,18 @@ fn voice_list_item_id(value: &Value) -> Option<String> {
     })
 }
 
+fn voice_list_item_is_usable(value: &Value) -> bool {
+    let status = payload_string(value, "status")
+        .or_else(|| value.get("data").and_then(|data| payload_string(data, "status")))
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    !matches!(
+        status.as_str(),
+        "failed" | "error" | "dead_lettered" | "deleted" | "cancelled" | "canceled"
+    )
+}
+
 fn voice_list_items_from_value(value: &Value) -> Vec<Value> {
     if let Some(items) = value.as_array() {
         return items.clone();
@@ -163,6 +175,9 @@ fn subject_voice_list_items(state: &State<'_, AppState>) -> Result<Vec<Value>, S
                 let voice = subject.voice.as_ref()?;
                 let voice_id = payload_string_alias(voice, &["voiceId", "voice_id"])?;
                 let status = payload_string(voice, "status").unwrap_or_else(|| "ready".to_string());
+                if !voice_list_item_is_usable(voice) {
+                    return None;
+                }
                 Some(json!({
                     "id": voice_id,
                     "value": voice_id,
@@ -462,12 +477,25 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     let mut voices = Vec::new();
     let mut seen = HashSet::new();
     for item in subject_voice_list_items(state)? {
+        if voice_list_item_is_usable(&item) {
+            if let Some(id) = voice_list_item_id(&item) {
+                if seen.insert(id) {
+                    voices.push(item);
+                }
+            }
+        }
+    }
+
+    let push_remote_voice = |voices: &mut Vec<Value>, seen: &mut HashSet<String>, item: Value| {
+        if !voice_list_item_is_usable(&item) {
+            return;
+        }
         if let Some(id) = voice_list_item_id(&item) {
             if seen.insert(id) {
                 voices.push(item);
             }
         }
-    }
+    };
 
     let config = match resolve_voice_config(state, Some(payload)) {
         Ok(config) => config,
@@ -507,11 +535,7 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     }
     let parsed = serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "raw": body }));
     for item in voice_list_items_from_value(&parsed) {
-        if let Some(id) = voice_list_item_id(&item) {
-            if seen.insert(id) {
-                voices.push(item);
-            }
-        }
+        push_remote_voice(&mut voices, &mut seen, item);
     }
     Ok(json!({ "success": true, "voices": voices, "raw": parsed }))
 }
