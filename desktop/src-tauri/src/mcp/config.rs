@@ -267,6 +267,7 @@ mod tests {
             command: Some("node".to_string()),
             args: None,
             env: None,
+            cwd: None,
             url: None,
             oauth,
         }

@@ -136,17 +136,18 @@ impl<'a> ChatExchangeRequest<'a> {
         }
     }
 
-    pub fn redclaw_run(
+    pub fn redclaw_run_with_user_persistence(
         session_id: String,
         prompt: String,
         source_label: &str,
         session_title: Option<String>,
+        persist_user_message: bool,
     ) -> Self {
         Self {
             session_id: Some(session_id),
             display_content: format!("{} 执行 · {}", app_ai_display_name(), source_label),
             message: prompt,
-            persist_user_message: true,
+            persist_user_message,
             model_config: None,
             attachment: None,
             turn_kind: SessionAgentTurnKind::RedclawRun,
@@ -202,12 +203,23 @@ impl RedclawRunTurn {
         prompt: String,
         session_title: Option<String>,
     ) -> Self {
+        Self::new_with_user_persistence(source_label, session_id, prompt, session_title, true)
+    }
+
+    pub fn new_with_user_persistence(
+        source_label: &str,
+        session_id: String,
+        prompt: String,
+        session_title: Option<String>,
+        persist_user_message: bool,
+    ) -> Self {
         Self {
-            request: ChatExchangeRequest::redclaw_run(
+            request: ChatExchangeRequest::redclaw_run_with_user_persistence(
                 session_id,
                 prompt,
                 source_label,
                 session_title,
+                persist_user_message,
             ),
         }
     }
@@ -374,8 +386,14 @@ mod tests {
             SessionAgentTurnKind::AssistantDaemon
         );
         assert_eq!(
-            ChatExchangeRequest::redclaw_run("s".to_string(), "m".to_string(), "scheduler", None)
-                .turn_kind,
+            ChatExchangeRequest::redclaw_run_with_user_persistence(
+                "s".to_string(),
+                "m".to_string(),
+                "scheduler",
+                None,
+                true,
+            )
+            .turn_kind,
             SessionAgentTurnKind::RedclawRun
         );
         assert_eq!(
@@ -412,11 +430,12 @@ mod tests {
             Some("Assistant · feishu")
         );
 
-        let redclaw = ChatExchangeRequest::redclaw_run(
+        let redclaw = ChatExchangeRequest::redclaw_run_with_user_persistence(
             "session-r".to_string(),
             "prompt".to_string(),
             "cron",
             Some("Cron Task".to_string()),
+            true,
         );
         assert_eq!(
             redclaw.checkpoint_summary_text(),

@@ -721,6 +721,15 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("editor", "run" | "update" | "generate" | "export") => {
             normalize_redbox_editor_operation(&operation, payload)
         }
+        ("media", "edit" | "cut" | "trim") => {
+            app_cli_action_call("media.edit", payload, Some("Operate"), Some("media.edit"))
+        }
+        ("media", "transcribe" | "subtitle" | "subtitles" | "asr") => app_cli_action_call(
+            "media.transcribe",
+            payload,
+            Some("Operate"),
+            Some("media.transcribe"),
+        ),
         ("runtime", "get" | "list") => app_cli_action_call(
             "runtime.query",
             payload,
@@ -1459,6 +1468,8 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         }
         ["image", "generate", ..] => Some("image.generate"),
         ["video", "generate", ..] => Some("video.generate"),
+        ["media", "edit", ..] => Some("media.edit"),
+        ["media", "transcribe", ..] => Some("media.transcribe"),
         _ => None,
     };
     match translated_action {

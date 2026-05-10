@@ -119,12 +119,16 @@ fn active_execution_exists(store: &AppStore, definition_id: &str) -> bool {
 
 fn definition_prompt(definition: &RedclawJobDefinitionRecord) -> String {
     match definition.source_kind.as_deref() {
-        Some("scheduled") => definition
-            .payload
-            .get("prompt")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
+        Some("scheduled") => {
+            let prompt = definition
+                .payload
+                .get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            format!(
+                "你正在执行一个已经创建好的自动化任务，不是在创建新的定时任务。\n不要调用或请求 redclaw.task 创建/修改/确认任务；也不要解释定时任务工具是否可用。\n请直接完成本次任务，并把结果作为本次自动化执行的输出。\n\n任务指令：\n{prompt}"
+            )
+        }
         Some("long_cycle") => {
             let objective = definition
                 .payload
@@ -511,20 +515,16 @@ pub fn recover_stale_job_executions(store: &mut AppStore, now: i64) {
     }
 }
 
-pub fn enqueue_manual_job_execution_for_source(
+pub fn enqueue_manual_job_execution_for_definition(
     store: &mut AppStore,
-    source_kind: &str,
-    source_task_id: &str,
+    definition_id: &str,
     trigger: &str,
 ) -> Result<String, String> {
     let now_iso = now_iso();
     let definition = store
         .redclaw_job_definitions
         .iter()
-        .find(|item| {
-            item.source_kind.as_deref() == Some(source_kind)
-                && item.source_task_id.as_deref() == Some(source_task_id)
-        })
+        .find(|item| item.id == definition_id)
         .cloned()
         .ok_or_else(|| "任务定义不存在".to_string())?;
     if active_execution_exists(store, &definition.id) {
@@ -1323,13 +1323,9 @@ mod tests {
     fn retry_job_execution_enqueues_new_execution() {
         let mut store = default_store();
         seed_scheduled_definition(&mut store);
-        let original_execution_id = enqueue_manual_job_execution_for_source(
-            &mut store,
-            "scheduled",
-            "scheduled-1",
-            "manual",
-        )
-        .expect("seed execution");
+        let original_execution_id =
+            enqueue_manual_job_execution_for_definition(&mut store, "jobdef-scheduled-1", "manual")
+                .expect("seed execution");
         let original_execution = store
             .redclaw_job_executions
             .iter_mut()
@@ -1365,13 +1361,9 @@ mod tests {
     fn archive_job_execution_hides_terminal_execution_from_background_snapshot() {
         let mut store = default_store();
         seed_scheduled_definition(&mut store);
-        let execution_id = enqueue_manual_job_execution_for_source(
-            &mut store,
-            "scheduled",
-            "scheduled-1",
-            "manual",
-        )
-        .expect("seed execution");
+        let execution_id =
+            enqueue_manual_job_execution_for_definition(&mut store, "jobdef-scheduled-1", "manual")
+                .expect("seed execution");
         let execution = store
             .redclaw_job_executions
             .iter_mut()

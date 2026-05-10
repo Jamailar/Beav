@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tauri::State;
 
 use super::index::rebuild_memory_index_from_store;
-use super::store::{memory_root, persist_memory_workspace_state};
+use super::store::{memory_root, memory_workspace_snapshot, persist_memory_workspace_state};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
     app_brand_display_name, load_redbox_prompt, make_id, now_i64, now_iso,
@@ -34,61 +34,78 @@ pub(crate) fn write_memory_maintenance_status_for_workspace(
     crate::write_json_value(&memory_maintenance_status_path(state)?, status)
 }
 
-pub(crate) fn build_memory_maintenance_prompt(store: &AppStore) -> String {
+struct MemoryMaintenancePromptSnapshot {
+    active_memories: Vec<UserMemoryRecord>,
+    archived_memories: Vec<UserMemoryRecord>,
+    history: Vec<MemoryHistoryRecord>,
+    recent_conversations: Vec<Value>,
+}
+
+fn memory_maintenance_prompt_snapshot(store: &AppStore) -> MemoryMaintenancePromptSnapshot {
+    MemoryMaintenancePromptSnapshot {
+        active_memories: store
+            .memories
+            .iter()
+            .filter(|item| item.status.as_deref().unwrap_or("active") == "active")
+            .cloned()
+            .collect(),
+        archived_memories: store
+            .memories
+            .iter()
+            .filter(|item| item.status.as_deref() == Some("archived"))
+            .cloned()
+            .collect(),
+        history: store.memory_history.clone(),
+        recent_conversations: recent_conversations_for_memory_maintenance(store),
+    }
+}
+
+fn render_memory_maintenance_prompt(
+    snapshot: &MemoryMaintenancePromptSnapshot,
+    reason: &str,
+    pending_mutation_count: i64,
+) -> String {
     let template =
         load_redbox_prompt("runtime/memory/maintenance_manager.txt").unwrap_or_else(|| {
             "You are a memory maintenance manager. Output strict JSON only.".to_string()
         });
-    let active_memories: Vec<Value> = store
-        .memories
-        .iter()
-        .filter(|item| item.status.as_deref().unwrap_or("active") == "active")
-        .cloned()
-        .map(|item| json!(item))
-        .collect();
-    let archived_memories: Vec<Value> = store
-        .memories
-        .iter()
-        .filter(|item| item.status.as_deref() == Some("archived"))
-        .cloned()
-        .map(|item| json!(item))
-        .collect();
-    let history: Vec<Value> = store
-        .memory_history
-        .iter()
-        .cloned()
-        .map(|item| json!(item))
-        .collect();
-    let recent_conversations = recent_conversations_for_memory_maintenance(store);
     render_redbox_prompt(
         &template,
         &[
-            ("trigger_reason", "manual".to_string()),
+            ("trigger_reason", reason.to_string()),
             ("current_date", now_iso()),
-            ("pending_mutation_count", "0".to_string()),
-            ("active_memory_count", active_memories.len().to_string()),
-            ("archived_memory_count", archived_memories.len().to_string()),
-            ("history_count", history.len().to_string()),
+            ("pending_mutation_count", pending_mutation_count.to_string()),
+            (
+                "active_memory_count",
+                snapshot.active_memories.len().to_string(),
+            ),
+            (
+                "archived_memory_count",
+                snapshot.archived_memories.len().to_string(),
+            ),
+            ("history_count", snapshot.history.len().to_string()),
             (
                 "recent_conversations_count",
-                recent_conversations.len().to_string(),
+                snapshot.recent_conversations.len().to_string(),
             ),
             (
                 "active_memories_json",
-                serde_json::to_string_pretty(&active_memories).unwrap_or_else(|_| "[]".to_string()),
+                serde_json::to_string_pretty(&snapshot.active_memories)
+                    .unwrap_or_else(|_| "[]".to_string()),
             ),
             (
                 "archived_memories_json",
-                serde_json::to_string_pretty(&archived_memories)
+                serde_json::to_string_pretty(&snapshot.archived_memories)
                     .unwrap_or_else(|_| "[]".to_string()),
             ),
             (
                 "history_json",
-                serde_json::to_string_pretty(&history).unwrap_or_else(|_| "[]".to_string()),
+                serde_json::to_string_pretty(&snapshot.history)
+                    .unwrap_or_else(|_| "[]".to_string()),
             ),
             (
                 "recent_conversations_json",
-                serde_json::to_string_pretty(&recent_conversations)
+                serde_json::to_string_pretty(&snapshot.recent_conversations)
                     .unwrap_or_else(|_| "[]".to_string()),
             ),
         ],
@@ -166,14 +183,12 @@ fn recent_conversations_for_memory_maintenance(store: &AppStore) -> Vec<Value> {
         .collect()
 }
 
-pub(crate) fn bump_memory_maintenance_mutation(
-    state: &State<'_, AppState>,
+pub(crate) fn memory_maintenance_mutation_status(
+    current: Option<Value>,
     store: &mut AppStore,
     reason: &str,
-) {
-    let current = memory_maintenance_status_from_workspace(state)
-        .ok()
-        .flatten()
+) -> Value {
+    let current = current
         .or_else(|| memory_maintenance_status_from_settings(&store.settings))
         .unwrap_or_else(default_memory_maintenance_status);
     let pending = current
@@ -199,7 +214,11 @@ pub(crate) fn bump_memory_maintenance_mutation(
         "lastError": current.get("lastError").cloned().unwrap_or(Value::Null),
         "nextScheduledAt": now_i64() + next_delay_ms,
     });
-    let _ = write_memory_maintenance_status_for_workspace(state, &status);
+    apply_memory_maintenance_status_to_store(store, &status);
+    status
+}
+
+fn apply_memory_maintenance_status_to_store(store: &mut AppStore, status: &Value) {
     if let Some(object) = store.settings.as_object_mut() {
         object.remove("redbox_memory_maintenance_status_json");
     }
@@ -210,8 +229,52 @@ pub(crate) fn run_memory_maintenance_with_reason(
     state: &State<'_, AppState>,
     reason: &str,
 ) -> Result<Value, String> {
-    let settings_snapshot = with_store(state, |store| Ok(store.settings.clone()))?;
-    let prompt = with_store(state, |store| Ok(build_memory_maintenance_prompt(&store)))?;
+    let (settings_snapshot, prompt_snapshot) = with_store(state, |store| {
+        Ok((
+            store.settings.clone(),
+            memory_maintenance_prompt_snapshot(&store),
+        ))
+    })?;
+    let settings_status = memory_maintenance_status_from_settings(&settings_snapshot);
+    let workspace_status = memory_maintenance_status_from_workspace(state)?;
+    let pending_mutation_count = workspace_status
+        .as_ref()
+        .or(settings_status.as_ref())
+        .and_then(|value| value.get("pendingMutations").and_then(|item| item.as_i64()))
+        .unwrap_or(0);
+    if reason == "periodic"
+        && pending_mutation_count <= 0
+        && prompt_snapshot.active_memories.is_empty()
+        && prompt_snapshot.archived_memories.is_empty()
+        && prompt_snapshot.history.is_empty()
+    {
+        let next_scheduled = now_i64() + 90 * 60 * 1000;
+        let status = json!({
+            "started": true,
+            "running": false,
+            "lockState": "owner",
+            "blockedBy": Value::Null,
+            "pendingMutations": 0,
+            "lastRunAt": now_i64(),
+            "lastScanAt": now_i64(),
+            "lastReason": reason,
+            "lastSummary": "Memory maintenance skipped; no pending memory changes.",
+            "lastError": Value::Null,
+            "nextScheduledAt": next_scheduled,
+        });
+        let _ = with_store_mut(state, |store| {
+            apply_memory_maintenance_status_to_store(store, &status);
+            Ok(())
+        });
+        let _ = write_memory_maintenance_status_for_workspace(state, &status);
+        return Ok(json!({
+            "success": true,
+            "skipped": true,
+            "reason": "no-pending-memory-changes",
+            "status": status,
+        }));
+    }
+    let prompt = render_memory_maintenance_prompt(&prompt_snapshot, reason, pending_mutation_count);
     let system_prompt = format!(
         "You are the background long-term memory maintenance manager for {}. Output strict JSON only.",
         app_brand_display_name()
@@ -237,7 +300,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
     let mut applied = 0_i64;
     let mut archived = 0_i64;
     let mut deleted = 0_i64;
-    with_store_mut(state, |store| {
+    let workspace_snapshot = with_store_mut(state, |store| {
         for action in actions {
             let action_type = payload_string(&action, "type").unwrap_or_default();
             match action_type.as_str() {
@@ -437,7 +500,7 @@ pub(crate) fn run_memory_maintenance_with_reason(
                 _ => {}
             }
         }
-        Ok(())
+        Ok(memory_workspace_snapshot(store))
     })?;
     let next_scheduled = match reason {
         "query-after" => now_i64() + 5 * 60 * 1000,
@@ -462,15 +525,11 @@ pub(crate) fn run_memory_maintenance_with_reason(
         "deleted": deleted
     });
     let _ = with_store_mut(state, |store| {
-        let _ = write_memory_maintenance_status_for_workspace(state, &status);
-        if let Some(object) = store.settings.as_object_mut() {
-            object.remove("redbox_memory_maintenance_status_json");
-        }
-        store.redclaw_state.next_maintenance_at =
-            value_to_i64_string(status.get("nextScheduledAt"));
-        persist_memory_workspace_state(state, store)?;
+        apply_memory_maintenance_status_to_store(store, &status);
         Ok(())
     });
+    let _ = write_memory_maintenance_status_for_workspace(state, &status);
+    let _ = persist_memory_workspace_state(state, &workspace_snapshot);
     let _ = rebuild_memory_index_from_store(state);
     Ok(status)
 }

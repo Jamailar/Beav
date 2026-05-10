@@ -431,6 +431,7 @@ mod tests {
             command: Some("python3".to_string()),
             args: Some(vec![script_path.display().to_string()]),
             env: None,
+            cwd: None,
             url: None,
             oauth: None,
         };
@@ -479,6 +480,7 @@ mod tests {
             command: Some("python3".to_string()),
             args: Some(vec![script_path.display().to_string()]),
             env: None,
+            cwd: None,
             url: None,
             oauth: None,
         };
@@ -506,6 +508,7 @@ mod tests {
             command: Some("python3".to_string()),
             args: Some(vec![script_path.display().to_string()]),
             env: None,
+            cwd: None,
             url: None,
             oauth: None,
         };
@@ -532,6 +535,7 @@ mod tests {
             command: Some("python3".to_string()),
             args: Some(vec![script_path.display().to_string()]),
             env: None,
+            cwd: None,
             url: None,
             oauth: None,
         };

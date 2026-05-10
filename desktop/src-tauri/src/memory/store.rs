@@ -8,6 +8,19 @@ use crate::{
     AppStore, MemoryHistoryRecord, UserMemoryRecord,
 };
 
+#[derive(Clone)]
+pub(crate) struct MemoryWorkspaceSnapshot {
+    pub memories: Vec<UserMemoryRecord>,
+    pub memory_history: Vec<MemoryHistoryRecord>,
+}
+
+pub(crate) fn memory_workspace_snapshot(store: &AppStore) -> MemoryWorkspaceSnapshot {
+    MemoryWorkspaceSnapshot {
+        memories: store.memories.clone(),
+        memory_history: store.memory_history.clone(),
+    }
+}
+
 pub(crate) fn memory_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     let root = workspace_root(state)?.join("memory");
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
@@ -53,19 +66,19 @@ fn memory_summary_markdown(memories: &[UserMemoryRecord]) -> String {
 
 pub(crate) fn persist_memory_workspace_state(
     state: &State<'_, AppState>,
-    store: &AppStore,
+    snapshot: &MemoryWorkspaceSnapshot,
 ) -> Result<(), String> {
     write_json_value(
         &memory_catalog_path(state)?,
-        &json!({ "memories": store.memories }),
+        &json!({ "memories": &snapshot.memories }),
     )?;
     write_json_value(
         &memory_history_path(state)?,
-        &json!({ "items": store.memory_history }),
+        &json!({ "items": &snapshot.memory_history }),
     )?;
     fs::write(
         memory_root(state)?.join("MEMORY.md"),
-        memory_summary_markdown(&store.memories),
+        memory_summary_markdown(&snapshot.memories),
     )
     .map_err(|error| error.to_string())?;
     Ok(())

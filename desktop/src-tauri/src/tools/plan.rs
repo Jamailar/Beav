@@ -457,6 +457,8 @@ fn pinned_direct_app_cli_actions(
     {
         &[
             "video.analyze",
+            "media.edit",
+            "media.transcribe",
             "image.generate",
             "skills.invoke",
             "skills.installFromRepo",
@@ -854,6 +856,8 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
+        assert!(plan.has_direct_app_cli_action("media.edit"));
+        assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
@@ -872,6 +876,8 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
+        assert!(plan.has_direct_app_cli_action("media.edit"));
+        assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
@@ -916,6 +922,8 @@ mod tests {
         assert_ne!(first.fingerprint, second.fingerprint);
         assert_eq!(first.direct_app_cli_actions[0].action, "image.generate");
         assert_eq!(second.direct_app_cli_actions[0].action, "video.generate");
+        assert!(second.has_direct_app_cli_action("media.edit"));
+        assert!(second.has_direct_app_cli_action("media.transcribe"));
     }
 
     #[test]

@@ -28,7 +28,7 @@ use task_policy::{
 
 pub use job_runtime::{
     archive_job_execution, background_status, cancel_job_execution, emit_scheduler_snapshot,
-    enqueue_due_job_executions, enqueue_manual_job_execution_for_source,
+    enqueue_due_job_executions, enqueue_manual_job_execution_for_definition,
     recover_stale_job_executions, requeue_retrying_job_executions, retry_job_execution,
     run_due_job_executions, run_job_queue_once,
 };

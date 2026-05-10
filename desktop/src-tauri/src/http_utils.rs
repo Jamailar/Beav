@@ -1,6 +1,7 @@
 use base64::Engine;
 use regex::Regex;
 use serde_json::{json, Value};
+use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -275,6 +276,16 @@ fn emit_curl_json_diagnostics(
     response_status_trailer: Option<&str>,
     stderr: &str,
 ) {
+    let redacted_request_body = if url.contains("/chat/completions")
+        && env::var("REDBOX_HTTP_TRACE_BODY").ok().as_deref() != Some("1")
+    {
+        format!(
+            "<redacted chat completions request body; {} chars>",
+            request_body.chars().count()
+        )
+    } else {
+        request_body.to_string()
+    };
     let mut sections = vec![format!(
         "[http][curl-json] diagnostic method={} url={} transport={} exit_status={}",
         method, url, transport, exit_status
@@ -289,7 +300,7 @@ fn emit_curl_json_diagnostics(
         sections.push(format!("response_status_trailer:\n{status}"));
     }
     sections.push(render_debug_section("request_headers", request_headers));
-    sections.push(render_debug_section("request_body", request_body));
+    sections.push(render_debug_section("request_body", &redacted_request_body));
     sections.push(render_debug_section("response_headers", response_headers));
     sections.push(render_debug_section("response_body", response_body));
     sections.push(render_debug_section("stderr", stderr));
