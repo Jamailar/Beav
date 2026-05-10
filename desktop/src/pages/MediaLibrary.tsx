@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2 } from 'lucide-react';
+import { ExternalLink, Link2, RefreshCw, Save, FolderOpen, ImagePlus, Sparkles, Search, SlidersHorizontal, Image, X, Clapperboard, Trash2, Music2 } from 'lucide-react';
 import clsx from 'clsx';
 import type { GenerationIntent } from '../App';
 import { resolveAssetUrl } from '../utils/pathManager';
@@ -15,6 +15,8 @@ type MediaAssetSource = 'generated' | 'planned' | 'imported';
 interface MediaAsset {
     id: string;
     source: MediaAssetSource;
+    sourceDomain?: string;
+    sourceLink?: string;
     projectId?: string;
     title?: string;
     prompt?: string;
@@ -163,6 +165,19 @@ function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): bool
     return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
 }
 
+function isAudioAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(String(asset.relativePath || '').trim());
+}
+
+function isTtsAsset(asset: Pick<MediaAsset, 'provider' | 'providerTemplate' | 'sourceDomain' | 'sourceLink'>): boolean {
+    return asset.provider === 'voice'
+        || asset.providerTemplate === 'tts'
+        || asset.sourceDomain === 'voice'
+        || String(asset.sourceLink || '').startsWith('voice:');
+}
+
 const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
@@ -262,6 +277,7 @@ function inferMediaAspectRatio(asset: MediaAsset): number {
     if (explicitAspectRatio && Number.isFinite(explicitAspectRatio) && explicitAspectRatio > 0) {
         return explicitAspectRatio;
     }
+    if (isAudioAsset(asset)) return 16 / 5;
     return isVideoAsset(asset) ? 16 / 9 : 3 / 4;
 }
 
@@ -1060,6 +1076,21 @@ export function MediaLibrary({
                                                             onClick={(event) => event.stopPropagation()}
                                                             onLoadedMetadata={() => measureAssetCard(asset.id)}
                                                         />
+                                                    ) : isAudioAsset(asset) ? (
+                                                        <div className="space-y-3 px-4 py-5">
+                                                            <div className="flex items-center gap-2 text-sm font-medium text-text-secondary">
+                                                                <Music2 className="h-4 w-4 text-accent-primary" />
+                                                                {isTtsAsset(asset) ? '声音合成' : '音频'}
+                                                            </div>
+                                                            <audio
+                                                                src={resolveAssetUrl(asset.previewUrl)}
+                                                                className="w-full"
+                                                                controls
+                                                                preload="metadata"
+                                                                onClick={(event) => event.stopPropagation()}
+                                                                onLoadedMetadata={() => measureAssetCard(asset.id)}
+                                                            />
+                                                        </div>
                                                     ) : (
                                                         <img
                                                             src={resolveAssetUrl(asset.previewUrl)}
@@ -1070,7 +1101,7 @@ export function MediaLibrary({
                                                     )
                                                 ) : (
                                                     <div className="min-h-[220px] w-full bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs px-4 text-center">
-                                                        {asset.source === 'planned' ? '计划素材（尚未生成）' : (isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
+                                                        {asset.source === 'planned' ? '计划素材（尚未生成）' : (isAudioAsset(asset) ? '音频文件不可用' : isVideoAsset(asset) ? '视频文件不可用' : '图片文件不可用')}
                                                     </div>
                                                 )}
                                             </div>
@@ -1079,7 +1110,7 @@ export function MediaLibrary({
                                                 <div>
                                                     <div className="text-sm font-medium text-text-primary break-words">{draft.title || asset.title || asset.id}</div>
                                                     <div className="text-[11px] text-text-tertiary truncate">
-                                                        {draft.projectId || asset.projectId || '未设置项目ID'} · {asset.aspectRatio || asset.size || 'auto'}
+                                                        {draft.projectId || asset.projectId || '未设置项目ID'} · {isTtsAsset(asset) ? 'TTS' : (asset.aspectRatio || asset.size || 'auto')}
                                                     </div>
                                                 </div>
                                                 <div className="text-[11px] text-text-tertiary truncate">
@@ -1387,6 +1418,14 @@ export function MediaLibrary({
                                                 {asset.previewUrl && asset.exists ? (
                                                     isVideoAsset(asset) ? (
                                                         <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-[4/5] object-cover bg-black" controls preload="metadata" />
+                                                    ) : isAudioAsset(asset) ? (
+                                                        <div className="flex aspect-[4/5] flex-col justify-center gap-4 bg-surface-secondary px-4">
+                                                            <div className="inline-flex items-center gap-2 text-sm font-medium text-text-secondary">
+                                                                <Music2 className="h-4 w-4 text-accent-primary" />
+                                                                音频
+                                                            </div>
+                                                            <audio src={resolveAssetUrl(asset.previewUrl)} className="w-full" controls preload="metadata" />
+                                                        </div>
                                                     ) : (
                                                         <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full aspect-[4/5] object-cover" />
                                                     )

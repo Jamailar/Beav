@@ -13,7 +13,7 @@ export type MediaJobStatus =
     | 'cancelled'
     | 'dead_lettered';
 
-export type MediaJobKind = 'image' | 'video';
+export type MediaJobKind = 'image' | 'video' | 'audio' | 'voice_clone';
 
 export type MediaJobArtifact = {
     artifactId: string;

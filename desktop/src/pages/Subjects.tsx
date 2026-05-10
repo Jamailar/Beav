@@ -3,6 +3,9 @@ import clsx from 'clsx';
 import { appAlert, appConfirm } from '../utils/appDialogs';
 import { buildAudioDataUrl } from '../features/audio-input/audioInput';
 import { useAudioRecording } from '../features/audio-input/useAudioRecording';
+import { useMediaJobSubscription } from '../features/media-jobs/useMediaJobSubscription';
+import { useMediaJobsStore } from '../features/media-jobs/useMediaJobsStore';
+import { isMediaJobTerminal, type MediaJobProjection } from '../features/media-jobs/types';
 import { uiDebug, uiMeasure } from '../utils/uiDebug';
 import {
     ArrowLeft,
@@ -130,6 +133,16 @@ const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
     imported: '导入',
 };
 
+type SubjectVoiceInfo = {
+    label: string;
+    detail?: string;
+    tone: 'muted' | 'active' | 'ready' | 'failed';
+    voiceId?: string;
+    jobId?: string;
+    error?: string;
+    canRetry: boolean;
+};
+
 const categoryIconForName = (name: string) => {
     const normalized = name.trim();
     if (normalized === '角色' || normalized === '人物') return UserRound;
@@ -217,6 +230,94 @@ function isVideoAsset(asset: Pick<MediaAsset, 'mimeType' | 'relativePath'>): boo
     return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
 }
 
+function subjectVoiceString(subject: SubjectRecord, keys: string[]): string {
+    const voice = subject.voice || {};
+    for (const key of keys) {
+        const value = voice[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+}
+
+function shortVoiceId(value?: string): string {
+    if (!value) return '';
+    if (value.length <= 18) return value;
+    return `${value.slice(0, 10)}...${value.slice(-4)}`;
+}
+
+function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | null): SubjectVoiceInfo {
+    const voiceId = subjectVoiceString(subject, ['voiceId', 'voice_id']);
+    const jobId = subjectVoiceString(subject, ['jobId']);
+    const status = subjectVoiceString(subject, ['status']).toLowerCase();
+    const lastError = subjectVoiceString(subject, ['lastError', 'error']);
+    const hasSample = Boolean(subject.voicePreviewUrl || subject.voicePath);
+
+    if (voiceId) {
+        return {
+            label: '已绑定声音',
+            detail: shortVoiceId(voiceId),
+            tone: 'ready',
+            voiceId,
+            jobId,
+            canRetry: hasSample,
+        };
+    }
+
+    const jobStatus = String(job?.status || '').toLowerCase();
+    if (jobStatus && !isMediaJobTerminal(jobStatus)) {
+        return {
+            label: jobStatus === 'queued' ? '声音复刻排队中' : '声音复刻中',
+            detail: jobId ? shortVoiceId(jobId) : undefined,
+            tone: 'active',
+            jobId,
+            canRetry: false,
+        };
+    }
+
+    if (status === 'failed' || jobStatus === 'failed' || jobStatus === 'dead_lettered') {
+        return {
+            label: '声音复刻失败',
+            detail: lastError || job?.attempt?.lastError || undefined,
+            tone: 'failed',
+            jobId,
+            error: lastError || job?.attempt?.lastError || undefined,
+            canRetry: hasSample,
+        };
+    }
+
+    if (status === 'queued' || status === 'submitting') {
+        return {
+            label: '声音复刻排队中',
+            detail: jobId ? shortVoiceId(jobId) : undefined,
+            tone: 'active',
+            jobId,
+            canRetry: false,
+        };
+    }
+
+    if (hasSample) {
+        return {
+            label: '待复刻',
+            tone: 'muted',
+            jobId,
+            canRetry: true,
+        };
+    }
+
+    return {
+        label: '无声音参考',
+        tone: 'muted',
+        canRetry: false,
+    };
+}
+
+function voiceInfoClassName(tone: SubjectVoiceInfo['tone']): string {
+    if (tone === 'ready') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    if (tone === 'active') return 'border-blue-200 bg-blue-50 text-blue-700';
+    if (tone === 'failed') return 'border-red-200 bg-red-50 text-red-700';
+    return 'border-border bg-surface-secondary/50 text-text-tertiary';
+}
+
 function formatAssetDate(value?: string): string {
     if (!value) return '';
     const date = new Date(value);
@@ -261,6 +362,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const hasLoadedSnapshotRef = useRef(false);
     const hasEnsuredDefaultCategoriesRef = useRef(false);
     const loadDataRequestRef = useRef(0);
+    const refreshedVoiceJobIdsRef = useRef(new Set<string>());
+    const [retryingVoiceSubjectId, setRetryingVoiceSubjectId] = useState<string | null>(null);
+    const voiceJobsById = useMediaJobsStore((state) => state.jobsById);
 
     useEffect(() => {
         if (!import.meta.env.DEV) return;
@@ -347,7 +451,43 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         void loadData();
     }, [isActive, loadData]);
 
+    const voiceJobIds = useMemo(
+        () => Array.from(new Set(subjects
+            .map((subject) => subjectVoiceString(subject, ['jobId']))
+            .filter(Boolean))),
+        [subjects],
+    );
+    const voiceJobBootstrapFilter = useMemo(() => ({ kind: 'voice_clone' as const, limit: 100 }), []);
+
+    useMediaJobSubscription(voiceJobIds, {
+        enabled: isActive,
+        bootstrapFilter: voiceJobBootstrapFilter,
+    });
+
+    useEffect(() => {
+        if (!isActive) return;
+        for (const jobId of voiceJobIds) {
+            const job = voiceJobsById[jobId];
+            if (!job || !isMediaJobTerminal(job.status) || refreshedVoiceJobIdsRef.current.has(jobId)) {
+                continue;
+            }
+            refreshedVoiceJobIdsRef.current.add(jobId);
+            void loadData();
+            break;
+        }
+    }, [isActive, loadData, voiceJobIds, voiceJobsById]);
+
     const categoryNameMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+    const activeDraftSubject = useMemo(
+        () => draft.id ? subjects.find((subject) => subject.id === draft.id) || null : null,
+        [draft.id, subjects],
+    );
+    const activeDraftVoiceInfo = useMemo(
+        () => activeDraftSubject
+            ? subjectVoiceInfo(activeDraftSubject, voiceJobsById[subjectVoiceString(activeDraftSubject, ['jobId'])])
+            : null,
+        [activeDraftSubject, voiceJobsById],
+    );
 
     const filteredSubjects = useMemo(() => {
         const keyword = query.trim().toLowerCase();
@@ -524,6 +664,31 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setRecordingError('');
         setRecordingHint('');
     }, []);
+
+    const handleRetryVoiceClone = useCallback(async (subject: SubjectRecord) => {
+        if (!subject.voicePath) {
+            void appAlert('请先保存声音参考，再重试复刻');
+            return;
+        }
+        setRetryingVoiceSubjectId(subject.id);
+        try {
+            const result = await window.ipcRenderer.voice.clone({
+                ownerAssetId: subject.id,
+                samplePath: subject.voicePath,
+                name: subject.name,
+                waitForCompletion: false,
+            }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                throw new Error(result?.error || '提交声音复刻失败');
+            }
+            await loadData();
+        } catch (e) {
+            console.error('Failed to retry voice clone:', e);
+            void appAlert(e instanceof Error ? e.message : '提交声音复刻失败');
+        } finally {
+            setRetryingVoiceSubjectId(null);
+        }
+    }, [loadData]);
 
     const saveVoiceDataUrl = useCallback(async (dataUrl: string, fileName: string) => {
         const duration = await getAudioDurationSeconds(dataUrl);
@@ -1117,7 +1282,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     </div>
                 ) : viewMode === 'grid' ? (
                     <div className={clsx('grid gap-2.5', isModalVariant ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6' : 'grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8')}>
-                        {filteredSubjects.map((subject) => (
+                        {filteredSubjects.map((subject) => {
+                            const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
+                            return (
                             <div
                                 key={subject.id}
                                 className="overflow-hidden rounded-lg border border-border bg-surface-primary shadow-sm transition-shadow hover:shadow-md"
@@ -1167,16 +1334,21 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             <div className="flex items-center justify-between text-[9px] text-text-tertiary">
                                             <span>属性 {subject.attributes.length}</span>
                                             <span>图片 {(subject.previewUrls || []).length}</span>
-                                            <span>{subject.voicePreviewUrl ? '有声音参考' : '无声音参考'}</span>
+                                            <span className={clsx('rounded-md border px-1.5 py-0.5', voiceInfoClassName(voiceInfo.tone))}>
+                                                {voiceInfo.label}
+                                            </span>
                                         </div>
                                     </div>
                                 </button>
                             </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 ) : (
                     <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
-                        {filteredSubjects.map((subject) => (
+                        {filteredSubjects.map((subject) => {
+                            const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
+                            return (
                             <button
                                 key={subject.id}
                                 type="button"
@@ -1202,8 +1374,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 <div className="hidden text-xs text-slate-400 md:block">
                                     {new Date(subject.updatedAt).toLocaleDateString()}
                                 </div>
+                                <div className={clsx('hidden rounded-md border px-2 py-1 text-[11px] md:block', voiceInfoClassName(voiceInfo.tone))}>
+                                    {voiceInfo.label}
+                                </div>
                             </button>
-                        ))}
+                            );
+                        })}
                     </div>
                 )}
             </div>
@@ -1532,6 +1708,30 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 <div className="space-y-2 rounded-lg bg-white px-3 py-2.5">
                                                     <div className="text-xs text-slate-500">{draft.voice.name}</div>
                                                     <audio controls src={resolveAssetUrl(draft.voice.previewUrl)} className="w-full" />
+                                                </div>
+                                            )}
+                                            {activeDraftSubject && activeDraftVoiceInfo && (
+                                                <div className={clsx('rounded-lg border px-3 py-2 text-xs', voiceInfoClassName(activeDraftVoiceInfo.tone))}>
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <span className="font-semibold">{activeDraftVoiceInfo.label}</span>
+                                                        {activeDraftVoiceInfo.detail && (
+                                                            <span className="font-mono text-[11px] opacity-80">{activeDraftVoiceInfo.detail}</span>
+                                                        )}
+                                                        {activeDraftVoiceInfo.canRetry && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
+                                                                disabled={retryingVoiceSubjectId === activeDraftSubject.id}
+                                                                className="ml-auto inline-flex h-7 items-center gap-1 rounded-md border border-current/20 bg-white/65 px-2 text-[11px] font-semibold disabled:opacity-50"
+                                                            >
+                                                                <RefreshCw className={clsx('h-3 w-3', retryingVoiceSubjectId === activeDraftSubject.id && 'animate-spin')} />
+                                                                重试
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                    {activeDraftVoiceInfo.error && (
+                                                        <div className="mt-1 line-clamp-2 opacity-80">{activeDraftVoiceInfo.error}</div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
