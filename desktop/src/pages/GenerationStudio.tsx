@@ -1180,6 +1180,8 @@ type VoiceListItem = {
     name: string;
     language: string;
     status: string;
+    source: string;
+    ownerAssetId: string;
 };
 
 function getAiSourceTypeLabel(source: AiSourceConfig): string {
@@ -1269,15 +1271,21 @@ function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
     }));
 }
 
+function extractVoiceListItems(value: unknown): unknown[] {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== 'object') return [];
+    const record = value as Record<string, unknown>;
+    const hasVoiceId = Boolean(record.voice_id || record.voiceId || record.id || record.value);
+    if (hasVoiceId) return [record];
+    for (const key of ['voices', 'items', 'data', 'results']) {
+        const items = extractVoiceListItems(record[key]);
+        if (items.length > 0) return items;
+    }
+    return [];
+}
+
 function normalizeVoiceList(value: unknown): VoiceListItem[] {
-    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-    const rawItems = Array.isArray(record.voices)
-        ? record.voices
-        : Array.isArray(record.items)
-            ? record.items
-            : Array.isArray(value)
-                ? value
-                : [];
+    const rawItems = extractVoiceListItems(value);
 
     return rawItems
         .map((item) => {
@@ -1290,6 +1298,8 @@ function normalizeVoiceList(value: unknown): VoiceListItem[] {
                 name: String(voice.name || voice.title || id).trim() || id,
                 language: String(voice.language || voice.lang || '').trim(),
                 status: String(voice.status || '').trim(),
+                source: String(voice.source || '').trim(),
+                ownerAssetId: String(voice.ownerAssetId || voice.assetId || voice.subjectId || '').trim(),
             } satisfies VoiceListItem;
         })
         .filter((item): item is VoiceListItem => Boolean(item));
@@ -2438,6 +2448,7 @@ export function GenerationStudio({
                     label: voice.name,
                     description: [
                         shortVoiceId(voice.id),
+                        voice.source === 'subject' ? '角色音色' : '',
                         voice.language,
                         voice.status && voice.status !== 'ready' ? voice.status : '',
                     ].filter(Boolean).join(' · '),

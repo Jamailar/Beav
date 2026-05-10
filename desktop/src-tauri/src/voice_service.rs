@@ -2,6 +2,7 @@ use base64::Engine;
 use reqwest::blocking::{multipart, Client};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -124,6 +125,62 @@ fn normalize_voice_response(value: Value, fallback_name: Option<String>) -> Resu
             .cloned()
             .unwrap_or_else(|| json!(now_iso())),
     }))
+}
+
+fn voice_list_item_id(value: &Value) -> Option<String> {
+    payload_string_alias(value, &["voice_id", "voiceId", "id", "value"]).or_else(|| {
+        value.get("data").and_then(|data| {
+            payload_string_alias(data, &["voice_id", "voiceId", "id", "value"])
+        })
+    })
+}
+
+fn voice_list_items_from_value(value: &Value) -> Vec<Value> {
+    if let Some(items) = value.as_array() {
+        return items.clone();
+    }
+    if voice_list_item_id(value).is_some() {
+        return vec![value.clone()];
+    }
+    for key in ["voices", "items", "data", "results"] {
+        if let Some(nested) = value.get(key) {
+            let items = voice_list_items_from_value(nested);
+            if !items.is_empty() {
+                return items;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn subject_voice_list_items(state: &State<'_, AppState>) -> Result<Vec<Value>, String> {
+    ensure_store_hydrated_for_subjects(state)?;
+    with_store(state, |store| {
+        Ok(store
+            .subjects
+            .iter()
+            .filter_map(|subject| {
+                let voice = subject.voice.as_ref()?;
+                let voice_id = payload_string_alias(voice, &["voiceId", "voice_id"])?;
+                let status = payload_string(voice, "status").unwrap_or_else(|| "ready".to_string());
+                Some(json!({
+                    "id": voice_id,
+                    "value": voice_id,
+                    "voiceId": voice_id,
+                    "voice_id": voice_id,
+                    "name": subject.name,
+                    "title": subject.name,
+                    "status": status,
+                    "source": "subject",
+                    "ownerAssetId": subject.id,
+                    "assetId": subject.id,
+                    "subjectId": subject.id,
+                    "sampleFilePath": subject.voice_path,
+                    "language": payload_string(voice, "language"),
+                }))
+            })
+            .collect())
+    })
 }
 
 fn resolve_sample_path(
@@ -402,26 +459,61 @@ fn clone_voice_from_managed_key(
 }
 
 pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
-    let config = resolve_voice_config(state, Some(payload))?;
+    let mut voices = Vec::new();
+    let mut seen = HashSet::new();
+    for item in subject_voice_list_items(state)? {
+        if let Some(id) = voice_list_item_id(&item) {
+            if seen.insert(id) {
+                voices.push(item);
+            }
+        }
+    }
+
+    let config = match resolve_voice_config(state, Some(payload)) {
+        Ok(config) => config,
+        Err(error) => {
+            return Ok(json!({ "success": true, "voices": voices, "configError": error }));
+        }
+    };
     let client = Client::builder()
         .timeout(Duration::from_secs(45))
         .build()
         .map_err(|error| error.to_string())?;
-    let response = authorized_request(
+    let response = match authorized_request(
         &client,
         reqwest::Method::GET,
         &gateway_url(&config, "/audio/voices"),
         config.api_key.as_deref(),
     )
     .send()
-    .map_err(|error| error.to_string())?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return Ok(json!({
+                "success": true,
+                "voices": voices,
+                "remoteError": error.to_string(),
+            }));
+        }
+    };
     let status = response.status();
     let body = response.text().map_err(|error| error.to_string())?;
     if !status.is_success() {
-        return Err(format!("voice list failed with HTTP {status}: {body}"));
+        return Ok(json!({
+            "success": true,
+            "voices": voices,
+            "remoteError": format!("voice list failed with HTTP {status}: {body}"),
+        }));
     }
     let parsed = serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "raw": body }));
-    Ok(json!({ "success": true, "voices": parsed }))
+    for item in voice_list_items_from_value(&parsed) {
+        if let Some(id) = voice_list_item_id(&item) {
+            if seen.insert(id) {
+                voices.push(item);
+            }
+        }
+    }
+    Ok(json!({ "success": true, "voices": voices, "raw": parsed }))
 }
 
 pub(crate) fn get_voice(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
