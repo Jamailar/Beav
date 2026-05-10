@@ -35,7 +35,7 @@ import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert } from '../utils/appDialogs';
 
-type StudioMode = 'image' | 'video';
+type StudioMode = 'image' | 'video' | 'audio';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
 type VideoGenerationMode = 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation';
 type ImageCreationSurface = 'manual' | 'agent';
@@ -56,6 +56,12 @@ type SettingsShape = {
     video_endpoint?: string;
     video_api_key?: string;
     video_model?: string;
+    voice_endpoint?: string;
+    tts_endpoint?: string;
+    voice_api_key?: string;
+    tts_api_key?: string;
+    voice_tts_model?: string;
+    tts_model?: string;
 };
 
 type ReferenceItem = {
@@ -132,7 +138,18 @@ type VideoGenerationRequest = {
     drivingAudio?: ReferenceItem | null;
 };
 
-type GenerationRequest = ImageGenerationRequest | VideoGenerationRequest;
+type AudioGenerationRequest = {
+    type: 'audio';
+    prompt: string;
+    title: string;
+    projectId: string;
+    model: string;
+    voiceId: string;
+    languageBoost: string;
+    responseFormat: string;
+};
+
+type GenerationRequest = ImageGenerationRequest | VideoGenerationRequest | AudioGenerationRequest;
 
 type GenerationFeedEntry = {
     kind: 'generation';
@@ -241,6 +258,17 @@ const VIDEO_DURATION_OPTIONS = [
 const VIDEO_AUDIO_OPTIONS = [
     { value: 'off', label: '音频关' },
     { value: 'on', label: '音频开' },
+] as const;
+
+const AUDIO_LANGUAGE_OPTIONS = [
+    { value: '', label: '自动' },
+    { value: 'Chinese', label: '中文' },
+    { value: 'English', label: '英文' },
+] as const;
+
+const AUDIO_FORMAT_OPTIONS = [
+    { value: 'mp3', label: 'MP3' },
+    { value: 'wav', label: 'WAV' },
 ] as const;
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -516,6 +544,12 @@ function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): bool
     return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
 }
 
+function isAudioAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(String(asset.relativePath || '').trim());
+}
+
 function inferAssetExtension(asset: GeneratedAsset, source: string): string {
     const mimeType = String(asset.mimeType || '').trim().toLowerCase();
     if (mimeType.startsWith('image/')) {
@@ -528,11 +562,18 @@ function inferAssetExtension(asset: GeneratedAsset, source: string): string {
         if (subtype === 'quicktime') return 'mov';
         if (subtype) return subtype;
     }
+    if (mimeType.startsWith('audio/')) {
+        const subtype = mimeType.slice('audio/'.length).split(/[+;]/)[0];
+        if (subtype === 'mpeg') return 'mp3';
+        if (subtype) return subtype;
+    }
 
     const match = String(source || '').match(/\.([a-zA-Z0-9]+)(?:[?#].*)?$/);
     const inferred = String(match?.[1] || '').trim().toLowerCase();
     if (inferred) return inferred;
-    return isVideoAsset(asset) ? 'mp4' : 'png';
+    if (isVideoAsset(asset)) return 'mp4';
+    if (isAudioAsset(asset)) return 'mp3';
+    return 'png';
 }
 
 function formatRelativeTime(timestampMs: number): string {
@@ -558,6 +599,7 @@ function applyIntentPreset(
         setVideoDurationSeconds: (value: number) => void;
         setImageProjectId: (value: string) => void;
         setVideoProjectId: (value: string) => void;
+        setAudioProjectId: (value: string) => void;
         setContextIntent: (value: GenerationIntent | null) => void;
     },
 ): void {
@@ -569,6 +611,7 @@ function applyIntentPreset(
     if (intent.bindTarget?.projectId) {
         setters.setImageProjectId(intent.bindTarget.projectId);
         setters.setVideoProjectId(intent.bindTarget.projectId);
+        setters.setAudioProjectId(intent.bindTarget.projectId);
     }
     if (intent.preset?.aspectRatio) {
         if (intent.mode === 'image') {
@@ -593,11 +636,24 @@ function buildRequestSummary(request: GenerationRequest): string[] {
             request.size || '自动尺寸',
         ];
     }
+    if (request.type === 'audio') {
+        return [
+            request.model || '默认模型',
+            request.voiceId ? shortVoiceId(request.voiceId) : '未选音色',
+            request.responseFormat || 'mp3',
+        ];
+    }
     return [
         request.model || '默认模型',
         request.aspectRatio,
         request.resolution,
     ];
+}
+
+function shortVoiceId(value: string): string {
+    if (!value) return '';
+    if (value.length <= 18) return value;
+    return `${value.slice(0, 10)}...${value.slice(-4)}`;
 }
 
 function serializeFeedEntries(entries: FeedEntry[]): string {
@@ -662,15 +718,32 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
     if (!value || typeof value !== 'object') return null;
     const record = value as Record<string, unknown>;
     const rawType = String(record.type || '').trim().toLowerCase();
-    const resolvedType = rawType === 'video'
+    const resolvedType = rawType === 'audio'
+        ? 'audio'
+        : rawType === 'video'
         ? 'video'
         : rawType === 'image'
             ? 'image'
             : String(record.mode || '').trim().toLowerCase() === 'video'
                 ? 'video'
-                : 'image';
-    const prompt = String(record.prompt || record.userPrompt || '').trim();
+                : String(record.mode || '').trim().toLowerCase() === 'audio'
+                    ? 'audio'
+                    : 'image';
+    const prompt = String(record.prompt || record.userPrompt || record.input || record.text || '').trim();
     if (!prompt) return null;
+
+    if (resolvedType === 'audio') {
+        return {
+            type: 'audio',
+            prompt,
+            title: String(record.title || '').trim(),
+            projectId: String(record.projectId || '').trim(),
+            model: String(record.model || '').trim(),
+            voiceId: String(record.voiceId || record.voice_id || record.voice || '').trim(),
+            languageBoost: String(record.languageBoost || record.language_boost || '').trim(),
+            responseFormat: String(record.responseFormat || record.response_format || 'mp3').trim() || 'mp3',
+        } satisfies AudioGenerationRequest;
+    }
 
     if (resolvedType === 'video') {
         const aspectRatio = String(record.aspectRatio || '16:9').trim();
@@ -822,10 +895,13 @@ function readPersistedFeedEntries(): FeedEntry[] {
 }
 
 function requestModeLabel(request: GenerationRequest): string {
-    return request.type === 'image' ? '图片创作' : '视频创作';
+    if (request.type === 'image') return '图片创作';
+    if (request.type === 'audio') return '音频创作';
+    return '视频创作';
 }
 
 function requestLeadingReference(request: GenerationRequest): ReferenceItem | null {
+    if (request.type === 'audio') return null;
     if (request.referenceItems.length > 0) return request.referenceItems[0];
     if (request.type === 'video' && request.firstClip) return request.firstClip;
     return null;
@@ -836,6 +912,9 @@ function requestSupportText(request: GenerationRequest): string {
         if (request.generationMode === 'image-to-image') return '图生图';
         if (request.generationMode === 'reference-guided') return '参考图引导';
         return `${request.count} 张`;
+    }
+    if (request.type === 'audio') {
+        return request.languageBoost || '自动语言';
     }
     if (request.generationMode === 'first-last-frame') return '首尾帧';
     if (request.generationMode === 'continuation') return '续写';
@@ -871,16 +950,24 @@ function parseAspectRatio(value: string | undefined, fallback: string): { width:
 function estimateGenerationProgress(request: GenerationRequest, elapsedMs: number): number {
     const expectedDurationMs = request.type === 'image'
         ? 28_000
-        : request.generationMode === 'reference-guided'
-            ? 180_000
-            : 150_000;
+        : request.type === 'audio'
+            ? 45_000
+            : request.generationMode === 'reference-guided'
+                ? 180_000
+                : 150_000;
     const ratio = Math.min(1, elapsedMs / expectedDurationMs);
     return Math.min(94, Math.max(6, Math.round(ratio * 100)));
 }
 
 function assetsFromJobProjection(job: MediaJobProjection): GeneratedAsset[] {
     return (job.artifacts || [])
-        .map((artifact) => artifact.metadata)
+        .map((artifact) => {
+            const metadata = artifact.metadata;
+            if (metadata?.asset && typeof metadata.asset === 'object') {
+                return metadata.asset;
+            }
+            return metadata;
+        })
         .filter((item): item is GeneratedAsset => Boolean(item && typeof item === 'object' && typeof (item as GeneratedAsset).id === 'string'));
 }
 
@@ -902,12 +989,25 @@ function imageCountFromJob(job: MediaJobProjection, request: Record<string, unkn
 
 function requestFromJobProjection(job: MediaJobProjection): GenerationRequest | null {
     const request = job.request || {};
-    const prompt = stringField(request, ['prompt', 'compiledPrompt', 'userPrompt', 'summary']);
+    const prompt = stringField(request, ['prompt', 'compiledPrompt', 'userPrompt', 'input', 'text', 'summary']);
     if (!prompt) return null;
     const title = stringField(request, ['title', 'name']);
     const projectId = job.projectId || stringField(request, ['projectId']);
     const model = job.providerModel || stringField(request, ['model']);
     const generationMode = stringField(request, ['generationMode', 'mode']);
+
+    if (job.kind === 'audio') {
+        return {
+            type: 'audio',
+            prompt,
+            title,
+            projectId: projectId || '',
+            model: model || '',
+            voiceId: stringField(request, ['voiceId', 'voice_id', 'voice']),
+            languageBoost: stringField(request, ['languageBoost', 'language_boost']),
+            responseFormat: stringField(request, ['responseFormat', 'response_format']) || 'mp3',
+        } satisfies AudioGenerationRequest;
+    }
 
     if (job.kind === 'video') {
         const referenceItems = referenceItemsFromJobRequest(request, ['referenceItems', 'referenceImages', 'reference_images']);
@@ -1041,12 +1141,14 @@ function placeholderCountForRequest(request: GenerationRequest): number {
 }
 
 function placeholderAspectRatioForRequest(request: GenerationRequest): string {
+    if (request.type === 'audio') return '16 / 5';
     return request.type === 'image'
         ? normalizeAspectRatio(request.aspectRatio, '4 / 3')
         : normalizeAspectRatio(request.aspectRatio, '16 / 9');
 }
 
 function isPortraitRequest(request: GenerationRequest): boolean {
+    if (request.type === 'audio') return false;
     const ratio = request.type === 'image'
         ? parseAspectRatio(request.aspectRatio, '4:3')
         : parseAspectRatio(request.aspectRatio, '16:9');
@@ -1054,6 +1156,7 @@ function isPortraitRequest(request: GenerationRequest): boolean {
 }
 
 function feedMediaGridClass(request: GenerationRequest, itemCount: number): string {
+    if (request.type === 'audio') return 'max-w-[620px]';
     const portrait = isPortraitRequest(request);
     if (itemCount === 1) {
         return portrait ? 'max-w-[380px]' : 'max-w-[500px]';
@@ -1062,6 +1165,7 @@ function feedMediaGridClass(request: GenerationRequest, itemCount: number): stri
 }
 
 function feedMediaHeightClass(request: GenerationRequest): string {
+    if (request.type === 'audio') return 'min-h-[104px]';
     return isPortraitRequest(request) ? 'max-h-[440px]' : 'max-h-[520px]';
 }
 
@@ -1454,6 +1558,20 @@ function AssetPreview({
             />
         );
     }
+    if (isAudioAsset(asset)) {
+        return (
+            <div
+                className={clsx('flex w-full flex-col justify-center rounded-[16px] border border-border bg-surface-secondary px-4 py-4', className)}
+                style={style}
+            >
+                <div className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-text-primary">
+                    <Music2 className="h-4 w-4 text-brand-red" />
+                    <span className="truncate">{asset.title || '生成音频'}</span>
+                </div>
+                <audio src={src} controls className="h-9 w-full" />
+            </div>
+        );
+    }
     return (
         <img
             src={src}
@@ -1515,7 +1633,11 @@ function ReferenceStack({
     if (!lead) {
         return (
             <div className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-surface-secondary text-text-tertiary">
-                {request.type === 'image' ? <ImageIcon className="h-3.5 w-3.5" /> : <Clapperboard className="h-3.5 w-3.5" />}
+                {request.type === 'image'
+                    ? <ImageIcon className="h-3.5 w-3.5" />
+                    : request.type === 'audio'
+                        ? <Music2 className="h-3.5 w-3.5" />
+                        : <Clapperboard className="h-3.5 w-3.5" />}
             </div>
         );
     }
@@ -1527,6 +1649,7 @@ function ReferenceStack({
 }
 
 function requestReferenceItems(request: GenerationRequest): ReferenceItem[] {
+    if (request.type === 'audio') return [];
     const items = [...request.referenceItems];
     if (request.type === 'video') {
         if (request.firstClip) items.push(request.firstClip);
@@ -1667,7 +1790,7 @@ function FeedEntryMessage({
                             任务创作中 {progress}%...
                         </div>
                         <div className="text-[11px] text-text-tertiary">
-                            {entry.request.type === 'image' ? '正在生成图片' : '正在生成视频'}
+                            {entry.request.type === 'image' ? '正在生成图片' : entry.request.type === 'audio' ? '正在生成音频' : '正在生成视频'}
                         </div>
                     </div>
                     <div className="h-2.5 overflow-hidden rounded-full bg-surface-tertiary">
@@ -1763,7 +1886,7 @@ function FeedEntryMessage({
                                 }}
                             />
                             <div className="absolute left-5 top-5 text-[12px] font-semibold text-text-secondary">
-                                {entry.request.type === 'image' ? '正在创建图片' : '正在创建视频'}
+                                {entry.request.type === 'image' ? '正在创建图片' : entry.request.type === 'audio' ? '正在创建音频' : '正在创建视频'}
                             </div>
                         </div>
                     ))}
@@ -1785,7 +1908,7 @@ function FeedEntryMessage({
                                     ? 'cursor-pointer hover:-translate-y-0.5'
                                     : 'cursor-default',
                             )}
-                            title={isVideoAsset(asset) ? '点击打开视频预览' : '点击放大图片'}
+                            title={isVideoAsset(asset) ? '点击打开视频预览' : isAudioAsset(asset) ? '点击播放音频' : '点击放大图片'}
                         >
                             <AssetPreview
                                 asset={asset}
@@ -1883,6 +2006,13 @@ export function GenerationStudio({
     const [videoGenerateAudio, setVideoGenerateAudio] = useState(false);
     const [isReadingVideoRefs, setIsReadingVideoRefs] = useState(false);
     const [videoError, setVideoError] = useState('');
+    const [audioPrompt, setAudioPrompt] = useState('');
+    const [audioTitle, setAudioTitle] = useState('');
+    const [audioProjectId, setAudioProjectId] = useState('');
+    const [audioVoiceId, setAudioVoiceId] = useState('');
+    const [audioLanguageBoost, setAudioLanguageBoost] = useState('Chinese');
+    const [audioResponseFormat, setAudioResponseFormat] = useState('mp3');
+    const [audioError, setAudioError] = useState('');
     const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
     const isAgentMode = studioMode === 'image' && imageCreationSurface === 'agent';
     const generationAgentTitle = useMemo(
@@ -1992,6 +2122,7 @@ export function GenerationStudio({
             setVideoDurationSeconds,
             setImageProjectId,
             setVideoProjectId,
+            setAudioProjectId,
             setContextIntent,
         });
         onIntentConsumed?.();
@@ -2164,6 +2295,10 @@ export function GenerationStudio({
     const effectiveVideoModel = resolvedVideoEndpoint === REDBOX_OFFICIAL_VIDEO_BASE_URL
         ? getRedBoxOfficialVideoModel(videoMode)
         : (settings.video_model || getRedBoxOfficialVideoModel(videoMode)).trim();
+    const resolvedVoiceEndpoint = (settings.voice_endpoint || settings.tts_endpoint || settings.api_endpoint || '').trim();
+    const resolvedVoiceApiKey = (settings.voice_api_key || settings.tts_api_key || settings.api_key || '').trim();
+    const hasVoiceConfig = Boolean(resolvedVoiceEndpoint) && Boolean(resolvedVoiceApiKey);
+    const effectiveAudioModel = (settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
 
     const imageModelOptions = useMemo<PickerOption[]>(() => buildImageModelOptions(settings), [settings]);
     const activeImageModelOption = useMemo(
@@ -2174,8 +2309,10 @@ export function GenerationStudio({
     const videoModelLabel = effectiveVideoModel;
     const currentConfigHint = studioMode === 'image'
         ? `${imageModelLabel} · ${imageAspectRatio || 'Auto'} · ${imageSize || '自动'}`
-        : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
-    const activeError = studioMode === 'image' ? imageError : videoError;
+        : studioMode === 'audio'
+            ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'} · ${audioResponseFormat}`
+            : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
+    const activeError = studioMode === 'image' ? imageError : studioMode === 'audio' ? audioError : videoError;
 
     useEffect(() => {
         setImageModel((prev) => {
@@ -2338,6 +2475,61 @@ export function GenerationStudio({
         return true;
     }, [contextIntent?.source, createFeedEntry, hasVideoConfig, updateFeedEntries]);
 
+    const runAudioRequest = useCallback((request: AudioGenerationRequest): boolean => {
+        if (!request.prompt.trim()) {
+            setAudioError('请先输入要合成的文本');
+            return false;
+        }
+        if (!request.voiceId.trim()) {
+            setAudioError('请先填写 voice_id');
+            return false;
+        }
+        if (!hasVoiceConfig) {
+            setAudioError('未检测到声音合成配置，请先在设置中补齐');
+            return false;
+        }
+
+        const entry = createFeedEntry(request);
+        updateFeedEntries((prev) => [...prev, entry]);
+        setAudioError('');
+
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.generation.submitAudio({
+                    source: contextIntent?.source === 'manuscripts' ? 'manuscripts' : 'generation_studio',
+                    input: request.prompt.trim(),
+                    title: request.title.trim() || undefined,
+                    projectId: request.projectId.trim() || undefined,
+                    voiceId: request.voiceId.trim(),
+                    voice_id: request.voiceId.trim(),
+                    model: request.model.trim() || undefined,
+                    languageBoost: request.languageBoost.trim() || undefined,
+                    responseFormat: request.responseFormat || 'mp3',
+                    returnAudioBinary: true,
+                }) as { success?: boolean; error?: string; jobId?: string };
+
+                if (!result?.success || !result?.jobId) {
+                    throw new Error(result?.error || '生音频失败');
+                }
+
+                updateFeedEntries((prev) => prev.map((item) => (
+                    item.id === entry.id
+                        ? { ...item, jobId: result.jobId, jobStatus: 'queued', status: 'running', error: undefined }
+                        : item
+                )));
+            } catch (error) {
+                const message = error instanceof Error ? error.message : '生音频失败';
+                setAudioError(message);
+                updateFeedEntries((prev) => prev.map((item) => (
+                    item.id === entry.id
+                        ? { ...item, status: 'error', error: message }
+                        : item
+                )));
+            }
+        })();
+        return true;
+    }, [contextIntent?.source, createFeedEntry, hasVoiceConfig, updateFeedEntries]);
+
     const handleGenerateImage = useCallback(() => {
         const effectiveImageMode: ImageGenerationMode = imageReferences.length > 0
             ? (imageMode === 'text-to-image' ? 'reference-guided' : imageMode)
@@ -2422,13 +2614,41 @@ export function GenerationStudio({
         videoTitle,
     ]);
 
+    const handleGenerateAudio = useCallback(() => {
+        const accepted = runAudioRequest({
+            type: 'audio',
+            prompt: audioPrompt,
+            title: audioTitle,
+            projectId: audioProjectId,
+            model: effectiveAudioModel,
+            voiceId: audioVoiceId,
+            languageBoost: audioLanguageBoost,
+            responseFormat: audioResponseFormat,
+        });
+        if (!accepted) return;
+        setAudioPrompt('');
+    }, [
+        audioLanguageBoost,
+        audioProjectId,
+        audioPrompt,
+        audioResponseFormat,
+        audioTitle,
+        audioVoiceId,
+        effectiveAudioModel,
+        runAudioRequest,
+    ]);
+
     const handleRegenerate = useCallback((entry: GenerationFeedEntry) => {
         if (entry.request.type === 'image') {
             runImageRequest(entry.request);
             return;
         }
+        if (entry.request.type === 'audio') {
+            runAudioRequest(entry.request);
+            return;
+        }
         runVideoRequest(entry.request);
-    }, [runImageRequest, runVideoRequest]);
+    }, [runAudioRequest, runImageRequest, runVideoRequest]);
 
     const handleEditEntry = useCallback((entry: GenerationFeedEntry) => {
         setStudioMode(entry.request.type);
@@ -2443,6 +2663,15 @@ export function GenerationStudio({
             setImageQuality(entry.request.quality);
             setImageMode(entry.request.generationMode);
             setImageReferences(entry.request.referenceItems);
+            return;
+        }
+        if (entry.request.type === 'audio') {
+            setAudioPrompt(entry.request.prompt);
+            setAudioTitle(entry.request.title);
+            setAudioProjectId(entry.request.projectId);
+            setAudioVoiceId(entry.request.voiceId);
+            setAudioLanguageBoost(entry.request.languageBoost || 'Chinese');
+            setAudioResponseFormat(entry.request.responseFormat || 'mp3');
             return;
         }
         setVideoPrompt(entry.request.prompt);
@@ -2526,7 +2755,7 @@ export function GenerationStudio({
     }, [resolveAssetSource]);
 
     const handleEditAsset = useCallback(async (asset: GeneratedAsset) => {
-        if (isVideoAsset(asset)) {
+        if (isVideoAsset(asset) || isAudioAsset(asset)) {
             void appAlert('当前仅支持把图片加入参考图');
             return;
         }
@@ -2662,7 +2891,9 @@ export function GenerationStudio({
         return [];
     }, [videoFirstFrame, videoLastFrame, videoMode, videoReferences]);
 
-    const composerGridClass = studioMode === 'video' && videoMode === 'first-last-frame'
+    const composerGridClass = studioMode === 'audio'
+        ? 'grid items-start gap-4 md:grid-cols-[220px_minmax(0,1fr)]'
+        : studioMode === 'video' && videoMode === 'first-last-frame'
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
@@ -2765,7 +2996,7 @@ export function GenerationStudio({
                 )}
             >
                 <ImagePlus className="h-4 w-4" />
-                图片创作
+                生图
             </button>
             <button
                 type="button"
@@ -2778,7 +3009,20 @@ export function GenerationStudio({
                 )}
             >
                 <Clapperboard className="h-4 w-4" />
-                视频创作
+                生视频
+            </button>
+            <button
+                type="button"
+                onClick={() => setStudioMode('audio')}
+                className={clsx(
+                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    studioMode === 'audio'
+                        ? 'border-brand-red/50 bg-brand-red text-white'
+                        : 'border-border bg-surface-primary text-text-secondary',
+                )}
+            >
+                <Music2 className="h-4 w-4" />
+                生音频
             </button>
             {studioMode === 'image' && (
                 <button
@@ -2914,6 +3158,22 @@ export function GenerationStudio({
                                                 onChange={handleImageReferenceFiles}
                                                 onClear={() => setImageReferences([])}
                                             />
+                                        ) : studioMode === 'audio' ? (
+                                            <div className="rounded-[18px] border border-border bg-surface-secondary p-3">
+                                                <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-text-secondary">
+                                                    <Music2 className="h-3.5 w-3.5 text-brand-red" />
+                                                    音色
+                                                </div>
+                                                <input
+                                                    value={audioVoiceId}
+                                                    onChange={(event) => setAudioVoiceId(event.target.value)}
+                                                    placeholder="voice_xxx"
+                                                    className="h-10 w-full rounded-[12px] border border-border bg-surface-primary px-3 font-mono text-[12px] text-text-primary outline-none focus:border-brand-red/50"
+                                                />
+                                                <div className="mt-2 truncate text-[11px] text-text-tertiary">
+                                                    {effectiveAudioModel || 'speech-2.8-turbo'}
+                                                </div>
+                                            </div>
                                         ) : videoMode === 'first-last-frame' ? (
                                             <div className="grid grid-cols-2 gap-3">
                                                 <UploadPreviewCard
@@ -2953,14 +3213,16 @@ export function GenerationStudio({
 
                                     <div className="space-y-3">
                                         <textarea
-                                            value={studioMode === 'image' ? imagePrompt : videoPrompt}
+                                            value={studioMode === 'image' ? imagePrompt : studioMode === 'audio' ? audioPrompt : videoPrompt}
                                             onChange={(event) => (
                                                 studioMode === 'image'
                                                     ? setImagePrompt(event.target.value)
-                                                    : setVideoPrompt(event.target.value)
+                                                    : studioMode === 'audio'
+                                                        ? setAudioPrompt(event.target.value)
+                                                        : setVideoPrompt(event.target.value)
                                             )}
                                             rows={4}
-                                            placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : '描述您想生成的视频场景、镜头、动作...'}
+                                            placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'audio' ? '输入要合成的旁白、台词或口播文本...' : '描述您想生成的视频场景、镜头、动作...'}
                                             className="min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
                                         />
 
@@ -3033,6 +3295,35 @@ export function GenerationStudio({
                                                         )}
                                                     </button>
                                                 </>
+                                            ) : studioMode === 'audio' ? (
+                                                <>
+                                                    <PopoverSelect
+                                                        value={audioLanguageBoost}
+                                                        onChange={setAudioLanguageBoost}
+                                                        options={AUDIO_LANGUAGE_OPTIONS}
+                                                        className="min-w-[92px]"
+                                                        title="语言"
+                                                        panelClassName="w-[180px]"
+                                                    />
+                                                    <PopoverSelect
+                                                        value={audioResponseFormat}
+                                                        onChange={setAudioResponseFormat}
+                                                        options={AUDIO_FORMAT_OPTIONS}
+                                                        className="min-w-[92px]"
+                                                        title="格式"
+                                                        panelClassName="w-[180px]"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleGenerateAudio}
+                                                        disabled={!hasVoiceConfig || !audioVoiceId.trim()}
+                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
+                                                        title="生成音频"
+                                                        aria-label="生成音频"
+                                                    >
+                                                        <Sparkles className="h-5 w-5" />
+                                                    </button>
+                                                </>
                                             ) : (
                                                 <>
                                                     <PopoverSelect
@@ -3101,6 +3392,12 @@ export function GenerationStudio({
                                             </div>
                                         )}
 
+                                        {studioMode === 'audio' && (
+                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
+                                                <span>模型：{effectiveAudioModel || 'speech-2.8-turbo'}</span>
+                                            </div>
+                                        )}
+
                                         {((isAgentMode && studioMode === 'image') ? (agentSessionError || imageError) : activeError) && (
                                             <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 {(isAgentMode && studioMode === 'image') ? (agentSessionError || imageError) : activeError}
@@ -3116,6 +3413,12 @@ export function GenerationStudio({
                                         {studioMode === 'video' && !hasVideoConfig && (
                                             <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 未检测到生视频配置。请先完成官方视频登录或填写视频生成所需的 API Key。
+                                            </div>
+                                        )}
+
+                                        {studioMode === 'audio' && !hasVoiceConfig && (
+                                            <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
+                                                未检测到声音合成配置。请先到“设置 → AI 模型”填写 TTS 配置。
                                             </div>
                                         )}
                                     </div>
@@ -3150,6 +3453,19 @@ export function GenerationStudio({
                                 preload="metadata"
                                 className="max-h-[90vh] max-w-[92vw] rounded-2xl bg-black shadow-2xl"
                             />
+                        ) : isAudioAsset(previewAsset) ? (
+                            <div className="w-[min(560px,92vw)] rounded-2xl border border-white/10 bg-surface-primary p-5 shadow-2xl">
+                                <div className="mb-4 flex items-center gap-3 text-text-primary">
+                                    <Music2 className="h-5 w-5 text-brand-red" />
+                                    <div className="min-w-0 flex-1 truncate text-sm font-semibold">{previewAsset.title || '生成音频'}</div>
+                                </div>
+                                <audio
+                                    src={resolveAssetUrl(previewAsset.previewUrl || '')}
+                                    controls
+                                    autoPlay
+                                    className="w-full"
+                                />
+                            </div>
                         ) : (
                             <img
                                 src={resolveAssetUrl(previewAsset.previewUrl || '')}
