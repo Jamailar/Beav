@@ -773,6 +773,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const handleVoiceFileInput = useCallback(async (files: FileList | null) => {
         const file = files?.[0];
         if (!file) return;
+        if (!/\.(mp3|wav|m4a)$/i.test(file.name)) {
+            setRecordingError('声音参考仅支持 mp3、wav、m4a 文件');
+            setRecordingHint('');
+            return;
+        }
         if (file.size > 10 * 1024 * 1024) {
             setRecordingError('声音参考文件不能超过 10MB');
             return;
@@ -1679,7 +1684,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     导入音频
                                                     <input
                                                         type="file"
-                                                        accept="audio/*"
+                                                        accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4"
                                                         className="hidden"
                                                         onChange={(event) => {
                                                             void handleVoiceFileInput(event.target.files);
