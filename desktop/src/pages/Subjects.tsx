@@ -658,14 +658,49 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }));
     }, []);
 
-    const handleRemoveVoice = useCallback(() => {
+    const buildSubjectPayload = useCallback((voicePayload?: Record<string, unknown>) => ({
+        id: draft.id,
+        name: draft.name.trim(),
+        categoryId: draft.categoryId || undefined,
+        description: draft.description.trim() || undefined,
+        tags: draft.tagsText.split(',').map((item) => item.trim()).filter(Boolean),
+        attributes: normalizeAttributes(draft.attributes),
+        images: draft.images.map((image) => image.relativePath
+            ? { relativePath: image.relativePath, name: image.name }
+            : { dataUrl: image.dataUrl, name: image.name }),
+        voice: voicePayload,
+    }), [draft]);
+
+    const persistVoiceChange = useCallback(async (voicePayload: Record<string, unknown>, successHint: string) => {
+        if (!draft.id) return false;
+        const draftCategoryName = categories.find((item) => item.id === draft.categoryId)?.name.trim() || '';
+        if (draftCategoryName !== '角色') return false;
+        const payload = buildSubjectPayload(voicePayload);
+        const result = await window.ipcRenderer.subjects.update(payload);
+        if (!result?.success) {
+            throw new Error(result?.error || '保存声音参考失败');
+        }
+        setInitialVoicePresent(Boolean(Object.keys(voicePayload).length));
+        setRecordingHint(successHint);
+        await loadData();
+        return true;
+    }, [buildSubjectPayload, categories, draft.categoryId, draft.id, loadData]);
+
+    const handleRemoveVoice = useCallback(async () => {
         setDraft((current) => ({
             ...current,
             voice: undefined,
         }));
         setRecordingError('');
         setRecordingHint('');
-    }, []);
+        try {
+            await persistVoiceChange({}, '声音参考已删除');
+        } catch (e) {
+            const message = e instanceof Error ? e.message : '删除声音参考失败';
+            setRecordingError(message);
+            void appAlert(message);
+        }
+    }, [persistVoiceChange]);
 
     const handleRetryVoiceClone = useCallback(async (subject: SubjectRecord) => {
         if (!subject.voicePath) {
@@ -703,18 +738,24 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         if (duration <= SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
             throw new Error(`声音参考时长必须大于 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒`);
         }
+        const nextVoice = {
+            name: fileName,
+            previewUrl: dataUrl,
+            dataUrl,
+            scriptText: SUBJECT_VOICE_SAMPLE_TEXT,
+        };
         setDraft((current) => ({
             ...current,
-            voice: {
-                name: fileName,
-                previewUrl: dataUrl,
-                dataUrl,
-                scriptText: SUBJECT_VOICE_SAMPLE_TEXT,
-            },
+            voice: nextVoice,
         }));
         setRecordingHint(`已录入声音参考，时长约 ${duration.toFixed(1)} 秒`);
         setRecordingError('');
-    }, []);
+        await persistVoiceChange({
+            dataUrl,
+            name: fileName,
+            scriptText: SUBJECT_VOICE_SAMPLE_TEXT,
+        }, `声音参考已保存，时长约 ${duration.toFixed(1)} 秒`);
+    }, [persistVoiceChange]);
 
     const audioRecording = useAudioRecording({
         onCaptured: async (clip) => {
@@ -933,18 +974,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         scriptText: draft.voice.scriptText.trim() || undefined,
                     })
                 : (initialVoicePresent ? {} : undefined);
-            const payload = {
-                id: draft.id,
-                name: draft.name.trim(),
-                categoryId: draft.categoryId || undefined,
-                description: draft.description.trim() || undefined,
-                tags: draft.tagsText.split(',').map((item) => item.trim()).filter(Boolean),
-                attributes: normalizeAttributes(draft.attributes),
-                images: draft.images.map((image) => image.relativePath
-                    ? { relativePath: image.relativePath, name: image.name }
-                    : { dataUrl: image.dataUrl, name: image.name }),
-                voice: nextVoicePayload,
-            };
+            const payload = buildSubjectPayload(nextVoicePayload);
             const result = draft.id
                 ? await window.ipcRenderer.subjects.update(payload)
                 : await window.ipcRenderer.subjects.create(payload);
@@ -959,7 +989,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         } finally {
             setWorking(false);
         }
-    }, [categories, closeModal, draft, initialVoicePresent, loadData]);
+    }, [buildSubjectPayload, categories, closeModal, draft, initialVoicePresent, loadData]);
 
     const handleDeleteSubject = useCallback(async () => {
         if (!draft.id) return;
