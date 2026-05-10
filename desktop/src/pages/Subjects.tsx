@@ -773,8 +773,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const handleVoiceFileInput = useCallback(async (files: FileList | null) => {
         const file = files?.[0];
         if (!file) return;
-        if (!/\.(mp3|wav|m4a)$/i.test(file.name)) {
-            setRecordingError('声音参考仅支持 mp3、wav、m4a 文件');
+        if (!/\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(file.name)) {
+            setRecordingError('声音参考仅支持常见音频文件');
             setRecordingHint('');
             return;
         }
@@ -1684,7 +1684,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     导入音频
                                                     <input
                                                         type="file"
-                                                        accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4"
+                                                        accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.webm"
                                                         className="hidden"
                                                         onChange={(event) => {
                                                             void handleVoiceFileInput(event.target.files);
