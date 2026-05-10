@@ -1066,6 +1066,7 @@ export interface McpServerConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  cwd?: string;
   url?: string;
   oauth?: {
     enabled?: boolean;
@@ -1079,6 +1080,7 @@ export interface McpServerConfig {
       elicitationPausesTimeout?: boolean;
       enabledTools?: string[];
       disabledTools?: string[];
+      envPassthrough?: string[];
       perTool?: Record<string, {
         approvalMode?: 'never' | 'destructive' | 'always';
         enabled?: boolean;
@@ -1251,6 +1253,7 @@ export const createDefaultMcpServer = (): McpServerConfig => ({
   command: '',
   args: [],
   env: {},
+  cwd: '',
   url: '',
   oauth: {
     enabled: false,
@@ -1263,6 +1266,7 @@ export const createDefaultMcpServer = (): McpServerConfig => ({
       elicitationPausesTimeout: true,
       enabledTools: [],
       disabledTools: [],
+      envPassthrough: [],
       perTool: {},
     },
   },
@@ -1289,6 +1293,7 @@ export const parseMcpServers = (raw: string | undefined): McpServerConfig[] => {
                 .filter(([, value]) => Boolean(value))
             )
           : {},
+        cwd: String(item.cwd || ''),
         url: String(item.url || ''),
         oauth: item.oauth && typeof item.oauth === 'object'
           ? {
@@ -1315,6 +1320,7 @@ export const parseMcpServers = (raw: string | undefined): McpServerConfig[] => {
                   elicitationPausesTimeout: redbox.elicitationPausesTimeout === undefined ? true : Boolean(redbox.elicitationPausesTimeout),
                   enabledTools: Array.isArray(redbox.enabledTools) ? redbox.enabledTools.map((tool) => String(tool || '').trim()).filter(Boolean) : [],
                   disabledTools: Array.isArray(redbox.disabledTools) ? redbox.disabledTools.map((tool) => String(tool || '').trim()).filter(Boolean) : [],
+                  envPassthrough: Array.isArray(redbox.envPassthrough) ? redbox.envPassthrough.map((key) => String(key || '').trim()).filter(Boolean) : [],
                   perTool: redbox.perTool && typeof redbox.perTool === 'object' && !Array.isArray(redbox.perTool)
                     ? Object.fromEntries(
                         Object.entries(redbox.perTool as Record<string, unknown>)

@@ -1224,6 +1224,11 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     }, [debouncedSearchQuery, selectedTypeFilter, selectedTag, sortOrder]);
 
     const hasMoreRenderedItems = visibleKnowledgeItems.length < filteredKnowledgeItems.length;
+    const isIndexingInProgress = indexStatus.isBuilding
+        || indexStatus.pendingCount > 0
+        || (typeof indexStatus.rebuildProgress === 'number' && indexStatus.rebuildProgress < 1)
+        || Boolean(indexStatus.migrationStatus)
+        || Boolean(indexStatus.pendingRebuildReason);
 
     const resolveAspectClass = (key: string) => {
         const aspect = imageAspectMap[key] || 'portrait';
@@ -2181,7 +2186,7 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         </div>
                     )}
 
-                    {!isEmbedded && (
+                    {!isEmbedded && isIndexingInProgress && (
                         <div className="flex items-center gap-3 text-[11px] font-medium text-text-tertiary/70">
                             <span>已索引 {indexStatus.indexedCount}</span>
                             {indexStatus.isBuilding && (
