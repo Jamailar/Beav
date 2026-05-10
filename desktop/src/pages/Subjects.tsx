@@ -251,6 +251,27 @@ function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | nul
     const status = subjectVoiceString(subject, ['status']).toLowerCase();
     const lastError = subjectVoiceString(subject, ['lastError', 'error']);
     const hasSample = Boolean(subject.voicePreviewUrl || subject.voicePath);
+    const jobStatus = String(job?.status || '').toLowerCase();
+
+    if (jobStatus && !isMediaJobTerminal(jobStatus)) {
+        return {
+            label: jobStatus === 'queued' ? '声音复刻排队中' : '声音复刻中',
+            detail: jobId ? shortVoiceId(jobId) : undefined,
+            tone: 'active',
+            jobId,
+            canRetry: false,
+        };
+    }
+
+    if (status === 'queued' || status === 'submitting') {
+        return {
+            label: '声音复刻排队中',
+            detail: jobId ? shortVoiceId(jobId) : undefined,
+            tone: 'active',
+            jobId,
+            canRetry: false,
+        };
+    }
 
     if (voiceId) {
         return {
@@ -263,17 +284,6 @@ function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | nul
         };
     }
 
-    const jobStatus = String(job?.status || '').toLowerCase();
-    if (jobStatus && !isMediaJobTerminal(jobStatus)) {
-        return {
-            label: jobStatus === 'queued' ? '声音复刻排队中' : '声音复刻中',
-            detail: jobId ? shortVoiceId(jobId) : undefined,
-            tone: 'active',
-            jobId,
-            canRetry: false,
-        };
-    }
-
     if (status === 'failed' || jobStatus === 'failed' || jobStatus === 'dead_lettered') {
         return {
             label: '声音复刻失败',
@@ -282,16 +292,6 @@ function subjectVoiceInfo(subject: SubjectRecord, job?: MediaJobProjection | nul
             jobId,
             error: lastError || job?.attempt?.lastError || undefined,
             canRetry: hasSample,
-        };
-    }
-
-    if (status === 'queued' || status === 'submitting') {
-        return {
-            label: '声音复刻排队中',
-            detail: jobId ? shortVoiceId(jobId) : undefined,
-            tone: 'active',
-            jobId,
-            canRetry: false,
         };
     }
 
@@ -482,10 +482,18 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         [draft.id, subjects],
     );
     const activeDraftVoiceInfo = useMemo(
-        () => activeDraftSubject
-            ? subjectVoiceInfo(activeDraftSubject, voiceJobsById[subjectVoiceString(activeDraftSubject, ['jobId'])])
-            : null,
-        [activeDraftSubject, voiceJobsById],
+        () => {
+            if (!activeDraftSubject) return null;
+            if (retryingVoiceSubjectId === activeDraftSubject.id) {
+                return {
+                    label: '声音复刻提交中',
+                    tone: 'active',
+                    canRetry: false,
+                } satisfies SubjectVoiceInfo;
+            }
+            return subjectVoiceInfo(activeDraftSubject, voiceJobsById[subjectVoiceString(activeDraftSubject, ['jobId'])]);
+        },
+        [activeDraftSubject, retryingVoiceSubjectId, voiceJobsById],
     );
     const filteredSubjects = useMemo(() => {
         const keyword = query.trim().toLowerCase();
@@ -1763,11 +1771,15 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     <button
                                                         type="button"
                                                         onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
-                                                        disabled={!activeDraftVoiceInfo.canRetry || retryingVoiceSubjectId === activeDraftSubject.id}
+                                                        disabled={!activeDraftVoiceInfo.canRetry || retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active'}
                                                         className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
-                                                        <RefreshCw className={clsx('h-3.5 w-3.5', retryingVoiceSubjectId === activeDraftSubject.id && 'animate-spin')} />
-                                                        {retryingVoiceSubjectId === activeDraftSubject.id ? '提交中' : '重新克隆音色'}
+                                                        <RefreshCw className={clsx('h-3.5 w-3.5', (retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active') && 'animate-spin')} />
+                                                        {retryingVoiceSubjectId === activeDraftSubject.id
+                                                            ? '提交中'
+                                                            : activeDraftVoiceInfo.tone === 'active'
+                                                                ? '音色复刻中'
+                                                                : '重新克隆音色'}
                                                     </button>
                                                     <div className={clsx('rounded-lg border px-3 py-2 text-xs', voiceInfoClassName(activeDraftVoiceInfo.tone))}>
                                                         <div className="flex flex-wrap items-center gap-2">
