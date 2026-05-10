@@ -125,9 +125,9 @@ interface MediaAsset {
 
 const UNCATEGORIZED_FILTER = '__uncategorized__';
 const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
-const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。';
-const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 5;
-const SUBJECT_VOICE_RECORDING_SECONDS = 8;
+const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
+const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 15;
+const SUBJECT_VOICE_RECORDING_SECONDS = 22;
 const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
     generated: '已生成',
     planned: '计划项',
@@ -692,8 +692,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     const saveVoiceDataUrl = useCallback(async (dataUrl: string, fileName: string) => {
         const duration = await getAudioDurationSeconds(dataUrl);
-        if (duration < 5 || duration > 10) {
-            throw new Error('声音参考时长必须在 5 到 10 秒之间');
+        if (duration <= SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+            throw new Error(`声音参考时长必须大于 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒`);
         }
         setDraft((current) => ({
             ...current,
@@ -726,7 +726,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const voiceRecordingElapsedSeconds = audioRecording.isRecording
         ? Math.max(0, SUBJECT_VOICE_RECORDING_SECONDS - recordingCountdown)
         : 0;
-    const canFinishVoiceRecording = voiceRecordingElapsedSeconds >= SUBJECT_VOICE_MIN_RECORDING_SECONDS;
+    const canFinishVoiceRecording = voiceRecordingElapsedSeconds > SUBJECT_VOICE_MIN_RECORDING_SECONDS;
 
     useEffect(() => {
         if (!audioRecording.error) return;
@@ -811,7 +811,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             setRecordingHint('');
             return;
         }
-        setRecordingHint('正在采样，录满 5 秒后可手动完成；不操作会自动结束。');
+        setRecordingHint(`正在采样，超过 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒后可手动完成；不操作会自动结束。`);
         try {
             recordingIntervalRef.current = window.setInterval(() => {
                 setRecordingCountdown((current) => Math.max(0, current - 1));
@@ -830,8 +830,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const handleFinishVoiceRecording = useCallback(async () => {
         if (!audioRecording.isRecording || audioRecording.isWorking) return;
         const elapsedSeconds = SUBJECT_VOICE_RECORDING_SECONDS - recordingCountdown;
-        if (elapsedSeconds < SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
-            setRecordingHint(`至少录满 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒，再点击完成采样。`);
+        if (elapsedSeconds <= SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+            setRecordingHint(`必须超过 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒，再点击完成采样。`);
             return;
         }
         clearRecordingTimers();
