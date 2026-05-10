@@ -989,6 +989,7 @@ fn discover_thrive_plugin_mcp_servers(
                 command,
                 args,
                 env,
+                cwd: None,
                 url,
                 oauth: Some(oauth_value),
             })

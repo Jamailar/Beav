@@ -11,9 +11,11 @@ use std::{
         Arc,
     },
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::commands::redclaw_runtime::execute_redclaw_run;
+use crate::commands::redclaw_runtime::{
+    append_redclaw_automation_user_message, ensure_redclaw_task_session_record, execute_redclaw_run,
+};
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
 use crate::runtime::{
     add_collab_member, collab_session_snapshot, create_collab_session, create_collab_task,
@@ -23,9 +25,9 @@ use crate::runtime::{
 };
 use crate::scheduler::task_policy::TaskIntentSchema;
 use crate::scheduler::{
-    clear_definition_cooldown, emit_scheduler_snapshot, enqueue_manual_job_execution_for_source,
-    run_job_queue_once, run_redclaw_job_runner, run_redclaw_scheduler,
-    sync_redclaw_job_definitions,
+    clear_definition_cooldown, emit_scheduler_snapshot,
+    enqueue_manual_job_execution_for_definition, run_job_queue_once, run_redclaw_job_runner,
+    run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
 use crate::{
     complete_redclaw_mvp_onboarding, handle_redclaw_onboarding_turn,
@@ -116,6 +118,29 @@ pub fn ensure_redclaw_runtime_running(
         }
     }
     Ok(false)
+}
+
+fn resolve_task_definition_id_for_manual_run(
+    store: &crate::AppStore,
+    source_kind: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    if let Some(definition) = store
+        .redclaw_job_definitions
+        .iter()
+        .find(|item| item.id == task_id && item.source_kind.as_deref() == Some(source_kind))
+    {
+        return Ok(definition.id.clone());
+    }
+
+    if let Some(definition) = store.redclaw_job_definitions.iter().find(|item| {
+        item.source_kind.as_deref() == Some(source_kind)
+            && item.source_task_id.as_deref() == Some(task_id)
+    }) {
+        return Ok(definition.id.clone());
+    }
+
+    Err("任务未找到".to_string())
 }
 
 pub fn handle_redclaw_channel(
@@ -476,35 +501,186 @@ pub fn handle_redclaw_channel(
         }
         "redclaw:runner-run-scheduled-now" => (|| {
             let task_id = payload_string(payload, "taskId").unwrap_or_default();
-            let execution_id = with_store_mut(state, |store| {
-                sync_redclaw_job_definitions(store);
-                enqueue_manual_job_execution_for_source(
-                    store,
-                    "scheduled",
-                    &task_id,
-                    "manual-scheduled-now",
-                )
-            })?;
+            let (execution_id, resolved_definition_id, source_task_id, title, prompt): (
+                String,
+                String,
+                String,
+                String,
+                String,
+            ) = with_store_mut(
+                state,
+                |store| -> Result<(String, String, String, String, String), String> {
+                    sync_redclaw_job_definitions(store);
+                    let definition_id =
+                        resolve_task_definition_id_for_manual_run(store, "scheduled", &task_id)?;
+                    let execution_id = enqueue_manual_job_execution_for_definition(
+                        store,
+                        &definition_id,
+                        "manual-scheduled-now",
+                    )?;
+                    let definition = store
+                        .redclaw_job_definitions
+                        .iter()
+                        .find(|item| item.id == definition_id)
+                        .ok_or_else(|| "未找到定时任务定义".to_string())?;
+                    Ok((
+                        execution_id,
+                        definition_id,
+                        definition
+                            .source_task_id
+                            .clone()
+                            .unwrap_or_else(|| task_id.clone()),
+                        definition.title.clone(),
+                        definition
+                            .payload
+                            .get("prompt")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    ))
+                },
+            )?;
+            let session_id = ensure_redclaw_task_session_record(
+                state,
+                Some("scheduled"),
+                Some(&source_task_id),
+                &title,
+            )?;
+            append_redclaw_automation_user_message(state, &session_id, &prompt, &execution_id)?;
             crate::events::emit_runtime_task_checkpoint_saved(
                 app,
                 Some(&execution_id),
-                None,
+                Some(&resolved_definition_id),
                 "task.enqueued",
                 "Manual scheduled task execution enqueued",
                 Some(json!({
                     "executionId": execution_id,
                     "sourceTaskId": task_id,
+                    "definitionId": resolved_definition_id.clone(),
                     "trigger": "manual-scheduled-now",
+                    "sessionId": session_id,
                 })),
             );
-            let run_result = run_job_queue_once(app, state, Some(&execution_id))?
-                .unwrap_or_else(|| json!({ "success": false, "executionId": execution_id, "status": "not-started" }));
-            with_store_mut(state, |store| {
-                sync_redclaw_job_definitions(store);
-                Ok(())
-            })?;
+            let app_for_run = app.clone();
+            let execution_id_for_run = execution_id.clone();
+            tauri::async_runtime::spawn(async move {
+                let managed_state = app_for_run.state::<AppState>();
+                if let Err(error) =
+                    run_job_queue_once(&app_for_run, &managed_state, Some(&execution_id_for_run))
+                {
+                    eprintln!("[redclaw][manual-run] scheduled execution failed: {error}");
+                }
+                let _ = with_store_mut(&managed_state, |store| {
+                    sync_redclaw_job_definitions(store);
+                    Ok(())
+                });
+                emit_scheduler_snapshot(&app_for_run, &managed_state);
+            });
             emit_scheduler_snapshot(app, state);
-            Ok(json!({ "success": true, "executionId": execution_id, "run": run_result }))
+            Ok(json!({
+                "success": true,
+                "executionId": execution_id,
+                "sessionId": session_id.clone(),
+                "run": {
+                    "queued": true,
+                    "sessionId": session_id,
+                }
+            }))
+        })(),
+        "redclaw:runner-run-long-cycle-now" => (|| {
+            let task_id = payload_string(payload, "taskId").unwrap_or_default();
+            let (execution_id, resolved_definition_id, source_task_id, title, prompt): (
+                String,
+                String,
+                String,
+                String,
+                String,
+            ) = with_store_mut(
+                state,
+                |store| -> Result<(String, String, String, String, String), String> {
+                    sync_redclaw_job_definitions(store);
+                    let definition_id =
+                        resolve_task_definition_id_for_manual_run(store, "long_cycle", &task_id)?;
+                    let execution_id = enqueue_manual_job_execution_for_definition(
+                        store,
+                        &definition_id,
+                        "manual-long-cycle-now",
+                    )?;
+                    let definition = store
+                        .redclaw_job_definitions
+                        .iter()
+                        .find(|item| item.id == definition_id)
+                        .ok_or_else(|| "未找到长期任务定义".to_string())?;
+                    Ok((
+                        execution_id,
+                        definition_id,
+                        definition
+                            .source_task_id
+                            .clone()
+                            .unwrap_or_else(|| task_id.clone()),
+                        definition.title.clone(),
+                        {
+                            let objective = definition
+                                .payload
+                                .get("objective")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            let step_prompt = definition
+                                .payload
+                                .get("stepPrompt")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            format!("目标：{objective}\n\n当前轮执行指令：{step_prompt}")
+                        },
+                    ))
+                },
+            )?;
+            let session_id = ensure_redclaw_task_session_record(
+                state,
+                Some("long_cycle"),
+                Some(&source_task_id),
+                &title,
+            )?;
+            append_redclaw_automation_user_message(state, &session_id, &prompt, &execution_id)?;
+            crate::events::emit_runtime_task_checkpoint_saved(
+                app,
+                Some(&execution_id),
+                Some(&resolved_definition_id),
+                "task.enqueued",
+                "Manual long-cycle execution enqueued",
+                Some(json!({
+                    "executionId": execution_id,
+                    "sourceTaskId": task_id,
+                    "definitionId": resolved_definition_id.clone(),
+                    "trigger": "manual-long-cycle-now",
+                    "sessionId": session_id,
+                })),
+            );
+            let app_for_run = app.clone();
+            let execution_id_for_run = execution_id.clone();
+            tauri::async_runtime::spawn(async move {
+                let managed_state = app_for_run.state::<AppState>();
+                if let Err(error) =
+                    run_job_queue_once(&app_for_run, &managed_state, Some(&execution_id_for_run))
+                {
+                    eprintln!("[redclaw][manual-run] long-cycle execution failed: {error}");
+                }
+                let _ = with_store_mut(&managed_state, |store| {
+                    sync_redclaw_job_definitions(store);
+                    Ok(())
+                });
+                emit_scheduler_snapshot(&app_for_run, &managed_state);
+            });
+            emit_scheduler_snapshot(app, state);
+            Ok(json!({
+                "success": true,
+                "executionId": execution_id,
+                "sessionId": session_id.clone(),
+                "run": {
+                    "queued": true,
+                    "sessionId": session_id,
+                }
+            }))
         })(),
         "redclaw:runner-list-long-cycle" => with_store(state, |store| {
             Ok(json!(store.redclaw_state.long_cycle_tasks.clone()))
@@ -644,38 +820,6 @@ pub fn handle_redclaw_channel(
                 Err(error) => Err(error),
             }
         }
-        "redclaw:runner-run-long-cycle-now" => (|| {
-            let task_id = payload_string(payload, "taskId").unwrap_or_default();
-            let execution_id = with_store_mut(state, |store| {
-                sync_redclaw_job_definitions(store);
-                enqueue_manual_job_execution_for_source(
-                    store,
-                    "long_cycle",
-                    &task_id,
-                    "manual-long-cycle-now",
-                )
-            })?;
-            crate::events::emit_runtime_task_checkpoint_saved(
-                app,
-                Some(&execution_id),
-                None,
-                "task.enqueued",
-                "Manual long-cycle execution enqueued",
-                Some(json!({
-                    "executionId": execution_id,
-                    "sourceTaskId": task_id,
-                    "trigger": "manual-long-cycle-now",
-                })),
-            );
-            let run_result = run_job_queue_once(app, state, Some(&execution_id))?
-                    .unwrap_or_else(|| json!({ "success": false, "executionId": execution_id, "status": "not-started" }));
-            with_store_mut(state, |store| {
-                sync_redclaw_job_definitions(store);
-                Ok(())
-            })?;
-            emit_scheduler_snapshot(app, state);
-            Ok(json!({ "success": true, "executionId": execution_id, "run": run_result }))
-        })(),
         _ => return None,
     };
     Some(result)

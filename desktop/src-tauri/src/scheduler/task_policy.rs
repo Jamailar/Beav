@@ -212,7 +212,7 @@ pub fn preview_task_intent(
 
     let exact_duplicate_exists = conflicts
         .iter()
-        .any(|item| item.lifecycle_state == "active" || item.lifecycle_state == "draft");
+        .any(|item| item.lifecycle_state == "active");
     if exact_duplicate_exists {
         rejection_reasons.push("检测到同 ownerScope + 同定义指纹的重复任务。".to_string());
     } else if !conflicts.is_empty() {

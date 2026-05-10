@@ -9,14 +9,14 @@ mod store;
 mod types;
 
 pub(crate) use maintenance::{
-    bump_memory_maintenance_mutation, default_memory_maintenance_status,
+    default_memory_maintenance_status, memory_maintenance_mutation_status,
     memory_maintenance_status_from_settings, memory_maintenance_status_from_workspace,
     run_memory_maintenance_with_reason, write_memory_maintenance_status_for_workspace,
 };
 pub(crate) use prompt::build_memory_prompt_section;
 pub(crate) use store::{
     archive_memory_record, list_active_memories, list_archived_memories, list_memory_history,
-    persist_memory_workspace_state, search_memory_records,
+    memory_workspace_snapshot, persist_memory_workspace_state, search_memory_records,
 };
 
 use crate::persistence::{with_store, with_store_mut};
@@ -145,6 +145,7 @@ pub(crate) fn handle_memory_channel(
                 }))
             }
             "memory:add" => {
+                let current_status = memory_maintenance_status_from_workspace(state)?;
                 let content = payload_string(payload, "content").unwrap_or_default();
                 let memory_type = payload_string(payload, "type")
                     .or_else(|| payload_string(payload, "memoryType"))
@@ -157,59 +158,62 @@ pub(crate) fn handle_memory_channel(
                         .or_else(|| payload_string(payload, "category")),
                 )
                 .or_else(|| Some("user".to_string()));
-                let memory = with_store_mut(state, |store| {
-                    let item = UserMemoryRecord {
-                        id: make_id("memory"),
-                        content: content.clone(),
-                        r#type: memory_type.clone(),
-                        tags,
-                        entities,
-                        scope,
-                        space_id: normalized_optional_string(payload_string(payload, "spaceId"))
+                let (memory, workspace_snapshot, maintenance_status) =
+                    with_store_mut(state, |store| {
+                        let item = UserMemoryRecord {
+                            id: make_id("memory"),
+                            content: content.clone(),
+                            r#type: memory_type.clone(),
+                            tags,
+                            entities,
+                            scope,
+                            space_id: normalized_optional_string(payload_string(
+                                payload, "spaceId",
+                            ))
                             .or_else(|| Some(store.active_space_id.clone())),
-                        project_id: normalized_optional_string(payload_string(
-                            payload,
-                            "projectId",
-                        )),
-                        session_id: normalized_optional_string(payload_string(
-                            payload,
-                            "sessionId",
-                        )),
-                        source: source.clone().or_else(|| Some(json!({ "kind": "tool" }))),
-                        confidence: payload_f64(payload, "confidence").or(Some(0.75)),
-                        created_at: now_i64(),
-                        updated_at: Some(now_i64()),
-                        last_accessed: None,
-                        status: Some("active".to_string()),
-                        archived_at: None,
-                        archive_reason: None,
-                        origin_id: None,
-                        canonical_key: None,
-                        revision: Some(1),
-                        last_conflict_at: None,
-                    };
-                    store.memories.push(item.clone());
-                    store.memory_history.push(MemoryHistoryRecord {
-                        id: make_id("memory-history"),
-                        memory_id: item.id.clone(),
-                        origin_id: item.id.clone(),
-                        action: "create".to_string(),
-                        reason: None,
-                        timestamp: now_i64(),
-                        before: None,
-                        after: Some(json!(item.clone())),
-                        archived_memory_id: None,
-                    });
-                    bump_memory_maintenance_mutation(state, store, "mutation");
-                    persist_memory_workspace_state(state, store)?;
-                    Ok(item)
-                })?;
-                let pending = with_store(state, |store| {
-                    Ok(memory_maintenance_status_from_workspace(state)?
-                        .or_else(|| memory_maintenance_status_from_settings(&store.settings))
-                        .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
-                        .unwrap_or(0))
-                })?;
+                            project_id: normalized_optional_string(payload_string(
+                                payload,
+                                "projectId",
+                            )),
+                            session_id: normalized_optional_string(payload_string(
+                                payload,
+                                "sessionId",
+                            )),
+                            source: source.clone().or_else(|| Some(json!({ "kind": "tool" }))),
+                            confidence: payload_f64(payload, "confidence").or(Some(0.75)),
+                            created_at: now_i64(),
+                            updated_at: Some(now_i64()),
+                            last_accessed: None,
+                            status: Some("active".to_string()),
+                            archived_at: None,
+                            archive_reason: None,
+                            origin_id: None,
+                            canonical_key: None,
+                            revision: Some(1),
+                            last_conflict_at: None,
+                        };
+                        store.memories.push(item.clone());
+                        store.memory_history.push(MemoryHistoryRecord {
+                            id: make_id("memory-history"),
+                            memory_id: item.id.clone(),
+                            origin_id: item.id.clone(),
+                            action: "create".to_string(),
+                            reason: None,
+                            timestamp: now_i64(),
+                            before: None,
+                            after: Some(json!(item.clone())),
+                            archived_memory_id: None,
+                        });
+                        let maintenance_status =
+                            memory_maintenance_mutation_status(current_status, store, "mutation");
+                        Ok((item, memory_workspace_snapshot(store), maintenance_status))
+                    })?;
+                let _ = write_memory_maintenance_status_for_workspace(state, &maintenance_status);
+                persist_memory_workspace_state(state, &workspace_snapshot)?;
+                let pending = maintenance_status
+                    .get("pendingMutations")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 if pending >= 5 {
                     let _ = run_memory_maintenance_with_reason(state, "mutation");
                 }
@@ -221,7 +225,7 @@ pub(crate) fn handle_memory_channel(
                     .or_else(|| payload_string(payload, "memoryId"))
                     .or_else(|| payload_string(payload, "targetMemoryId"))
                     .unwrap_or_default();
-                let updated = with_store_mut(state, |store| {
+                let (updated, workspace_snapshot) = with_store_mut(state, |store| {
                     let Some(item) = store.memories.iter_mut().find(|entry| entry.id == id) else {
                         return Err(format!("memory not found: {id}"));
                     };
@@ -242,9 +246,9 @@ pub(crate) fn handle_memory_channel(
                         archived_memory_id: None,
                     });
                     let updated = item.clone();
-                    persist_memory_workspace_state(state, store)?;
-                    Ok(updated)
+                    Ok((updated, memory_workspace_snapshot(store)))
                 })?;
+                persist_memory_workspace_state(state, &workspace_snapshot)?;
                 let _ = index::rebuild_memory_index_from_store(state);
                 Ok(json!(updated))
             }
@@ -254,11 +258,11 @@ pub(crate) fn handle_memory_channel(
                     .unwrap_or_default();
                 let reason = payload_string(payload, "reason")
                     .unwrap_or_else(|| "manual-archive".to_string());
-                with_store_mut(state, |store| {
+                let workspace_snapshot = with_store_mut(state, |store| {
                     archive_memory_record(store, &id, &reason);
-                    persist_memory_workspace_state(state, store)?;
-                    Ok(json!({ "success": true }))
+                    Ok(memory_workspace_snapshot(store))
                 })?;
+                persist_memory_workspace_state(state, &workspace_snapshot)?;
                 let _ = index::rebuild_memory_index_from_store(state);
                 Ok(json!({ "success": true }))
             }
@@ -270,13 +274,14 @@ pub(crate) fn handle_memory_channel(
                     .map(ToString::to_string)
                     .or_else(|| payload_string(payload, "id"))
                     .unwrap_or_default();
-                with_store_mut(state, |store| {
+                let workspace_snapshot = with_store_mut(state, |store| {
                     archive_memory_record(store, &id, "manual-delete");
-                    persist_memory_workspace_state(state, store)?;
-                    Ok(json!({ "success": true }))
+                    Ok(memory_workspace_snapshot(store))
                 })?;
+                persist_memory_workspace_state(state, &workspace_snapshot)?;
+                let workspace_status = memory_maintenance_status_from_workspace(state)?;
                 let pending = with_store(state, |store| {
-                    Ok(memory_maintenance_status_from_workspace(state)?
+                    Ok(workspace_status
                         .or_else(|| memory_maintenance_status_from_settings(&store.settings))
                         .and_then(|value| value.get("pendingMutations").and_then(|v| v.as_i64()))
                         .unwrap_or(0))

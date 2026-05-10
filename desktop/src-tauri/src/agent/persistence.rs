@@ -341,8 +341,9 @@ pub fn update_post_exchange_maintenance(
     response: &str,
 ) -> Result<(), String> {
     let next_scheduled_at = next_memory_maintenance_at_ms(response, now_i64());
+    let workspace_status = memory_maintenance_status_from_workspace(state)?;
     let current = with_store(state, |store| {
-        Ok(memory_maintenance_status_from_workspace(state)?
+        Ok(workspace_status
             .or_else(|| memory_maintenance_status_from_settings(&store.settings))
             .unwrap_or_else(default_memory_maintenance_status))
     })?;

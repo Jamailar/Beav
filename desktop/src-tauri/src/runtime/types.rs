@@ -18,6 +18,7 @@ pub struct McpServerRecord {
     pub command: Option<String>,
     pub args: Option<Vec<String>>,
     pub env: Option<HashMap<String, String>>,
+    pub cwd: Option<String>,
     pub url: Option<String>,
     pub oauth: Option<Value>,
 }

@@ -236,6 +236,7 @@ mod tests {
             command: None,
             args: None,
             env: None,
+            cwd: None,
             url: None,
             oauth: None,
         };

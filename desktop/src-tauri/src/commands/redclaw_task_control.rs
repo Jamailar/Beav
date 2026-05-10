@@ -173,7 +173,11 @@ pub fn handle_task_confirm(
                 .get("intent")
                 .ok_or_else(|| "任务草稿缺少 intent".to_string())?,
         )?;
-        let preview = preview_task_intent(store, &intent, now_i64())?;
+        let mut preview_store = store.clone();
+        preview_store
+            .redclaw_job_definitions
+            .retain(|item| item.id != draft_id);
+        let preview = preview_task_intent(&preview_store, &intent, now_i64())?;
         if matches!(preview.policy_decision, TaskPolicyDecisionKind::Reject) {
             return Err(preview
                 .rejection_reasons
