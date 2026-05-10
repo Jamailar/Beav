@@ -39,6 +39,7 @@ type StudioMode = 'image' | 'video';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
 type VideoGenerationMode = 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation';
 type ImageCreationSurface = 'manual' | 'agent';
+type GenerationFeedSource = GenerationIntent['source'] | string;
 
 type SettingsShape = {
     api_endpoint?: string;
@@ -137,7 +138,7 @@ type GenerationFeedEntry = {
     kind: 'generation';
     id: string;
     createdAt: number;
-    source: GenerationIntent['source'];
+    source: GenerationFeedSource;
     sourceTitle?: string;
     referencePreview?: ReferenceItem | null;
     request: GenerationRequest;
@@ -153,7 +154,7 @@ type AgentSessionFeedEntry = {
     kind: 'agent-session';
     id: string;
     createdAt: number;
-    source: GenerationIntent['source'];
+    source: GenerationFeedSource;
     sourceTitle?: string;
     sessionId: string;
     contextId: string;
@@ -242,11 +243,15 @@ const VIDEO_AUDIO_OPTIONS = [
     { value: 'on', label: '音频开' },
 ] as const;
 
-const SOURCE_LABELS: Record<GenerationIntent['source'], string> = {
+const SOURCE_LABELS: Record<string, string> = {
     standalone: '独立创作',
+    generation_studio: '独立创作',
     'media-library': '媒体库',
     manuscripts: '稿件',
     'cover-studio': '封面',
+    cover_studio: '封面',
+    tool: 'Agent 工具',
+    redclaw: 'RedClaw',
 };
 
 type AssetContextMenuState = {
@@ -272,6 +277,28 @@ const readBlobAsDataUrl = (blob: Blob): Promise<string> => new Promise((resolve,
 
 function makeId(prefix: string): string {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function stringField(record: Record<string, unknown>, keys: string[]): string {
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+}
+
+function numberField(record: Record<string, unknown>, keys: string[], fallback: number): number {
+    for (const key of keys) {
+        const value = Number(record[key]);
+        if (Number.isFinite(value) && value > 0) return value;
+    }
+    return fallback;
+}
+
+function referenceNameFromSource(source: string, index: number): string {
+    const normalized = source.split('?')[0]?.split('#')[0] || '';
+    const name = normalized.split('/').filter(Boolean).pop();
+    return name || `reference-${index + 1}`;
 }
 
 function dataUrlMimeType(dataUrl: string): string {
@@ -595,13 +622,31 @@ function serializeFeedEntries(entries: FeedEntry[]): string {
 function normalizeReferenceItems(value: unknown): ReferenceItem[] {
     if (!Array.isArray(value)) return [];
     return value
-        .map((item) => {
+        .map((item, index) => {
+            if (typeof item === 'string') {
+                const source = item.trim();
+                if (!source) return null;
+                return {
+                    name: referenceNameFromSource(source, index),
+                    dataUrl: source.startsWith('data:') ? source : resolveAssetUrl(source),
+                } satisfies ReferenceItem;
+            }
             if (!item || typeof item !== 'object') return null;
             const record = item as Record<string, unknown>;
-            const dataUrl = String(record.dataUrl || '').trim();
+            const rawSource = String(
+                record.dataUrl
+                || record.previewUrl
+                || record.localUrl
+                || record.absolutePath
+                || record.path
+                || record.url
+                || '',
+            ).trim();
+            if (!rawSource) return null;
+            const dataUrl = rawSource.startsWith('data:') ? rawSource : resolveAssetUrl(rawSource);
             if (!dataUrl) return null;
             return {
-                name: String(record.name || 'reference').trim() || 'reference',
+                name: String(record.name || record.fileName || referenceNameFromSource(rawSource, index)).trim() || 'reference',
                 dataUrl,
             } satisfies ReferenceItem;
         })
@@ -719,7 +764,7 @@ function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
             kind: 'agent-session',
             id,
             createdAt: Number(record.createdAt || Date.now()),
-            source: (String(record.source || 'standalone').trim() || 'standalone') as GenerationIntent['source'],
+            source: String(record.source || 'standalone').trim() || 'standalone',
             sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
             sessionId,
             contextId,
@@ -734,7 +779,7 @@ function normalizeFeedEntryRecord(value: unknown): FeedEntry | null {
         kind: 'generation',
         id,
         createdAt: Number(record.createdAt || Date.now()),
-        source: (String(record.source || 'standalone').trim() || 'standalone') as GenerationIntent['source'],
+        source: String(record.source || 'standalone').trim() || 'standalone',
         sourceTitle: typeof record.sourceTitle === 'string' ? record.sourceTitle : undefined,
         referencePreview: normalizeReferenceItem(record.referencePreview),
         request,
@@ -839,6 +884,119 @@ function assetsFromJobProjection(job: MediaJobProjection): GeneratedAsset[] {
         .filter((item): item is GeneratedAsset => Boolean(item && typeof item === 'object' && typeof (item as GeneratedAsset).id === 'string'));
 }
 
+function referenceItemsFromJobRequest(request: Record<string, unknown>, keys: string[]): ReferenceItem[] {
+    for (const key of keys) {
+        const items = normalizeReferenceItems(request[key]);
+        if (items.length > 0) return items;
+    }
+    return [];
+}
+
+function imageCountFromJob(job: MediaJobProjection, request: Record<string, unknown>): number {
+    const plannedCount = Array.isArray(request.imagePlanItems) ? request.imagePlanItems.length : 0;
+    if (plannedCount > 0) return plannedCount;
+    const requestedCount = Number(request.count || request.n);
+    if (Number.isFinite(requestedCount) && requestedCount > 0) return requestedCount;
+    return Math.max(1, job.artifacts?.length || 1);
+}
+
+function requestFromJobProjection(job: MediaJobProjection): GenerationRequest | null {
+    const request = job.request || {};
+    const prompt = stringField(request, ['prompt', 'compiledPrompt', 'userPrompt', 'summary']);
+    if (!prompt) return null;
+    const title = stringField(request, ['title', 'name']);
+    const projectId = job.projectId || stringField(request, ['projectId']);
+    const model = job.providerModel || stringField(request, ['model']);
+    const generationMode = stringField(request, ['generationMode', 'mode']);
+
+    if (job.kind === 'video') {
+        const referenceItems = referenceItemsFromJobRequest(request, ['referenceItems', 'referenceImages', 'reference_images']);
+        const firstClip = normalizeReferenceItem(request.firstClip || request.first_clip);
+        const drivingAudio = normalizeReferenceItem(request.drivingAudio || request.driving_audio);
+        const aspectRatio = stringField(request, ['aspectRatio', 'aspect_ratio']);
+        const resolution = stringField(request, ['resolution']);
+        const normalizedMode = generationMode === 'reference-guided'
+            || generationMode === 'first-last-frame'
+            || generationMode === 'continuation'
+            || generationMode === 'text-to-video'
+            ? generationMode
+            : referenceItems.length > 0
+                ? 'reference-guided'
+                : 'text-to-video';
+        return {
+            type: 'video',
+            prompt,
+            title,
+            projectId: projectId || '',
+            model: model || '',
+            aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9',
+            resolution: resolution === '1080p' ? '1080p' : '720p',
+            durationSeconds: numberField(request, ['durationSeconds', 'duration_seconds', 'duration'], 8),
+            generateAudio: Boolean(request.generateAudio),
+            generationMode: normalizedMode,
+            referenceItems,
+            firstClip,
+            drivingAudio,
+        } satisfies VideoGenerationRequest;
+    }
+
+    const referenceItems = referenceItemsFromJobRequest(request, ['referenceItems', 'referenceImages', 'reference_images']);
+    const normalizedMode = generationMode === 'reference-guided'
+        || generationMode === 'image-to-image'
+        || generationMode === 'text-to-image'
+        ? generationMode
+        : referenceItems.length > 0
+            ? 'reference-guided'
+            : 'text-to-image';
+    return {
+        type: 'image',
+        prompt,
+        title,
+        projectId: projectId || '',
+        count: imageCountFromJob(job, request),
+        model: model || '',
+        aspectRatio: stringField(request, ['aspectRatio', 'aspect_ratio']) || '4:3',
+        size: stringField(request, ['size']),
+        quality: stringField(request, ['quality']) || 'auto',
+        generationMode: normalizedMode,
+        referenceItems,
+    } satisfies ImageGenerationRequest;
+}
+
+function sourceFromJobProjection(job: MediaJobProjection): GenerationFeedSource {
+    const requestSource = job.request && typeof job.request.source === 'string' ? job.request.source.trim() : '';
+    return requestSource || job.source || 'generation_studio';
+}
+
+function feedEntryFromJobProjection(job: MediaJobProjection): GenerationFeedEntry | null {
+    const request = requestFromJobProjection(job);
+    if (!request) return null;
+    const createdAt = Date.parse(job.createdAt);
+    const base: GenerationFeedEntry = {
+        kind: 'generation',
+        id: `job:${job.jobId}`,
+        createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+        source: sourceFromJobProjection(job),
+        sourceTitle: undefined,
+        referencePreview: requestLeadingReference(request),
+        request,
+        status: 'running',
+        jobId: job.jobId,
+        jobStatus: job.status,
+        completedAt: job.completedAt || undefined,
+        error: undefined,
+        assets: assetsFromJobProjection(job),
+    };
+    return applyJobProjectionToFeedEntry(base, job) as GenerationFeedEntry;
+}
+
+function isSamePendingGenerationRequest(entry: FeedEntry, jobEntry: GenerationFeedEntry): boolean {
+    if (!isGenerationFeedEntry(entry) || entry.jobId || entry.status !== 'running') return false;
+    if (entry.request.type !== jobEntry.request.type) return false;
+    if (entry.request.prompt.trim() !== jobEntry.request.prompt.trim()) return false;
+    return Math.abs(entry.createdAt - jobEntry.createdAt) < 120_000;
+}
+
 function errorMessageFromJobProjection(job: MediaJobProjection): string {
     const attemptError = typeof job.attempt?.lastError === 'string' ? job.attempt.lastError : '';
     const resultError = typeof job.result?.error === 'string' ? job.result.error : '';
@@ -860,18 +1018,21 @@ function applyJobProjectionToFeedEntry(entry: FeedEntry, job: MediaJobProjection
         };
     }
     if (isMediaJobTerminal(job.status)) {
+        const assets = assetsFromJobProjection(job);
         return {
             ...entry,
             jobStatus: job.status,
             completedAt: job.completedAt || entry.completedAt,
-            status: 'error',
+            status: assets.length > 0 ? 'success' : 'error',
             error: errorMessageFromJobProjection(job),
+            assets,
         };
     }
     return {
         ...entry,
         jobStatus: job.status,
         status: 'running',
+        assets: assetsFromJobProjection(job),
     };
 }
 
@@ -1365,6 +1526,52 @@ function ReferenceStack({
     );
 }
 
+function requestReferenceItems(request: GenerationRequest): ReferenceItem[] {
+    const items = [...request.referenceItems];
+    if (request.type === 'video') {
+        if (request.firstClip) items.push(request.firstClip);
+        if (request.drivingAudio) items.push(request.drivingAudio);
+    }
+    const seen = new Set<string>();
+    return items.filter((item) => {
+        const key = item.dataUrl || item.name;
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function ReferencePreviewStrip({ request }: { request: GenerationRequest }) {
+    const items = requestReferenceItems(request);
+    if (items.length === 0) return null;
+    return (
+        <div className="flex max-w-[680px] items-center gap-2 overflow-x-auto">
+            <div className="shrink-0 text-[11px] text-text-tertiary">参考图</div>
+            <div className="flex min-w-0 items-center gap-2">
+                {items.slice(0, 6).map((item, index) => (
+                    <div
+                        key={`${item.dataUrl}-${index}`}
+                        className="h-12 w-12 shrink-0 overflow-hidden rounded-[10px] border border-border bg-surface-secondary"
+                        title={item.name}
+                    >
+                        {dataUrlMimeType(item.dataUrl).startsWith('audio/') || /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(item.name) ? (
+                            <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                <Music2 className="h-4 w-4" />
+                            </div>
+                        ) : dataUrlMimeType(item.dataUrl).startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(item.name) ? (
+                            <div className="flex h-full w-full items-center justify-center text-text-tertiary">
+                                <Clapperboard className="h-4 w-4" />
+                            </div>
+                        ) : (
+                            <img src={item.dataUrl} alt={item.name} className="h-full w-full object-cover" />
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 function MetaRow({ request }: { request: GenerationRequest }) {
     const summary = buildRequestSummary(request);
     return (
@@ -1425,7 +1632,7 @@ function FeedEntryMessage({
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-tertiary">
                         <span>{formatRelativeTime(entry.createdAt)}</span>
                         <span>·</span>
-                        <span>{SOURCE_LABELS[entry.source]}</span>
+                        <span>{SOURCE_LABELS[entry.source] || entry.source}</span>
                         {entry.sourceTitle && (
                             <>
                                 <span>·</span>
@@ -1450,6 +1657,8 @@ function FeedEntryMessage({
                     <Trash2 className="h-3.5 w-3.5" />
                 </button>
             </div>
+
+            <ReferencePreviewStrip request={entry.request} />
 
             {isRunning && (
                 <div className="max-w-[760px] rounded-[16px] border border-border bg-surface-secondary px-4 py-3">
@@ -1699,6 +1908,7 @@ export function GenerationStudio({
             .filter((jobId): jobId is string => Boolean(jobId)),
         [feedEntries],
     );
+    const generationJobBootstrapFilter = useMemo(() => ({ limit: 100 }), []);
     const updateFeedEntries = useCallback(
         (updater: FeedEntry[] | ((prev: FeedEntry[]) => FeedEntry[])) => {
             setFeedEntries((prev) => {
@@ -1747,7 +1957,8 @@ export function GenerationStudio({
     }, [contextIntent?.source, contextIntent?.sourceTitle, generationAgentContextId, generationAgentTitle, updateFeedEntries]);
 
     useMediaJobSubscription(trackedJobIds, {
-        enabled: trackedJobIds.length > 0,
+        enabled: isActive,
+        bootstrapFilter: generationJobBootstrapFilter,
     });
 
     const loadContext = useCallback(async (overwriteDraftDefaults = false) => {
@@ -1866,6 +2077,38 @@ export function GenerationStudio({
                 return patched;
             });
             return changed ? next : prev;
+        });
+    }, [trackedJobsById, updateFeedEntries]);
+
+    useEffect(() => {
+        const jobs = Object.values(trackedJobsById)
+            .filter((job) => job.kind === 'image' || job.kind === 'video')
+            .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+        if (jobs.length === 0) return;
+
+        updateFeedEntries((prev) => {
+            let changed = false;
+            const next = [...prev];
+            for (const job of jobs) {
+                if (next.some((entry) => isGenerationFeedEntry(entry) && entry.jobId === job.jobId)) {
+                    continue;
+                }
+                const jobEntry = feedEntryFromJobProjection(job);
+                if (!jobEntry) continue;
+                const pendingIndex = next.findIndex((entry) => isSamePendingGenerationRequest(entry, jobEntry));
+                if (pendingIndex >= 0) {
+                    next[pendingIndex] = applyJobProjectionToFeedEntry({
+                        ...(next[pendingIndex] as GenerationFeedEntry),
+                        jobId: job.jobId,
+                        jobStatus: job.status,
+                    }, job);
+                } else {
+                    next.push(jobEntry);
+                }
+                changed = true;
+            }
+            if (!changed) return prev;
+            return next.sort((a, b) => a.createdAt - b.createdAt);
         });
     }, [trackedJobsById, updateFeedEntries]);
 

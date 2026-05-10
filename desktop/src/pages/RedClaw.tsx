@@ -175,7 +175,7 @@ const normalizePreviewKind = (value: unknown, fallback: ChatMessageLinkKind): Ch
 interface RedClawProps {
     pendingMessage?: PendingChatMessage | null;
     onPendingMessageConsumed?: () => void;
-    navigationAction?: { action: 'new' | 'open-team'; sessionId?: string; nonce: number } | null;
+    navigationAction?: { action: 'new' | 'open-team' | 'open-session'; sessionId?: string; nonce: number } | null;
     onNavigationActionConsumed?: () => void;
     isActive?: boolean;
     onExecutionStateChange?: (active: boolean) => void;
@@ -230,6 +230,19 @@ function readRedClawLastSessionId(spaceId: string): string | null {
     const raw = localStorage.getItem(redClawLastSessionStorageKey(spaceId));
     const sessionId = String(raw || '').trim();
     return sessionId || null;
+}
+
+function automationRunSessionId(value: unknown): string {
+    const root = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+    const run = root.run && typeof root.run === 'object' && !Array.isArray(root.run)
+        ? root.run as Record<string, unknown>
+        : {};
+    const result = run.result && typeof run.result === 'object' && !Array.isArray(run.result)
+        ? run.result as Record<string, unknown>
+        : {};
+    return String(root.sessionId || run.sessionId || result.sessionId || '').trim();
 }
 
 function getRedClawImageJobExpectedCount(job: MediaJobProjection): number {
@@ -764,7 +777,6 @@ export function RedClaw({
     useEffect(() => {
         if (advisors.length === 0) {
             setSelectedAdvisorId(null);
-            setAdvisorHistorySessions([]);
             return;
         }
         if (!selectedAdvisorId || !advisors.some((advisor) => advisor.id === selectedAdvisorId)) {
@@ -1316,6 +1328,14 @@ export function RedClaw({
         debugUi('sessions:new_draft', { activeSpaceId: activeSpaceId || 'default' });
     }, [activeSpaceId, debugUi, onOpenChatSurface]);
 
+    const switchSession = useCallback((nextSessionId: string) => {
+        if (!nextSessionId) return;
+        setActiveAiSurface('redclaw');
+        activeSessionIdRef.current = nextSessionId;
+        setActiveSessionId(nextSessionId);
+        debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
+    }, [activeSpaceId, debugUi]);
+
     useEffect(() => {
         if (!isActive || !navigationAction) return;
         if (consumedNavigationActionNonceRef.current === navigationAction.nonce) return;
@@ -1327,17 +1347,21 @@ export function RedClaw({
             setSelectedRoomId(navigationAction.sessionId);
             setActiveAiSurface('room');
             onOpenChatSurface?.();
+        } else if (navigationAction.action === 'open-session' && navigationAction.sessionId) {
+            onOpenChatSurface?.();
+            switchSession(navigationAction.sessionId);
+            void loadContextSessions(
+                activeSpaceId || 'default',
+                activeSpaceName || activeSpaceId || 'default',
+                {
+                    preferredSessionId: navigationAction.sessionId,
+                    createIfEmpty: false,
+                    silent: true,
+                },
+            );
         }
         onNavigationActionConsumed?.();
-    }, [isActive, navigationAction, onNavigationActionConsumed, onOpenChatSurface, startNewDraftSession]);
-
-    const switchSession = useCallback((nextSessionId: string) => {
-        if (!nextSessionId) return;
-        setActiveAiSurface('redclaw');
-        activeSessionIdRef.current = nextSessionId;
-        setActiveSessionId(nextSessionId);
-        debugUi('sessions:switch', { sessionId: nextSessionId, activeSpaceId });
-    }, [activeSpaceId, debugUi]);
+    }, [activeSpaceId, activeSpaceName, isActive, loadContextSessions, navigationAction, onNavigationActionConsumed, onOpenChatSurface, startNewDraftSession, switchSession]);
 
     const markHistorySessionActivity = useCallback((sessionId: string, updatedAt: string) => {
         const nextSessionId = String(sessionId || '').trim();
@@ -1877,15 +1901,29 @@ export function RedClaw({
                 setAutomationMessage(result?.error || '触发执行失败');
                 return;
             }
+            const sessionId = automationRunSessionId(result);
             setAutomationMessage('已触发定时任务执行');
             await loadRunnerStatus(false);
+            if (sessionId) {
+                onOpenChatSurface?.();
+                switchSession(sessionId);
+                void loadContextSessions(
+                    activeSpaceId || 'default',
+                    activeSpaceName || activeSpaceId || 'default',
+                    {
+                        preferredSessionId: sessionId,
+                        createIfEmpty: false,
+                        silent: true,
+                    },
+                );
+            }
         } catch (error) {
             console.error('Failed to run schedule now:', error);
             setAutomationMessage('触发执行失败');
         } finally {
             setAutomationLoading(false);
         }
-    }, [loadRunnerStatus]);
+    }, [activeSpaceId, activeSpaceName, loadContextSessions, loadRunnerStatus, onOpenChatSurface, switchSession]);
 
     const removeScheduleTask = useCallback(async (taskId: string) => {
         setAutomationLoading(true);

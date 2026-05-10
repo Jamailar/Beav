@@ -1061,6 +1061,296 @@ select {
   opacity: 0.58;
 }
 
+.automation-editor-page {
+  padding: 0;
+}
+
+.automation-editor-shell {
+  height: 100%;
+  min-height: 0;
+  background: rgb(var(--color-background) / 1);
+}
+
+.automation-editor-topbar {
+  height: 58px;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgb(var(--color-border) / 0.7);
+}
+
+.automation-editor-breadcrumb,
+.automation-editor-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.automation-breadcrumb-button,
+.automation-editor-icon-button,
+.automation-editor-secondary-button,
+.automation-editor-primary-button {
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: rgb(var(--color-text-secondary) / 1);
+  cursor: pointer;
+}
+
+.automation-breadcrumb-button {
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.automation-breadcrumb-separator {
+  color: rgb(var(--color-text-tertiary) / 1);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.automation-breadcrumb-title {
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.automation-editor-icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+}
+
+.automation-editor-icon-button:hover,
+.automation-breadcrumb-button:hover {
+  color: rgb(var(--color-text-primary) / 1);
+  background: rgb(var(--color-surface-secondary) / 0.75);
+}
+
+.automation-editor-secondary-button,
+.automation-editor-primary-button {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.automation-editor-secondary-button {
+  background: rgb(var(--color-surface-secondary) / 1);
+}
+
+.automation-editor-primary-button {
+  background: rgb(var(--color-accent-primary) / 1);
+  color: #fff;
+}
+
+.automation-editor-primary-button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.automation-editor-layout {
+  height: calc(100% - 58px);
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 344px;
+}
+
+.automation-editor-main {
+  max-width: 860px;
+  width: 100%;
+  padding: 58px 52px 72px;
+  justify-self: center;
+  min-height: 0;
+  overflow: auto;
+}
+
+.automation-editor-title-input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: rgb(var(--color-text-primary) / 1);
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 500;
+  outline: none;
+  margin-bottom: 34px;
+}
+
+.automation-editor-title-input::placeholder,
+.automation-editor-prompt::placeholder {
+  color: rgb(var(--color-text-tertiary) / 0.8);
+}
+
+.automation-editor-prompt {
+  width: 100%;
+  min-height: 520px;
+  border: 0;
+  resize: vertical;
+  outline: none;
+  background: transparent;
+  color: rgb(var(--color-text-primary) / 0.9);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.automation-editor-sidebar {
+  padding: 34px 24px;
+  border-left: 1px solid rgb(var(--color-border) / 0.7);
+  color: rgb(var(--color-text-secondary) / 1);
+  min-height: 0;
+  overflow: auto;
+}
+
+.automation-side-section + .automation-side-section {
+  margin-top: 34px;
+}
+
+.automation-side-heading {
+  margin-bottom: 18px;
+  color: rgb(var(--color-text-tertiary) / 1);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.automation-side-row {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.automation-side-row + .automation-side-row {
+  margin-top: 10px;
+}
+
+.automation-side-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgb(var(--color-text-secondary) / 1);
+}
+
+.automation-side-value {
+  max-width: 180px;
+  color: rgb(var(--color-text-tertiary) / 1);
+  text-align: right;
+}
+
+.automation-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 0;
+  background: rgb(var(--color-surface-secondary) / 1);
+  color: rgb(var(--color-text-tertiary) / 1);
+}
+
+.automation-status-pill span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgb(var(--color-text-tertiary) / 1);
+}
+
+.automation-status-pill.is-active span {
+  background: rgb(var(--color-accent-primary) / 1);
+}
+
+.automation-status-button {
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.automation-status-button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.automation-schedule-control--side {
+  max-width: 215px;
+}
+
+.automation-schedule-control--side .automation-schedule-button {
+  background: transparent;
+  color: rgb(var(--color-text-secondary) / 1);
+  padding: 0;
+  min-height: 30px;
+  font-size: 13px;
+}
+
+.automation-editor-sidebar .automation-schedule-popover {
+  left: auto;
+  right: 0;
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+.automation-history-row {
+  width: 100%;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 52px 58px;
+  align-items: center;
+  gap: 8px;
+  color: rgb(var(--color-text-secondary) / 1);
+  font-size: 13px;
+}
+
+.automation-history-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(var(--color-text-tertiary) / 0.55);
+  color: #fff;
+}
+
+.automation-history-title,
+.automation-history-project,
+.automation-history-time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-history-project,
+.automation-history-time,
+.automation-history-empty {
+  color: rgb(var(--color-text-tertiary) / 1);
+}
+
+.automation-history-status {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .automation-editor-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-editor-sidebar {
+    border-left: 0;
+    border-top: 1px solid rgb(var(--color-border) / 0.7);
+  }
+}
+
 [data-theme='dark'] .automation-new-button,
 [data-theme='dark'] .automation-primary-button {
   background: rgb(100 116 125 / 1);
