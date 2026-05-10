@@ -1,0 +1,4 @@
+interface:
+  display_name: "App Feedback Admin"
+  short_description: "Read admin feedback and plan fixes"
+  default_prompt: "Use $app-feedback-admin to read recent app feedback and turn it into a concrete RedBox repair and iteration plan."

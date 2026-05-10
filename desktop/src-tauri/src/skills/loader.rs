@@ -256,7 +256,8 @@ fn parse_frontmatter_string(raw_body: &str, accepted_keys: &[&str]) -> Option<St
     let trimmed = normalized.trim_start();
     let rest = trimmed.strip_prefix("---\n")?;
     let (frontmatter, _) = rest.split_once("\n---\n")?;
-    for line in frontmatter.lines() {
+    let lines = frontmatter.lines().collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
@@ -269,7 +270,32 @@ fn parse_frontmatter_string(raw_body: &str, accepted_keys: &[&str]) -> Option<St
             .iter()
             .any(|accepted| key == accepted.trim().to_ascii_lowercase())
         {
-            let value = normalize_string(raw_value);
+            let value = if matches!(raw_value.trim(), "|" | ">") {
+                let folded = raw_value.trim() == ">";
+                let indent = line
+                    .chars()
+                    .take_while(|character| character.is_whitespace())
+                    .count();
+                let mut block_lines = Vec::<String>::new();
+                for next_line in lines.iter().skip(index + 1) {
+                    let next_indent = next_line
+                        .chars()
+                        .take_while(|character| character.is_whitespace())
+                        .count();
+                    if !next_line.trim().is_empty() && next_indent <= indent {
+                        break;
+                    }
+                    block_lines.push(next_line.trim().to_string());
+                }
+                if folded {
+                    block_lines.join(" ")
+                } else {
+                    block_lines.join("\n")
+                }
+            } else {
+                normalize_string(raw_value)
+            };
+            let value = value.trim().to_string();
             if !value.is_empty() {
                 return Some(value);
             }
@@ -359,6 +385,9 @@ pub fn discover_builtin_skill_records() -> Vec<SkillRecord> {
     let mut records = Vec::<SkillRecord>::new();
     for root in redbox_builtin_skill_roots() {
         for record in discover_skill_records_from_root(&root, "builtin", true) {
+            if is_deprecated_builtin_skill_name(&record.name) {
+                continue;
+            }
             let key = record.name.to_ascii_lowercase();
             if seen.insert(key) {
                 records.push(record);
@@ -375,7 +404,6 @@ pub fn skill_source_roots(workspace_root: Option<&Path>) -> Vec<PathBuf> {
     if let Some(root) = workspace_root {
         roots.push(root.join("skills"));
     }
-    roots.push(home.join(".codex").join("skills"));
     roots.push(home.join(".agents").join("skills"));
     roots
         .into_iter()
@@ -441,6 +469,17 @@ fn builtin_skill_roots(skill_name: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn is_deprecated_builtin_skill_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "dbs-xhs-title"
+            | "redbox-image-director"
+            | "redbox-video-director"
+            | "richpost-layout-designer"
+            | "richpost-theme-editor"
+    )
+}
+
 pub fn load_skill_bundle_sections_from_root(
     skill_name: &str,
     skill_root: &Path,
@@ -474,6 +513,15 @@ pub fn load_skill_bundle_sections_from_sources(
     skill_name: &str,
     workspace_root: Option<&Path>,
 ) -> SkillBundleSections {
+    if is_deprecated_builtin_skill_name(skill_name) {
+        return SkillBundleSections {
+            skill_name: skill_name.to_string(),
+            body: String::new(),
+            references: String::new(),
+            scripts: String::new(),
+            rules: BTreeMap::new(),
+        };
+    }
     for builtin_root in builtin_skill_roots(skill_name) {
         let builtin_bundle = load_skill_bundle_sections_from_root(skill_name, &builtin_root);
         if !builtin_bundle.body.trim().is_empty() {
@@ -593,14 +641,14 @@ mod tests {
         fs::create_dir_all(root.join("demo-skill")).expect("root should be created");
         fs::write(
             root.join("demo-skill").join("SKILL.md"),
-            "---\ndescription: Demo description\n---\n# Demo Skill\n\nBody",
+            "---\ndescription: |\n  Demo description\n  Second line\n---\n# Demo Skill\n\nBody",
         )
         .expect("skill file should be written");
 
         let discovered = discover_skill_records_from_root(&root, "user", false);
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].name, "demo-skill");
-        assert_eq!(discovered[0].description, "Demo description");
+        assert_eq!(discovered[0].description, "Demo description\nSecond line");
         assert_eq!(discovered[0].source_scope.as_deref(), Some("user"));
         assert_eq!(discovered[0].is_builtin, Some(false));
 
@@ -614,5 +662,21 @@ mod tests {
         assert!(loaded.rules.contains_key("calculate-metadata.md"));
         assert!(loaded.rules.contains_key("compositions.md"));
         assert!(loaded.rules.contains_key("timing.md"));
+    }
+
+    #[test]
+    fn load_skill_bundle_sections_ignores_deprecated_builtin_skill() {
+        for skill_name in [
+            "dbs-xhs-title",
+            "redbox-image-director",
+            "redbox-video-director",
+            "richpost-layout-designer",
+            "richpost-theme-editor",
+        ] {
+            let loaded = load_skill_bundle_sections_from_sources(skill_name, None);
+            assert!(loaded.body.trim().is_empty());
+            assert!(loaded.references.trim().is_empty());
+            assert!(loaded.scripts.trim().is_empty());
+        }
     }
 }
