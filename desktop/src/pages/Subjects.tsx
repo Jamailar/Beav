@@ -126,7 +126,8 @@ interface MediaAsset {
 const UNCATEGORIZED_FILTER = '__uncategorized__';
 const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。';
-const SUBJECT_VOICE_RECORDING_SECONDS = 6;
+const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 5;
+const SUBJECT_VOICE_RECORDING_SECONDS = 8;
 const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
     generated: '已生成',
     planned: '计划项',
@@ -488,7 +489,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             : null,
         [activeDraftSubject, voiceJobsById],
     );
-
     const filteredSubjects = useMemo(() => {
         const keyword = query.trim().toLowerCase();
         return subjects.filter((subject) => {
@@ -719,6 +719,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             );
         },
     });
+    const voiceRecordingElapsedSeconds = audioRecording.isRecording
+        ? Math.max(0, SUBJECT_VOICE_RECORDING_SECONDS - recordingCountdown)
+        : 0;
+    const canFinishVoiceRecording = voiceRecordingElapsedSeconds >= SUBJECT_VOICE_MIN_RECORDING_SECONDS;
 
     useEffect(() => {
         if (!audioRecording.error) return;
@@ -795,18 +799,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         if (audioRecording.isRecording || audioRecording.isWorking) return;
         setRecordingCountdown(SUBJECT_VOICE_RECORDING_SECONDS);
         setRecordingError('');
-        setRecordingHint('点击录音后，请按正常语速清晰朗读示例句。系统会自动截取这次采样。');
+        setRecordingHint('正在准备录音，请按正常语速清晰朗读示例句。');
         const started = await audioRecording.startRecording();
         if (!started) {
             setRecordingCountdown(0);
             setRecordingHint('');
             return;
         }
+        setRecordingHint('正在采样，录满 5 秒后可手动完成；不操作会自动结束。');
         try {
             recordingIntervalRef.current = window.setInterval(() => {
                 setRecordingCountdown((current) => Math.max(0, current - 1));
             }, 1000);
             recordingTimeoutRef.current = window.setTimeout(() => {
+                clearRecordingTimers();
                 void audioRecording.stopRecording();
             }, SUBJECT_VOICE_RECORDING_SECONDS * 1000);
         } catch (e) {
@@ -814,7 +820,18 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             setRecordingError(e instanceof Error ? e.message : '无法启动录音');
             setRecordingHint('');
         }
-    }, [audioRecording, stopRecordingSession]);
+    }, [audioRecording, clearRecordingTimers, stopRecordingSession]);
+
+    const handleFinishVoiceRecording = useCallback(async () => {
+        if (!audioRecording.isRecording || audioRecording.isWorking) return;
+        const elapsedSeconds = SUBJECT_VOICE_RECORDING_SECONDS - recordingCountdown;
+        if (elapsedSeconds < SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+            setRecordingHint(`至少录满 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒，再点击完成采样。`);
+            return;
+        }
+        clearRecordingTimers();
+        await audioRecording.stopRecording();
+    }, [audioRecording, clearRecordingTimers, recordingCountdown]);
 
     const submitCategoryDialog = useCallback(async () => {
         const trimmedName = categoryDialogName.trim();
@@ -1673,14 +1690,36 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <button
                                                     type="button"
-                                                    onClick={() => void handleRecordVoice()}
-                                                    disabled={audioRecording.isRecording || audioRecording.isWorking}
-                                                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-black px-3 text-xs font-semibold text-white transition hover:bg-black/85 disabled:opacity-60"
+                                                    onClick={() => {
+                                                        if (audioRecording.isRecording) {
+                                                            void handleFinishVoiceRecording();
+                                                        } else {
+                                                            void handleRecordVoice();
+                                                        }
+                                                    }}
+                                                    disabled={audioRecording.isWorking}
+                                                    className={clsx(
+                                                        'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-white transition disabled:opacity-60',
+                                                        audioRecording.isRecording
+                                                            ? canFinishVoiceRecording
+                                                                ? 'bg-emerald-600 hover:bg-emerald-700'
+                                                                : 'bg-violet-600 hover:bg-violet-700'
+                                                            : 'bg-black hover:bg-black/85',
+                                                    )}
                                                 >
                                                     <Mic className="h-3.5 w-3.5" />
-                                                    {audioRecording.isRecording ? `录音中 ${recordingCountdown}s` : '录制音频'}
+                                                    {audioRecording.isWorking
+                                                        ? '处理中'
+                                                        : audioRecording.isRecording
+                                                            ? (canFinishVoiceRecording ? '完成采样' : `录音中 ${recordingCountdown}s`)
+                                                            : '录制音频'}
                                                 </button>
-                                                <label className="inline-flex h-9 cursor-pointer items-center rounded-lg bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100">
+                                                <label className={clsx(
+                                                    'inline-flex h-9 items-center rounded-lg bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100',
+                                                    audioRecording.isRecording || audioRecording.isWorking
+                                                        ? 'pointer-events-none opacity-50'
+                                                        : 'cursor-pointer',
+                                                )}>
                                                     导入音频
                                                     <input
                                                         type="file"
@@ -1704,7 +1743,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             </div>
                                             {audioRecording.isRecording && (
                                                 <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
-                                                    采样倒计时：{recordingCountdown} 秒
+                                                    已录 {voiceRecordingElapsedSeconds} 秒，还可录 {recordingCountdown} 秒
                                                 </div>
                                             )}
                                             {recordingHint && <div className="text-xs text-slate-500">{recordingHint}</div>}
