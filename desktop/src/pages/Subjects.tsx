@@ -665,6 +665,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             return;
         }
         setRetryingVoiceSubjectId(subject.id);
+        setRecordingError('');
+        setRecordingHint('正在提交音色复刻...');
         try {
             const result = await window.ipcRenderer.voice.clone({
                 ownerAssetId: subject.id,
@@ -675,10 +677,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             if (!result?.success) {
                 throw new Error(result?.error || '提交声音复刻失败');
             }
+            setRecordingHint('音色复刻已提交');
             await loadData();
         } catch (e) {
             console.error('Failed to retry voice clone:', e);
-            void appAlert(e instanceof Error ? e.message : '提交声音复刻失败');
+            const message = e instanceof Error ? e.message : '提交声音复刻失败';
+            setRecordingError(message);
+            setRecordingHint('');
+            void appAlert(message);
         } finally {
             setRetryingVoiceSubjectId(null);
         }
@@ -1753,27 +1759,27 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 </div>
                                             )}
                                             {activeDraftSubject && activeDraftVoiceInfo && (
-                                                <div className={clsx('rounded-lg border px-3 py-2 text-xs', voiceInfoClassName(activeDraftVoiceInfo.tone))}>
-                                                    <div className="flex flex-wrap items-center gap-2">
-                                                        <span className="font-semibold">{activeDraftVoiceInfo.label}</span>
-                                                        {activeDraftVoiceInfo.detail && (
-                                                            <span className="font-mono text-[11px] opacity-80">{activeDraftVoiceInfo.detail}</span>
-                                                        )}
-                                                        {activeDraftVoiceInfo.canRetry && (
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
-                                                                disabled={retryingVoiceSubjectId === activeDraftSubject.id}
-                                                                className="ml-auto inline-flex h-7 items-center gap-1 rounded-md border border-current/20 bg-white/65 px-2 text-[11px] font-semibold disabled:opacity-50"
-                                                            >
-                                                                <RefreshCw className={clsx('h-3 w-3', retryingVoiceSubjectId === activeDraftSubject.id && 'animate-spin')} />
-                                                                重试
-                                                            </button>
+                                                <div className="space-y-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
+                                                        disabled={!activeDraftVoiceInfo.canRetry || retryingVoiceSubjectId === activeDraftSubject.id}
+                                                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        <RefreshCw className={clsx('h-3.5 w-3.5', retryingVoiceSubjectId === activeDraftSubject.id && 'animate-spin')} />
+                                                        {retryingVoiceSubjectId === activeDraftSubject.id ? '提交中' : '重新克隆音色'}
+                                                    </button>
+                                                    <div className={clsx('rounded-lg border px-3 py-2 text-xs', voiceInfoClassName(activeDraftVoiceInfo.tone))}>
+                                                        <div className="flex flex-wrap items-center gap-2">
+                                                            <span className="font-semibold">{activeDraftVoiceInfo.label}</span>
+                                                            {activeDraftVoiceInfo.detail && (
+                                                                <span className="font-mono text-[11px] opacity-80">{activeDraftVoiceInfo.detail}</span>
+                                                            )}
+                                                        </div>
+                                                        {activeDraftVoiceInfo.error && (
+                                                            <div className="mt-1 line-clamp-2 opacity-80">{activeDraftVoiceInfo.error}</div>
                                                         )}
                                                     </div>
-                                                    {activeDraftVoiceInfo.error && (
-                                                        <div className="mt-1 line-clamp-2 opacity-80">{activeDraftVoiceInfo.error}</div>
-                                                    )}
                                                 </div>
                                             )}
                                         </div>
@@ -1804,8 +1810,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         </div>
                                     </div>
                                     {draft.id && (
-                                        <div className="mt-4 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-slate-500">
-                                            ID：{draft.id}
+                                        <div className="mt-4 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-slate-500">
+                                            <div>ID：{draft.id}</div>
+                                            {activeDraftVoiceInfo?.voiceId && (
+                                                <div>音色ID：<span className="font-mono">{activeDraftVoiceInfo.voiceId}</span></div>
+                                            )}
                                         </div>
                                     )}
                                 </aside>
