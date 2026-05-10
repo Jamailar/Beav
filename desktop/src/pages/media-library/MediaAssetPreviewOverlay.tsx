@@ -35,6 +35,12 @@ function isVideoAsset(asset: Pick<MediaAssetLike, 'mimeType' | 'relativePath'>):
     return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
 }
 
+function isAudioAsset(asset: Pick<MediaAssetLike, 'mimeType' | 'relativePath'>): boolean {
+    const mimeType = String(asset.mimeType || '').toLowerCase();
+    if (mimeType.startsWith('audio/')) return true;
+    return /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)$/i.test(String(asset.relativePath || '').trim());
+}
+
 export function MediaAssetPreviewOverlay({
     preview,
     onClose,
@@ -102,6 +108,11 @@ export function MediaAssetPreviewOverlay({
                             controls
                             autoPlay
                         />
+                    ) : isAudioAsset(asset) ? (
+                        <div className="w-full max-w-2xl rounded-xl border border-white/10 bg-black/38 p-5 shadow-2xl">
+                            <div className="mb-3 text-sm text-white/78">{asset.title || asset.id}</div>
+                            <audio src={src} className="w-full" controls autoPlay />
+                        </div>
                     ) : (
                         <img
                             src={src}

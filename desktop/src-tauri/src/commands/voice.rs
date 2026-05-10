@@ -1,7 +1,7 @@
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
-use crate::{media_runtime, payload_field, voice_service, AppState};
+use crate::{media_runtime, payload_field, payload_string, voice_service, AppState};
 
 pub fn handle_voice_channel(
     app: &AppHandle,
@@ -22,6 +22,19 @@ pub fn handle_voice_channel(
                 (|| {
                     let submitted =
                         media_runtime::submit_media_job(app, state, "voice_clone", payload)?;
+                    if let (Some(subject_id), Some(job_id)) = (
+                        payload_string(payload, "ownerAssetId")
+                            .or_else(|| payload_string(payload, "assetId"))
+                            .or_else(|| payload_string(payload, "subjectId")),
+                        submitted.get("jobId").and_then(Value::as_str),
+                    ) {
+                        let _ = voice_service::patch_subject_voice_queued(
+                            state,
+                            &subject_id,
+                            job_id,
+                            payload,
+                        );
+                    }
                     if payload_field(payload, "waitForCompletion")
                         .and_then(Value::as_bool)
                         .unwrap_or(false)

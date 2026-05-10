@@ -335,9 +335,16 @@ export function mapGenerationProjectionToNotification(
     || '';
   const createdAt = Date.now();
   const isSuccess = normalizedStatus === 'completed';
+  const kindLabel = projection.kind === 'video'
+    ? '视频'
+    : projection.kind === 'audio'
+      ? '语音合成'
+      : projection.kind === 'voice_clone'
+        ? '声音复刻'
+        : '图片';
   const title = isSuccess
-    ? `${projection.kind === 'video' ? '视频' : '图片'}任务已完成`
-    : `${projection.kind === 'video' ? '视频' : '图片'}任务失败`;
+    ? `${kindLabel}任务已完成`
+    : `${kindLabel}任务失败`;
   const body = isSuccess
     ? (projection.recentEvents.at(-1)?.message || '生成结果已准备好。')
     : (projection.attempt?.lastError || projection.recentEvents.at(-1)?.message || '生成任务失败。');

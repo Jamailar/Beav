@@ -693,6 +693,29 @@ pub(crate) fn bind_subject_voice(
     Ok(json!({ "success": true, "ownerAssetId": subject_id, "voice": voice }))
 }
 
+pub(crate) fn patch_subject_voice_queued(
+    state: &State<'_, AppState>,
+    subject_id: &str,
+    job_id: &str,
+    payload: &Value,
+) -> Result<(), String> {
+    let mut voice = json!({
+        "status": "queued",
+        "jobId": job_id,
+        "updatedAt": now_iso(),
+    });
+    if let Some(path) = payload_string_alias(payload, &["samplePath", "sampleFilePath"]) {
+        voice["sampleFilePath"] = json!(path);
+    }
+    if let Some(key) = payload_string_alias(payload, &["sampleFileKey", "sample_file_key"]) {
+        voice["sampleFileKey"] = json!(key);
+    }
+    if let Some(language) = payload_string(payload, "language") {
+        voice["language"] = json!(language);
+    }
+    patch_subject_voice_state(state, subject_id, voice)
+}
+
 pub(crate) fn patch_subject_voice_failure(
     state: &State<'_, AppState>,
     subject_id: &str,
