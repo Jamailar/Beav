@@ -1302,7 +1302,11 @@ function normalizeVoiceList(value: unknown): VoiceListItem[] {
                 ownerAssetId: String(voice.ownerAssetId || voice.assetId || voice.subjectId || '').trim(),
             } satisfies VoiceListItem;
         })
-        .filter((item): item is VoiceListItem => Boolean(item));
+        .filter((item): item is VoiceListItem => {
+            if (!item) return false;
+            const status = item.status.trim().toLowerCase();
+            return !['failed', 'error', 'dead_lettered', 'deleted', 'cancelled', 'canceled'].includes(status);
+        })
 }
 
 function useDismissiblePopover(open: boolean, onClose: () => void) {
