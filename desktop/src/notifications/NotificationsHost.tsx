@@ -10,6 +10,7 @@ import {
   mapRuntimeErrorToNotification,
   mapRuntimeTaskNodeFailureToNotification,
   mapRuntimeToolConfirmToNotification,
+  shouldShowInNotificationCenter,
   shouldShowSystemNotification,
 } from './policy';
 import { useNotificationStore } from './store';
@@ -91,7 +92,7 @@ export function NotificationsHost({ currentView, children = null }: Notification
       }
       fingerprintsRef.current.set(fingerprint, now);
 
-      if (notification.showInCenter !== false) {
+      if (shouldShowInNotificationCenter(notification)) {
         push(notification);
       }
       showNotificationToast(notification, settings, openCenter);
