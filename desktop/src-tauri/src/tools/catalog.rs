@@ -703,9 +703,10 @@ fn voice_clone_input_schema() -> Value {
             ("language", string_schema("Optional sample language, such as zh, en, or nl.")),
             ("model", string_schema("Optional clone model key; omit to use backend default.")),
             ("writeBack", bool_schema("Whether to write the resulting voiceId back to ownerAssetId. Defaults to true.")),
+            ("waitForCompletion", bool_schema("When true, wait for the queued voice clone job to complete before returning.")),
         ],
         &[],
-        Some("Clone a managed local audio sample into a reusable platform voice_id. Do not pass external URLs."),
+        Some("Queue a managed local or OSS audio sample for cloning into a reusable platform voice_id. Do not pass external URLs."),
     )
 }
 
@@ -752,9 +753,10 @@ fn voice_speech_input_schema() -> Value {
             ("title", string_schema("Optional media library title for the generated audio asset.")),
             ("projectId", string_schema("Optional project id to attach to the generated media asset.")),
             ("boundManuscriptPath", string_schema("Optional manuscript path to bind the generated audio asset.")),
+            ("waitForCompletion", bool_schema("When true, wait for the queued audio job to complete before returning.")),
         ],
         &["input", "voiceId"],
-        Some("Generate speech with a cloned or platform voice id and save the audio into the media library."),
+        Some("Queue speech synthesis with a cloned or platform voice id and save the audio into the media library when the job completes."),
     )
 }
 
@@ -774,6 +776,8 @@ fn voice_output_schema() -> Value {
             "voices": { "type": "array", "items": { "type": "object" } },
             "voiceId": { "type": "string" },
             "asset": { "type": "object" },
+            "jobId": { "type": "string" },
+            "status": { "type": "string" },
             "relativePath": { "type": "string" }
         },
         "additionalProperties": true
@@ -2820,7 +2824,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "voice.clone",
         namespace: "voice",
-        description: "Clone a managed local or OSS audio sample into a reusable platform voice_id. Use ownerAssetId when cloning from a person or role asset so the result is written back.",
+        description: "Queue a managed local or OSS audio sample for cloning into a reusable platform voice_id. Use ownerAssetId when cloning from a person or role asset so the result is written back.",
         input_schema: voice_clone_input_schema,
         output_schema: voice_output_schema,
         mutating: true,
@@ -2842,7 +2846,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "voice.speech",
         namespace: "voice",
-        description: "Generate speech from text with a platform voice_id and save the audio result into the media library.",
+        description: "Queue speech synthesis from text with a platform voice_id; completion saves the audio result into the media library.",
         input_schema: voice_speech_input_schema,
         output_schema: voice_output_schema,
         mutating: true,

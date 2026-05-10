@@ -525,6 +525,9 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (channel === 'generation:list-job-summaries') {
     return { success: true, items: [] };
   }
+  if (channel === 'generation:submit-audio' || channel === 'generation:submit-voice-clone') {
+    return { success: false, error: `${APP_BRAND.displayName} media generation is unavailable in this environment.` };
+  }
   if (channel === 'generation:get-runtime-status') {
     return { success: true, runtimeReady: false, runtimeRunning: false };
   }
@@ -1319,6 +1322,8 @@ function createIpcRenderer() {
         invokeChannel('generation:submit-image', await preflightGenerationMediaPayload(payload)),
       submitVideo: async (payload: Record<string, unknown>) =>
         invokeChannel('generation:submit-video', await preflightGenerationMediaPayload(payload)),
+      submitAudio: (payload: Record<string, unknown>) => invokeChannel('generation:submit-audio', payload),
+      submitVoiceClone: (payload: Record<string, unknown>) => invokeChannel('generation:submit-voice-clone', payload),
       listJobSummaries: (payload?: Record<string, unknown>) => invokeChannel('generation:list-job-summaries', payload || {}),
       listJobs: (payload?: Record<string, unknown>) => invokeChannel('generation:list-jobs', payload || {}),
       getJob: (jobId: string) => invokeChannel('generation:get-job', { jobId }),

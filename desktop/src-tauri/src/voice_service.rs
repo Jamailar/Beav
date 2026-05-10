@@ -570,26 +570,34 @@ pub(crate) fn spawn_subject_voice_clone_if_needed(
     ) {
         return Ok(());
     }
-    let app_handle = app.clone();
-    let subject = record.clone();
-    std::thread::spawn(move || {
-        let state = app_handle.state::<AppState>();
-        let result = clone_voice_for_subject(&state, &subject);
-        let patch_result = match result {
-            Ok(voice) => patch_subject_voice_state(&state, &subject.id, voice),
-            Err(error) => patch_subject_voice_failure(&state, &subject.id, error),
+    let state = app.state::<AppState>();
+    let payload = voice_clone_payload_for_subject(record)?;
+    let submitted =
+        match crate::media_runtime::submit_media_job(app, &state, "voice_clone", &payload) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = patch_subject_voice_failure(&state, &record.id, error);
+                return Ok(());
+            }
         };
-        if let Err(error) = patch_result {
-            eprintln!("failed to update subject voice state: {error}");
-        }
+    let job_id = submitted
+        .get("jobId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut queued = json!({
+        "status": "queued",
+        "jobId": job_id,
+        "updatedAt": now_iso(),
     });
+    if let Some(path) = payload.get("samplePath").cloned() {
+        queued["sampleFilePath"] = path;
+    }
+    patch_subject_voice_state(&state, &record.id, queued)?;
     Ok(())
 }
 
-fn clone_voice_for_subject(
-    state: &State<'_, AppState>,
-    subject: &SubjectRecord,
-) -> Result<Value, String> {
+fn voice_clone_payload_for_subject(subject: &SubjectRecord) -> Result<Value, String> {
     let relative_path = subject
         .voice_path
         .clone()
@@ -598,7 +606,7 @@ fn clone_voice_for_subject(
         "ownerAssetId": subject.id,
         "samplePath": relative_path,
         "name": subject.name,
-        "writeBack": false,
+        "writeBack": true,
     });
     if let Some(language) = subject
         .voice
@@ -607,12 +615,7 @@ fn clone_voice_for_subject(
     {
         payload["language"] = json!(language);
     }
-    clone_voice(state, &payload).and_then(|value| {
-        value
-            .get("voice")
-            .cloned()
-            .ok_or_else(|| "voice clone result did not include voice".to_string())
-    })
+    Ok(payload)
 }
 
 fn patch_subject_voice_state(
@@ -690,7 +693,7 @@ pub(crate) fn bind_subject_voice(
     Ok(json!({ "success": true, "ownerAssetId": subject_id, "voice": voice }))
 }
 
-fn patch_subject_voice_failure(
+pub(crate) fn patch_subject_voice_failure(
     state: &State<'_, AppState>,
     subject_id: &str,
     error: String,

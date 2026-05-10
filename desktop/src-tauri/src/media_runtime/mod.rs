@@ -27,6 +27,8 @@ const MEDIA_JOB_EVENT_LOG: &str = "generation:job-log";
 
 const IMAGE_SUBMIT_LIMIT_PER_PROVIDER: usize = 8;
 const VIDEO_SUBMIT_LIMIT_PER_PROVIDER: usize = 4;
+const AUDIO_SUBMIT_LIMIT_PER_PROVIDER: usize = 6;
+const VOICE_CLONE_SUBMIT_LIMIT_PER_PROVIDER: usize = 2;
 const VIDEO_DOWNLOAD_LIMIT_PER_PROVIDER: usize = 3;
 const VIDEO_POLL_LIMIT_GLOBAL: usize = 32;
 
@@ -42,6 +44,8 @@ static MEDIA_RUNTIME_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 struct RuntimeSlots {
     image_submit_by_provider: HashMap<String, usize>,
     video_submit_by_provider: HashMap<String, usize>,
+    audio_submit_by_provider: HashMap<String, usize>,
+    voice_clone_submit_by_provider: HashMap<String, usize>,
     video_download_by_provider: HashMap<String, usize>,
     active_video_polls: usize,
 }
@@ -1231,6 +1235,8 @@ fn retry_policy_for_stage(stage: &str) -> Option<(&'static str, &'static str, us
     match stage {
         "image-submit" => Some(("queued", "retry_image_submit", 3, 1_500)),
         "video-submit" => Some(("queued", "retry_video_submit", 3, 1_500)),
+        "audio-submit" => Some(("queued", "retry_audio_submit", 3, 1_500)),
+        "voice-clone-submit" => Some(("queued", "retry_voice_clone_submit", 3, 2_500)),
         "video-poll" => Some(("polling", "retry_video_poll", 20, 2_500)),
         "video-download" => Some(("downloading", "retry_video_download", 5, 2_000)),
         _ => None,
@@ -1471,46 +1477,55 @@ fn resolve_provider_metadata(
     payload: &Value,
 ) -> Result<(String, Option<String>), String> {
     let settings = with_store(state, |store| Ok(store.settings.clone()))?;
-    let provider = if kind == "image" {
-        payload_string(payload, "provider")
+    let provider = match kind {
+        "image" => payload_string(payload, "provider")
             .or_else(|| payload_string(&settings, "image_provider"))
-            .unwrap_or_else(|| "openai-compatible".to_string())
-    } else {
-        payload_string(payload, "provider").unwrap_or_else(|| "redbox-official".to_string())
+            .unwrap_or_else(|| "openai-compatible".to_string()),
+        "audio" | "voice_clone" => payload_string(payload, "provider")
+            .or_else(|| payload_string(&settings, "voice_provider"))
+            .or_else(|| payload_string(&settings, "tts_provider"))
+            .unwrap_or_else(|| "voice".to_string()),
+        _ => payload_string(payload, "provider").unwrap_or_else(|| "redbox-official".to_string()),
     };
-    let model = if kind == "image" {
-        resolve_image_provider_model(
+    let model = match kind {
+        "image" => resolve_image_provider_model(
             payload_string(&settings, "image_model"),
             payload_string(payload, "model"),
-        )?
-    } else {
-        let generation_mode = payload_field(payload, "generationMode")
-            .and_then(Value::as_str)
-            .unwrap_or("text-to-video");
-        normalize_optional_string(payload_string(payload, "model")).or_else(|| {
-            let configured =
-                resolve_video_generation_settings(&settings).map(|(_, _, model)| model);
-            Some(match configured {
-                Some(model) => {
-                    if generation_mode == "reference-guided" {
-                        "wan2.7-r2v-video".to_string()
-                    } else if matches!(generation_mode, "first-last-frame" | "continuation") {
-                        "wan2.7-i2v-video".to_string()
-                    } else {
-                        model
+        )?,
+        "audio" => normalize_optional_string(payload_string(payload, "model"))
+            .or_else(|| payload_string(&settings, "voice_tts_model"))
+            .or_else(|| payload_string(&settings, "tts_model")),
+        "voice_clone" => normalize_optional_string(payload_string(payload, "model"))
+            .or_else(|| payload_string(&settings, "voice_clone_model")),
+        _ => {
+            let generation_mode = payload_field(payload, "generationMode")
+                .and_then(Value::as_str)
+                .unwrap_or("text-to-video");
+            normalize_optional_string(payload_string(payload, "model")).or_else(|| {
+                let configured =
+                    resolve_video_generation_settings(&settings).map(|(_, _, model)| model);
+                Some(match configured {
+                    Some(model) => {
+                        if generation_mode == "reference-guided" {
+                            "wan2.7-r2v-video".to_string()
+                        } else if matches!(generation_mode, "first-last-frame" | "continuation") {
+                            "wan2.7-i2v-video".to_string()
+                        } else {
+                            model
+                        }
                     }
-                }
-                None => {
-                    if generation_mode == "reference-guided" {
-                        "wan2.7-r2v-video".to_string()
-                    } else if matches!(generation_mode, "first-last-frame" | "continuation") {
-                        "wan2.7-i2v-video".to_string()
-                    } else {
-                        "wan2.7-t2v-video".to_string()
+                    None => {
+                        if generation_mode == "reference-guided" {
+                            "wan2.7-r2v-video".to_string()
+                        } else if matches!(generation_mode, "first-last-frame" | "continuation") {
+                            "wan2.7-i2v-video".to_string()
+                        } else {
+                            "wan2.7-t2v-video".to_string()
+                        }
                     }
-                }
+                })
             })
-        })
+        }
     };
     Ok((provider, model))
 }
@@ -1991,6 +2006,22 @@ fn slot_has_capacity(slots: &RuntimeSlots, loaded: &LoadedJob, stage: &str) -> b
                 .unwrap_or(0)
                 < VIDEO_SUBMIT_LIMIT_PER_PROVIDER
         }
+        "audio-submit" => {
+            slots
+                .audio_submit_by_provider
+                .get(&provider_key)
+                .copied()
+                .unwrap_or(0)
+                < AUDIO_SUBMIT_LIMIT_PER_PROVIDER
+        }
+        "voice-clone-submit" => {
+            slots
+                .voice_clone_submit_by_provider
+                .get(&provider_key)
+                .copied()
+                .unwrap_or(0)
+                < VOICE_CLONE_SUBMIT_LIMIT_PER_PROVIDER
+        }
         "video-download" => {
             slots
                 .video_download_by_provider
@@ -2026,6 +2057,18 @@ fn reserve_slot(slots: &Arc<Mutex<RuntimeSlots>>, loaded: &LoadedJob, stage: &st
                 .entry(provider_key)
                 .or_insert(0) += 1;
         }
+        "audio-submit" => {
+            *guard
+                .audio_submit_by_provider
+                .entry(provider_key)
+                .or_insert(0) += 1;
+        }
+        "voice-clone-submit" => {
+            *guard
+                .voice_clone_submit_by_provider
+                .entry(provider_key)
+                .or_insert(0) += 1;
+        }
         "video-download" => {
             *guard
                 .video_download_by_provider
@@ -2054,6 +2097,8 @@ fn release_slot(slots: &Arc<Mutex<RuntimeSlots>>, loaded: &LoadedJob, stage: &st
     match stage {
         "image-submit" => decrement(&mut guard.image_submit_by_provider, provider_key),
         "video-submit" => decrement(&mut guard.video_submit_by_provider, provider_key),
+        "audio-submit" => decrement(&mut guard.audio_submit_by_provider, provider_key),
+        "voice-clone-submit" => decrement(&mut guard.voice_clone_submit_by_provider, provider_key),
         "video-download" => decrement(&mut guard.video_download_by_provider, provider_key),
         "video-poll" => {
             guard.active_video_polls = guard.active_video_polls.saturating_sub(1);
@@ -2396,6 +2441,90 @@ fn complete_image_job(
         })),
     )?;
     emit_job_updated(app, &state, job_id);
+    Ok(())
+}
+
+fn complete_audio_job(app: &AppHandle, loaded: &LoadedJob, result: &Value) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let conn = open_media_runtime_connection(&state)?;
+    let Some(current) = load_job_with_current_attempt(&conn, &loaded.job.job_id)? else {
+        return Ok(());
+    };
+    let asset = result.get("asset").cloned().unwrap_or(Value::Null);
+    insert_artifact_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        "audio",
+        result
+            .get("relativePath")
+            .and_then(Value::as_str)
+            .or_else(|| asset.get("relativePath").and_then(Value::as_str)),
+        result
+            .get("path")
+            .and_then(Value::as_str)
+            .or_else(|| asset.get("absolutePath").and_then(Value::as_str)),
+        asset.get("mimeType").and_then(Value::as_str),
+        asset.get("previewUrl").and_then(Value::as_str),
+        Some(&json!({
+            "asset": asset,
+            "voiceId": result.get("voiceId").cloned().unwrap_or(Value::Null),
+        })),
+    )?;
+    update_job_result_json(&conn, &loaded.job.job_id, result, true)?;
+    set_attempt_details(
+        &conn,
+        &current,
+        "completed",
+        current.attempt.provider_task_id.as_deref(),
+        current.attempt.provider_status_url.as_deref(),
+        None,
+        Some(result),
+        None,
+        true,
+    )?;
+    append_event_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        Some(&current.attempt.attempt_id),
+        "completed",
+        "Speech synthesis completed",
+        Some(result),
+    )?;
+    emit_job_updated(app, &state, &loaded.job.job_id);
+    Ok(())
+}
+
+fn complete_voice_clone_job(
+    app: &AppHandle,
+    loaded: &LoadedJob,
+    result: &Value,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let conn = open_media_runtime_connection(&state)?;
+    let Some(current) = load_job_with_current_attempt(&conn, &loaded.job.job_id)? else {
+        return Ok(());
+    };
+    update_job_result_json(&conn, &loaded.job.job_id, result, true)?;
+    set_attempt_details(
+        &conn,
+        &current,
+        "completed",
+        current.attempt.provider_task_id.as_deref(),
+        current.attempt.provider_status_url.as_deref(),
+        None,
+        Some(result),
+        None,
+        true,
+    )?;
+    append_event_with_connection(
+        &conn,
+        &loaded.job.job_id,
+        Some(&current.attempt.attempt_id),
+        "completed",
+        "Voice clone completed",
+        Some(result),
+    )?;
+    emit_job_updated(app, &state, &loaded.job.job_id);
     Ok(())
 }
 
@@ -2889,6 +3018,103 @@ fn run_image_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<R
     release_slot(&slots, &loaded, "image-submit");
 }
 
+fn run_audio_submit_worker(app: AppHandle, loaded: LoadedJob, slots: Arc<Mutex<RuntimeSlots>>) {
+    let result = (|| {
+        let state = app.state::<AppState>();
+        if get_media_job_projection(&state, &loaded.job.job_id)?
+            .get("status")
+            .and_then(Value::as_str)
+            == Some("cancel_requested")
+        {
+            return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
+        }
+        let mut payload = loaded.job.request_json.clone();
+        if let Some(object) = payload.as_object_mut() {
+            if let Some(model) = loaded.job.provider_model.clone() {
+                object.entry("model".to_string()).or_insert(json!(model));
+            }
+            object.insert("runtimeBypass".to_string(), json!(true));
+            object.insert("source".to_string(), json!(loaded.job.source.clone()));
+            object.insert("jobId".to_string(), json!(loaded.job.job_id.clone()));
+        }
+        let result = crate::voice_service::synthesize_speech(&state, &payload)?;
+        complete_audio_job(&app, &loaded, &result)
+    })();
+    if let Err(error) = result {
+        let _ = schedule_stage_retry_or_dead_letter(
+            &app,
+            &loaded.job.job_id,
+            "audio-submit",
+            &error,
+            None,
+        );
+        emit_job_log(
+            &app,
+            &loaded.job.job_id,
+            &format!("audio submit failed: {error}"),
+            None,
+        );
+    }
+    release_slot(&slots, &loaded, "audio-submit");
+}
+
+fn run_voice_clone_submit_worker(
+    app: AppHandle,
+    loaded: LoadedJob,
+    slots: Arc<Mutex<RuntimeSlots>>,
+) {
+    let result = (|| {
+        let state = app.state::<AppState>();
+        if get_media_job_projection(&state, &loaded.job.job_id)?
+            .get("status")
+            .and_then(Value::as_str)
+            == Some("cancel_requested")
+        {
+            return complete_job_cancelled(&app, &loaded.job.job_id, "User requested cancellation");
+        }
+        let mut payload = loaded.job.request_json.clone();
+        if let Some(object) = payload.as_object_mut() {
+            if let Some(model) = loaded.job.provider_model.clone() {
+                object.entry("model".to_string()).or_insert(json!(model));
+            }
+            object.insert("runtimeBypass".to_string(), json!(true));
+            object.insert("source".to_string(), json!(loaded.job.source.clone()));
+            object.insert("jobId".to_string(), json!(loaded.job.job_id.clone()));
+        }
+        let result = crate::voice_service::clone_voice(&state, &payload)?;
+        complete_voice_clone_job(&app, &loaded, &result)
+    })();
+    if let Err(error) = result {
+        if let Some(subject_id) = loaded
+            .job
+            .request_json
+            .get("ownerAssetId")
+            .and_then(Value::as_str)
+        {
+            let state = app.state::<AppState>();
+            let _ = crate::voice_service::patch_subject_voice_failure(
+                &state,
+                subject_id,
+                error.clone(),
+            );
+        }
+        let _ = schedule_stage_retry_or_dead_letter(
+            &app,
+            &loaded.job.job_id,
+            "voice-clone-submit",
+            &error,
+            None,
+        );
+        emit_job_log(
+            &app,
+            &loaded.job.job_id,
+            &format!("voice clone submit failed: {error}"),
+            None,
+        );
+    }
+    release_slot(&slots, &loaded, "voice-clone-submit");
+}
+
 async fn run_video_submit_worker(
     app: AppHandle,
     loaded: LoadedJob,
@@ -3128,6 +3354,16 @@ fn spawn_worker(
                 run_image_submit_worker(app_handle, loaded, slots)
             });
         }
+        "audio-submit" => {
+            tauri::async_runtime::spawn_blocking(move || {
+                run_audio_submit_worker(app_handle, loaded, slots)
+            });
+        }
+        "voice-clone-submit" => {
+            tauri::async_runtime::spawn_blocking(move || {
+                run_voice_clone_submit_worker(app_handle, loaded, slots)
+            });
+        }
         "video-submit" => {
             tauri::async_runtime::spawn(async move {
                 run_video_submit_worker(app_handle, loaded, slots).await;
@@ -3169,7 +3405,9 @@ fn dispatch_stage(
             &conn,
             &loaded,
             match stage {
-                "image-submit" | "video-submit" => "submitting",
+                "image-submit" | "video-submit" | "audio-submit" | "voice-clone-submit" => {
+                    "submitting"
+                }
                 "video-poll" => "polling",
                 "video-download" => "downloading",
                 _ => loaded.job.status.as_str(),
@@ -3221,6 +3459,26 @@ fn run_media_generation_dispatcher(
                 "video-submit",
                 false,
                 "media-runtime:video-submit",
+            );
+            let _ = dispatch_stage(
+                &app,
+                &state,
+                &slots,
+                "audio",
+                &["queued"],
+                "audio-submit",
+                false,
+                "media-runtime:audio-submit",
+            );
+            let _ = dispatch_stage(
+                &app,
+                &state,
+                &slots,
+                "voice_clone",
+                &["queued"],
+                "voice-clone-submit",
+                false,
+                "media-runtime:voice-clone-submit",
             );
             let _ = dispatch_stage(
                 &app,
