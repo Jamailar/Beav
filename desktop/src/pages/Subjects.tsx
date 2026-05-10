@@ -126,8 +126,7 @@ interface MediaAsset {
 const UNCATEGORIZED_FILTER = '__uncategorized__';
 const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
-const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 15;
-const SUBJECT_VOICE_RECORDING_SECONDS = 22;
+const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 30;
 const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
     generated: '已生成',
     planned: '计划项',
@@ -357,9 +356,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [initialVoicePresent, setInitialVoicePresent] = useState(false);
     const [recordingError, setRecordingError] = useState('');
     const [recordingHint, setRecordingHint] = useState('');
-    const [recordingCountdown, setRecordingCountdown] = useState(0);
+    const [recordingElapsedSeconds, setRecordingElapsedSeconds] = useState(0);
     const recordingIntervalRef = useRef<number | null>(null);
-    const recordingTimeoutRef = useRef<number | null>(null);
     const hasLoadedSnapshotRef = useRef(false);
     const hasEnsuredDefaultCategoriesRef = useRef(false);
     const loadDataRequestRef = useRef(0);
@@ -582,10 +580,6 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             window.clearInterval(recordingIntervalRef.current);
             recordingIntervalRef.current = null;
         }
-        if (recordingTimeoutRef.current) {
-            window.clearTimeout(recordingTimeoutRef.current);
-            recordingTimeoutRef.current = null;
-        }
     }, []);
 
     const updateDraft = useCallback((patch: Partial<SubjectDraft>) => {
@@ -724,9 +718,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         audioRecordingRef.current = audioRecording;
     }, [audioRecording]);
     const voiceRecordingElapsedSeconds = audioRecording.isRecording
-        ? Math.max(0, SUBJECT_VOICE_RECORDING_SECONDS - recordingCountdown)
+        ? recordingElapsedSeconds
         : 0;
-    const canFinishVoiceRecording = voiceRecordingElapsedSeconds > SUBJECT_VOICE_MIN_RECORDING_SECONDS;
+    const canFinishVoiceRecording = voiceRecordingElapsedSeconds >= SUBJECT_VOICE_MIN_RECORDING_SECONDS;
 
     useEffect(() => {
         if (!audioRecording.error) return;
@@ -737,12 +731,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     useEffect(() => {
         if (audioRecording.isRecording) return;
         clearRecordingTimers();
-        setRecordingCountdown(0);
+        setRecordingElapsedSeconds(0);
     }, [audioRecording.isRecording, clearRecordingTimers]);
 
     const stopRecordingSession = useCallback(() => {
         clearRecordingTimers();
-        setRecordingCountdown(0);
+        setRecordingElapsedSeconds(0);
         const currentRecording = audioRecordingRef.current;
         if (currentRecording.isRecording || currentRecording.isWorking) {
             void currentRecording.cancelRecording();
@@ -802,24 +796,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     const handleRecordVoice = useCallback(async () => {
         if (audioRecording.isRecording || audioRecording.isWorking) return;
-        setRecordingCountdown(SUBJECT_VOICE_RECORDING_SECONDS);
+        setRecordingElapsedSeconds(0);
         setRecordingError('');
         setRecordingHint('正在准备录音，请按正常语速清晰朗读示例句。');
         const started = await audioRecording.startRecording();
         if (!started) {
-            setRecordingCountdown(0);
+            setRecordingElapsedSeconds(0);
             setRecordingHint('');
             return;
         }
-        setRecordingHint(`正在采样，超过 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒后可手动完成；不操作会自动结束。`);
+        setRecordingHint(`正在采样，达到 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒后可手动完成。`);
         try {
             recordingIntervalRef.current = window.setInterval(() => {
-                setRecordingCountdown((current) => Math.max(0, current - 1));
+                setRecordingElapsedSeconds((current) => current + 1);
             }, 1000);
-            recordingTimeoutRef.current = window.setTimeout(() => {
-                clearRecordingTimers();
-                void audioRecording.stopRecording();
-            }, SUBJECT_VOICE_RECORDING_SECONDS * 1000);
         } catch (e) {
             stopRecordingSession();
             setRecordingError(e instanceof Error ? e.message : '无法启动录音');
@@ -829,14 +819,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     const handleFinishVoiceRecording = useCallback(async () => {
         if (!audioRecording.isRecording || audioRecording.isWorking) return;
-        const elapsedSeconds = SUBJECT_VOICE_RECORDING_SECONDS - recordingCountdown;
-        if (elapsedSeconds <= SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
-            setRecordingHint(`必须超过 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒，再点击完成采样。`);
+        if (recordingElapsedSeconds < SUBJECT_VOICE_MIN_RECORDING_SECONDS) {
+            setRecordingHint(`至少需要 ${SUBJECT_VOICE_MIN_RECORDING_SECONDS} 秒，再点击完成采样。`);
             return;
         }
         clearRecordingTimers();
         await audioRecording.stopRecording();
-    }, [audioRecording, clearRecordingTimers, recordingCountdown]);
+    }, [audioRecording, clearRecordingTimers, recordingElapsedSeconds]);
 
     const submitCategoryDialog = useCallback(async () => {
         const trimmedName = categoryDialogName.trim();
@@ -1716,7 +1705,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     {audioRecording.isWorking
                                                         ? '处理中'
                                                         : audioRecording.isRecording
-                                                            ? (canFinishVoiceRecording ? '完成采样' : `录音中 ${recordingCountdown}s`)
+                                                            ? (canFinishVoiceRecording ? '完成采样' : `录音中 ${recordingElapsedSeconds}s`)
                                                             : '录制音频'}
                                                 </button>
                                                 <label className={clsx(
@@ -1748,7 +1737,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             </div>
                                             {audioRecording.isRecording && (
                                                 <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
-                                                    已录 {voiceRecordingElapsedSeconds} 秒，还可录 {recordingCountdown} 秒
+                                                    已录 {voiceRecordingElapsedSeconds} 秒
                                                 </div>
                                             )}
                                             {recordingHint && <div className="text-xs text-slate-500">{recordingHint}</div>}
