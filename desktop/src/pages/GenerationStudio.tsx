@@ -2959,9 +2959,9 @@ export function GenerationStudio({
                                                     ? setImagePrompt(event.target.value)
                                                     : setVideoPrompt(event.target.value)
                                             )}
-                                            rows={2}
+                                            rows={4}
                                             placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : '描述您想生成的视频场景、镜头、动作...'}
-                                            className="min-h-[54px] w-full resize-none bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
+                                            className="min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
                                         />
 
                                         {studioMode === 'image' && isAgentMode && agentAttachment && (
