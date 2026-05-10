@@ -1863,6 +1863,14 @@ declare global {
         onJobLog: (listener: (...args: any[]) => void) => void;
         offJobLog: (listener: (...args: any[]) => void) => void;
       };
+      voice: {
+        list: (payload?: Record<string, unknown>) => Promise<{ success?: boolean; voices?: Array<Record<string, unknown>>; items?: Array<Record<string, unknown>>; error?: string }>;
+        get: (payload: { voiceId: string }) => Promise<Record<string, unknown>>;
+        clone: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        bindAsset: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        speech: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        delete: (payload: { voiceId: string }) => Promise<Record<string, unknown>>;
+      };
       redclawRunner: {
         getStatus: () => Promise<{
           enabled: boolean;

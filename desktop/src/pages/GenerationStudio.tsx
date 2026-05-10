@@ -1175,6 +1175,13 @@ type PickerOption = {
     description?: string;
 };
 
+type VoiceListItem = {
+    id: string;
+    name: string;
+    language: string;
+    status: string;
+};
+
 function getAiSourceTypeLabel(source: AiSourceConfig): string {
     const presetId = String(source.presetId || inferPresetIdByEndpoint(source.baseURL || '') || '').trim();
     const preset = findAiPresetById(presetId);
@@ -1222,6 +1229,70 @@ function buildImageModelOptions(settings: SettingsShape): PickerOption[] {
         label: option.label,
         description: option.sourceLabels.join(' / '),
     }));
+}
+
+function buildAudioModelOptions(settings: SettingsShape): PickerOption[] {
+    const sources = parseAiSources(settings.ai_sources_json);
+    const optionsByModel = new Map<string, { label: string; sourceLabels: string[] }>();
+    const fallbackModel = String(settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
+
+    for (const source of sources) {
+        const audioModels = filterAiModelsByCapability(getAiSourceModelDescriptors(source), 'audio');
+        if (audioModels.length === 0) continue;
+
+        const sourceType = getAiSourceTypeLabel(source);
+        const sourceName = String(source.name || '').trim();
+        const sourceLabel = sourceName && sourceName !== sourceType
+            ? `${sourceType} · ${sourceName}`
+            : sourceType;
+
+        for (const model of audioModels) {
+            const existing = optionsByModel.get(model.id);
+            if (!existing) {
+                optionsByModel.set(model.id, { label: model.id, sourceLabels: [sourceLabel] });
+                continue;
+            }
+            if (!existing.sourceLabels.includes(sourceLabel)) {
+                existing.sourceLabels.push(sourceLabel);
+            }
+        }
+    }
+
+    if (fallbackModel && !optionsByModel.has(fallbackModel)) {
+        optionsByModel.set(fallbackModel, { label: fallbackModel, sourceLabels: ['当前设置'] });
+    }
+
+    return Array.from(optionsByModel.entries()).map(([value, option]) => ({
+        value,
+        label: option.label,
+        description: option.sourceLabels.join(' / '),
+    }));
+}
+
+function normalizeVoiceList(value: unknown): VoiceListItem[] {
+    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const rawItems = Array.isArray(record.voices)
+        ? record.voices
+        : Array.isArray(record.items)
+            ? record.items
+            : Array.isArray(value)
+                ? value
+                : [];
+
+    return rawItems
+        .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const voice = item as Record<string, unknown>;
+            const id = String(voice.voice_id || voice.voiceId || voice.id || voice.value || '').trim();
+            if (!id) return null;
+            return {
+                id,
+                name: String(voice.name || voice.title || id).trim() || id,
+                language: String(voice.language || voice.lang || '').trim(),
+                status: String(voice.status || '').trim(),
+            } satisfies VoiceListItem;
+        })
+        .filter((item): item is VoiceListItem => Boolean(item));
 }
 
 function useDismissiblePopover(open: boolean, onClose: () => void) {
@@ -2009,9 +2080,12 @@ export function GenerationStudio({
     const [audioPrompt, setAudioPrompt] = useState('');
     const [audioTitle, setAudioTitle] = useState('');
     const [audioProjectId, setAudioProjectId] = useState('');
+    const [audioModel, setAudioModel] = useState('');
     const [audioVoiceId, setAudioVoiceId] = useState('');
     const [audioLanguageBoost, setAudioLanguageBoost] = useState('Chinese');
     const [audioResponseFormat, setAudioResponseFormat] = useState('mp3');
+    const [audioVoiceOptions, setAudioVoiceOptions] = useState<PickerOption[]>([]);
+    const [isLoadingAudioVoices, setIsLoadingAudioVoices] = useState(false);
     const [audioError, setAudioError] = useState('');
     const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
     const isAgentMode = studioMode === 'image' && imageCreationSurface === 'agent';
@@ -2102,6 +2176,7 @@ export function GenerationStudio({
             setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
             setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality === 'low' ? 'auto' : normalizedSettings.image_quality || 'auto') : prev));
+            setAudioModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.voice_tts_model || normalizedSettings.tts_model || 'speech-2.8-turbo') : prev));
         } catch (error) {
             console.error('Failed to load generation studio context:', error);
         }
@@ -2298,13 +2373,24 @@ export function GenerationStudio({
     const resolvedVoiceEndpoint = (settings.voice_endpoint || settings.tts_endpoint || settings.api_endpoint || '').trim();
     const resolvedVoiceApiKey = (settings.voice_api_key || settings.tts_api_key || settings.api_key || '').trim();
     const hasVoiceConfig = Boolean(resolvedVoiceEndpoint) && Boolean(resolvedVoiceApiKey);
-    const effectiveAudioModel = (settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
+    const audioModelOptions = useMemo<PickerOption[]>(() => buildAudioModelOptions(settings), [settings]);
+    const effectiveAudioModel = (audioModel || settings.voice_tts_model || settings.tts_model || 'speech-2.8-turbo').trim();
 
     const imageModelOptions = useMemo<PickerOption[]>(() => buildImageModelOptions(settings), [settings]);
     const activeImageModelOption = useMemo(
         () => imageModelOptions.find((option) => option.value === imageModel.trim()) || null,
         [imageModel, imageModelOptions],
     );
+    const mergedAudioVoiceOptions = useMemo<PickerOption[]>(() => {
+        const normalizedVoiceId = audioVoiceId.trim();
+        if (!normalizedVoiceId || audioVoiceOptions.some((option) => option.value === normalizedVoiceId)) {
+            return audioVoiceOptions;
+        }
+        return [
+            { value: normalizedVoiceId, label: shortVoiceId(normalizedVoiceId), description: '当前音色' },
+            ...audioVoiceOptions,
+        ];
+    }, [audioVoiceId, audioVoiceOptions]);
     const imageModelLabel = activeImageModelOption?.label || imageModel.trim() || '未选择模型';
     const videoModelLabel = effectiveVideoModel;
     const currentConfigHint = studioMode === 'image'
@@ -2323,6 +2409,56 @@ export function GenerationStudio({
             return imageModelOptions[0]?.value || '';
         });
     }, [imageModelOptions]);
+
+    useEffect(() => {
+        setAudioModel((prev) => {
+            const current = prev.trim();
+            if (current && audioModelOptions.some((option) => option.value === current)) {
+                return prev;
+            }
+            return audioModelOptions[0]?.value || '';
+        });
+    }, [audioModelOptions]);
+
+    useEffect(() => {
+        if (!isActive || !hasVoiceConfig) {
+            setAudioVoiceOptions([]);
+            return;
+        }
+
+        let cancelled = false;
+        setIsLoadingAudioVoices(true);
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.voice.list({}) as unknown;
+                if (cancelled) return;
+                const voices = normalizeVoiceList(result);
+                setAudioVoiceOptions(voices.map((voice) => ({
+                    value: voice.id,
+                    label: voice.name,
+                    description: [
+                        shortVoiceId(voice.id),
+                        voice.language,
+                        voice.status && voice.status !== 'ready' ? voice.status : '',
+                    ].filter(Boolean).join(' · '),
+                })));
+                setAudioVoiceId((prev) => {
+                    if (prev.trim()) return prev;
+                    return voices[0]?.id || '';
+                });
+            } catch (error) {
+                if (cancelled) return;
+                console.error('Failed to load audio voices:', error);
+                setAudioVoiceOptions([]);
+            } finally {
+                if (!cancelled) setIsLoadingAudioVoices(false);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [hasVoiceConfig, isActive]);
 
     const createFeedEntry = useCallback((request: GenerationRequest): GenerationFeedEntry => ({
         kind: 'generation',
@@ -2669,6 +2805,7 @@ export function GenerationStudio({
             setAudioPrompt(entry.request.prompt);
             setAudioTitle(entry.request.title);
             setAudioProjectId(entry.request.projectId);
+            setAudioModel(entry.request.model);
             setAudioVoiceId(entry.request.voiceId);
             setAudioLanguageBoost(entry.request.languageBoost || 'Chinese');
             setAudioResponseFormat(entry.request.responseFormat || 'mp3');
@@ -2892,7 +3029,7 @@ export function GenerationStudio({
     }, [videoFirstFrame, videoLastFrame, videoMode, videoReferences]);
 
     const composerGridClass = studioMode === 'audio'
-        ? 'grid items-start gap-4 md:grid-cols-[220px_minmax(0,1fr)]'
+        ? 'grid gap-4'
         : studioMode === 'video' && videoMode === 'first-last-frame'
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
@@ -3148,68 +3285,54 @@ export function GenerationStudio({
 
                             <div className="mt-3 rounded-[20px] border border-border bg-surface-primary p-4">
                                 <div className={composerGridClass}>
-                                    <div className="space-y-3">
-                                        {studioMode === 'image' ? (
-                                            <UploadPreviewCard
-                                                label={isReadingImageRefs ? '读取中' : '图片'}
-                                                accept="image/*"
-                                                multiple
-                                                items={imageReferences}
-                                                onChange={handleImageReferenceFiles}
-                                                onClear={() => setImageReferences([])}
-                                            />
-                                        ) : studioMode === 'audio' ? (
-                                            <div className="rounded-[18px] border border-border bg-surface-secondary p-3">
-                                                <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold text-text-secondary">
-                                                    <Music2 className="h-3.5 w-3.5 text-brand-red" />
-                                                    音色
-                                                </div>
-                                                <input
-                                                    value={audioVoiceId}
-                                                    onChange={(event) => setAudioVoiceId(event.target.value)}
-                                                    placeholder="voice_xxx"
-                                                    className="h-10 w-full rounded-[12px] border border-border bg-surface-primary px-3 font-mono text-[12px] text-text-primary outline-none focus:border-brand-red/50"
-                                                />
-                                                <div className="mt-2 truncate text-[11px] text-text-tertiary">
-                                                    {effectiveAudioModel || 'speech-2.8-turbo'}
-                                                </div>
-                                            </div>
-                                        ) : videoMode === 'first-last-frame' ? (
-                                            <div className="grid grid-cols-2 gap-3">
+                                    {studioMode !== 'audio' && (
+                                        <div className="space-y-3">
+                                            {studioMode === 'image' ? (
                                                 <UploadPreviewCard
-                                                    label={isReadingVideoRefs ? '读取中' : '首帧'}
+                                                    label={isReadingImageRefs ? '读取中' : '图片'}
                                                     accept="image/*"
-                                                    items={videoFirstFrame ? [videoFirstFrame] : []}
-                                                    onChange={(event) => void handleVideoReferenceFile(event, 'first')}
-                                                    onClear={() => setVideoFirstFrame(null)}
+                                                    multiple
+                                                    items={imageReferences}
+                                                    onChange={handleImageReferenceFiles}
+                                                    onClear={() => setImageReferences([])}
                                                 />
+                                            ) : videoMode === 'first-last-frame' ? (
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <UploadPreviewCard
+                                                        label={isReadingVideoRefs ? '读取中' : '首帧'}
+                                                        accept="image/*"
+                                                        items={videoFirstFrame ? [videoFirstFrame] : []}
+                                                        onChange={(event) => void handleVideoReferenceFile(event, 'first')}
+                                                        onClear={() => setVideoFirstFrame(null)}
+                                                    />
+                                                    <UploadPreviewCard
+                                                        label={isReadingVideoRefs ? '读取中' : '尾帧'}
+                                                        accept="image/*"
+                                                        items={videoLastFrame ? [videoLastFrame] : []}
+                                                        onChange={(event) => void handleVideoReferenceFile(event, 'last')}
+                                                        onClear={() => setVideoLastFrame(null)}
+                                                    />
+                                                </div>
+                                            ) : videoMode === 'continuation' ? (
                                                 <UploadPreviewCard
-                                                    label={isReadingVideoRefs ? '读取中' : '尾帧'}
-                                                    accept="image/*"
-                                                    items={videoLastFrame ? [videoLastFrame] : []}
-                                                    onChange={(event) => void handleVideoReferenceFile(event, 'last')}
-                                                    onClear={() => setVideoLastFrame(null)}
+                                                    label={isReadingVideoRefs ? '读取中' : '视频'}
+                                                    accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                                                    items={videoFirstClip ? [videoFirstClip] : []}
+                                                    onChange={(event) => void handleVideoReferenceFile(event, 'firstClip')}
+                                                    onClear={() => setVideoFirstClip(null)}
                                                 />
-                                            </div>
-                                        ) : videoMode === 'continuation' ? (
-                                            <UploadPreviewCard
-                                                label={isReadingVideoRefs ? '读取中' : '视频'}
-                                                accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
-                                                items={videoFirstClip ? [videoFirstClip] : []}
-                                                onChange={(event) => void handleVideoReferenceFile(event, 'firstClip')}
-                                                onClear={() => setVideoFirstClip(null)}
-                                            />
-                                        ) : (
-                                            <UploadPreviewCard
-                                                label={isReadingVideoRefs ? '读取中' : '图片'}
-                                                accept="image/*"
-                                                multiple
-                                                items={uploadedVideoRefs}
-                                                onChange={handleVideoReferenceFiles}
-                                                onClear={() => setVideoReferences([])}
-                                            />
-                                        )}
-                                    </div>
+                                            ) : (
+                                                <UploadPreviewCard
+                                                    label={isReadingVideoRefs ? '读取中' : '图片'}
+                                                    accept="image/*"
+                                                    multiple
+                                                    items={uploadedVideoRefs}
+                                                    onChange={handleVideoReferenceFiles}
+                                                    onClear={() => setVideoReferences([])}
+                                                />
+                                            )}
+                                        </div>
+                                    )}
 
                                     <div className="space-y-3">
                                         <textarea
@@ -3297,6 +3420,28 @@ export function GenerationStudio({
                                                 </>
                                             ) : studioMode === 'audio' ? (
                                                 <>
+                                                    <PopoverSelect
+                                                        value={audioVoiceId}
+                                                        onChange={setAudioVoiceId}
+                                                        options={mergedAudioVoiceOptions}
+                                                        className="min-w-[150px]"
+                                                        title="音色"
+                                                        panelClassName="w-[280px]"
+                                                        layout="column"
+                                                        disabled={!hasVoiceConfig || isLoadingAudioVoices || mergedAudioVoiceOptions.length === 0}
+                                                        emptyText={isLoadingAudioVoices ? '加载音色' : '暂无音色'}
+                                                    />
+                                                    <PopoverSelect
+                                                        value={effectiveAudioModel}
+                                                        onChange={setAudioModel}
+                                                        options={audioModelOptions}
+                                                        className="min-w-[150px]"
+                                                        title="TTS 模型"
+                                                        panelClassName="w-[260px]"
+                                                        layout="column"
+                                                        disabled={audioModelOptions.length === 0}
+                                                        emptyText="未添加音频模型"
+                                                    />
                                                     <PopoverSelect
                                                         value={audioLanguageBoost}
                                                         onChange={setAudioLanguageBoost}
@@ -3389,12 +3534,6 @@ export function GenerationStudio({
                                             <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
                                                 {videoDrivingAudio && <span>已附带驱动音频</span>}
                                                 {isReadingVideoRefs && <span>正在读取素材...</span>}
-                                            </div>
-                                        )}
-
-                                        {studioMode === 'audio' && (
-                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
-                                                <span>模型：{effectiveAudioModel || 'speech-2.8-turbo'}</span>
                                             </div>
                                         )}
 
