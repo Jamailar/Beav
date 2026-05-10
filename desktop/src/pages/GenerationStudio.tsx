@@ -1392,6 +1392,7 @@ function PopoverSelect({
                 >
                     {title && <div className="mb-3 text-[13px] font-semibold text-text-secondary">{title}</div>}
                     <div className={clsx(
+                        'max-h-[420px] overflow-y-auto pr-1',
                         layout === 'column' ? 'flex flex-col gap-2' : 'flex flex-wrap gap-2',
                     )}>
                         {options.map((option) => {
