@@ -1510,7 +1510,11 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
             true,
         ),
         "svg" => ("image/svg+xml".to_string(), "image".to_string(), true),
-        "mp3" | "wav" | "m4a" | "aac" | "ogg" => ("audio/*".to_string(), "audio".to_string(), true),
+        "mp3" => ("audio/mpeg".to_string(), "audio".to_string(), true),
+        "wav" => ("audio/wav".to_string(), "audio".to_string(), true),
+        "m4a" => ("audio/mp4".to_string(), "audio".to_string(), true),
+        "aac" => ("audio/aac".to_string(), "audio".to_string(), true),
+        "ogg" => ("audio/ogg".to_string(), "audio".to_string(), true),
         "mp4" | "mov" | "mkv" | "avi" | "webm" => {
             ("video/*".to_string(), "video".to_string(), false)
         }

@@ -3,7 +3,7 @@ use reqwest::blocking::{multipart, Client};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
@@ -153,6 +153,24 @@ fn resolve_sample_path(
     Ok((normalize_legacy_workspace_path(&resolved), owner_asset_id))
 }
 
+fn validate_voice_clone_sample_type(path: &Path) -> Result<(), String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "mp3" | "wav" | "m4a") {
+        return Ok(());
+    }
+    Err(format!(
+        "声音复刻样本格式不支持：{}。请使用 mp3、wav 或 m4a 文件。",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("voice sample")
+    ))
+}
+
 pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
     let config = resolve_voice_config(state, Some(payload))?;
     let Some(api_key) = config.api_key.as_deref() else {
@@ -173,6 +191,7 @@ pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Resul
         );
     }
     let (sample_path, owner_asset_id) = resolve_sample_path(state, payload)?;
+    validate_voice_clone_sample_type(&sample_path)?;
     let bytes = fs::read(&sample_path).map_err(|error| {
         format!(
             "failed to read voice sample {}: {error}",
