@@ -29,12 +29,11 @@ const RedClawPage = lazy(async () => ({ default: (await import('./pages/RedClaw'
 const MediaLibraryPage = lazy(async () => ({ default: (await import('./pages/MediaLibrary')).MediaLibrary }));
 const CoverStudioPage = lazy(async () => ({ default: (await import('./pages/CoverStudio')).CoverStudio }));
 const GenerationStudioPage = lazy(async () => ({ default: (await import('./pages/GenerationStudio')).GenerationStudio }));
-const AudioStudioPage = lazy(async () => ({ default: (await import('./pages/AudioStudio')).AudioStudio }));
 const SubjectsPage = lazy(async () => ({ default: (await import('./pages/Subjects')).Subjects }));
 const AutomationPage = lazy(async () => ({ default: (await import('./pages/Automation')).Automation }));
 const ApprovalPage = lazy(async () => ({ default: (await import('./pages/Approval')).Approval }));
 
-export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'audio-studio' | 'subjects' | 'automation' | 'approval';
+export type ViewType = 'home' | 'skills' | 'knowledge' | 'settings' | 'archives' | 'wander' | 'redclaw' | 'media-library' | 'cover-studio' | 'generation-studio' | 'subjects' | 'automation' | 'approval';
 export type ImmersiveMode = false | 'theme' | 'dark';
 export type TeamSection = 'team-workbench' | 'members';
 type SettingsNavigationTarget = {
@@ -80,7 +79,6 @@ const NON_CACHEABLE_VIEWS = new Set<ViewType>([
   'media-library',
   'cover-studio',
   'generation-studio',
-  'audio-studio',
   'subjects',
   'automation',
   'approval',
@@ -188,7 +186,7 @@ export interface PendingChatMessage {
 }
 
 export interface GenerationIntent {
-  mode: 'image' | 'video';
+  mode: 'image' | 'video' | 'audio';
   source: 'standalone' | 'media-library' | 'manuscripts' | 'cover-studio';
   sourceTitle?: string;
   bindTarget?: {
@@ -891,7 +889,6 @@ function AuthenticatedApp() {
                 isActive={currentView === 'home'}
                 onNavigateToCoverStudio={() => setCurrentView('cover-studio')}
                 onNavigateToGenerationStudio={(mode) => navigateToGenerationStudio({ mode, source: 'standalone' })}
-                onNavigateToAudioStudio={() => setCurrentView('audio-studio')}
                 onNavigateToRedClaw={navigateToRedClaw}
               />
             </Suspense>
@@ -998,16 +995,6 @@ function AuthenticatedApp() {
                 pendingIntent={pendingGenerationIntent}
                 onIntentConsumed={clearPendingGenerationIntent}
                 onExecutionStateChange={handleGenerationStudioExecutionStateChange}
-                onReturnHome={returnHomeFromEmbeddedTool}
-              />
-            </Suspense>
-          </div>
-        )}
-        {shouldRenderView(mountedViews, currentView, persistentViews, 'audio-studio') && (
-          <div className={currentView === 'audio-studio' ? 'h-full min-h-0 flex flex-col' : 'hidden'}>
-            <Suspense fallback={currentView === 'audio-studio' ? <ViewLoadingFallback /> : null}>
-              <AudioStudioPage
-                isActive={currentView === 'audio-studio'}
                 onReturnHome={returnHomeFromEmbeddedTool}
               />
             </Suspense>

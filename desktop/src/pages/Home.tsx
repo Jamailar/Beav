@@ -8,8 +8,7 @@ import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHome
 interface HomeProps {
     isActive?: boolean;
     onNavigateToCoverStudio?: () => void;
-    onNavigateToGenerationStudio?: (mode: 'image' | 'video') => void;
-    onNavigateToAudioStudio?: () => void;
+    onNavigateToGenerationStudio?: (mode: 'image' | 'video' | 'audio') => void;
     onNavigateToRedClaw?: (message: {
         content: string;
         displayContent?: string;
@@ -319,7 +318,7 @@ function PluginHomeWidgetCard({
     );
 }
 
-export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToAudioStudio, onNavigateToRedClaw }: HomeProps) {
+export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToRedClaw }: HomeProps) {
     const [stats, setStats] = useState<HomeStats>(EMPTY_STATS);
     const [recentManuscripts, setRecentManuscripts] = useState<RecentManuscript[]>([]);
     const [pluginHomeWidgets, setPluginHomeWidgets] = useState<ThrivePluginHomeWidget[]>([]);
@@ -547,7 +546,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                             description="用角色音色合成旁白"
                             icon={Mic2}
                             tintClassName="bg-amber-500/10 text-amber-700"
-                            onClick={() => onNavigateToAudioStudio?.()}
+                            onClick={() => onNavigateToGenerationStudio?.('audio')}
                         />
                     </section>
 
