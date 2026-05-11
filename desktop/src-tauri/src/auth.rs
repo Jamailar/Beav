@@ -814,7 +814,25 @@ pub(crate) fn initialize_auth_runtime(
     app: &AppHandle,
     state: &State<'_, AppState>,
 ) -> Result<AuthStateSnapshot, String> {
-    let cache = load_auth_cache(&state.store_path)?;
+    let mut cache = load_auth_cache(&state.store_path)?;
+
+    if cache.session.is_none() {
+        crate::persistence::with_store_mut(state, |store| {
+            if let Some(store_session) = session_from_settings(&store.settings) {
+                cache.session = Some(store_session);
+            }
+            cache.points = payload_string(&store.settings, "redbox_auth_points_json")
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            cache.models = payload_string(&store.settings, "redbox_official_models_json")
+                .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+                .unwrap_or_default();
+            cache.call_records = payload_string(&store.settings, "redbox_official_call_records_json")
+                .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+                .unwrap_or_default();
+            Ok(())
+        })?;
+    }
+
     let secrets = AuthSecretBundle {
         refresh_token: session_refresh_token(cache.session.as_ref()),
         token_family_id: None,

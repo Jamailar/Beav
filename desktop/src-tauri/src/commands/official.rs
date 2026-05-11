@@ -328,14 +328,16 @@ fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option
     );
 
     if resolved_key.is_none() {
-        let created = crate::run_official_json_request_response(
-            settings,
-            "POST",
-            "/users/me/api-keys",
-            Some(json!({ "name": format!("{} Desktop {}", app_brand_display_name(), now_iso()) })),
-        )?;
-        resolved_key = extract_official_api_key_value(&created.body);
-        merge_official_api_key_records(settings, normalize_official_api_key_record(&created.body));
+        if official_settings_api_keys(settings).is_empty() {
+            let created = crate::run_official_json_request_response(
+                settings,
+                "POST",
+                "/users/me/api-keys",
+                Some(json!({ "name": format!("{} Desktop {}", app_brand_display_name(), now_iso()) })),
+            )?;
+            resolved_key = extract_official_api_key_value(&created.body);
+            merge_official_api_key_records(settings, normalize_official_api_key_record(&created.body));
+        }
     }
 
     if let Some(api_key) = resolved_key.clone() {
