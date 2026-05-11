@@ -45,19 +45,19 @@ pub fn tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["resource"],
         ToolPack::ManuscriptEditor => &["workflow"],
-        ToolPack::Team => &["bash", "resource", "workflow"],
-        ToolPack::ImageGeneration => &["bash", "resource", "workflow"],
-        ToolPack::Knowledge => &["bash", "resource", "workflow"],
+        ToolPack::Team => &["shell", "resource", "workflow"],
+        ToolPack::ImageGeneration => &["shell", "resource", "workflow"],
+        ToolPack::Knowledge => &["shell", "resource", "workflow"],
         ToolPack::Redclaw => {
             if cfg!(target_os = "windows") {
                 &["resource", "workflow"]
             } else {
-                &["bash", "resource", "workflow"]
+                &["shell", "resource", "workflow"]
             }
         }
-        ToolPack::BackgroundMaintenance => &["bash", "workflow"],
-        ToolPack::Editor => &["bash", "resource", "workflow", "editor"],
-        ToolPack::Diagnostics => &["bash", "resource", "workflow", "editor"],
+        ToolPack::BackgroundMaintenance => &["shell", "workflow"],
+        ToolPack::Editor => &["shell", "resource", "workflow", "editor"],
+        ToolPack::Diagnostics => &["shell", "resource", "workflow", "editor"],
     }
 }
 
@@ -65,19 +65,19 @@ pub fn visible_tool_names_for_pack(pack: ToolPack) -> &'static [&'static str] {
     match pack {
         ToolPack::Wander => &["Read", "List", "Search"],
         ToolPack::ManuscriptEditor => &["Write"],
-        ToolPack::Team => &["Read", "List", "Search", "Write", "Operate", "bash"],
-        ToolPack::ImageGeneration => &["Read", "List", "Search", "Operate", "bash"],
-        ToolPack::Knowledge => &["Read", "List", "Search", "Operate", "bash"],
+        ToolPack::Team => &["Read", "List", "Search", "Write", "Operate", "shell"],
+        ToolPack::ImageGeneration => &["Read", "List", "Search", "Operate", "shell"],
+        ToolPack::Knowledge => &["Read", "List", "Search", "Operate", "shell"],
         ToolPack::Redclaw => {
             if cfg!(target_os = "windows") {
                 &["Read", "List", "Search", "Write", "Operate"]
             } else {
-                &["Read", "List", "Search", "Write", "Operate", "bash"]
+                &["Read", "List", "Search", "Write", "Operate", "shell"]
             }
         }
-        ToolPack::BackgroundMaintenance => &["Read", "List", "Search", "Operate", "bash"],
-        ToolPack::Editor => &["Read", "List", "Search", "Write", "Operate", "bash"],
-        ToolPack::Diagnostics => &["Read", "List", "Search", "Write", "Operate", "bash"],
+        ToolPack::BackgroundMaintenance => &["Read", "List", "Search", "Operate", "shell"],
+        ToolPack::Editor => &["Read", "List", "Search", "Write", "Operate", "shell"],
+        ToolPack::Diagnostics => &["Read", "List", "Search", "Write", "Operate", "shell"],
     }
 }
 
@@ -118,14 +118,14 @@ mod tests {
         let tools = tool_names_for_runtime_mode("image-generation");
         assert!(tools.contains(&"workflow"));
         assert!(tools.contains(&"resource"));
-        assert!(tools.contains(&"bash"));
+        assert!(tools.contains(&"shell"));
     }
 
     #[test]
     fn wander_runtime_includes_structured_file_tool() {
         let tools = tool_names_for_runtime_mode("wander");
         assert!(tools.contains(&"resource"));
-        assert!(!tools.contains(&"bash"));
+        assert!(!tools.contains(&"shell"));
     }
 
     #[test]
@@ -134,9 +134,9 @@ mod tests {
         assert!(tools.contains(&"resource"));
         assert!(tools.contains(&"workflow"));
         if cfg!(target_os = "windows") {
-            assert!(!tools.contains(&"bash"));
+            assert!(!tools.contains(&"shell"));
         } else {
-            assert!(tools.contains(&"bash"));
+            assert!(tools.contains(&"shell"));
         }
     }
 

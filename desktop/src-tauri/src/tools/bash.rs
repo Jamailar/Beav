@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
