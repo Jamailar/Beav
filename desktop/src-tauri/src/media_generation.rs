@@ -1,5 +1,5 @@
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -453,11 +453,7 @@ fn infer_aspect_ratio_from_size(size: Option<&str>) -> Option<&'static str> {
             best_delta = delta;
         }
     }
-    if best_delta <= 0.04 {
-        best
-    } else {
-        None
-    }
+    if best_delta <= 0.04 { best } else { None }
 }
 
 fn map_quality_to_openai(quality: Option<&str>) -> Option<String> {
@@ -1737,13 +1733,15 @@ pub(crate) fn build_video_request_body(
         "reference-guided" => {
             if !reference_images.is_empty() {
                 if is_redbox_compatible_endpoint(endpoint) {
-                    body["media"] = json!(reference_images
-                        .iter()
-                        .map(|item| json!({
-                            "type": "reference_image",
-                            "url": item,
-                        }))
-                        .collect::<Vec<_>>());
+                    body["media"] = json!(
+                        reference_images
+                            .iter()
+                            .map(|item| json!({
+                                "type": "reference_image",
+                                "url": item,
+                            }))
+                            .collect::<Vec<_>>()
+                    );
                 }
                 body["images"] = json!(reference_images.clone());
                 body["reference_images"] = json!(reference_images.clone());
@@ -1765,24 +1763,26 @@ pub(crate) fn build_video_request_body(
             let last_frame = reference_images.get(1).cloned().unwrap_or_default();
             if !first_frame.is_empty() || !last_frame.is_empty() {
                 body["video_mode"] = json!("first_last_frame");
-                body["media"] = json!([
-                    if !first_frame.is_empty() {
-                        Some(json!({ "type": "first_frame", "url": first_frame.clone() }))
-                    } else {
-                        None
-                    },
-                    if !last_frame.is_empty() {
-                        Some(json!({ "type": "last_frame", "url": last_frame.clone() }))
-                    } else {
-                        None
-                    },
-                    driving_audio
-                        .clone()
-                        .map(|audio| json!({ "type": "driving_audio", "url": audio })),
-                ]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>());
+                body["media"] = json!(
+                    [
+                        if !first_frame.is_empty() {
+                            Some(json!({ "type": "first_frame", "url": first_frame.clone() }))
+                        } else {
+                            None
+                        },
+                        if !last_frame.is_empty() {
+                            Some(json!({ "type": "last_frame", "url": last_frame.clone() }))
+                        } else {
+                            None
+                        },
+                        driving_audio
+                            .clone()
+                            .map(|audio| json!({ "type": "driving_audio", "url": audio })),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                );
                 if !first_frame.is_empty() {
                     body["image"] = json!(first_frame.clone());
                     body["image_url"] = json!(first_frame.clone());
@@ -1790,10 +1790,12 @@ pub(crate) fn build_video_request_body(
                     body["img_url"] = json!(first_frame.clone());
                 }
                 if !last_frame.is_empty() {
-                    body["images"] = json!([first_frame.clone(), last_frame.clone()]
-                        .into_iter()
-                        .filter(|item| !item.is_empty())
-                        .collect::<Vec<_>>());
+                    body["images"] = json!(
+                        [first_frame.clone(), last_frame.clone()]
+                            .into_iter()
+                            .filter(|item| !item.is_empty())
+                            .collect::<Vec<_>>()
+                    );
                     body["last_frame"] = json!(last_frame.clone());
                     body["last_frame_url"] = json!(last_frame.clone());
                     body["last_image_url"] = json!(last_frame);
@@ -2295,9 +2297,11 @@ mod tests {
         );
 
         assert!(!fields.iter().any(|(key, _value)| key == "response_format"));
-        assert!(fields
-            .iter()
-            .any(|(key, value)| key == "size" && value == "1536x1024"));
+        assert!(
+            fields
+                .iter()
+                .any(|(key, value)| key == "size" && value == "1536x1024")
+        );
     }
 
     #[test]

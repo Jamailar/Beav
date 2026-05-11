@@ -4,17 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use dirs::home_dir;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::cli_runtime::{CliEnvironmentRecord, CliRuntimeInventory};
 use crate::process_utils::configure_background_command;
 
 fn path_separator() -> char {
-    if cfg!(windows) {
-        ';'
-    } else {
-        ':'
-    }
+    if cfg!(windows) { ';' } else { ':' }
 }
 
 fn parse_env_output(content: &str) -> BTreeMap<String, String> {

@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
-use crate::interactive_runtime_shared::resolve_workspace_tool_path_for_session;
 use crate::AppState;
+use crate::interactive_runtime_shared::resolve_workspace_tool_path_for_session;
 
 const DEFAULT_OUTPUT_CHARS: usize = 8_000;
 const MAX_OUTPUT_CHARS: usize = 20_000;

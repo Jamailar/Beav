@@ -1,11 +1,11 @@
 use tauri::State;
 
+use crate::AppState;
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    find_catalog_skill_by_name, merge_requested_skills_into_session, normalized_activation_scope,
-    normalized_runtime_mode_name, skill_allows_runtime_mode, SkillActivationSource,
+    SkillActivationSource, find_catalog_skill_by_name, merge_requested_skills_into_session,
+    normalized_activation_scope, normalized_runtime_mode_name, skill_allows_runtime_mode,
 };
-use crate::AppState;
 
 #[derive(Debug, Clone)]
 pub struct SkillInvokeRequest<'a> {

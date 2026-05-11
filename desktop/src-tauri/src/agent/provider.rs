@@ -1,12 +1,12 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::agent::{ChatExchangeContext, ChatExchangeResponseStage};
 use crate::runtime::runtime_error_envelope_from_error;
 use crate::{
-    append_debug_log_state, provider_profile_from_config, resolve_chat_config,
+    AppState, append_debug_log_state, provider_profile_from_config, resolve_chat_config,
     run_anthropic_interactive_chat_runtime, run_gemini_interactive_chat_runtime,
-    run_openai_interactive_chat_runtime, AppState,
+    run_openai_interactive_chat_runtime,
 };
 
 pub fn resolve_chat_exchange_response_stage(
@@ -26,7 +26,25 @@ pub fn resolve_chat_exchange_response_stage(
     }
 
     let app = app.ok_or_else(|| "App handle unavailable for runtime execution".to_string())?;
-    let config = resolve_chat_config(&context.settings_snapshot, model_config)
+    let scoped_model_config = if let Some(value) = model_config {
+        value.clone()
+    } else {
+        json!({})
+    };
+    let scoped_model_config = if scoped_model_config
+        .get("runtimeMode")
+        .or_else(|| scoped_model_config.get("runtime_mode"))
+        .is_some()
+    {
+        scoped_model_config
+    } else {
+        let mut next = scoped_model_config;
+        if let Some(object) = next.as_object_mut() {
+            object.insert("runtimeMode".to_string(), json!(context.runtime_mode));
+        }
+        next
+    };
+    let config = resolve_chat_config(&context.settings_snapshot, Some(&scoped_model_config))
         .ok_or_else(|| "当前未配置可用模型".to_string())?;
     if !matches!(config.protocol.as_str(), "openai" | "anthropic" | "gemini") {
         return Err(format!("unsupported runtime protocol: {}", config.protocol));

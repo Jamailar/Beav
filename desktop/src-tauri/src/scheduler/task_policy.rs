@@ -1,8 +1,8 @@
-use crate::{parse_timestamp_ms, AppStore};
+use crate::{AppStore, parse_timestamp_ms};
 use chrono::{Datelike, Duration, Local, LocalResult, NaiveTime, TimeZone, Timelike, Weekday};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const MAX_PENDING_PER_CONVERSATION: usize = 2;

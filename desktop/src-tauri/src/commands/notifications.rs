@@ -1,11 +1,11 @@
-use serde_json::{json, Value};
-use tauri::{plugin::PermissionState, AppHandle, State};
+use serde_json::{Value, json};
+use tauri::{AppHandle, State, plugin::PermissionState};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::{
-    auth, official_base_url_from_settings, official_realm_from_settings,
+    AppState, auth, official_base_url_from_settings, official_realm_from_settings,
     official_unwrap_response_payload, payload_string, run_official_json_request_response,
-    with_store, AppState,
+    with_store,
 };
 
 fn permission_state_label(state: PermissionState) -> &'static str {

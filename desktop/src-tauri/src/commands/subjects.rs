@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use tauri::{AppHandle, State};
@@ -7,11 +7,10 @@ use crate::commands::generation::generate_image_assets;
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store};
 use crate::{
-    file_content_hash, handle_subject_category_create, handle_subject_category_delete,
-    handle_subject_category_update, handle_subject_create, handle_subject_delete,
-    handle_subject_update, hydrated_subject_record, now_iso, now_ms, payload_string,
-    persist_subjects_workspace, safe_subject_relative_path, subjects_root, AppState,
-    SubjectAttribute, SubjectRecord,
+    AppState, SubjectAttribute, SubjectRecord, file_content_hash, handle_subject_category_create,
+    handle_subject_category_delete, handle_subject_category_update, handle_subject_create,
+    handle_subject_delete, handle_subject_update, hydrated_subject_record, now_iso, now_ms,
+    payload_string, persist_subjects_workspace, safe_subject_relative_path, subjects_root,
 };
 
 pub fn handle_subjects_channel(
@@ -148,11 +147,9 @@ fn build_character_card_prompt(subject: &SubjectRecord, category_name: &str) -> 
     }
 
     format!(
-        "Create a polished horizontal character reference card based on the provided character image.\n\
-         Aspect ratio 16:9. Keep the character likeness, hairstyle, face, outfit, age impression, color palette, and identity consistent with the reference image.\n\
-         Layout: one clean full-body or half-body character render on one side, compact setting-card panels on the other side, premium editorial design, clear hierarchy, no clutter.\n\
-         Include only concise Chinese setting-card text derived from this info, do not invent biography details:\n{}\n\
-         Avoid watermarks, logos, UI chrome, fake QR codes, tiny unreadable text, extra characters, duplicated faces, or storyboard labels.",
+        "给这个角色制作一张影视角色信息卡，横版构图，16:9比例，白色背景，基于参考图保持角色脸型、发型、服装、年龄感和整体气质一致。需要有角色展开三视图、身体配饰细节和各类情绪的表情特写。人物属性设定放左下角，使用中文小字。\n\
+         角色资料：\n{}\n\
+         避免水印、logo、二维码、乱码文字、重复脸、额外角色、prompt字样。",
         info_lines.join("\n")
     )
 }

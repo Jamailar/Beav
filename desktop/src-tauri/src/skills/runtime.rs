@@ -1,10 +1,10 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::runtime::SkillRecord;
 use crate::skills::{
-    build_skill_catalog_snapshot, build_skill_prompt_bundle,
-    build_skill_watcher_snapshot_with_discovery, find_skill_catalog_entry_by_name,
-    resolve_skill_set, LoadedSkillRecord, SkillWatcherSnapshot,
+    LoadedSkillRecord, SkillWatcherSnapshot, build_skill_catalog_snapshot,
+    build_skill_prompt_bundle, build_skill_watcher_snapshot_with_discovery,
+    find_skill_catalog_entry_by_name, resolve_skill_set,
 };
 use crate::slug_from_relative_path;
 use crate::tools::packs::tool_names_for_runtime_mode;
@@ -75,28 +75,30 @@ pub fn skills_catalog_list_value(
         discovery_fingerprint.unwrap_or_default(),
     );
     (
-        json!(skills
-            .iter()
-            .zip(state.catalog.iter())
-            .map(|(record, skill)| {
-                let mut item = json!({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "location": skill.location,
-                    "sourceScope": skill.source_scope,
-                    "isBuiltin": skill.is_builtin,
-                    "disabled": skill.disabled,
-                    "metadata": skill.metadata,
-                    "watchFingerprint": skill.fingerprint,
-                    "catalogFingerprint": watcher.fingerprint,
-                    "discoveryFingerprint": watcher.discovery_fingerprint,
-                });
-                if include_body {
-                    item["body"] = json!(record.body);
-                }
-                item
-            })
-            .collect::<Vec<_>>()),
+        json!(
+            skills
+                .iter()
+                .zip(state.catalog.iter())
+                .map(|(record, skill)| {
+                    let mut item = json!({
+                        "name": skill.name,
+                        "description": skill.description,
+                        "location": skill.location,
+                        "sourceScope": skill.source_scope,
+                        "isBuiltin": skill.is_builtin,
+                        "disabled": skill.disabled,
+                        "metadata": skill.metadata,
+                        "watchFingerprint": skill.fingerprint,
+                        "catalogFingerprint": watcher.fingerprint,
+                        "discoveryFingerprint": watcher.discovery_fingerprint,
+                    });
+                    if include_body {
+                        item["body"] = json!(record.body);
+                    }
+                    item
+                })
+                .collect::<Vec<_>>()
+        ),
         watcher,
     )
 }
@@ -250,9 +252,11 @@ mod tests {
         );
         assert!(state.skills_section.contains("redclaw-guide: desc"));
         assert!(state.skills_section.contains("xhs-title: desc"));
-        assert!(!state
-            .skills_section
-            .contains("remotion-best-practices: desc"));
+        assert!(
+            !state
+                .skills_section
+                .contains("remotion-best-practices: desc")
+        );
     }
 
     #[test]
@@ -334,8 +338,10 @@ mod tests {
             &["workflow".to_string()],
         );
         assert!(redclaw_state.active_skills.is_empty());
-        assert!(redclaw_state
-            .skills_section
-            .contains("image-director: image desc"));
+        assert!(
+            redclaw_state
+                .skills_section
+                .contains("image-director: image desc")
+        );
     }
 }

@@ -1,16 +1,16 @@
-use crate::persistence::with_store;
-use crate::runtime::{
-    append_session_checkpoint, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord,
-};
 #[cfg(test)]
 use crate::ChatSessionRecord;
+use crate::persistence::with_store;
+use crate::runtime::{
+    SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord,
+    append_session_checkpoint,
+};
 use crate::{
-    make_id, now_iso, slug_from_relative_path, storage_safe_file_stem, store_root, AppState,
-    AppStore, ChatMessageRecord, ChatSessionContextRecord,
+    AppState, AppStore, ChatMessageRecord, ChatSessionContextRecord, make_id, now_iso,
+    slug_from_relative_path, storage_safe_file_stem, store_root,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
@@ -1119,7 +1119,8 @@ fn sanitize_runtime_history_message(message: &Value) -> Option<Value> {
 }
 
 fn is_internal_runtime_history_user_message(content: &str) -> bool {
-    content == "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。"
+    content
+        == "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。"
         || content.starts_with("系统状态更新：以下技能已激活并写入当前会话：")
         || content.starts_with("系统状态更新：以下技能已激活并加入当前轮上下文：")
         || content.starts_with("当前写稿工程已创建并绑定为 `")
@@ -1775,6 +1776,10 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "2".to_string(),
             metadata: Some(json!({ "contextType": "chat" })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         }
     }
 
@@ -1941,6 +1946,10 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "1".to_string(),
             metadata: Some(json!({"contextType": "chat"})),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         });
         store.chat_sessions.push(ChatSessionRecord {
             id: "session-child".to_string(),
@@ -1951,6 +1960,10 @@ mod tests {
                 "contextType": "chat",
                 "parentSessionId": "session-parent"
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         });
         store
             .session_transcript_records
@@ -2308,6 +2321,10 @@ mod tests {
                 "contextId": "redclaw-singleton:default",
                 "initialContext": "RedClaw seeded context"
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         });
         store
             .chat_messages
@@ -2368,19 +2385,18 @@ mod tests {
             ));
         }
 
-        assert!(update_session_context_record(
+        assert!(
+            update_session_context_record(&mut store, "session-compact-threshold", "auto", false,)
+                .is_none()
+        );
+
+        let manual = update_session_context_record(
             &mut store,
             "session-compact-threshold",
-            "auto",
-            false,
+            "manual",
+            true,
         )
-        .is_none());
-
-        let manual =
-            update_session_context_record(&mut store, "session-compact-threshold", "manual", true)
-                .expect(
-                "manual compaction should archive history once there are more than tail messages",
-            );
+        .expect("manual compaction should archive history once there are more than tail messages");
         assert_eq!(manual.compacted_message_count, 6);
     }
 

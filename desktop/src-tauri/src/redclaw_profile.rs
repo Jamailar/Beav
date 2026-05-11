@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
-use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
+use crate::agent::{PreparedSessionAgentTurn, RedclawRunTurn, execute_prepared_session_agent_turn};
 use crate::skills::{
     build_workspace_skill_record, refresh_skill_store_catalog, resolve_skill_file_path,
     write_skill_record_to_path,
 };
 use crate::{
-    app_ai_display_name, app_brand_display_name, now_iso, refresh_runtime_warm_state,
-    slug_from_relative_path, workspace_root, AppState,
+    AppState, app_ai_display_name, app_brand_display_name, now_iso, refresh_runtime_warm_state,
+    slug_from_relative_path, workspace_root,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -511,7 +511,8 @@ fn writing_direction_rule(
 ) -> Vec<String> {
     if content_vs_commerce >= 70 {
         return vec![
-            "商业优先。默认先明确用户问题、产品适配关系和行动方向，不要把价值内容和转化完全拆开。".to_string(),
+            "商业优先。默认先明确用户问题、产品适配关系和行动方向，不要把价值内容和转化完全拆开。"
+                .to_string(),
             format!(
                 "经营模式按 `{primary_model_label}` 理解，正文里允许更早出现产品、服务或成交线索，但仍要给足用户判断依据。"
             ),
@@ -539,8 +540,11 @@ fn writing_direction_rule(
 fn trust_source_rule(persona_vs_brand: i64, role_position_label: &str) -> Vec<String> {
     if persona_vs_brand >= 70 {
         return vec![
-            "信任主要来自“你是谁、你怎么判断”。允许更多第一人称判断、取舍标准和个人视角。".to_string(),
-            format!("对外角色按 `{role_position_label}` 经营，文案里要让读者感到这是一个有明确判断的人在做推荐。"),
+            "信任主要来自“你是谁、你怎么判断”。允许更多第一人称判断、取舍标准和个人视角。"
+                .to_string(),
+            format!(
+                "对外角色按 `{role_position_label}` 经营，文案里要让读者感到这是一个有明确判断的人在做推荐。"
+            ),
             "如果提产品，优先写为什么你会这样选，而不是只堆品牌口号。".to_string(),
         ];
     }

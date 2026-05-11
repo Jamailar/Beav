@@ -2,7 +2,7 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::events::emit_runtime_tool_partial;
 use crate::persistence::{with_store, with_store_mut};
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -1534,12 +1534,16 @@ mod tests {
         assert_eq!(items[0].title.as_deref(), Some("第2页冲突"));
         assert!(items[0].prompt.contains("你不是缺方法，是缺反馈回路"));
         assert!(items[0].prompt.contains("Visual brief: 冲突模型卡片"));
-        assert!(!items[0]
-            .prompt
-            .contains("Visible text to render exactly, and no other planning labels: 第2页冲突"));
-        assert!(items[0]
-            .prompt
-            .contains("Treat imagePlanItems.title/name/label"));
+        assert!(
+            !items[0].prompt.contains(
+                "Visible text to render exactly, and no other planning labels: 第2页冲突"
+            )
+        );
+        assert!(
+            items[0]
+                .prompt
+                .contains("Treat imagePlanItems.title/name/label")
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{now_iso, ChatSessionRecord};
+use crate::{ChatSessionRecord, now_iso};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -235,6 +235,10 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
             metadata: Some(metadata),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         }
     }
 

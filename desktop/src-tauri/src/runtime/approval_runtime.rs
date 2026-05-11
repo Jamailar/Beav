@@ -6,7 +6,7 @@ use serde_json::Value;
 use tauri::State;
 
 use crate::runtime::RuntimeApprovalDetails;
-use crate::{now_i64, AppState};
+use crate::{AppState, now_i64};
 
 const APPROVAL_RECENT_LIMIT: usize = 50;
 

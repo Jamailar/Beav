@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::State;
 
 use crate::agent::{ChatExchangeContext, ChatExchangePersistenceStage, SessionAgentTurnKind};
@@ -13,9 +13,9 @@ use crate::runtime::{
     save_session_bundle_messages, update_session_context_record,
 };
 use crate::{
-    append_session_transcript, make_id, next_memory_maintenance_at_ms, now_i64, now_iso,
-    resolve_runtime_mode_from_context_type, session_title_from_message, value_to_i64_string,
-    AppState, ChatMessageRecord, ChatSessionRecord,
+    AppState, ChatMessageRecord, ChatSessionRecord, append_session_transcript, make_id,
+    next_memory_maintenance_at_ms, now_i64, now_iso, resolve_runtime_mode_from_context_type,
+    session_title_from_message, value_to_i64_string,
 };
 
 pub fn persist_chat_exchange(
@@ -463,6 +463,10 @@ mod tests {
                 "agentProfile": "video-editor",
                 "contextType": "chat"
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         };
         assert_eq!(session_runtime_mode(&session), "video-editor");
     }

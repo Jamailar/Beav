@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::State;
 
 mod index;
@@ -21,8 +21,8 @@ pub(crate) use store::{
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    log_timing_event, make_id, now_i64, now_ms, payload_field, payload_string, AppState,
-    MemoryHistoryRecord, UserMemoryRecord,
+    AppState, MemoryHistoryRecord, UserMemoryRecord, log_timing_event, make_id, now_i64, now_ms,
+    payload_field, payload_string,
 };
 
 pub(crate) fn handle_memory_channel(
@@ -100,9 +100,11 @@ pub(crate) fn handle_memory_channel(
                 let fallback_status = with_store(state, |store| {
                     Ok(memory_maintenance_status_from_settings(&store.settings))
                 })?;
-                let response = json!(workspace_status
-                    .or(fallback_status)
-                    .unwrap_or_else(default_memory_maintenance_status));
+                let response = json!(
+                    workspace_status
+                        .or(fallback_status)
+                        .unwrap_or_else(default_memory_maintenance_status)
+                );
                 log_timing_event(
                     state,
                     "settings",
@@ -444,16 +446,16 @@ fn normalized_optional_string(value: Option<String>) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{
-        startup_migration, AppStore, ApprovalRuntimeState, AuthRuntimeState, DiagnosticsState,
-        RuntimeWarmState,
+        AppStore, ApprovalRuntimeState, AuthRuntimeState, DiagnosticsState, RuntimeWarmState,
+        startup_migration,
     };
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::{Arc, Mutex};
-    use tauri::test::{mock_builder, mock_context, noop_assets};
     use tauri::Manager;
+    use tauri::test::{mock_builder, mock_context, noop_assets};
 
     fn unique_test_dir(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -703,10 +705,12 @@ mod tests {
             handle_memory_channel(&state, "memory:search", &json!({ "query": "verification" }))
                 .expect("memory:search should be handled")
                 .expect("memory:search should succeed");
-        assert!(after
-            .as_array()
-            .expect("memory:search should return an array")
-            .is_empty());
+        assert!(
+            after
+                .as_array()
+                .expect("memory:search should return an array")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -764,10 +768,12 @@ mod tests {
         )
         .expect("memory:search should be handled")
         .expect("memory:search should succeed");
-        assert!(user_hits
-            .as_array()
-            .expect("memory:search should return an array")
-            .is_empty());
+        assert!(
+            user_hits
+                .as_array()
+                .expect("memory:search should return an array")
+                .is_empty()
+        );
     }
 
     #[test]

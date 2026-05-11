@@ -1,5 +1,5 @@
 use crate::{normalize_base_url, payload_string, run_curl_json, run_curl_text};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub(crate) fn url_encode_component(value: &str) -> String {
     let mut out = String::new();

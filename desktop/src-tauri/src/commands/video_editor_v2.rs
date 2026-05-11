@@ -1,6 +1,6 @@
 use crate::helpers::{read_json_value_or, write_json_value};
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -497,10 +497,12 @@ fn handle_split_clip(state: &State<'_, AppState>, payload: &Value) -> Result<Val
             let mut right = clip;
             right["id"] = json!(make_id("clip"));
             right["timelineStartMs"] = json!(cut);
-            right["sourceStartMs"] = json!(clips[index]
-                .get("sourceEndMs")
-                .and_then(Value::as_i64)
-                .unwrap_or(0));
+            right["sourceStartMs"] = json!(
+                clips[index]
+                    .get("sourceEndMs")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+            );
             clips.insert(index + 1, right);
             break;
         }

@@ -1,11 +1,11 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 use tauri::State;
 
 use crate::{
-    make_id, now_i64, now_iso, truncate_chars, workspace_root, write_json_value, AppState,
-    AppStore, MemoryHistoryRecord, UserMemoryRecord,
+    AppState, AppStore, MemoryHistoryRecord, UserMemoryRecord, make_id, now_i64, now_iso,
+    truncate_chars, workspace_root, write_json_value,
 };
 
 #[derive(Clone)]

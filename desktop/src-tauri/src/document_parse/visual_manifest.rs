@@ -1,11 +1,11 @@
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
-use super::{detect_language, mime_type_for_path, ParsedSection};
+use super::{ParsedSection, detect_language, mime_type_for_path};
 
 pub(crate) const VISUAL_SCHEMA_VERSION: &str = "redbox.visual_manifest.v1";
 pub(super) const VISUAL_PARSER_NAME: &str = "redbox-visual-llm-indexer";
@@ -468,20 +468,24 @@ mod tests {
                 .and_then(Value::as_str),
             Some(DEFAULT_PROMPT_VERSION)
         );
-        assert!(manifest
-            .get("summary")
-            .and_then(|summary| summary.get("short"))
-            .and_then(Value::as_str)
-            .is_some_and(|text| text.contains("图片文件")));
-        assert!(manifest
-            .get("retrievalProjection")
-            .and_then(Value::as_array)
-            .and_then(|items| items.first())
-            .and_then(|item| item.get("keywords"))
-            .and_then(Value::as_array)
-            .is_some_and(|keywords| keywords
-                .iter()
-                .any(|value| value.as_str() == Some("视觉索引"))));
+        assert!(
+            manifest
+                .get("summary")
+                .and_then(|summary| summary.get("short"))
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("图片文件"))
+        );
+        assert!(
+            manifest
+                .get("retrievalProjection")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("keywords"))
+                .and_then(Value::as_array)
+                .is_some_and(|keywords| keywords
+                    .iter()
+                    .any(|value| value.as_str() == Some("视觉索引")))
+        );
     }
 
     #[test]

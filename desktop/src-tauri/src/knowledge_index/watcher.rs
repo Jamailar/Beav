@@ -3,12 +3,13 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use notify::{recommended_watcher, Event, RecursiveMode, Watcher};
+use notify::{Event, RecursiveMode, Watcher, recommended_watcher};
 use tauri::{AppHandle, Manager};
 
 use crate::{
+    AppState,
     knowledge_index::{document_blocks::is_visual_candidate_path, jobs},
-    with_store, workspace_root, AppState,
+    with_store, workspace_root,
 };
 
 const WATCH_DEBOUNCE_MS: u64 = 1200;

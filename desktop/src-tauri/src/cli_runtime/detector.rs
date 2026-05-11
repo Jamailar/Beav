@@ -7,8 +7,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::cli_runtime::{
-    discover_extra_bin_paths_with_env, env_path_entries, CliResolvedFrom, CliToolHealth,
-    CliToolRecord, CliToolSource,
+    CliResolvedFrom, CliToolHealth, CliToolRecord, CliToolSource,
+    discover_extra_bin_paths_with_env, env_path_entries,
 };
 use crate::now_i64;
 use crate::process_utils::configure_background_command;
@@ -16,11 +16,7 @@ use crate::process_utils::configure_background_command;
 const VERSION_FLAGS: [&str; 3] = ["--version", "version", "-V"];
 
 fn path_separator() -> char {
-    if cfg!(windows) {
-        ';'
-    } else {
-        ':'
-    }
+    if cfg!(windows) { ';' } else { ':' }
 }
 
 fn looks_like_path(command: &str) -> bool {
@@ -683,10 +679,12 @@ mod tests {
             detected.resolved_path.as_deref(),
             Some(command_path.to_string_lossy().as_ref())
         );
-        assert!(detected
-            .effective_path_preview
-            .iter()
-            .any(|item| item == bin.to_string_lossy().as_ref()));
+        assert!(
+            detected
+                .effective_path_preview
+                .iter()
+                .any(|item| item == bin.to_string_lossy().as_ref())
+        );
 
         let discovered = discover_all_commands(&env, Some("lark-cli"), 10);
         assert!(discovered.iter().any(|item| item.executable == "lark-cli"));
@@ -722,11 +720,13 @@ mod tests {
             Some(command_path.to_string_lossy().as_ref())
         );
         assert_eq!(detected.resolved_from, Some(CliResolvedFrom::HostShellPath));
-        assert!(detected
-            .metadata
-            .as_ref()
-            .and_then(|value| value.get("shellResolveProbe"))
-            .is_some());
+        assert!(
+            detected
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("shellResolveProbe"))
+                .is_some()
+        );
 
         let _ = fs::remove_dir_all(root);
     }

@@ -1,6 +1,6 @@
 use arboard::Clipboard;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -19,9 +19,9 @@ use crate::persistence::{
     with_store_mut,
 };
 use crate::{
-    app_brand_display_name, is_same_path, now_iso, payload_field, payload_string,
+    AppState, app_brand_display_name, is_same_path, now_iso, payload_field, payload_string,
     payload_value_as_string, pick_files_native, refresh_runtime_warm_state, store_root,
-    update_workspace_root_cache, workspace_root_from_snapshot, AppState,
+    update_workspace_root_cache, workspace_root_from_snapshot,
 };
 
 const APP_UPDATE_DOWNLOAD_PAGE_URL: &str = "https://redbox.ziz.hk/download";
@@ -811,9 +811,11 @@ pub fn handle_system_channel(
                     );
                     Ok(json!({ "success": true }))
                 }
-                "clipboard:read-text" => Ok(json!(Clipboard::new()
-                    .and_then(|mut clipboard| clipboard.get_text())
-                    .unwrap_or_default())),
+                "clipboard:read-text" => Ok(json!(
+                    Clipboard::new()
+                        .and_then(|mut clipboard| clipboard.get_text())
+                        .unwrap_or_default()
+                )),
                 "clipboard:write-html" => {
                     let text = payload_string(payload, "text")
                         .or_else(|| payload_string(payload, "html"))

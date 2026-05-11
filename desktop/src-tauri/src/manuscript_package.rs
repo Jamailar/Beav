@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -7,9 +7,10 @@ use std::time::{Duration, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
+    AppState,
     cli_runtime::{
-        execute_cli_command, load_cli_execution_snapshot, refresh_cli_execution, CliExecuteRequest,
-        CliExecutionStatus, CliVerifyRule,
+        CliExecuteRequest, CliExecutionStatus, CliVerifyRule, execute_cli_command,
+        load_cli_execution_snapshot, refresh_cli_execution,
     },
     commands::manuscripts::{
         richpost_theme_catalog_value_for_manifest, richpost_theme_state_value,
@@ -29,7 +30,7 @@ use crate::{
     package_richpost_theme_tokens_path, package_richpost_themes_path, package_scene_ui_path,
     package_timeline_path, package_track_ui_path, parse_json_value_from_text, read_json_value_or,
     read_package_json_entry_or, redbox_project_root, resolve_manuscript_path,
-    title_from_relative_path, write_json_value, write_text_file, AppState,
+    title_from_relative_path, write_json_value, write_text_file,
 };
 
 pub(crate) fn normalize_motion_preset(value: Option<&str>, fallback: &str) -> String {

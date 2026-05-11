@@ -1,10 +1,10 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    app_brand_display_name, append_debug_trace_state, auth, create_official_payment_form,
+    AppState, app_brand_display_name, append_debug_trace_state, auth, create_official_payment_form,
     emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
     fetch_official_models_for_settings, make_id, normalize_base_url,
     normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
@@ -17,13 +17,12 @@ use crate::{
     official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
     run_official_public_json_request, run_official_public_json_request_response,
     upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
-    AppState,
 };
 
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
 const OFFICIAL_SESSION_MAX_REFRESH_WINDOW_MS: i64 = 5 * 60_000;
 const OFFICIAL_POINTS_SILENT_REFRESH_INTERVAL_MS: i64 = 60_000;
-const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 22] = [
+const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 23] = [
     "redbox_official_realm",
     "redbox_official_base_url",
     "redbox_auth_session_json",
@@ -43,6 +42,7 @@ const OFFICIAL_SETTINGS_SYNC_KEYS: [&str; 22] = [
     "model_name_chatroom",
     "model_name_knowledge",
     "model_name_redclaw",
+    "ai_model_routes_json",
     "video_endpoint",
     "video_api_key",
     "video_model",
@@ -333,10 +333,15 @@ fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option
                 settings,
                 "POST",
                 "/users/me/api-keys",
-                Some(json!({ "name": format!("{} Desktop {}", app_brand_display_name(), now_iso()) })),
+                Some(
+                    json!({ "name": format!("{} Desktop {}", app_brand_display_name(), now_iso()) }),
+                ),
             )?;
             resolved_key = extract_official_api_key_value(&created.body);
-            merge_official_api_key_records(settings, normalize_official_api_key_record(&created.body));
+            merge_official_api_key_records(
+                settings,
+                normalize_official_api_key_record(&created.body),
+            );
         }
     }
 
@@ -715,8 +720,10 @@ fn switch_official_realm(settings: &mut Value, realm: &str) -> Result<(), String
         object.insert("redbox_auth_session_json".to_string(), json!(""));
         object.insert(
             "redbox_auth_sessions_json".to_string(),
-            json!(serde_json::to_string(&Value::Object(sessions))
-                .unwrap_or_else(|_| "{}".to_string())),
+            json!(
+                serde_json::to_string(&Value::Object(sessions))
+                    .unwrap_or_else(|_| "{}".to_string())
+            ),
         );
         object.insert("redbox_auth_points_json".to_string(), json!(""));
         object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
@@ -981,6 +988,7 @@ fn merge_official_settings(settings: &mut Value, source: &Value) {
                     | "model_name_chatroom"
                     | "model_name_knowledge"
                     | "model_name_redclaw"
+                    | "ai_model_routes_json"
             )
         {
             continue;
@@ -3300,9 +3308,11 @@ mod tests {
         let sources = payload_string(&settings, "ai_sources_json")
             .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
             .unwrap_or_default();
-        assert!(sources
-            .iter()
-            .any(|item| payload_string(item, "id").as_deref() == Some("custom-source")));
+        assert!(
+            sources
+                .iter()
+                .any(|item| payload_string(item, "id").as_deref() == Some("custom-source"))
+        );
         let official_source = sources
             .iter()
             .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
@@ -3459,8 +3469,10 @@ mod tests {
             payload_string(&request_candidates[0].1, "refresh_token").as_deref(),
             Some("refresh-1")
         );
-        assert!(request_candidates
-            .iter()
-            .all(|(path, _)| *path != "/auth/token/refresh"));
+        assert!(
+            request_candidates
+                .iter()
+                .all(|(path, _)| *path != "/auth/token/refresh")
+        );
     }
 }

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::runtime::RedclawProjectRecord;
-use crate::{make_id, now_iso, payload_string, AppStore};
+use crate::{AppStore, make_id, now_iso, payload_string};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -499,21 +499,51 @@ pub fn redclaw_agent_specs() -> Vec<RedclawAgentSpec> {
 
 fn skill_instruction(skill_id: &str) -> &'static str {
     match skill_id {
-        "xhs.topic_brief" => "Turn research evidence into a RedNote/Xiaohongshu topic brief with audience, pain points, search keywords, hooks, recommended note format, and reasoning.",
-        "xhs.search_keyword_plan" => "Expand topic intent into search/discovery keywords, long-tail phrases, and content tags that fit Xiaohongshu search behavior.",
-        "xhs.note_architecture" => "Convert the topic brief into a note structure with opening strategy, section roles, key messages, and image/page intent.",
-        "xhs.carousel_page_plan" => "Plan each carousel page with purpose, text overlay, visual direction, and sequence logic.",
-        "xhs.copy_package" => "Write a publishable Xiaohongshu copy package: title options, cover title, opening hook, body, CTA, hashtags, comment prompt, and tone notes.",
-        "xhs.visual_brief" => "Define cover and image visual direction, page image types, prompts, overlay text, aspect ratio, and negative constraints.",
-        "xhs.cover_direction" => "Specify cover objective, composition, text hierarchy, safe area, and style constraints for mobile readability.",
-        "xhs.image_manifest" => "Bind generated or matched image assets to note pages, with path, source, prompt, overlay text, and missing asset list.",
-        "xhs.carousel_layout" => "Create a carousel layout manifest with page order, role, image binding, headline/body text, and layout type.",
-        "xhs.cover_text_safety" => "Check cover and carousel text for mobile readability, excessive wording, unsafe claims, and layout risk.",
-        "xhs.compliance_check" => "Check Xiaohongshu platform risk, sensitive expressions, exaggerated promises, medical/financial/legal claims, and commercial disclosure gaps.",
-        "image.prompt_pack" => "Create image prompts and negative prompts from a visual brief without claiming assets already exist.",
-        "image.generate_assets" => "Generate or request image assets according to the visual brief and return concrete asset paths when available.",
-        "image.asset_match" => "Match existing local assets to image requirements and return path-bound candidates with confidence and gaps.",
-        _ => "Execute the named RedClaw skill using the node input and return the declared structured output.",
+        "xhs.topic_brief" => {
+            "Turn research evidence into a RedNote/Xiaohongshu topic brief with audience, pain points, search keywords, hooks, recommended note format, and reasoning."
+        }
+        "xhs.search_keyword_plan" => {
+            "Expand topic intent into search/discovery keywords, long-tail phrases, and content tags that fit Xiaohongshu search behavior."
+        }
+        "xhs.note_architecture" => {
+            "Convert the topic brief into a note structure with opening strategy, section roles, key messages, and image/page intent."
+        }
+        "xhs.carousel_page_plan" => {
+            "Plan each carousel page with purpose, text overlay, visual direction, and sequence logic."
+        }
+        "xhs.copy_package" => {
+            "Write a publishable Xiaohongshu copy package: title options, cover title, opening hook, body, CTA, hashtags, comment prompt, and tone notes."
+        }
+        "xhs.visual_brief" => {
+            "Define cover and image visual direction, page image types, prompts, overlay text, aspect ratio, and negative constraints."
+        }
+        "xhs.cover_direction" => {
+            "Specify cover objective, composition, text hierarchy, safe area, and style constraints for mobile readability."
+        }
+        "xhs.image_manifest" => {
+            "Bind generated or matched image assets to note pages, with path, source, prompt, overlay text, and missing asset list."
+        }
+        "xhs.carousel_layout" => {
+            "Create a carousel layout manifest with page order, role, image binding, headline/body text, and layout type."
+        }
+        "xhs.cover_text_safety" => {
+            "Check cover and carousel text for mobile readability, excessive wording, unsafe claims, and layout risk."
+        }
+        "xhs.compliance_check" => {
+            "Check Xiaohongshu platform risk, sensitive expressions, exaggerated promises, medical/financial/legal claims, and commercial disclosure gaps."
+        }
+        "image.prompt_pack" => {
+            "Create image prompts and negative prompts from a visual brief without claiming assets already exist."
+        }
+        "image.generate_assets" => {
+            "Generate or request image assets according to the visual brief and return concrete asset paths when available."
+        }
+        "image.asset_match" => {
+            "Match existing local assets to image requirements and return path-bound candidates with confidence and gaps."
+        }
+        _ => {
+            "Execute the named RedClaw skill using the node input and return the declared structured output."
+        }
     }
 }
 
@@ -1645,9 +1675,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("string")
         );
-        assert!(profiles
-            .iter()
-            .filter(|profile| profile.domain == "xhs")
-            .all(|profile| profile.output_contract.get("type").is_some()));
+        assert!(
+            profiles
+                .iter()
+                .filter(|profile| profile.domain == "xhs")
+                .all(|profile| profile.output_contract.get("type").is_some())
+        );
     }
 }

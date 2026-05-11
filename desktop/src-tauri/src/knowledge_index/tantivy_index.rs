@@ -3,16 +3,16 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use tantivy::{
+    Document, Index,
     collector::TopDocs,
     query::QueryParser,
-    schema::{Field, Schema, TantivyDocument, STORED, STRING, TEXT},
-    Document, Index,
+    schema::{Field, STORED, STRING, Schema, TEXT, TantivyDocument},
 };
 use tauri::State;
 
 use crate::{
-    knowledge_index::{catalog_root, document_blocks::DocumentBlockRecord},
     AppState,
+    knowledge_index::{catalog_root, document_blocks::DocumentBlockRecord},
 };
 
 const INDEX_DIR_NAME: &str = "tantivy-blocks";

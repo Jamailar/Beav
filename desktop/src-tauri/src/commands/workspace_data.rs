@@ -1,7 +1,7 @@
 use crate::knowledge;
 use crate::persistence::{ensure_store_hydrated_for_work, with_store, with_store_mut};
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 
 pub fn handle_workspace_data_channel(

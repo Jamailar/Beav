@@ -128,6 +128,7 @@ const UNCATEGORIZED_FILTER = '__uncategorized__';
 const DEFAULT_SUBJECT_CATEGORY_NAMES = ['角色', '物品', '品牌', '场景'];
 const SUBJECT_VOICE_SAMPLE_TEXT = '君不见黄河之水天上来，奔流到海不复回。请用自然稳定的语速朗读这段文字，保持音量一致、停顿清晰，让系统更好地学习你的声音特点和语气节奏。';
 const SUBJECT_VOICE_MIN_RECORDING_SECONDS = 30;
+const SUBJECT_AUTOSAVE_DELAY_MS = 600;
 const MEDIA_SOURCE_LABEL: Record<MediaAssetSource, string> = {
     generated: '已生成',
     planned: '计划项',
@@ -203,6 +204,46 @@ function toDraft(subject?: SubjectRecord | null): SubjectDraft {
             scriptText: subject.voiceScript || '',
         } : undefined,
     };
+}
+
+function subjectDraftVoicePayload(draft: SubjectDraft, categories: SubjectCategory[], initialVoicePresent: boolean): Record<string, unknown> | undefined {
+    const shouldSaveVoice = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
+    if (shouldSaveVoice && draft.voice) {
+        return draft.voice.relativePath
+            ? {
+                relativePath: draft.voice.relativePath,
+                name: draft.voice.name,
+                scriptText: draft.voice.scriptText.trim() || undefined,
+            }
+            : {
+                dataUrl: draft.voice.dataUrl,
+                name: draft.voice.name,
+                scriptText: draft.voice.scriptText.trim() || undefined,
+            };
+    }
+    return initialVoicePresent ? {} : undefined;
+}
+
+function subjectDraftPayload(draft: SubjectDraft, voicePayload?: Record<string, unknown>) {
+    return {
+        id: draft.id,
+        name: draft.name.trim(),
+        categoryId: draft.categoryId || undefined,
+        description: draft.description.trim() || undefined,
+        tags: draft.tagsText.split(',').map((item) => item.trim()).filter(Boolean),
+        attributes: normalizeAttributes(draft.attributes),
+        images: draft.images.map((image) => image.relativePath
+            ? { relativePath: image.relativePath, name: image.name }
+            : { dataUrl: image.dataUrl, name: image.name }),
+        voice: voicePayload,
+    };
+}
+
+function subjectDraftPayloadSnapshot(draft: SubjectDraft, categories: SubjectCategory[], initialVoicePresent: boolean): string {
+    return JSON.stringify(subjectDraftPayload(
+        draft,
+        subjectDraftVoicePayload(draft, categories, initialVoicePresent),
+    ));
 }
 
 function normalizeAttributes(attributes: SubjectAttribute[]): SubjectAttribute[] {
@@ -363,8 +404,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const hasEnsuredDefaultCategoriesRef = useRef(false);
     const loadDataRequestRef = useRef(0);
     const refreshedVoiceJobIdsRef = useRef(new Set<string>());
+    const autosaveTimerRef = useRef<number | null>(null);
+    const autosaveLastPayloadRef = useRef<string | null>(null);
+    const autosaveSavingRef = useRef(false);
+    const autosaveVersionRef = useRef(0);
     const [retryingVoiceSubjectId, setRetryingVoiceSubjectId] = useState<string | null>(null);
     const [generatingCardSubjectId, setGeneratingCardSubjectId] = useState<string | null>(null);
+    const [previewImage, setPreviewImage] = useState<SubjectImageDraft | null>(null);
     const voiceJobsById = useMediaJobsStore((state) => state.jobsById);
 
     useEffect(() => {
@@ -545,6 +591,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         if (categoryFilter !== 'all' && categoryFilter !== UNCATEGORIZED_FILTER) {
             nextDraft.categoryId = categoryFilter;
         }
+        autosaveLastPayloadRef.current = null;
         setDraft(nextDraft);
         setInitialVoicePresent(false);
         setError('');
@@ -553,6 +600,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, [categoryFilter]);
 
     const openEditModal = useCallback((subject: SubjectRecord) => {
+        autosaveLastPayloadRef.current = null;
         setDraft(toDraft(subject));
         setInitialVoicePresent(Boolean(subject.voicePreviewUrl));
         setError('');
@@ -661,16 +709,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     }, []);
 
     const buildSubjectPayload = useCallback((voicePayload?: Record<string, unknown>) => ({
-        id: draft.id,
-        name: draft.name.trim(),
-        categoryId: draft.categoryId || undefined,
-        description: draft.description.trim() || undefined,
-        tags: draft.tagsText.split(',').map((item) => item.trim()).filter(Boolean),
-        attributes: normalizeAttributes(draft.attributes),
-        images: draft.images.map((image) => image.relativePath
-            ? { relativePath: image.relativePath, name: image.name }
-            : { dataUrl: image.dataUrl, name: image.name }),
-        voice: voicePayload,
+        ...subjectDraftPayload(draft, voicePayload),
     }), [draft]);
 
     const persistVoiceChange = useCallback(async (voicePayload: Record<string, unknown>, successHint: string) => {
@@ -823,6 +862,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         stopRecordingSession();
         setIsDraftCategoryMenuOpen(false);
         setIsModalOpen(false);
+        setPreviewImage(null);
         setDraft(createEmptyDraft());
         setInitialVoicePresent(false);
         setError('');
@@ -832,6 +872,10 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     useEffect(() => () => {
         stopRecordingSession();
+        if (autosaveTimerRef.current) {
+            window.clearTimeout(autosaveTimerRef.current);
+            autosaveTimerRef.current = null;
+        }
     }, [stopRecordingSession]);
 
     const handleVoiceFileInput = useCallback(async (files: FileList | null) => {
@@ -954,24 +998,34 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         await loadData();
     }, [categoryFilter, draft.categoryId, loadData]);
 
+    const mergeSavedSubject = useCallback((savedSubject: SubjectRecord, syncDraftMedia = false) => {
+        setSubjects((current) => current.map((subject) => (
+            subject.id === savedSubject.id ? savedSubject : subject
+        )));
+        if (!syncDraftMedia) return;
+        setDraft((current) => {
+            if (current.id !== savedSubject.id) return current;
+            const nextDraft = toDraft(savedSubject);
+            autosaveLastPayloadRef.current = subjectDraftPayloadSnapshot(
+                nextDraft,
+                categories,
+                Boolean(savedSubject.voicePreviewUrl),
+            );
+            return nextDraft;
+        });
+        setInitialVoicePresent(Boolean(savedSubject.voicePreviewUrl));
+    }, [categories]);
+
     const persistDraft = useCallback(async (): Promise<SubjectRecord> => {
         if (!draft.name.trim()) {
             throw new Error('资产名称是必填项');
         }
-        const shouldSaveVoice = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
-        const nextVoicePayload = shouldSaveVoice && draft.voice
-            ? (draft.voice.relativePath
-                ? {
-                    relativePath: draft.voice.relativePath,
-                    name: draft.voice.name,
-                    scriptText: draft.voice.scriptText.trim() || undefined,
-                }
-                : {
-                    dataUrl: draft.voice.dataUrl,
-                    name: draft.voice.name,
-                    scriptText: draft.voice.scriptText.trim() || undefined,
-                })
-            : (initialVoicePresent ? {} : undefined);
+        autosaveVersionRef.current += 1;
+        if (autosaveTimerRef.current) {
+            window.clearTimeout(autosaveTimerRef.current);
+            autosaveTimerRef.current = null;
+        }
+        const nextVoicePayload = subjectDraftVoicePayload(draft, categories, initialVoicePresent);
         const payload = buildSubjectPayload(nextVoicePayload);
         const result = draft.id
             ? await window.ipcRenderer.subjects.update(payload)
@@ -981,6 +1035,61 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         }
         return result.subject as SubjectRecord;
     }, [buildSubjectPayload, categories, draft.categoryId, draft.id, draft.name, draft.voice, initialVoicePresent]);
+
+    useEffect(() => {
+        if (!isModalOpen || !draft.id) return;
+        const snapshot = subjectDraftPayloadSnapshot(draft, categories, initialVoicePresent);
+        if (!autosaveLastPayloadRef.current) {
+            autosaveLastPayloadRef.current = snapshot;
+            return;
+        }
+        if (snapshot === autosaveLastPayloadRef.current) return;
+        if (!draft.name.trim()) return;
+
+        autosaveVersionRef.current += 1;
+        const version = autosaveVersionRef.current;
+        const payload = subjectDraftPayload(
+            draft,
+            subjectDraftVoicePayload(draft, categories, initialVoicePresent),
+        );
+        const syncDraftMedia = draft.images.some((image) => image.dataUrl) || Boolean(draft.voice?.dataUrl);
+        const runAutosave = async () => {
+            if (version !== autosaveVersionRef.current) return;
+            if (autosaveSavingRef.current) {
+                autosaveTimerRef.current = window.setTimeout(runAutosave, SUBJECT_AUTOSAVE_DELAY_MS);
+                return;
+            }
+            autosaveSavingRef.current = true;
+            try {
+                const result = await window.ipcRenderer.subjects.update(payload);
+                if (version !== autosaveVersionRef.current) return;
+                if (!result?.success || !result.subject) {
+                    throw new Error(result?.error || '自动保存失败');
+                }
+                autosaveLastPayloadRef.current = snapshot;
+                mergeSavedSubject(result.subject as SubjectRecord, syncDraftMedia);
+                setError('');
+            } catch (e) {
+                if (version === autosaveVersionRef.current) {
+                    console.error('Failed to autosave subject:', e);
+                    setError(e instanceof Error ? e.message : '自动保存失败');
+                }
+            } finally {
+                autosaveSavingRef.current = false;
+            }
+        };
+
+        if (autosaveTimerRef.current) {
+            window.clearTimeout(autosaveTimerRef.current);
+        }
+        autosaveTimerRef.current = window.setTimeout(runAutosave, SUBJECT_AUTOSAVE_DELAY_MS);
+        return () => {
+            if (autosaveTimerRef.current) {
+                window.clearTimeout(autosaveTimerRef.current);
+                autosaveTimerRef.current = null;
+            }
+        };
+    }, [categories, draft, initialVoicePresent, isModalOpen, mergeSavedSubject]);
 
     const handleSave = useCallback(async () => {
         setWorking(true);
@@ -1289,7 +1398,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <div className="text-sm font-medium">暂无媒体</div>
                         </div>
                     ) : viewMode === 'grid' ? (
-                        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                             {filteredMediaAssets.map((asset) => {
                                 const previewUrl = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
                                 const source = normalizeMediaSource(asset.source);
@@ -1300,7 +1409,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
                                         className="overflow-hidden rounded-lg border border-border bg-surface-primary text-left shadow-sm transition hover:shadow-md"
                                     >
-                                        <div className="aspect-[4/5] overflow-hidden bg-surface-secondary/50">
+                                        <div className="aspect-video overflow-hidden bg-surface-secondary/50">
                                             {previewUrl && asset.exists ? (
                                                 isVideoAsset(asset) ? (
                                                     <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
@@ -1376,7 +1485,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-xs text-slate-500">已加载全部</div>
                     </div>
                 ) : viewMode === 'grid' ? (
-                    <div className={clsx('grid gap-2.5', isModalVariant ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6' : 'grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8')}>
+                    <div className={clsx('grid gap-3', isModalVariant ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5')}>
                         {filteredSubjects.map((subject) => {
                             const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
                             return (
@@ -1389,7 +1498,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     onClick={() => openEditModal(subject)}
                                     className="w-full text-left"
                                 >
-                                    <div className="aspect-[4/5] bg-surface-secondary/50 overflow-hidden">
+                                    <div className="aspect-video bg-surface-secondary/50 overflow-hidden">
                                         {subject.primaryPreviewUrl ? (
                                             <img
                                                 src={resolveAssetUrl(subject.primaryPreviewUrl)}
@@ -1750,8 +1859,15 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         {draft.images.length > 0 && (
                                             <div className="grid grid-cols-6 gap-2">
                                                 {draft.images.map((image, index) => (
-                                                    <div key={`${image.relativePath || image.name}-${index}`} className="group relative aspect-square overflow-hidden rounded-lg bg-slate-100">
-                                                        <img src={resolveAssetUrl(image.previewUrl)} alt={image.name} className="h-full w-full object-cover" />
+                                                    <div key={`${image.relativePath || image.name}-${index}`} className="group relative aspect-video overflow-hidden rounded-lg bg-slate-100">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setPreviewImage(image)}
+                                                            className="h-full w-full"
+                                                            aria-label="预览图片"
+                                                        >
+                                                            <img src={resolveAssetUrl(image.previewUrl)} alt={image.name} className="h-full w-full object-cover" />
+                                                        </button>
                                                         <button
                                                             type="button"
                                                             onClick={() => handleRemoveImage(index)}
@@ -1941,6 +2057,32 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 </button>
                             </div>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {previewImage && (
+                <div
+                    className="fixed inset-0 z-[160] flex items-center justify-center bg-black/75 p-6"
+                    onMouseDown={() => setPreviewImage(null)}
+                >
+                    <div
+                        className="relative max-h-full max-w-5xl"
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => setPreviewImage(null)}
+                            className="absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-black/80"
+                            aria-label="关闭预览"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                        <img
+                            src={resolveAssetUrl(previewImage.previewUrl)}
+                            alt={previewImage.name}
+                            className="max-h-[82vh] max-w-[88vw] rounded-xl bg-white object-contain shadow-2xl"
+                        />
                     </div>
                 </div>
             )}

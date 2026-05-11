@@ -6,29 +6,30 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
+    AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord, YoutubeVideoRecord,
     knowledge_index::{
         advisor_source_id,
         canonical_store::{
             delete_documents_by_ids, load_document_rows, load_visual_retry_gates, replace_documents,
         },
-        catalog::{replace_catalog, KnowledgeCatalogSummary},
+        catalog::{KnowledgeCatalogSummary, replace_catalog},
         citation_anchors::{
             build_anchors_for_blocks, delete_anchors_for_documents, replace_anchors,
             replace_anchors_for_source, upsert_anchors_for_documents,
         },
         document_blocks::{
-            block_records_from_document, build_blocks_for_source_with_cache_policy_and_visual_seen,
+            CanonicalCachePolicy, block_records_from_document,
+            build_blocks_for_source_with_cache_policy_and_visual_seen,
             canonical_needs_visual_backfill_for_config, is_visual_candidate_path,
             rebuild_search_index_from_blocks, replace_blocks, replace_blocks_for_source,
             resolve_visual_index_config, upsert_blocks_for_documents,
             visual_backfill_candidate_unit_ids, visual_document_blocks_missing,
-            visual_document_ids_missing_blocks, CanonicalCachePolicy,
+            visual_document_ids_missing_blocks,
         },
         fingerprint::fingerprint_file,
         mark_indexed_now,
     },
-    now_i64, now_iso, workspace_root, AppState, DocumentKnowledgeSourceRecord, KnowledgeNoteRecord,
-    YoutubeVideoRecord,
+    now_i64, now_iso, workspace_root,
 };
 
 type IndexedFileRow = (String, String, i64, i64, String, String);

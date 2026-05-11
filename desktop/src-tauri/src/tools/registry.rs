@@ -1,16 +1,17 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
+use crate::AppStore;
 use crate::mcp::{McpToolInfo, McpToolInventorySnapshot};
 use crate::tools::catalog::{
-    descriptor_by_name, schema_for_tool_for_runtime_mode, schema_for_tool_from_action_descriptors,
-    tool_action_family_summary, tool_action_family_summary_for_descriptors, ToolDescriptor,
+    ToolDescriptor, descriptor_by_name, schema_for_tool_for_runtime_mode,
+    schema_for_tool_from_action_descriptors, tool_action_family_summary,
+    tool_action_family_summary_for_descriptors,
 };
 use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_runtime_mode};
 use crate::tools::plan::{
-    base_tool_names_for_metadata, build_tool_registry_plan_for_session,
-    build_tool_registry_plan_for_session_with_mcp, ToolRegistryPlan,
+    ToolRegistryPlan, base_tool_names_for_metadata, build_tool_registry_plan_for_session,
+    build_tool_registry_plan_for_session_with_mcp,
 };
-use crate::AppStore;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {
@@ -493,6 +494,10 @@ mod tests {
             metadata: Some(json!({
                 "allowedTools": ["resource", "runtime_control", "not_real"]
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         });
 
         let names = tool_names_for_session(&store, "team", Some("session-1"));
@@ -514,6 +519,10 @@ mod tests {
                     "manuscripts.writeCurrent"
                 ]
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         });
 
         let schemas = openai_schemas_for_session(&store, "redclaw", Some("session-1"));

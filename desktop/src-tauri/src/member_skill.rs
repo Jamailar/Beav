@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,11 +7,11 @@ use tauri::State;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    merge_requested_skills_into_metadata, refresh_skill_store_catalog, SkillActivationSource,
+    SkillActivationSource, merge_requested_skills_into_metadata, refresh_skill_store_catalog,
 };
 use crate::{
-    advisor_knowledge_dir, build_excerpt_around, now_i64, now_iso, slug_from_relative_path,
-    workspace_root, AdvisorRecord, AppState, AppStore,
+    AdvisorRecord, AppState, AppStore, advisor_knowledge_dir, build_excerpt_around, now_i64,
+    now_iso, slug_from_relative_path, workspace_root,
 };
 
 const MEMBER_SKILL_REASON: &str = "advisor-member-skill";
@@ -1184,8 +1184,9 @@ fn build_member_skill_artifacts(
             "# Examples\n\nUse this folder for reviewed sample replies from {}. Runtime generation does not require examples to exist.\n",
             advisor.name
         ),
-        script_readme: "# Scripts\n\nOptional local helper scripts for this member skill package.\n"
-            .to_string(),
+        script_readme:
+            "# Scripts\n\nOptional local helper scripts for this member skill package.\n"
+                .to_string(),
     }
 }
 

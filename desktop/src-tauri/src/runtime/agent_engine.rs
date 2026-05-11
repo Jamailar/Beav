@@ -175,9 +175,11 @@ mod tests {
         assert_eq!(route.intent, "redclaw_orchestration");
         assert_eq!(route.recommended_role, "ops-coordinator");
         assert!(route.requires_multi_agent);
-        assert!(route
-            .required_capabilities
-            .contains(&"multi-agent-creative-pipeline".to_string()));
+        assert!(
+            route
+                .required_capabilities
+                .contains(&"multi-agent-creative-pipeline".to_string())
+        );
     }
 }
 

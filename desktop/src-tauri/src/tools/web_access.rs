@@ -1,5 +1,5 @@
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Read;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::time::Duration;
@@ -189,11 +189,7 @@ fn extract_title(html: &str) -> Option<String> {
     let re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
     let raw = re.captures(html)?.get(1)?.as_str();
     let title = normalize_text(&decode_html_entities(raw));
-    if title.is_empty() {
-        None
-    } else {
-        Some(title)
-    }
+    if title.is_empty() { None } else { Some(title) }
 }
 
 fn html_to_text(html: &str) -> String {

@@ -2,7 +2,7 @@ use tauri::State;
 
 use super::recall::build_memory_recall_summary;
 use super::types::MemoryPromptSection;
-use crate::{truncate_chars, AppState};
+use crate::{AppState, truncate_chars};
 
 pub(crate) fn build_memory_prompt_section(
     state: &State<'_, AppState>,

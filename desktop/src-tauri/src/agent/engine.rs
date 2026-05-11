@@ -3,8 +3,8 @@ use serde_json::Value;
 use crate::app_ai_display_name;
 
 use crate::agent::{
-    build_runtime_query_checkpoint_bundle, PreparedChatSendTurn, PreparedRuntimeQueryTurn,
-    PreparedSessionBridgeTurn, RuntimeQueryCheckpointBundle,
+    PreparedChatSendTurn, PreparedRuntimeQueryTurn, PreparedSessionBridgeTurn,
+    RuntimeQueryCheckpointBundle, build_runtime_query_checkpoint_bundle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

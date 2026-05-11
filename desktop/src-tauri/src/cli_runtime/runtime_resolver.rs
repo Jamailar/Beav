@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::cli_runtime::{
-    active_workspace_root, create_task_ephemeral_environment, ensure_app_global_environment,
-    ensure_workspace_environment, find_cli_environment_by_id, list_cli_environments,
     CliEnvironmentRecord, CliEnvironmentResolution, CliEnvironmentResolveRequest,
-    CliEnvironmentScope,
+    CliEnvironmentScope, active_workspace_root, create_task_ephemeral_environment,
+    ensure_app_global_environment, ensure_workspace_environment, find_cli_environment_by_id,
+    list_cli_environments,
 };
-use crate::{is_same_path, AppState};
+use crate::{AppState, is_same_path};
 
 fn normalized_text(value: Option<&str>) -> Option<String> {
     value

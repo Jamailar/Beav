@@ -140,6 +140,44 @@ type SettingsNavigationTarget = {
   nonce?: number;
 };
 
+type AiModelRouteMode = 'inherit' | 'official' | 'custom' | 'disabled';
+type AiModelRouteScope =
+  | 'chat'
+  | 'wander'
+  | 'team'
+  | 'knowledge'
+  | 'redclaw'
+  | 'transcription'
+  | 'embedding'
+  | 'image'
+  | 'visualIndex'
+  | 'videoAnalysis'
+  | 'voiceTts'
+  | 'voiceClone';
+
+type AiModelRouteConfig = {
+  mode: AiModelRouteMode;
+  sourceId?: string;
+  model?: string;
+};
+
+type AiModelRoutes = Record<AiModelRouteScope, AiModelRouteConfig>;
+
+const DEFAULT_AI_MODEL_ROUTES: AiModelRoutes = {
+  chat: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
+  wander: { mode: 'inherit', model: '' },
+  team: { mode: 'inherit', model: '' },
+  knowledge: { mode: 'inherit', model: '' },
+  redclaw: { mode: 'inherit', model: '' },
+  transcription: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
+  embedding: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
+  image: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
+  visualIndex: { mode: 'disabled', sourceId: 'redbox_official_auto', model: '' },
+  videoAnalysis: { mode: 'disabled', sourceId: 'redbox_official_auto', model: '' },
+  voiceTts: { mode: 'official', sourceId: 'redbox_official_auto', model: 'speech-2.8-turbo' },
+  voiceClone: { mode: 'official', sourceId: 'redbox_official_auto', model: 'minimax-voice-clone' },
+};
+
 type SettingsSkill = {
   name: string;
   description: string;
@@ -788,14 +826,43 @@ function clearCachedFileIndexDashboard() {
   }
 }
 
+function normalizeAiModelRoutes(value: unknown): AiModelRoutes {
+  const parsed = typeof value === 'string'
+    ? (() => {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return null;
+      }
+    })()
+    : value;
+  const source = parsed && typeof parsed === 'object' ? parsed as Partial<Record<AiModelRouteScope, Partial<AiModelRouteConfig>>> : {};
+  const next = { ...DEFAULT_AI_MODEL_ROUTES } as AiModelRoutes;
+  for (const key of Object.keys(DEFAULT_AI_MODEL_ROUTES) as AiModelRouteScope[]) {
+    const route = source[key];
+    if (!route || typeof route !== 'object') continue;
+    const mode = String(route.mode || '').trim();
+    next[key] = {
+      mode: mode === 'inherit' || mode === 'custom' || mode === 'disabled' || mode === 'official'
+        ? mode
+        : DEFAULT_AI_MODEL_ROUTES[key].mode,
+      sourceId: String(route.sourceId || '').trim() || DEFAULT_AI_MODEL_ROUTES[key].sourceId,
+      model: String(route.model || '').trim() || DEFAULT_AI_MODEL_ROUTES[key].model,
+    };
+  }
+  return next;
+}
+
 export function Settings({
   isActive = true,
+  onOpenAppOnboarding,
   onOpenRedClawOnboarding,
   redclawOnboardingVersion = 0,
   navigationTarget,
   onReturn,
 }: {
   isActive?: boolean;
+  onOpenAppOnboarding?: () => void;
   onOpenRedClawOnboarding?: () => void;
   redclawOnboardingVersion?: number;
   navigationTarget?: SettingsNavigationTarget | null;
@@ -899,7 +966,9 @@ export function Settings({
     cli_runtime_execution_mode: 'host_compatible',
     developer_mode_enabled: false,
     developer_mode_unlocked_at: '',
+    ai_model_routes_json: JSON.stringify(DEFAULT_AI_MODEL_ROUTES),
   });
+  const [aiModelRoutes, setAiModelRoutes] = useState<AiModelRoutes>(DEFAULT_AI_MODEL_ROUTES);
   const [aiSources, setAiSources] = useState<AiSourceConfig[]>([]);
   const [defaultAiSourceId, setDefaultAiSourceId] = useState('');
   const [activeAiSourceId, setActiveAiSourceId] = useState('');
@@ -1739,6 +1808,13 @@ export function Settings({
     && officialAuthStatus !== 'restoring'
     && Boolean((officialAuthState as { loggedIn?: boolean } | null)?.loggedIn);
   const officialAuthNeedsLogin = officialAuthKnown && !officialAuthPending && !officialAuthLoggedIn;
+  const officialAiSource = useMemo(() => (
+    displayedAiSources.find((source) => isOfficialManagedSource(source)) || null
+  ), [displayedAiSources, isOfficialManagedSource]);
+  const customAiSources = useMemo(() => (
+    aiSources.filter((source) => !isOfficialManagedSource(source))
+  ), [aiSources, isOfficialManagedSource]);
+  const firstCustomAiSource = customAiSources[0] || null;
 
   const defaultSourceModels = useMemo(() => {
     if (!defaultAiSource) return [];
@@ -2165,6 +2241,91 @@ export function Settings({
       ]),
     }));
   };
+
+  const getRouteSource = useCallback((route: AiModelRouteConfig): AiSourceConfig | null => {
+    if (route.mode === 'official') return officialAiSource;
+    if (route.mode === 'custom') {
+      return getAiSourceById(route.sourceId || '') || firstCustomAiSource;
+    }
+    return null;
+  }, [firstCustomAiSource, getAiSourceById, officialAiSource]);
+
+  const updateAiModelRoute = useCallback((scope: AiModelRouteScope, patch: Partial<AiModelRouteConfig>) => {
+    setAiModelRoutes((prev) => {
+      const next = {
+        ...prev,
+        [scope]: {
+          ...prev[scope],
+          ...patch,
+        },
+      } as AiModelRoutes;
+      setFormData((data) => ({ ...data, ai_model_routes_json: JSON.stringify(next) }));
+      return next;
+    });
+  }, []);
+
+  const applyRouteSource = useCallback((scope: AiModelRouteScope, mode: AiModelRouteMode) => {
+    const source = mode === 'official' ? officialAiSource : mode === 'custom' ? firstCustomAiSource : null;
+    const nextSourceId = source?.id || (mode === 'official' ? 'redbox_official_auto' : '');
+    updateAiModelRoute(scope, { mode, sourceId: nextSourceId });
+    if (!source) {
+      if (scope === 'visualIndex') {
+        setFormData((prev) => ({ ...prev, visual_index_enabled: false }));
+      }
+      if (scope === 'videoAnalysis') {
+        setFormData((prev) => ({ ...prev, video_analysis_enabled: false }));
+      }
+      return;
+    }
+
+    if (scope === 'chat') {
+      markAiSourceDraftDirty();
+      setDefaultAiSourceId(source.id);
+      setActiveAiSourceId(source.id);
+      return;
+    }
+    if (scope === 'transcription') handleLinkedSourceChange('transcription', source.id);
+    if (scope === 'embedding') handleLinkedSourceChange('embedding', source.id);
+    if (scope === 'image') handleLinkedSourceChange('image', source.id);
+    if (scope === 'visualIndex') {
+      setFormData((prev) => ({ ...prev, visual_index_enabled: mode !== 'disabled' }));
+      handleLinkedSourceChange('visual', source.id);
+    }
+    if (scope === 'videoAnalysis') {
+      setFormData((prev) => ({ ...prev, video_analysis_enabled: mode !== 'disabled' }));
+      handleLinkedSourceChange('videoAnalysis', source.id);
+    }
+  }, [firstCustomAiSource, handleLinkedSourceChange, markAiSourceDraftDirty, officialAiSource, updateAiModelRoute]);
+
+  const applyRouteModel = useCallback((scope: AiModelRouteScope, modelId: string) => {
+    const normalizedModel = String(modelId || '').trim();
+    updateAiModelRoute(scope, { model: normalizedModel });
+    if (scope === 'chat' && defaultAiSource) {
+      handleSetSourceDefaultModel(defaultAiSource.id, normalizedModel);
+    } else if (scope === 'wander') {
+      setFormData((prev) => ({ ...prev, model_name_wander: normalizedModel }));
+    } else if (scope === 'team') {
+      setFormData((prev) => ({ ...prev, model_name_chatroom: normalizedModel }));
+    } else if (scope === 'knowledge') {
+      setFormData((prev) => ({ ...prev, model_name_knowledge: normalizedModel }));
+    } else if (scope === 'redclaw') {
+      setFormData((prev) => ({ ...prev, model_name_redclaw: normalizedModel }));
+    } else if (scope === 'transcription') {
+      setFormData((prev) => ({ ...prev, transcription_model: normalizedModel }));
+    } else if (scope === 'embedding') {
+      setFormData((prev) => ({ ...prev, embedding_model: normalizedModel }));
+    } else if (scope === 'image') {
+      setFormData((prev) => ({ ...prev, image_model: normalizedModel }));
+    } else if (scope === 'visualIndex') {
+      setFormData((prev) => ({ ...prev, visual_index_model: normalizedModel }));
+    } else if (scope === 'videoAnalysis') {
+      setFormData((prev) => ({ ...prev, video_analysis_model: normalizedModel }));
+    } else if (scope === 'voiceTts') {
+      setFormData((prev) => ({ ...prev, voice_tts_model: normalizedModel, tts_model: normalizedModel }));
+    } else if (scope === 'voiceClone') {
+      setFormData((prev) => ({ ...prev, voice_clone_model: normalizedModel }));
+    }
+  }, [defaultAiSource, updateAiModelRoute]);
 
   const handleRemoveSourceModel = (sourceId: string, modelId: string) => {
     const normalizedModel = String(modelId || '').trim();
@@ -3750,6 +3911,81 @@ export function Settings({
         const loadedCliRuntimeExecutionMode = normalizeCliRuntimeExecutionMode(
           settings.cli_runtime_execution_mode,
         );
+        const loadedModelRoutes = normalizeAiModelRoutes(settings.ai_model_routes_json);
+        const routeSourceMode = (sourceId: string, fallback: AiModelRouteMode = 'custom'): AiModelRouteMode => (
+          sourceId === 'redbox_official_auto' ? 'official' : fallback
+        );
+        const nextModelRoutes: AiModelRoutes = {
+          ...loadedModelRoutes,
+          chat: {
+            ...loadedModelRoutes.chat,
+            mode: routeSourceMode(normalizedDefaultId, loadedModelRoutes.chat.mode),
+            sourceId: normalizedDefaultId,
+            model: loadedModelRoutes.chat.model || String(resolvedDefaultSource?.model || settings.model_name || '').trim(),
+          },
+          wander: {
+            ...loadedModelRoutes.wander,
+            model: loadedModelRoutes.wander.model || String(settings.model_name_wander || '').trim(),
+          },
+          team: {
+            ...loadedModelRoutes.team,
+            model: loadedModelRoutes.team.model || String(settings.model_name_chatroom || '').trim(),
+          },
+          knowledge: {
+            ...loadedModelRoutes.knowledge,
+            model: loadedModelRoutes.knowledge.model || String(settings.model_name_knowledge || '').trim(),
+          },
+          redclaw: {
+            ...loadedModelRoutes.redclaw,
+            model: loadedModelRoutes.redclaw.model || String(settings.model_name_redclaw || '').trim(),
+          },
+          transcription: {
+            ...loadedModelRoutes.transcription,
+            mode: routeSourceMode(resolvedTranscriptionSourceId, loadedModelRoutes.transcription.mode),
+            sourceId: resolvedTranscriptionSourceId,
+            model: loadedModelRoutes.transcription.model || String(settings.transcription_model || '').trim(),
+          },
+          embedding: {
+            ...loadedModelRoutes.embedding,
+            mode: routeSourceMode(resolvedEmbeddingSourceId, loadedModelRoutes.embedding.mode),
+            sourceId: resolvedEmbeddingSourceId,
+            model: loadedModelRoutes.embedding.model || String(settings.embedding_model || '').trim(),
+          },
+          image: {
+            ...loadedModelRoutes.image,
+            mode: routeSourceMode(resolvedImageSourceId, loadedModelRoutes.image.mode),
+            sourceId: resolvedImageSourceId,
+            model: loadedModelRoutes.image.model || String(settings.image_model || '').trim(),
+          },
+          visualIndex: {
+            ...loadedModelRoutes.visualIndex,
+            mode: Boolean(settings.visual_index_enabled)
+              ? routeSourceMode(resolvedVisualIndexSourceId, loadedModelRoutes.visualIndex.mode === 'disabled' ? 'official' : loadedModelRoutes.visualIndex.mode)
+              : 'disabled',
+            sourceId: resolvedVisualIndexSourceId,
+            model: loadedModelRoutes.visualIndex.model || String(settings.visual_index_model || '').trim(),
+          },
+          videoAnalysis: {
+            ...loadedModelRoutes.videoAnalysis,
+            mode: Boolean(settings.video_analysis_enabled)
+              ? routeSourceMode(resolvedVideoAnalysisSourceId, loadedModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : loadedModelRoutes.videoAnalysis.mode)
+              : 'disabled',
+            sourceId: resolvedVideoAnalysisSourceId,
+            model: loadedModelRoutes.videoAnalysis.model || String(settings.video_analysis_model || '').trim(),
+          },
+          voiceTts: {
+            ...loadedModelRoutes.voiceTts,
+            mode: 'official',
+            sourceId: 'redbox_official_auto',
+            model: String(settings.voice_tts_model || settings.tts_model || loadedModelRoutes.voiceTts.model || 'speech-2.8-turbo').trim(),
+          },
+          voiceClone: {
+            ...loadedModelRoutes.voiceClone,
+            mode: 'official',
+            sourceId: 'redbox_official_auto',
+            model: String(settings.voice_clone_model || loadedModelRoutes.voiceClone.model || 'minimax-voice-clone').trim(),
+          },
+        };
 
         setCurrentSpaceState(
           (settings as { active_space_id?: string; activeSpaceId?: string }).active_space_id
@@ -3798,6 +4034,7 @@ export function Settings({
         setVideoAnalysisSourceId(resolvedVideoAnalysisSourceId);
         setImageSourceId(resolvedImageSourceId);
         setVoiceSourceId(resolvedVoiceSourceId);
+        setAiModelRoutes(nextModelRoutes);
         setNotificationSettings(parseNotificationSettings(settings.notifications_json));
         clearAiSourceDraftDirty();
         console.log('[settings][ai] loadSettings-applied', {
@@ -3906,6 +4143,7 @@ export function Settings({
           cli_runtime_execution_mode: loadedCliRuntimeExecutionMode,
           developer_mode_enabled: developerModeEnabled,
           developer_mode_unlocked_at: developerModeEnabled ? unlockedAt : '',
+          ai_model_routes_json: JSON.stringify(nextModelRoutes),
         });
 
         if (Boolean(settings.developer_mode_enabled) && !developerModeEnabled) {
@@ -3927,6 +4165,7 @@ export function Settings({
         setDetectedAiProtocol('openai');
         setMcpServers([]);
         setCliRuntimeExecutionMode('host_compatible');
+        setAiModelRoutes(DEFAULT_AI_MODEL_ROUTES);
         setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS);
         clearAiSourceDraftDirty();
       }
@@ -5491,6 +5730,35 @@ export function Settings({
       if (formData.video_analysis_enabled && (!normalizedVideoAnalysisEndpoint || !resolvedVideoAnalysisModel)) {
         throw new Error('启用视频分析专用模型时必须填写 Endpoint 和模型名');
       }
+      const normalizedModelRoutes: AiModelRoutes = {
+        ...aiModelRoutes,
+        chat: {
+          ...aiModelRoutes.chat,
+          sourceId: resolvedDefaultSourceId || defaultSource?.id || '',
+          model: resolvedModelName,
+        },
+        wander: { ...aiModelRoutes.wander, model: String(formData.model_name_wander || '').trim() },
+        team: { ...aiModelRoutes.team, model: String(formData.model_name_chatroom || '').trim() },
+        knowledge: { ...aiModelRoutes.knowledge, model: String(formData.model_name_knowledge || '').trim() },
+        redclaw: { ...aiModelRoutes.redclaw, model: String(formData.model_name_redclaw || '').trim() },
+        transcription: { ...aiModelRoutes.transcription, sourceId: resolvedTranscriptionSource?.id || '', model: resolvedTranscriptionModel },
+        embedding: { ...aiModelRoutes.embedding, sourceId: resolvedEmbeddingSource?.id || '', model: resolvedEmbeddingModel },
+        image: { ...aiModelRoutes.image, sourceId: resolvedImageSource?.id || '', model: resolvedImageModel },
+        visualIndex: {
+          ...aiModelRoutes.visualIndex,
+          mode: formData.visual_index_enabled ? aiModelRoutes.visualIndex.mode === 'disabled' ? 'official' : aiModelRoutes.visualIndex.mode : 'disabled',
+          sourceId: resolvedVisualIndexSource?.id || '',
+          model: resolvedVisualIndexModel,
+        },
+        videoAnalysis: {
+          ...aiModelRoutes.videoAnalysis,
+          mode: formData.video_analysis_enabled ? aiModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : aiModelRoutes.videoAnalysis.mode : 'disabled',
+          sourceId: resolvedVideoAnalysisSource?.id || '',
+          model: resolvedVideoAnalysisModel,
+        },
+        voiceTts: { mode: 'official', sourceId: 'redbox_official_auto', model: resolvedVoiceTtsModel },
+        voiceClone: { mode: 'official', sourceId: 'redbox_official_auto', model: resolvedVoiceCloneModel },
+      };
       const parsedParserTimeoutSeconds = Number(formData.parser_timeout_seconds);
       const parserTimeoutSeconds = Number.isFinite(parsedParserTimeoutSeconds)
         ? Math.min(300, Math.max(10, Math.floor(parsedParserTimeoutSeconds)))
@@ -5562,6 +5830,7 @@ export function Settings({
         video_endpoint: REDBOX_OFFICIAL_VIDEO_BASE_URL,
         video_api_key: String(formData.video_api_key || formData.api_key || '').trim(),
         video_model: resolvedVideoModel,
+        ai_model_routes_json: JSON.stringify(normalizedModelRoutes),
         ai_sources_json: JSON.stringify(sanitizedSources),
         default_ai_source_id: resolvedDefaultSourceId || defaultSource?.id || '',
         mcp_servers_json: JSON.stringify(mcpServers),
@@ -5615,6 +5884,98 @@ export function Settings({
       console.warn('Failed to play notification test sound:', error);
     }
   }, [notificationSettings.sound.volume]);
+
+  const routeModelOptions = useCallback((scope: AiModelRouteScope, source: AiSourceConfig | null): AiModelDescriptor[] => {
+    if (!source) return [];
+    const models = getSourceModelList(source);
+    if (scope === 'transcription') return filterAiModelsByCapability(models, 'transcription');
+    if (scope === 'embedding') return filterAiModelsByCapability(models, 'embedding');
+    if (scope === 'image') return filterAiModelsByCapability(models, 'image');
+    if (scope === 'visualIndex') return filterVisualIndexModels(models);
+    if (scope === 'videoAnalysis') return filterVideoAnalysisModels(models);
+    if (scope === 'voiceTts') return filterAiModelsByCapability(models, 'audio');
+    return filterAiModelsByCapability(models, 'chat');
+  }, [filterVideoAnalysisModels, filterVisualIndexModels, getSourceModelList]);
+
+  const renderRouteModeButton = (
+    scope: AiModelRouteScope,
+    mode: AiModelRouteMode,
+    label: string,
+    disabled = false,
+  ) => {
+    const route = aiModelRoutes[scope];
+    const active = route.mode === mode;
+    return (
+      <button
+        key={mode}
+        type="button"
+        disabled={disabled}
+        onClick={() => applyRouteSource(scope, mode)}
+        className={clsx(
+          'h-8 rounded-md px-2.5 text-xs font-medium transition-colors',
+          active
+            ? 'bg-surface-primary text-text-primary shadow-sm'
+            : 'text-text-tertiary hover:bg-surface-primary/70 hover:text-text-primary',
+          disabled && 'cursor-not-allowed opacity-45 hover:bg-transparent hover:text-text-tertiary'
+        )}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  const renderModelRouteRow = (params: {
+    scope: AiModelRouteScope;
+    label: string;
+    value: string;
+    fixedOfficial?: boolean;
+    allowInherit?: boolean;
+    allowDisabled?: boolean;
+  }) => {
+    const route = aiModelRoutes[params.scope];
+    const source = getRouteSource(route);
+    const options = routeModelOptions(params.scope, source);
+    const disabled = route.mode === 'disabled' || route.mode === 'inherit' || params.fixedOfficial;
+    const selectedValue = params.value || route.model || '';
+    const customDisabled = !firstCustomAiSource;
+    const officialDisabled = !officialAuthLoggedIn && !params.fixedOfficial;
+
+    return (
+      <div key={params.scope} className="grid grid-cols-[minmax(112px,0.8fr)_minmax(210px,1fr)_minmax(220px,1.2fr)] items-center gap-3 border-t border-border/70 px-3 py-2.5 first:border-t-0">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-text-primary">{params.label}</div>
+          {route.mode === 'official' && officialAuthNeedsLogin && !params.fixedOfficial && (
+            <div className="mt-0.5 text-[11px] text-amber-600">需要登录</div>
+          )}
+        </div>
+        <div className="inline-grid w-fit grid-flow-col gap-1 rounded-lg border border-border bg-surface-secondary/50 p-1">
+          {params.allowDisabled && renderRouteModeButton(params.scope, 'disabled', '关闭')}
+          {params.allowInherit && renderRouteModeButton(params.scope, 'inherit', '跟随默认')}
+          {renderRouteModeButton(params.scope, 'official', '官方', officialDisabled)}
+          {!params.fixedOfficial && renderRouteModeButton(params.scope, 'custom', '自定义', customDisabled)}
+        </div>
+        {params.fixedOfficial ? (
+          <div className="truncate rounded-md border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary">
+            {selectedValue || '官方自动管理'}
+          </div>
+        ) : (
+          <AiModelSelect
+            value={selectedValue}
+            onChange={(modelId) => applyRouteModel(params.scope, modelId)}
+            disabled={disabled || !options.length}
+            placeholder={route.mode === 'inherit' ? '跟随默认模型' : route.mode === 'disabled' ? '已关闭' : '请选择模型'}
+            className="w-full"
+            options={options.map((model) => ({
+              id: model.id,
+              label: model.id,
+              badges: buildModelCapabilityBadges(model.capabilities),
+              inputIcons: buildModelInputIcons(model.inputCapabilities),
+            }))}
+          />
+        )}
+      </div>
+    );
+  };
 
   const tabs = [
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
@@ -5696,6 +6057,7 @@ export function Settings({
                 handleDismissPendingReport={handleDismissPendingReport}
                 handleVersionTap={handleVersionTap}
                 handleOpenDownloadPage={handleOpenDownloadPage}
+                handleOpenAppOnboarding={onOpenAppOnboarding}
               />
             )}
 
@@ -5726,6 +6088,98 @@ export function Settings({
                     </div>
                   )}
 
+                  <div className="overflow-hidden rounded-xl border border-border bg-surface-secondary/20">
+                    <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
+                      <div>
+                        <h3 className="text-sm font-medium text-text-primary">模型路由</h3>
+                        <p className="mt-0.5 text-[11px] text-text-tertiary">
+                          每个功能选择官方或自定义；生视频、TTS、声音复刻暂时固定官方。
+                        </p>
+                      </div>
+                      {officialAuthNeedsLogin && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAiModelSettings(false)}
+                          className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
+                        >
+                          登录
+                        </button>
+                      )}
+                    </div>
+                    <div className="overflow-x-auto">
+                    <div className="min-w-[620px]">
+                      {renderModelRouteRow({
+                        scope: 'chat',
+                        label: '默认聊天',
+                        value: defaultAiSource?.model || formData.model_name,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'wander',
+                        label: '漫步',
+                        value: formData.model_name_wander,
+                        allowInherit: true,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'team',
+                        label: 'Team',
+                        value: formData.model_name_chatroom,
+                        allowInherit: true,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'knowledge',
+                        label: '知识库问答',
+                        value: formData.model_name_knowledge,
+                        allowInherit: true,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'redclaw',
+                        label: APP_BRAND.aiDisplayName,
+                        value: formData.model_name_redclaw,
+                        allowInherit: true,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'transcription',
+                        label: '转录',
+                        value: formData.transcription_model,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'embedding',
+                        label: 'Embedding',
+                        value: formData.embedding_model,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'image',
+                        label: '生图',
+                        value: formData.image_model,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'visualIndex',
+                        label: '视觉索引',
+                        value: formData.visual_index_model,
+                        allowDisabled: true,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'videoAnalysis',
+                        label: '视频分析',
+                        value: formData.video_analysis_model,
+                        allowDisabled: true,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'voiceTts',
+                        label: 'TTS',
+                        value: formData.voice_tts_model || formData.tts_model || 'speech-2.8-turbo',
+                        fixedOfficial: true,
+                      })}
+                      {renderModelRouteRow({
+                        scope: 'voiceClone',
+                        label: '声音复刻',
+                        value: formData.voice_clone_model || 'minimax-voice-clone',
+                        fixedOfficial: true,
+                      })}
+                    </div>
+                    </div>
+                  </div>
+
                   <div className="rounded-xl border border-border bg-surface-secondary/20 overflow-hidden">
                     <button
                       type="button"
@@ -5734,7 +6188,7 @@ export function Settings({
                       aria-expanded={showAiModelSettings}
                       aria-controls="ai-model-settings-panel"
                     >
-                      <span className="text-sm font-medium text-text-primary">模型设置</span>
+                      <span className="text-sm font-medium text-text-primary">高级：自定义模型源</span>
                       <ChevronDown className={clsx('h-4 w-4 text-text-tertiary transition-transform', showAiModelSettings && 'rotate-180')} />
                     </button>
 

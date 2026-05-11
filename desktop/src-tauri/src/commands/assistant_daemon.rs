@@ -1,11 +1,11 @@
 use crate::persistence::{with_store, with_store_mut};
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use tauri::{AppHandle, State};
 
