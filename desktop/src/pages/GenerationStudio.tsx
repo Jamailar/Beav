@@ -1646,16 +1646,13 @@ function AssetPreview({
     }
     if (isAudioAsset(asset)) {
         return (
-            <div
-                className={clsx('flex w-full flex-col justify-center rounded-[16px] border border-border bg-surface-secondary px-4 py-4', className)}
+            <audio
+                src={src}
+                controls
+                preload="metadata"
+                className={clsx('w-full', className)}
                 style={style}
-            >
-                <div className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-text-primary">
-                    <Music2 className="h-4 w-4 text-brand-red" />
-                    <span className="truncate">{asset.title || '生成音频'}</span>
-                </div>
-                <audio src={src} controls className="h-9 w-full" />
-            </div>
+            />
         );
     }
     return (
@@ -1870,7 +1867,11 @@ function FeedEntryMessage({
             <ReferencePreviewStrip request={entry.request} />
 
             {isRunning && (
-                <div className="max-w-[760px] rounded-[16px] border border-border bg-surface-secondary px-4 py-3">
+                <div className={clsx(
+                    entry.request.type === 'audio'
+                        ? 'max-w-[620px]'
+                        : 'max-w-[760px] rounded-[16px] border border-border bg-surface-secondary px-4 py-3',
+                )}>
                     <div className="mb-2.5 flex items-center justify-between gap-4">
                         <div className="text-[12px] font-medium text-text-secondary">
                             任务创作中 {progress}%...
@@ -1894,7 +1895,7 @@ function FeedEntryMessage({
                 </div>
             )}
 
-            {isRunning && entry.assets.length === 0 && (
+            {isRunning && entry.assets.length === 0 && entry.request.type !== 'audio' && (
                 <div className={clsx('grid gap-4', mediaGridClass)}>
                     {Array.from({ length: placeholderCount }).map((_, index) => (
                         <div
@@ -1981,36 +1982,49 @@ function FeedEntryMessage({
 
             {entry.assets.length > 0 && (
                 <div className={clsx('grid gap-4', assetGridClass)}>
-                    {entry.assets.map((asset) => (
-                        <button
-                            key={asset.id}
-                            type="button"
-                            onClick={() => onPreviewAsset(asset)}
-                            onContextMenu={(event) => onOpenAssetMenu(event, asset, entry.id)}
-                            disabled={!asset.previewUrl || !asset.exists}
-                            className={clsx(
-                                'group relative overflow-hidden rounded-[16px] text-left transition-transform',
-                                asset.previewUrl && asset.exists
-                                    ? 'cursor-pointer hover:-translate-y-0.5'
-                                    : 'cursor-default',
-                            )}
-                            title={isVideoAsset(asset) ? '点击打开视频预览' : isAudioAsset(asset) ? '点击播放音频' : '点击放大图片'}
-                        >
-                            <AssetPreview
-                                asset={asset}
-                                className={clsx(mediaHeightClass, asset.previewUrl && asset.exists && 'transition-[filter] duration-200 group-hover:brightness-[0.94]')}
-                                style={{ aspectRatio: normalizeAspectRatio(asset.aspectRatio, placeholderAspectRatio) }}
-                                interactive
-                            />
-                            {asset.previewUrl && asset.exists && isVideoAsset(asset) && (
-                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/55 text-white shadow-[0_10px_24px_rgba(0,0,0,0.28)]">
-                                        <Play className="ml-0.5 h-5 w-5 fill-current" />
-                                    </div>
+                    {entry.assets.map((asset) => {
+                        if (isAudioAsset(asset)) {
+                            return (
+                                <div
+                                    key={asset.id}
+                                    className="max-w-[620px]"
+                                    onContextMenu={(event) => onOpenAssetMenu(event, asset, entry.id)}
+                                >
+                                    <AssetPreview asset={asset} />
                                 </div>
-                            )}
-                        </button>
-                    ))}
+                            );
+                        }
+                        return (
+                            <button
+                                key={asset.id}
+                                type="button"
+                                onClick={() => onPreviewAsset(asset)}
+                                onContextMenu={(event) => onOpenAssetMenu(event, asset, entry.id)}
+                                disabled={!asset.previewUrl || !asset.exists}
+                                className={clsx(
+                                    'group relative overflow-hidden rounded-[16px] text-left transition-transform',
+                                    asset.previewUrl && asset.exists
+                                        ? 'cursor-pointer hover:-translate-y-0.5'
+                                        : 'cursor-default',
+                                )}
+                                title={isVideoAsset(asset) ? '点击打开视频预览' : '点击放大图片'}
+                            >
+                                <AssetPreview
+                                    asset={asset}
+                                    className={clsx(mediaHeightClass, asset.previewUrl && asset.exists && 'transition-[filter] duration-200 group-hover:brightness-[0.94]')}
+                                    style={{ aspectRatio: normalizeAspectRatio(asset.aspectRatio, placeholderAspectRatio) }}
+                                    interactive
+                                />
+                                {asset.previewUrl && asset.exists && isVideoAsset(asset) && (
+                                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                                        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-black/55 text-white shadow-[0_10px_24px_rgba(0,0,0,0.28)]">
+                                            <Play className="ml-0.5 h-5 w-5 fill-current" />
+                                        </div>
+                                    </div>
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
             )}
 

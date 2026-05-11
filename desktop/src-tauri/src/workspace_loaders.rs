@@ -4,7 +4,7 @@ use std::path::Path;
 use url::Url;
 
 use crate::{
-    extract_tags_from_text, file_url_for_path, normalize_legacy_workspace_path,
+    extract_tags_from_text, file_content_hash, file_url_for_path, normalize_legacy_workspace_path,
     normalize_timestamp_string, now_iso, optional_asset_url_from_note_path,
     read_text_file_or_empty, slug_from_relative_path, AdvisorRecord, ChatRoomMessageRecord,
     ChatRoomRecord, CoverAssetRecord, DocumentKnowledgeSourceRecord, KnowledgeAuthorRecord,
@@ -734,6 +734,16 @@ pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetReco
                     .or_else(|| item.get("mime_type"))
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string),
+                content_hash: item
+                    .get("contentHash")
+                    .or_else(|| item.get("content_hash"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+                    .or_else(|| {
+                        absolute_path
+                            .as_deref()
+                            .and_then(|abs| file_content_hash(Path::new(abs)).ok())
+                    }),
                 relative_path: relative_path.clone(),
                 bound_manuscript_path: item
                     .get("boundManuscriptPath")

@@ -26,6 +26,7 @@ import {
     Save,
     Search,
     SlidersHorizontal,
+    Sparkles,
     Tag,
     Trash2,
     Upload,
@@ -363,6 +364,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const loadDataRequestRef = useRef(0);
     const refreshedVoiceJobIdsRef = useRef(new Set<string>());
     const [retryingVoiceSubjectId, setRetryingVoiceSubjectId] = useState<string | null>(null);
+    const [generatingCardSubjectId, setGeneratingCardSubjectId] = useState<string | null>(null);
     const voiceJobsById = useMediaJobsStore((state) => state.jobsById);
 
     useEffect(() => {
@@ -952,35 +954,39 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         await loadData();
     }, [categoryFilter, draft.categoryId, loadData]);
 
-    const handleSave = useCallback(async () => {
+    const persistDraft = useCallback(async (): Promise<SubjectRecord> => {
         if (!draft.name.trim()) {
-            setError('资产名称是必填项');
-            return;
+            throw new Error('资产名称是必填项');
         }
+        const shouldSaveVoice = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
+        const nextVoicePayload = shouldSaveVoice && draft.voice
+            ? (draft.voice.relativePath
+                ? {
+                    relativePath: draft.voice.relativePath,
+                    name: draft.voice.name,
+                    scriptText: draft.voice.scriptText.trim() || undefined,
+                }
+                : {
+                    dataUrl: draft.voice.dataUrl,
+                    name: draft.voice.name,
+                    scriptText: draft.voice.scriptText.trim() || undefined,
+                })
+            : (initialVoicePresent ? {} : undefined);
+        const payload = buildSubjectPayload(nextVoicePayload);
+        const result = draft.id
+            ? await window.ipcRenderer.subjects.update(payload)
+            : await window.ipcRenderer.subjects.create(payload);
+        if (!result?.success || !result.subject) {
+            throw new Error(result?.error || '保存资产失败');
+        }
+        return result.subject as SubjectRecord;
+    }, [buildSubjectPayload, categories, draft.categoryId, draft.id, draft.name, draft.voice, initialVoicePresent]);
+
+    const handleSave = useCallback(async () => {
         setWorking(true);
         setError('');
         try {
-            const shouldSaveVoice = categories.find((item) => item.id === draft.categoryId)?.name.trim() === '角色';
-            const nextVoicePayload = shouldSaveVoice && draft.voice
-                ? (draft.voice.relativePath
-                    ? {
-                        relativePath: draft.voice.relativePath,
-                        name: draft.voice.name,
-                        scriptText: draft.voice.scriptText.trim() || undefined,
-                    }
-                    : {
-                        dataUrl: draft.voice.dataUrl,
-                        name: draft.voice.name,
-                        scriptText: draft.voice.scriptText.trim() || undefined,
-                    })
-                : (initialVoicePresent ? {} : undefined);
-            const payload = buildSubjectPayload(nextVoicePayload);
-            const result = draft.id
-                ? await window.ipcRenderer.subjects.update(payload)
-                : await window.ipcRenderer.subjects.create(payload);
-            if (!result?.success) {
-                throw new Error(result?.error || '保存资产失败');
-            }
+            await persistDraft();
             await loadData();
             closeModal();
         } catch (e) {
@@ -989,7 +995,32 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         } finally {
             setWorking(false);
         }
-    }, [buildSubjectPayload, categories, closeModal, draft, initialVoicePresent, loadData]);
+    }, [closeModal, loadData, persistDraft]);
+
+    const handleGenerateCharacterCard = useCallback(async () => {
+        setWorking(true);
+        setError('');
+        try {
+            const savedSubject = await persistDraft();
+            if (!(savedSubject.previewUrls || []).length && !(savedSubject.absoluteImagePaths || []).length) {
+                throw new Error('请先添加角色图片');
+            }
+            setGeneratingCardSubjectId(savedSubject.id);
+            const result = await window.ipcRenderer.subjects.generateCharacterCard({ id: savedSubject.id });
+            if (!result?.success || !result.subject) {
+                throw new Error(result?.error || '生成角色卡失败');
+            }
+            setDraft(toDraft(result.subject as SubjectRecord));
+            setInitialVoicePresent(Boolean((result.subject as SubjectRecord).voicePreviewUrl));
+            await loadData();
+        } catch (e) {
+            console.error('Failed to generate character card:', e);
+            setError(e instanceof Error ? e.message : '生成角色卡失败');
+        } finally {
+            setGeneratingCardSubjectId(null);
+            setWorking(false);
+        }
+    }, [loadData, persistDraft]);
 
     const handleDeleteSubject = useCallback(async () => {
         if (!draft.id) return;
@@ -1686,7 +1717,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     </div>
 
                                     <div className="space-y-2">
-                                        <div className="text-sm font-semibold text-slate-800">{draftEntityLabel}图片</div>
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="text-sm font-semibold text-slate-800">{draftEntityLabel}图片</div>
+                                            {isRoleDraft && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handleGenerateCharacterCard()}
+                                                    disabled={working || generatingCardSubjectId === draft.id || draft.images.length === 0}
+                                                    className="inline-flex h-8 items-center gap-1 rounded-lg bg-slate-950 px-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    <Sparkles className={clsx('h-3.5 w-3.5', generatingCardSubjectId === draft.id && 'animate-pulse')} />
+                                                    {generatingCardSubjectId === draft.id ? '生成中' : '角色卡'}
+                                                </button>
+                                            )}
+                                        </div>
                                         <label className={clsx(
                                             'flex h-10 cursor-pointer items-center justify-center rounded-lg bg-slate-100 text-sm font-semibold text-slate-950 transition hover:bg-slate-200',
                                             draft.images.length >= 5 && 'pointer-events-none opacity-50'

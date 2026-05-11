@@ -19,7 +19,6 @@ mod tests {
         assert_eq!(
             names,
             std::collections::BTreeSet::from([
-                "cover-builder",
                 "image-director",
                 "image-prompt-optimizer",
                 "member-skill-distiller",

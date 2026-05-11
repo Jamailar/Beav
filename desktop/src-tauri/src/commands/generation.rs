@@ -249,6 +249,7 @@ fn execute_planned_image_generation_item(
             absolute_path: Some(absolute_path.display().to_string()),
             preview_url: Some(file_url_for_path(&absolute_path)),
             exists: true,
+            content_hash: file_content_hash(&absolute_path).ok(),
         },
     ))
 }
@@ -403,6 +404,7 @@ fn generate_planned_image_batch(
                 size: size.clone(),
                 quality: quality.clone(),
                 mime_type: mime_type.clone(),
+                content_hash: file_content_hash(&absolute_path).ok(),
                 relative_path: Some(relative_path),
                 bound_manuscript_path: None,
                 created_at: now_rfc3339(),
@@ -740,6 +742,7 @@ pub(crate) fn generate_image_assets(
             size: size.clone(),
             quality: quality.clone(),
             mime_type: Some("image/png".to_string()),
+            content_hash: file_content_hash(&absolute_path).ok(),
             relative_path: Some(relative_path),
             bound_manuscript_path: None,
             created_at: now_rfc3339(),
@@ -1418,6 +1421,7 @@ pub fn handle_generation_channel(
                 size: size.clone(),
                 quality: quality.clone(),
                 mime_type: effective_mime_type.clone(),
+                content_hash: file_content_hash(&absolute_path).ok(),
                 relative_path: Some(relative_path),
                 bound_manuscript_path: None,
                 created_at: now_rfc3339(),

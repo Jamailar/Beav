@@ -120,6 +120,66 @@ pub(crate) fn persist_cover_workspace_catalog(state: &State<'_, AppState>) -> Re
     )
 }
 
+pub(crate) fn existing_media_asset_by_content_hash(
+    state: &State<'_, AppState>,
+    content_hash: &str,
+) -> Result<Option<MediaAssetRecord>, String> {
+    let normalized_hash = content_hash.trim();
+    if normalized_hash.is_empty() {
+        return Ok(None);
+    }
+    let root = media_root(state)?;
+    let exact_match = with_store(state, |store| {
+        Ok(store
+            .media_assets
+            .iter()
+            .find(|asset| {
+                if asset.content_hash.as_deref() != Some(normalized_hash) || !asset.exists {
+                    return false;
+                }
+                if asset
+                    .absolute_path
+                    .as_deref()
+                    .is_some_and(|path| Path::new(path).exists())
+                {
+                    return true;
+                }
+                asset
+                    .relative_path
+                    .as_deref()
+                    .is_some_and(|rel| root.join(rel).exists())
+            })
+            .cloned())
+    })?;
+    if exact_match.is_some() {
+        return Ok(exact_match);
+    }
+    let candidates = with_store(state, |store| {
+        Ok(store
+            .media_assets
+            .iter()
+            .filter(|asset| asset.content_hash.is_none() && asset.exists)
+            .cloned()
+            .collect::<Vec<_>>())
+    })?;
+    for asset in candidates {
+        let asset_hash = asset
+            .absolute_path
+            .as_deref()
+            .and_then(|path| file_content_hash(Path::new(path)).ok())
+            .or_else(|| {
+                asset
+                    .relative_path
+                    .as_deref()
+                    .and_then(|rel| file_content_hash(&root.join(rel)).ok())
+            });
+        if asset_hash.as_deref() == Some(normalized_hash) {
+            return Ok(Some(asset));
+        }
+    }
+    Ok(None)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CoverTemplateRecord {
@@ -1481,44 +1541,63 @@ pub fn handle_library_channel(
                 }
                 let imports_root = media_root(state)?.join("imports");
                 fs::create_dir_all(&imports_root).map_err(|error| error.to_string())?;
-                let imported = with_store_mut(state, |store| {
-                    let mut assets = Vec::new();
-                    for file in &selected {
-                        let (relative_name, target) = copy_file_into_dir(file, &imports_root)?;
-                        let (mime_type, _kind, _) = guess_mime_and_kind(&target);
-                        let asset = MediaAssetRecord {
-                            id: make_id("media"),
-                            source: "imported".to_string(),
-                            source_domain: None,
-                            source_link: None,
-                            project_id: None,
-                            title: file
-                                .file_stem()
-                                .and_then(|value| value.to_str())
-                                .map(ToString::to_string),
-                            prompt: None,
-                            provider: None,
-                            provider_template: None,
-                            model: None,
-                            aspect_ratio: None,
-                            size: None,
-                            quality: None,
-                            mime_type: Some(mime_type),
-                            relative_path: Some(format!("imports/{}", relative_name)),
-                            bound_manuscript_path: None,
-                            created_at: now_rfc3339(),
-                            updated_at: now_rfc3339(),
-                            absolute_path: Some(target.display().to_string()),
-                            preview_url: Some(file_url_for_path(&target)),
-                            exists: true,
-                        };
-                        store.media_assets.push(asset.clone());
-                        assets.push(asset);
+                let mut imported = Vec::new();
+                let mut new_assets = Vec::new();
+                for file in &selected {
+                    let content_hash = file_content_hash(file)?;
+                    if let Some(existing) =
+                        existing_media_asset_by_content_hash(state, &content_hash)?
+                    {
+                        imported.push(existing);
+                        continue;
                     }
-                    Ok(assets)
-                })?;
+                    let (relative_name, target) = copy_file_into_dir(file, &imports_root)?;
+                    let (mime_type, _kind, _) = guess_mime_and_kind(&target);
+                    let asset = MediaAssetRecord {
+                        id: make_id("media"),
+                        source: "imported".to_string(),
+                        source_domain: None,
+                        source_link: None,
+                        project_id: None,
+                        title: file
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            .map(ToString::to_string),
+                        prompt: None,
+                        provider: None,
+                        provider_template: None,
+                        model: None,
+                        aspect_ratio: None,
+                        size: None,
+                        quality: None,
+                        mime_type: Some(mime_type),
+                        content_hash: Some(content_hash),
+                        relative_path: Some(format!("imports/{}", relative_name)),
+                        bound_manuscript_path: None,
+                        created_at: now_rfc3339(),
+                        updated_at: now_rfc3339(),
+                        absolute_path: Some(target.display().to_string()),
+                        preview_url: Some(file_url_for_path(&target)),
+                        exists: true,
+                    };
+                    imported.push(asset.clone());
+                    new_assets.push(asset);
+                }
+                if !new_assets.is_empty() {
+                    with_store_mut(state, |store| {
+                        for asset in &new_assets {
+                            store.media_assets.push(asset.clone());
+                        }
+                        Ok(())
+                    })?;
+                }
                 persist_media_workspace_catalog(state)?;
-                Ok(json!({ "success": true, "assets": imported, "imported": imported.len() }))
+                Ok(json!({
+                    "success": true,
+                    "assets": imported,
+                    "imported": new_assets.len(),
+                    "reused": imported.len().saturating_sub(new_assets.len())
+                }))
             }
             "animation-elements:list" => {
                 let root = remotion_elements_root(state)?;

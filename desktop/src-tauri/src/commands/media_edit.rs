@@ -1,8 +1,8 @@
 use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::{
-    file_url_for_path, guess_mime_and_kind, make_id, media_root, now_ms, now_rfc3339,
-    workspace_root, AppState, MediaAssetRecord,
+    file_content_hash, file_url_for_path, guess_mime_and_kind, make_id, media_root, now_ms,
+    now_rfc3339, workspace_root, AppState, MediaAssetRecord,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -229,6 +229,7 @@ fn register_media_edit_assets(
                 size: None,
                 quality: None,
                 mime_type: Some(mime_type),
+                content_hash: file_content_hash(path).ok(),
                 relative_path: None,
                 bound_manuscript_path: None,
                 created_at: created_at.clone(),

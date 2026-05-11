@@ -145,10 +145,10 @@ mod tests {
                 disabled: Some(false),
             },
             SkillRecord {
-                name: "cover-builder".to_string(),
+                name: "xhs-title".to_string(),
                 description: "desc".to_string(),
-                location: "skills://cover-builder".to_string(),
-                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [workflow]\nautoActivate: false\nactivationScope: session\nhookMode: forked\n---\n# Cover\n\nBody".to_string(),
+                location: "skills://xhs-title".to_string(),
+                body: "---\nallowedRuntimeModes: [redclaw]\nallowedTools: [workflow]\nautoActivate: false\nactivationScope: session\nhookMode: forked\n---\n# Title\n\nBody".to_string(),
                 source_scope: Some("builtin".to_string()),
                 is_builtin: Some(true),
                 disabled: Some(false),
@@ -185,7 +185,7 @@ mod tests {
         let state = build_skill_runtime_state(
             &skills(),
             "redclaw",
-            Some(&json!({ "activeSkills": ["cover-builder"] })),
+            Some(&json!({ "activeSkills": ["xhs-title"] })),
             &[
                 "query".to_string(),
                 "resource".to_string(),
@@ -198,7 +198,7 @@ mod tests {
         assert!(state.skills_section.contains(
             "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
         ));
-        assert!(state.skills_section.contains("cover-builder [forked]"));
+        assert!(state.skills_section.contains("xhs-title [forked]"));
     }
 
     #[test]
@@ -249,7 +249,7 @@ mod tests {
             ],
         );
         assert!(state.skills_section.contains("redclaw-guide: desc"));
-        assert!(state.skills_section.contains("cover-builder: desc"));
+        assert!(state.skills_section.contains("xhs-title: desc"));
         assert!(!state
             .skills_section
             .contains("remotion-best-practices: desc"));

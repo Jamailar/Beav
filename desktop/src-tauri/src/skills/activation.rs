@@ -175,15 +175,15 @@ mod tests {
     #[test]
     fn resolve_skill_set_activates_explicitly_requested_session_skill() {
         let resolved = resolve_skill_set(
-            &[skill("cover-builder", "[redclaw, wander]", false)],
+            &[skill("xhs-title", "[redclaw, wander]", false)],
             "redclaw",
             Some(&serde_json::json!({
-                "activeSkills": ["cover-builder"]
+                "activeSkills": ["xhs-title"]
             })),
             &["workflow".to_string()],
         );
         assert_eq!(resolved.active_skills.len(), 1);
-        assert_eq!(resolved.active_skills[0].name, "cover-builder");
+        assert_eq!(resolved.active_skills[0].name, "xhs-title");
     }
 
     #[test]

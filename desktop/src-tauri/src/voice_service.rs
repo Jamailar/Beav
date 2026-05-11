@@ -13,10 +13,10 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::helpers::{file_url_for_path, storage_safe_file_stem};
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
 use crate::{
-    guess_mime_and_kind, make_id, media_root, normalize_legacy_workspace_path, now_iso,
-    now_rfc3339, official_ai_api_key_from_settings, official_base_url_from_settings, payload_field,
-    payload_string, persist_subjects_workspace, subjects_root, workspace_root, AppState,
-    MediaAssetRecord, SubjectRecord,
+    file_content_hash, guess_mime_and_kind, make_id, media_root, normalize_legacy_workspace_path,
+    now_iso, now_rfc3339, official_ai_api_key_from_settings, official_base_url_from_settings,
+    payload_field, payload_string, persist_subjects_workspace, subjects_root, workspace_root,
+    AppState, MediaAssetRecord, SubjectRecord,
 };
 
 const DEFAULT_CLONE_MODEL: &str = "minimax-voice-clone";
@@ -129,23 +129,27 @@ fn normalize_voice_response(value: Value, fallback_name: Option<String>) -> Resu
 
 fn voice_list_item_id(value: &Value) -> Option<String> {
     payload_string_alias(value, &["voice_id", "voiceId", "id", "value"]).or_else(|| {
-        value.get("data").and_then(|data| {
-            payload_string_alias(data, &["voice_id", "voiceId", "id", "value"])
-        })
+        value
+            .get("data")
+            .and_then(|data| payload_string_alias(data, &["voice_id", "voiceId", "id", "value"]))
     })
 }
 
 fn voice_list_item_name(value: &Value) -> Option<String> {
     payload_string_alias(value, &["name", "title", "voiceName"]).or_else(|| {
-        value.get("data").and_then(|data| {
-            payload_string_alias(data, &["name", "title", "voiceName"])
-        })
+        value
+            .get("data")
+            .and_then(|data| payload_string_alias(data, &["name", "title", "voiceName"]))
     })
 }
 
 fn voice_list_item_is_usable(value: &Value) -> bool {
     let status = payload_string(value, "status")
-        .or_else(|| value.get("data").and_then(|data| payload_string(data, "status")))
+        .or_else(|| {
+            value
+                .get("data")
+                .and_then(|data| payload_string(data, "status"))
+        })
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
@@ -227,7 +231,10 @@ fn subject_voice_list_items(state: &State<'_, AppState>) -> Result<Vec<Value>, S
     })
 }
 
-fn subject_voice_id(state: &State<'_, AppState>, subject_id: &str) -> Result<Option<String>, String> {
+fn subject_voice_id(
+    state: &State<'_, AppState>,
+    subject_id: &str,
+) -> Result<Option<String>, String> {
     ensure_store_hydrated_for_subjects(state)?;
     with_store(state, |store| {
         Ok(store
@@ -276,7 +283,10 @@ fn voice_clone_sample_extension(path: &Path) -> String {
 }
 
 fn is_direct_voice_clone_sample(path: &Path) -> bool {
-    matches!(voice_clone_sample_extension(path).as_str(), "mp3" | "wav" | "m4a")
+    matches!(
+        voice_clone_sample_extension(path).as_str(),
+        "mp3" | "wav" | "m4a"
+    )
 }
 
 fn is_transcodable_voice_clone_sample(path: &Path) -> bool {
@@ -610,7 +620,13 @@ pub(crate) fn list_voices(state: &State<'_, AppState>, payload: &Value) -> Resul
     }
     let parsed = serde_json::from_str::<Value>(&body).unwrap_or_else(|_| json!({ "raw": body }));
     for item in voice_list_items_from_value(&parsed) {
-        push_remote_voice(&mut voices, &mut seen, &local_subject_voice_names, &config, item);
+        push_remote_voice(
+            &mut voices,
+            &mut seen,
+            &local_subject_voice_names,
+            &config,
+            item,
+        );
     }
     Ok(json!({ "success": true, "voices": voices, "raw": parsed }))
 }
@@ -802,6 +818,7 @@ pub(crate) fn synthesize_speech(
         size: None,
         quality: None,
         mime_type: Some(mime_type),
+        content_hash: file_content_hash(&absolute_path).ok(),
         relative_path: Some(relative_path.clone()),
         bound_manuscript_path: payload_string(payload, "boundManuscriptPath"),
         created_at: now.clone(),

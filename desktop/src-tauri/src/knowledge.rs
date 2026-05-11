@@ -1893,6 +1893,7 @@ fn create_media_asset_record(
         size: None,
         quality: None,
         mime_type: Some(mime_type),
+        content_hash: Some(file_content_hash(&normalized)?),
         relative_path: Some(relative_path),
         bound_manuscript_path: None,
         created_at: timestamp.clone(),
@@ -1930,6 +1931,15 @@ pub(crate) fn import_chat_attachment_image(
             let (_, copied) = copy_file_into_dir(&normalized_source, &imports_root)?;
             copied
         };
+    let content_hash = file_content_hash(&materialized)?;
+    if let Some(existing) =
+        crate::commands::library::existing_media_asset_by_content_hash(state, &content_hash)?
+    {
+        if materialized.starts_with(&imports_root) {
+            let _ = fs::remove_file(&materialized);
+        }
+        return Ok(existing);
+    }
     let source_text = normalized_source.display().to_string();
     let item = KnowledgeMediaAssetItemInput {
         title: title_from_media_source(&source_text),
@@ -1974,6 +1984,7 @@ pub(crate) fn ingest_media_assets(
     fs::create_dir_all(&imports_root).map_err(|error| error.to_string())?;
 
     let mut assets = Vec::new();
+    let mut new_assets = Vec::new();
     for item in &request.items {
         let source = normalize_string(Some(item.source.clone()))
             .ok_or_else(|| "media-assets item 缺少 source".to_string())?;
@@ -1984,6 +1995,16 @@ pub(crate) fn ingest_media_assets(
             } else {
                 materialize_image_source(&source, &imports_root)?
             };
+        let content_hash = file_content_hash(&materialized)?;
+        if let Some(existing) =
+            crate::commands::library::existing_media_asset_by_content_hash(state, &content_hash)?
+        {
+            if materialized.starts_with(&imports_root) {
+                let _ = fs::remove_file(&materialized);
+            }
+            assets.push(existing);
+            continue;
+        }
         match create_media_asset_record(
             &media_root,
             &materialized,
@@ -1991,7 +2012,10 @@ pub(crate) fn ingest_media_assets(
             &request.source,
             item,
         ) {
-            Ok(asset) => assets.push(asset),
+            Ok(asset) => {
+                new_assets.push(asset.clone());
+                assets.push(asset);
+            }
             Err(error) => {
                 if materialized.starts_with(&imports_root) {
                     let _ = fs::remove_file(&materialized);
@@ -2001,19 +2025,22 @@ pub(crate) fn ingest_media_assets(
         }
     }
 
-    with_store_mut(state, |store| {
-        for asset in &assets {
-            store.media_assets.push(asset.clone());
-        }
-        Ok(())
-    })?;
-    crate::commands::library::persist_media_workspace_catalog(state)?;
-    emit_media_assets_changed(app);
+    if !new_assets.is_empty() {
+        with_store_mut(state, |store| {
+            for asset in &new_assets {
+                store.media_assets.push(asset.clone());
+            }
+            Ok(())
+        })?;
+        crate::commands::library::persist_media_workspace_catalog(state)?;
+        emit_media_assets_changed(app);
+    }
 
     Ok(json!({
         "success": true,
         "kind": "media-assets",
-        "imported": assets.len(),
+        "imported": new_assets.len(),
+        "reused": assets.len().saturating_sub(new_assets.len()),
         "assets": assets,
     }))
 }
