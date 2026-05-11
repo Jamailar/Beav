@@ -2909,6 +2909,7 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
             .map(|value| value.to_string()),
         quality: None,
         mime_type: Some("video/mp4".to_string()),
+        content_hash: file_content_hash(PathBuf::from(&absolute_path).as_path()).ok(),
         relative_path: Some(relative_path.clone()),
         bound_manuscript_path: loaded.job.manuscript_path.clone(),
         created_at: now_iso(),

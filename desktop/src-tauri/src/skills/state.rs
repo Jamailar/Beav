@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn session_skill_state_from_metadata_reads_legacy_active_skills() {
         let state = session_skill_state_from_metadata(Some(&json!({
-            "activeSkills": ["writing-style", "cover-builder"]
+            "activeSkills": ["writing-style", "xhs-title"]
         })));
         assert_eq!(state.requested.len(), 2);
         assert_eq!(state.active.len(), 2);

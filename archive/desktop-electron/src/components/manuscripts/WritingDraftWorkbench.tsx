@@ -216,7 +216,6 @@ const RICHPOST_SHORTCUTS = [
 
 const RICHPOST_LAYOUT_SKILL_NAME = 'richpost-layout-designer';
 const RICHPOST_THEME_EDITOR_SKILL_NAME = 'richpost-theme-editor';
-const LONGFORM_LAYOUT_SKILL_NAME = 'longform-layout-designer';
 const SHOW_RICHPOST_THEME_EDITOR_CHAT = false;
 const PRESET_PREVIEW_TITLE = 'RedBox';
 const RICHPOST_FONT_SCALE_MIN = 0.8;
@@ -1714,7 +1713,7 @@ export function WritingDraftWorkbench({
       return {
         id: 'article-layout',
         label: '长文排版',
-        activeSkills: [LONGFORM_LAYOUT_SKILL_NAME],
+        activeSkills: [],
       };
     }
     if (activeTab === 'layout' || activeTab === 'wechat' || (activeTab === 'manuscript' && isSplitCompareEnabled)) {

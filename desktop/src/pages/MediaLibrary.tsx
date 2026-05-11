@@ -662,6 +662,23 @@ export function MediaLibrary({
         }
     }, [loadData]);
 
+    const handleShowAssetInFolder = useCallback(async (asset: MediaAsset) => {
+        const source = asset.absolutePath || asset.relativePath || asset.previewUrl || '';
+        if (!source) {
+            void appAlert('媒体资产没有可打开的文件路径');
+            return;
+        }
+        try {
+            const result = await window.ipcRenderer.files.showInFolder({ source }) as { success?: boolean; error?: string };
+            if (!result?.success) {
+                void appAlert(result?.error || '打开文件夹失败');
+            }
+        } catch (error) {
+            console.error('Failed to show media asset in folder:', error);
+            void appAlert('打开文件夹失败');
+        }
+    }, []);
+
     const openAssetContextMenu = useCallback((event: React.MouseEvent, asset: MediaAsset) => {
         event.preventDefault();
         setContextMenu({
@@ -1137,12 +1154,16 @@ export function MediaLibrary({
                     <button
                         type="button"
                         onClick={() => {
-                            setExpandedAssetId(contextMenu.asset!.id);
+                            const asset = contextMenu.asset;
                             setContextMenu({ visible: false, x: 0, y: 0, asset: null });
+                            if (asset) {
+                                void handleShowAssetInFolder(asset);
+                            }
                         }}
                         className={getLiquidGlassMenuItemClassName()}
                     >
-                        编辑
+                        <FolderOpen className="h-4 w-4" />
+                        文件夹中打开
                     </button>
                     <button
                         type="button"
@@ -1155,6 +1176,7 @@ export function MediaLibrary({
                         }}
                         className={getLiquidGlassMenuItemClassName({ destructive: true })}
                     >
+                        <Trash2 className="h-4 w-4" />
                         删除
                     </button>
                 </LiquidGlassMenuPanel>

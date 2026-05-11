@@ -186,11 +186,12 @@ fn build_input_stream(
 fn choose_recording_input_config(
     device: &cpal::Device,
 ) -> Result<(StreamConfig, SampleFormat), String> {
-    let default_config = device.default_input_config().map_err(|error| error.to_string())?;
+    let default_config = device
+        .default_input_config()
+        .map_err(|error| error.to_string())?;
     let default_rate = default_config.sample_rate().0;
     let default_channels = default_config.channels();
-    if (MIN_REASONABLE_INPUT_SAMPLE_RATE..=MAX_REASONABLE_INPUT_SAMPLE_RATE)
-        .contains(&default_rate)
+    if (MIN_REASONABLE_INPUT_SAMPLE_RATE..=MAX_REASONABLE_INPUT_SAMPLE_RATE).contains(&default_rate)
         && (1..=2).contains(&default_channels)
     {
         return Ok((default_config.config(), default_config.sample_format()));
@@ -214,13 +215,12 @@ fn choose_recording_input_config(
         {
             continue;
         }
-        let target_rate = if min_rate <= PREFERRED_INPUT_SAMPLE_RATE
-            && max_rate >= PREFERRED_INPUT_SAMPLE_RATE
-        {
-            PREFERRED_INPUT_SAMPLE_RATE
-        } else {
-            max_rate.min(MAX_REASONABLE_INPUT_SAMPLE_RATE).max(min_rate)
-        };
+        let target_rate =
+            if min_rate <= PREFERRED_INPUT_SAMPLE_RATE && max_rate >= PREFERRED_INPUT_SAMPLE_RATE {
+                PREFERRED_INPUT_SAMPLE_RATE
+            } else {
+                max_rate.min(MAX_REASONABLE_INPUT_SAMPLE_RATE).max(min_rate)
+            };
         let supported_config = config_range.with_sample_rate(SampleRate(target_rate));
         let config = supported_config.config();
         let sample_format = supported_config.sample_format();

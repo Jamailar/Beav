@@ -4734,6 +4734,35 @@ export function Settings({
     void loadSkillMarketplace();
   }, [loadSkillMarketplace]);
 
+  const handleUninstallSettingsSkill = useCallback(async (skill: SettingsSkill) => {
+    if (skill.isBuiltin) return;
+    const confirmed = await appConfirm(`删除技能“${skill.name}”？`, {
+      title: '删除技能',
+      confirmLabel: '删除',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    setSettingsSkillBusyName(skill.name);
+    setSettingsSkillStatusMessage('');
+    try {
+      const result = await window.ipcRenderer.skills.uninstall({ name: skill.name }) as { success?: boolean; error?: string };
+      if (result && result.success === false) {
+        throw new Error(result.error || '技能删除失败');
+      }
+      setSettingsSkillStatusMessage(`已删除 ${skill.name}`);
+      await loadSettingsSkills();
+      if (isSkillMarketplaceOpen) {
+        await loadSkillMarketplace();
+      }
+      tabWarmRef.current.skills = true;
+    } catch (error) {
+      console.error('Failed to uninstall skill:', error);
+      setSettingsSkillStatusMessage(error instanceof Error ? error.message : '技能删除失败');
+    } finally {
+      setSettingsSkillBusyName('');
+    }
+  }, [isSkillMarketplaceOpen, loadSettingsSkills, loadSkillMarketplace]);
+
   const handleInstallMarketplaceSkill = useCallback(async (skill: ThriveSkillMarketplaceItem) => {
     setSkillMarketplaceBusyId(skill.id);
     setSettingsSkillStatusMessage(`正在安装 ${skill.name}`);
@@ -6823,24 +6852,38 @@ export function Settings({
                                 </div>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => void handleToggleSettingsSkill(skill)}
-                              disabled={skill.isBuiltin || isBusy}
-                              role="switch"
-                              aria-checked={enabled}
-                              aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
-                              title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
-                              className={clsx(
-                                'ui-switch-track shrink-0 disabled:cursor-not-allowed',
-                                skill.isBuiltin && 'opacity-70',
-                                isBusy && 'opacity-60'
+                            <div className="flex shrink-0 items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleToggleSettingsSkill(skill)}
+                                disabled={skill.isBuiltin || isBusy}
+                                role="switch"
+                                aria-checked={enabled}
+                                aria-label={`${enabled ? '关闭' : '打开'}技能 ${skill.name}`}
+                                title={skill.isBuiltin ? '内置技能不可关闭' : (enabled ? '关闭技能' : '打开技能')}
+                                className={clsx(
+                                  'ui-switch-track disabled:cursor-not-allowed',
+                                  skill.isBuiltin && 'opacity-70',
+                                  isBusy && 'opacity-60'
+                                )}
+                                data-size="sm"
+                                data-state={enabled ? 'on' : 'off'}
+                              >
+                                <span className="ui-switch-thumb" />
+                              </button>
+                              {!skill.isBuiltin && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleUninstallSettingsSkill(skill)}
+                                  disabled={isBusy}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-text-tertiary transition-colors hover:border-brand-red/30 hover:bg-brand-red/10 hover:text-brand-red disabled:opacity-50"
+                                  aria-label={`删除技能 ${skill.name}`}
+                                  title="删除技能"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
                               )}
-                              data-size="sm"
-                              data-state={enabled ? 'on' : 'off'}
-                            >
-                              <span className="ui-switch-thumb" />
-                            </button>
+                            </div>
                           </div>
                         );
                       })}

@@ -81,8 +81,9 @@ use runtime::{
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -657,6 +658,7 @@ struct MediaAssetRecord {
     size: Option<String>,
     quality: Option<String>,
     mime_type: Option<String>,
+    content_hash: Option<String>,
     relative_path: Option<String>,
     bound_manuscript_path: Option<String>,
     created_at: String,
@@ -2585,6 +2587,20 @@ fn copy_file_into_dir(source: &Path, target_dir: &Path) -> Result<(String, PathB
     }
     fs::copy(source, &target).map_err(|error| error.to_string())?;
     Ok((relative_name, target))
+}
+
+fn file_content_hash(path: &Path) -> Result<String, String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), String> {

@@ -225,11 +225,9 @@ mod tests {
 
     #[test]
     fn merge_discovered_with_existing_forces_builtin_enabled() {
-        let existing = vec![skill("cover-builder", "builtin", true)];
-        let merged = merge_discovered_with_existing(
-            &existing,
-            vec![skill("cover-builder", "builtin", false)],
-        );
+        let existing = vec![skill("xhs-title", "builtin", true)];
+        let merged =
+            merge_discovered_with_existing(&existing, vec![skill("xhs-title", "builtin", false)]);
         assert_eq!(merged[0].disabled, Some(false));
     }
 }

@@ -1208,6 +1208,7 @@ function createIpcRenderer() {
       get: (payload: { id: string }) => invokeChannel('subjects:get', payload),
       create: (payload: unknown) => invokeChannel('subjects:create', payload),
       update: (payload: unknown) => invokeChannel('subjects:update', payload),
+      generateCharacterCard: (payload: { id: string }) => invokeChannel('subjects:generate-character-card', payload),
       delete: (payload: { id: string }) => invokeChannel('subjects:delete', payload),
       search: (payload?: Record<string, unknown>) => invokeChannel('subjects:search', payload || {}),
       categories: {

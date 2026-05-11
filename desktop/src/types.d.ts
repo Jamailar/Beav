@@ -1534,6 +1534,7 @@ declare global {
         get: (payload: { id: string }) => Promise<{ success?: boolean; error?: string; subject?: SubjectRecord }>;
         create: (payload: unknown) => Promise<{ success?: boolean; error?: string; subject?: SubjectRecord }>;
         update: (payload: unknown) => Promise<{ success?: boolean; error?: string; subject?: SubjectRecord }>;
+        generateCharacterCard: (payload: { id: string }) => Promise<{ success?: boolean; error?: string; subject?: SubjectRecord; asset?: unknown }>;
         delete: (payload: { id: string }) => Promise<{ success?: boolean; error?: string }>;
         search: (payload?: { query?: string; categoryId?: string; limit?: number }) => Promise<{ success?: boolean; error?: string; subjects?: SubjectRecord[] }>;
         categories: {

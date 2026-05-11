@@ -8404,6 +8404,35 @@ pub fn handle_manuscripts_channel(
                 let role = payload_string(&payload, "role");
                 let imports_root = media_root(state)?.join("imports");
                 fs::create_dir_all(&imports_root).map_err(|error| error.to_string())?;
+                let content_hash = file_content_hash(&source)?;
+                if let Some(asset) = crate::commands::library::existing_media_asset_by_content_hash(
+                    state,
+                    &content_hash,
+                )? {
+                    ensure_package_asset_entry(
+                        &full_path,
+                        &asset,
+                        package_asset_kind.as_deref(),
+                        label.as_deref(),
+                        role.as_deref(),
+                    )?;
+                    return Ok(json!({
+                        "success": true,
+                        "reused": true,
+                        "asset": {
+                            "id": asset.id,
+                            "title": asset.title,
+                            "mimeType": asset.mime_type,
+                            "relativePath": asset.relative_path,
+                            "absolutePath": asset.absolute_path,
+                            "previewUrl": asset.preview_url,
+                            "kind": package_asset_kind,
+                            "label": label,
+                            "role": role
+                        },
+                        "state": get_manuscript_package_state(&full_path)?
+                    }));
+                }
                 let (relative_name, target) = copy_file_into_dir(&source, &imports_root)?;
                 let (mime_type, _kind, _) = guess_mime_and_kind(&target);
                 let asset = with_store_mut(state, |store| {
@@ -8425,6 +8454,7 @@ pub fn handle_manuscripts_channel(
                         size: None,
                         quality: None,
                         mime_type: Some(mime_type.clone()),
+                        content_hash: file_content_hash(&target).ok(),
                         relative_path: Some(format!("imports/{}", relative_name)),
                         bound_manuscript_path: Some(file_path.clone()),
                         created_at: now_rfc3339(),
@@ -8796,6 +8826,44 @@ pub fn handle_manuscripts_channel(
                 fs::create_dir_all(&imports_root).map_err(|error| error.to_string())?;
                 let mut imported = Vec::<Value>::new();
                 for file in picked {
+                    let content_hash = file_content_hash(&file)?;
+                    if let Some(asset) =
+                        crate::commands::library::existing_media_asset_by_content_hash(
+                            state,
+                            &content_hash,
+                        )?
+                    {
+                        ensure_package_asset_entry(&full_path, &asset, None, None, None)?;
+                        let mime_type = asset.mime_type.clone().unwrap_or_else(|| {
+                            let (mime_type, _, _) = guess_mime_and_kind(&file);
+                            mime_type
+                        });
+                        let track = if mime_type.starts_with("audio/") {
+                            "A1"
+                        } else {
+                            "V1"
+                        };
+                        if package_kind != "video" {
+                            let _ = handle_manuscripts_channel(
+                                app,
+                                state,
+                                "manuscripts:add-package-clip",
+                                &json!({
+                                    "filePath": file_path,
+                                    "assetId": asset.id,
+                                    "track": track,
+                                }),
+                            );
+                        }
+                        imported.push(json!({
+                            "absolutePath": asset.absolute_path,
+                            "title": asset.title,
+                            "mimeType": mime_type,
+                            "assetId": asset.id,
+                            "reused": true,
+                        }));
+                        continue;
+                    }
                     let (relative_name, target) = copy_file_into_dir(&file, &imports_root)?;
                     let (mime_type, _kind, _) = guess_mime_and_kind(&target);
                     let asset = with_store_mut(state, |store| {
@@ -8817,6 +8885,7 @@ pub fn handle_manuscripts_channel(
                             size: None,
                             quality: None,
                             mime_type: Some(mime_type.clone()),
+                            content_hash: file_content_hash(&target).ok(),
                             relative_path: Some(format!("imports/{}", relative_name)),
                             bound_manuscript_path: Some(file_path.clone()),
                             created_at: now_rfc3339(),
