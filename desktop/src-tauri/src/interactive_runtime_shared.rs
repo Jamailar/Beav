@@ -132,6 +132,9 @@ pub(crate) fn interactive_runtime_context_bundle(
     let workspace_root_value = workspace_root(state)
         .map(|value| value.display().to_string())
         .unwrap_or_default();
+    let current_working_directory = session_workspace_root_override(state, session_id)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| workspace_root_value.clone());
     let subjects_section = build_asset_library_tool_section(&workspace_root_value);
     let memory_section = if runtime_mode == "wander" {
         None
@@ -300,7 +303,7 @@ pub(crate) fn interactive_runtime_context_bundle(
                 ),
                 ("subjects_section", subjects_section.clone()),
                 ("current_date", now_iso()),
-                ("current_working_directory", workspace_root_value),
+                ("current_working_directory", current_working_directory),
                 ("pi_documentation", "Tauri Rust host runtime".to_string()),
             ],
         );
@@ -907,10 +910,26 @@ pub(crate) fn resolve_workspace_tool_path(
 }
 
 pub(crate) fn session_workspace_root_override(
-    _state: &State<'_, AppState>,
-    _session_id: Option<&str>,
+    state: &State<'_, AppState>,
+    session_id: Option<&str>,
 ) -> Option<PathBuf> {
-    None
+    let session_id = session_id?;
+    crate::persistence::with_store(state, |store| {
+        let session = store.chat_sessions.iter().find(|s| s.id == session_id);
+        let wd = session
+            .and_then(|s| s.metadata.as_ref())
+            .and_then(|meta| crate::payload_string(meta, "workingDirectory"))
+            .filter(|value| !value.trim().is_empty());
+        match wd {
+            Some(wd) => {
+                let path = PathBuf::from(wd);
+                if path.exists() { Ok(Some(path)) } else { Ok(None) }
+            }
+            None => Ok(None),
+        }
+    })
+    .ok()
+    .flatten()
 }
 
 pub(crate) fn resolve_workspace_tool_path_for_session(
