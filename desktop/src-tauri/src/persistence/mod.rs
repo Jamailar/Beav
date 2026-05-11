@@ -3,8 +3,8 @@ use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::MutexGuard;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::State;
 
@@ -16,12 +16,12 @@ use crate::workspace_loaders::{
     load_memory_history_from_fs,
 };
 use crate::{
+    AppState, AppStore, AssistantStateRecord, RedclawStateRecord, SpaceRecord,
     active_space_workspace_root_from_store, app_brand_display_name, load_advisors_from_fs,
     load_cover_assets_from_fs, load_document_sources_from_fs, load_knowledge_authors_from_fs,
     load_knowledge_notes_from_fs, load_media_assets_from_fs, load_redclaw_state_from_fs,
     load_subject_categories_from_fs, load_subjects_from_fs, load_work_items_from_fs,
-    load_youtube_videos_from_fs, now_iso, storage_safe_file_stem, AppState, AppStore,
-    AssistantStateRecord, RedclawStateRecord, SpaceRecord,
+    load_youtube_videos_from_fs, now_iso, storage_safe_file_stem,
 };
 
 pub(crate) struct WorkspaceHydrationSnapshot {
@@ -80,6 +80,38 @@ struct PersistedSessionArtifacts {
     session_transcript_records: Vec<crate::SessionTranscriptRecord>,
     session_checkpoints: Vec<crate::SessionCheckpointRecord>,
     session_tool_results: Vec<crate::SessionToolResultRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionIndexEntry {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+    #[serde(default)]
+    pub(crate) metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(crate) archived: bool,
+    #[serde(default)]
+    pub(crate) archived_at: Option<i64>,
+    #[serde(default)]
+    pub(crate) starred: bool,
+    #[serde(default)]
+    pub(crate) message_count: i64,
+    #[serde(default)]
+    pub(crate) working_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub(crate) enum SessionFileEntry {
+    Session(crate::ChatSessionRecord),
+    Message(crate::ChatMessageRecord),
+    Context(crate::ChatSessionContextRecord),
+    Transcript(crate::SessionTranscriptRecord),
+    Checkpoint(crate::SessionCheckpointRecord),
+    ToolResult(crate::SessionToolResultRecord),
 }
 
 pub(crate) fn load_workspace_hydration_snapshot(root: &Path) -> WorkspaceHydrationSnapshot {
@@ -266,6 +298,243 @@ fn session_artifact_dir(store_path: &Path) -> Result<PathBuf, String> {
 fn session_artifact_path(store_path: &Path, session_id: &str) -> Result<PathBuf, String> {
     Ok(session_artifact_dir(store_path)?
         .join(format!("{}.json", storage_safe_file_stem(session_id))))
+}
+
+fn sessions_dir(store_path: &Path) -> Result<PathBuf, String> {
+    let dir = store_root_from_store_path(store_path)?.join("sessions");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+fn session_file_path(store_path: &Path, session_id: &str) -> Result<PathBuf, String> {
+    Ok(sessions_dir(store_path)?.join(format!("{}.jsonl", storage_safe_file_stem(session_id))))
+}
+
+fn archived_dir(store_path: &Path) -> Result<PathBuf, String> {
+    let dir = store_root_from_store_path(store_path)?.join("archived");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+fn archived_session_path(store_path: &Path, session_id: &str) -> Result<PathBuf, String> {
+    Ok(archived_dir(store_path)?.join(format!("{}.jsonl", storage_safe_file_stem(session_id))))
+}
+
+fn session_index_path(store_path: &Path) -> Result<PathBuf, String> {
+    Ok(sessions_dir(store_path)?.join("index.json"))
+}
+
+fn write_session_file_entries(
+    store_path: &Path,
+    session_id: &str,
+    entries: &[SessionFileEntry],
+) -> Result<(), String> {
+    let path = session_file_path(store_path, session_id)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| error.to_string())?;
+    use std::io::Write;
+    for entry in entries {
+        let line = serde_json::to_string(entry).map_err(|error| error.to_string())?;
+        writeln!(file, "{}", line).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn write_session_index(store_path: &Path, entries: &[SessionIndexEntry]) -> Result<(), String> {
+    let path = session_index_path(store_path)?;
+    let serialized = serde_json::to_string_pretty(entries).map_err(|error| error.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serialized).map_err(|error| error.to_string())?;
+    fs::rename(&tmp, &path).map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_session_index(store_path: &Path) -> Result<Vec<SessionIndexEntry>, String> {
+    let path = session_index_path(store_path)?;
+    let content = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    serde_json::from_str(&content).map_err(|error| error.to_string())
+}
+
+pub(crate) fn load_session_file(
+    store_path: &Path,
+    session_id: &str,
+) -> Result<Vec<SessionFileEntry>, String> {
+    let path = session_file_path(store_path, session_id)?;
+    let content = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let mut entries: Vec<SessionFileEntry> = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<SessionFileEntry>(trimmed) {
+            Ok(entry) => entries.push(entry),
+            Err(e) => eprintln!(
+                "[{}] skip malformed JSONL line in {}.jsonl: {e}",
+                app_brand_display_name(),
+                storage_safe_file_stem(session_id),
+            ),
+        }
+    }
+    Ok(entries)
+}
+
+pub(crate) fn apply_session_file_entries_to_store(
+    store: &mut AppStore,
+    entries: Vec<SessionFileEntry>,
+) {
+    for entry in entries {
+        match entry {
+            SessionFileEntry::Session(session) => {
+                store.chat_sessions.push(session);
+            }
+            SessionFileEntry::Message(msg) => {
+                store.chat_messages.push(msg);
+            }
+            SessionFileEntry::Context(ctx) => {
+                store.session_context_records.push(ctx);
+            }
+            SessionFileEntry::Transcript(tr) => {
+                store.session_transcript_records.push(tr);
+            }
+            SessionFileEntry::Checkpoint(ch) => {
+                store.session_checkpoints.push(ch);
+            }
+            SessionFileEntry::ToolResult(tr) => {
+                store.session_tool_results.push(tr);
+            }
+        }
+    }
+}
+
+fn load_sessions_from_jsonl(store_path: &Path, store: &mut AppStore) -> Result<(), String> {
+    let index = match load_session_index(store_path) {
+        Ok(idx) => idx,
+        Err(_) => return Ok(()),
+    };
+    for entry in &index {
+        if entry.archived {
+            continue;
+        }
+        match load_session_file(store_path, &entry.id) {
+            Ok(entries) => apply_session_file_entries_to_store(store, entries),
+            Err(e) => eprintln!(
+                "[{}] failed to load session {}: {e}",
+                app_brand_display_name(),
+                entry.id,
+            ),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn archive_session(store_path: &Path, session_id: &str) -> Result<(), String> {
+    let src = session_file_path(store_path, session_id)?;
+    let dst = archived_session_path(store_path, session_id)?;
+    if src.exists() {
+        fs::rename(&src, &dst).map_err(|error| error.to_string())?;
+    }
+    // Update index to mark as archived
+    let mut index = load_session_index(store_path).unwrap_or_default();
+    if let Some(entry) = index.iter_mut().find(|e| e.id == session_id) {
+        entry.archived = true;
+        entry.archived_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        );
+    }
+    write_session_index(store_path, &index)
+}
+
+pub(crate) fn unarchive_session(store_path: &Path, session_id: &str) -> Result<(), String> {
+    let src = archived_session_path(store_path, session_id)?;
+    let dst = session_file_path(store_path, session_id)?;
+    if src.exists() {
+        fs::rename(&src, &dst).map_err(|error| error.to_string())?;
+    }
+    // Update index to mark as unarchived
+    let mut index = load_session_index(store_path).unwrap_or_default();
+    if let Some(entry) = index.iter_mut().find(|e| e.id == session_id) {
+        entry.archived = false;
+        entry.archived_at = None;
+    }
+    write_session_index(store_path, &index)?;
+    // Reload session into memory is handled by the caller via load_session_file
+    Ok(())
+}
+
+pub(crate) fn delete_session_file(store_path: &Path, session_id: &str) -> Result<(), String> {
+    let path = session_file_path(store_path, session_id)?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    let archived = archived_session_path(store_path, session_id)?;
+    if archived.exists() {
+        fs::remove_file(&archived).map_err(|error| error.to_string())?;
+    }
+    // Remove from index
+    let mut index = load_session_index(store_path).unwrap_or_default();
+    index.retain(|e| e.id != session_id);
+    write_session_index(store_path, &index)
+}
+
+pub(crate) fn enforce_disk_retention(store_path: &Path) {
+    const MAX_DISK_MB: u64 = 500;
+    let sessions_dir = match sessions_dir(store_path) {
+        Ok(dir) => dir,
+        Err(_) => return,
+    };
+    let total_size = dir_size(&sessions_dir);
+    if total_size < MAX_DISK_MB * 1024 * 1024 {
+        return;
+    }
+    // Load index, sort by updated_at ascending (oldest first), prune until under limit
+    let mut index = match load_session_index(store_path) {
+        Ok(idx) => idx,
+        Err(_) => return,
+    };
+    index.retain(|e| !e.archived);
+    index.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+    let mut removed_size: u64 = 0;
+    for entry in &index {
+        if total_size.saturating_sub(removed_size) < MAX_DISK_MB * 1024 * 1024 {
+            break;
+        }
+        let path = match session_file_path(store_path, &entry.id) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if let Ok(meta) = path.metadata() {
+            removed_size += meta.len();
+        }
+        let _ = fs::remove_file(&path);
+    }
+    // Rebuild index without removed entries
+    let remaining_ids: HashSet<&str> = index.iter().map(|e| e.id.as_str()).collect();
+    let mut new_index = match load_session_index(store_path) {
+        Ok(idx) => idx,
+        Err(_) => return,
+    };
+    new_index.retain(|e| remaining_ids.contains(e.id.as_str()));
+    let _ = write_session_index(store_path, &new_index);
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    let mut total: u64 = 0;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() {
+                    total += meta.len();
+                }
+            }
+        }
+    }
+    total
 }
 
 fn append_session_artifacts_bucket<'a>(
@@ -614,8 +883,27 @@ pub fn load_store(path: &PathBuf) -> AppStore {
         store.assistant_state.last_error = Some("RedClaw assistant daemon is idle.".to_string());
     }
     let embedded_session_artifacts = take_session_artifacts_from_store(&mut store);
-    let disk_session_ids =
-        restore_session_artifacts_from_disk(path, &mut store).unwrap_or_default();
+
+    // Prefer per-session JSONL if available, fall back to legacy disk artifacts
+    let mut loaded_from_legacy = false;
+    let disk_session_ids = if session_index_path(path).is_ok_and(|p| p.exists()) {
+        if let Err(e) = load_sessions_from_jsonl(path, &mut store) {
+            eprintln!(
+                "[{}] JSONL session load failed, falling back to legacy: {e}",
+                app_brand_display_name()
+            );
+            let ids = restore_session_artifacts_from_disk(path, &mut store).unwrap_or_default();
+            loaded_from_legacy = true;
+            ids
+        } else {
+            HashSet::new()
+        }
+    } else {
+        let ids = restore_session_artifacts_from_disk(path, &mut store).unwrap_or_default();
+        loaded_from_legacy = true;
+        ids
+    };
+
     let mut migrated_session_artifacts = false;
     if !embedded_session_artifacts.is_empty() {
         for artifacts in embedded_session_artifacts {
@@ -635,7 +923,11 @@ pub fn load_store(path: &PathBuf) -> AppStore {
             false
         };
     crate::session_manager::enforce_default_retention(&mut store);
-    if skills_migrated || assistant_daemon_migrated || migrated_session_artifacts {
+    if skills_migrated
+        || assistant_daemon_migrated
+        || migrated_session_artifacts
+        || loaded_from_legacy
+    {
         let _ = persist_store(path, &store);
     }
     store
@@ -646,7 +938,67 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
     crate::session_manager::enforce_default_retention(&mut snapshot);
     crate::auth::sanitize_store_for_persist(&mut snapshot);
     let session_artifacts = take_session_artifacts_from_store(&mut snapshot);
+    let sessions = std::mem::take(&mut snapshot.chat_sessions);
+    let context_records = std::mem::take(&mut snapshot.session_context_records);
     snapshot.debug_logs.clear();
+
+    // Write per-session JSONL files
+    let mut index_entries: Vec<SessionIndexEntry> = Vec::new();
+    for session in &sessions {
+        let session_id = &session.id;
+        let mut entries: Vec<SessionFileEntry> = Vec::new();
+        entries.push(SessionFileEntry::Session(session.clone()));
+
+        // Collect messages for this session
+        let artifact = session_artifacts
+            .iter()
+            .find(|a| a.session_id == *session_id);
+        let message_count = artifact.map(|a| a.chat_messages.len() as i64).unwrap_or(0);
+        if let Some(artifact) = artifact {
+            for msg in &artifact.chat_messages {
+                entries.push(SessionFileEntry::Message(msg.clone()));
+            }
+            for tr in &artifact.session_transcript_records {
+                entries.push(SessionFileEntry::Transcript(tr.clone()));
+            }
+            for ch in &artifact.session_checkpoints {
+                entries.push(SessionFileEntry::Checkpoint(ch.clone()));
+            }
+            for tr in &artifact.session_tool_results {
+                entries.push(SessionFileEntry::ToolResult(tr.clone()));
+            }
+        }
+
+        // Context records
+        for ctx in context_records
+            .iter()
+            .filter(|c| c.session_id == *session_id)
+        {
+            entries.push(SessionFileEntry::Context(ctx.clone()));
+        }
+
+        let _ = write_session_file_entries(path, session_id, &entries);
+
+        index_entries.push(SessionIndexEntry {
+            id: session.id.clone(),
+            title: session.title.clone(),
+            created_at: session.created_at.clone(),
+            updated_at: session.updated_at.clone(),
+            metadata: session.metadata.clone(),
+            archived: false,
+            archived_at: None,
+            starred: session.starred,
+            message_count,
+            working_directory: session
+                .metadata
+                .as_ref()
+                .and_then(|m| crate::payload_string(m, "workingDirectory")),
+        });
+    }
+    let _ = write_session_index(path, &index_entries);
+    enforce_disk_retention(path);
+
+    // Still write legacy format (dual-write during transition)
     write_session_artifacts_to_disk(path, &session_artifacts)?;
     let serialized = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {
@@ -859,87 +1211,145 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
     if scheduled.swap(true, Ordering::SeqCst) {
         return;
     }
-    tauri::async_runtime::spawn_blocking(move || loop {
-        let target_version = latest.load(Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(180));
-        if target_version != latest.load(Ordering::SeqCst) {
-            continue;
-        }
-        let mut snapshot = match store_handle.lock() {
-            Ok(store) => store.clone(),
-            Err(_) => {
+    tauri::async_runtime::spawn_blocking(move || {
+        loop {
+            let target_version = latest.load(Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(180));
+            if target_version != latest.load(Ordering::SeqCst) {
+                continue;
+            }
+            let mut snapshot = match store_handle.lock() {
+                Ok(store) => store.clone(),
+                Err(_) => {
+                    eprintln!(
+                        "[{} async persist] store lock poisoned",
+                        app_brand_display_name()
+                    );
+                    scheduled.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+            crate::session_manager::enforce_default_retention(&mut snapshot);
+            crate::auth::sanitize_store_for_persist(&mut snapshot);
+            let session_artifacts = take_session_artifacts_from_store(&mut snapshot);
+            let sessions = std::mem::take(&mut snapshot.chat_sessions);
+            let context_records = std::mem::take(&mut snapshot.session_context_records);
+            snapshot.debug_logs.clear();
+
+            // Write per-session JSONL files
+            let mut index_entries: Vec<SessionIndexEntry> = Vec::new();
+            for session in &sessions {
+                let session_id = &session.id;
+                let mut entries: Vec<SessionFileEntry> = Vec::new();
+                entries.push(SessionFileEntry::Session(session.clone()));
+
+                let artifact = session_artifacts
+                    .iter()
+                    .find(|a| a.session_id == *session_id);
+                let message_count = artifact.map(|a| a.chat_messages.len() as i64).unwrap_or(0);
+                if let Some(artifact) = artifact {
+                    for msg in &artifact.chat_messages {
+                        entries.push(SessionFileEntry::Message(msg.clone()));
+                    }
+                    for tr in &artifact.session_transcript_records {
+                        entries.push(SessionFileEntry::Transcript(tr.clone()));
+                    }
+                    for ch in &artifact.session_checkpoints {
+                        entries.push(SessionFileEntry::Checkpoint(ch.clone()));
+                    }
+                    for tr in &artifact.session_tool_results {
+                        entries.push(SessionFileEntry::ToolResult(tr.clone()));
+                    }
+                }
+                for ctx in context_records
+                    .iter()
+                    .filter(|c| c.session_id == *session_id)
+                {
+                    entries.push(SessionFileEntry::Context(ctx.clone()));
+                }
+
+                let _ = write_session_file_entries(&path, session_id, &entries);
+
+                index_entries.push(SessionIndexEntry {
+                    id: session.id.clone(),
+                    title: session.title.clone(),
+                    created_at: session.created_at.clone(),
+                    updated_at: session.updated_at.clone(),
+                    metadata: session.metadata.clone(),
+                    archived: false,
+                    archived_at: None,
+                    starred: session.starred,
+                    message_count,
+                    working_directory: session
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| crate::payload_string(m, "workingDirectory")),
+                });
+            }
+            let _ = write_session_index(&path, &index_entries);
+            enforce_disk_retention(&path);
+
+            let serialized = match serde_json::to_string_pretty(&snapshot) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!(
+                        "[{} async persist] serialize failed: {error}",
+                        app_brand_display_name()
+                    );
+                    scheduled.store(false, Ordering::SeqCst);
+                    return;
+                }
+            };
+            if target_version != latest.load(Ordering::SeqCst) {
+                continue;
+            }
+            if let Err(error) = write_session_artifacts_to_disk(&path, &session_artifacts) {
                 eprintln!(
-                    "[{} async persist] store lock poisoned",
+                    "[{} async persist] session artifact write failed: {error}",
                     app_brand_display_name()
                 );
                 scheduled.store(false, Ordering::SeqCst);
                 return;
             }
-        };
-        crate::session_manager::enforce_default_retention(&mut snapshot);
-        crate::auth::sanitize_store_for_persist(&mut snapshot);
-        let session_artifacts = take_session_artifacts_from_store(&mut snapshot);
-        snapshot.debug_logs.clear();
-        let serialized = match serde_json::to_string_pretty(&snapshot) {
-            Ok(value) => value,
-            Err(error) => {
+            if let Some(parent) = path.parent() {
+                if let Err(error) = fs::create_dir_all(parent) {
+                    eprintln!(
+                        "[{} async persist] create dir failed: {error}",
+                        app_brand_display_name()
+                    );
+                    scheduled.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+            let tmp_path = path.with_extension(format!("json.tmp.{target_version}"));
+            if let Err(error) = fs::write(&tmp_path, serialized) {
                 eprintln!(
-                    "[{} async persist] serialize failed: {error}",
+                    "[{} async persist] temp write failed: {error}",
                     app_brand_display_name()
                 );
                 scheduled.store(false, Ordering::SeqCst);
                 return;
             }
-        };
-        if target_version != latest.load(Ordering::SeqCst) {
-            continue;
-        }
-        if let Err(error) = write_session_artifacts_to_disk(&path, &session_artifacts) {
-            eprintln!(
-                "[{} async persist] session artifact write failed: {error}",
-                app_brand_display_name()
-            );
-            scheduled.store(false, Ordering::SeqCst);
-            return;
-        }
-        if let Some(parent) = path.parent() {
-            if let Err(error) = fs::create_dir_all(parent) {
+            if target_version != latest.load(Ordering::SeqCst) {
+                let _ = fs::remove_file(&tmp_path);
+                continue;
+            }
+            if let Err(error) = fs::rename(&tmp_path, &path) {
+                let _ = fs::remove_file(&tmp_path);
                 eprintln!(
-                    "[{} async persist] create dir failed: {error}",
+                    "[{} async persist] rename failed: {error}",
                     app_brand_display_name()
                 );
                 scheduled.store(false, Ordering::SeqCst);
                 return;
             }
-        }
-        let tmp_path = path.with_extension(format!("json.tmp.{target_version}"));
-        if let Err(error) = fs::write(&tmp_path, serialized) {
-            eprintln!(
-                "[{} async persist] temp write failed: {error}",
-                app_brand_display_name()
-            );
             scheduled.store(false, Ordering::SeqCst);
-            return;
-        }
-        if target_version != latest.load(Ordering::SeqCst) {
-            let _ = fs::remove_file(&tmp_path);
-            continue;
-        }
-        if let Err(error) = fs::rename(&tmp_path, &path) {
-            let _ = fs::remove_file(&tmp_path);
-            eprintln!(
-                "[{} async persist] rename failed: {error}",
-                app_brand_display_name()
-            );
-            scheduled.store(false, Ordering::SeqCst);
-            return;
-        }
-        scheduled.store(false, Ordering::SeqCst);
-        if target_version == latest.load(Ordering::SeqCst) {
-            break;
-        }
-        if scheduled.swap(true, Ordering::SeqCst) {
-            break;
+            if target_version == latest.load(Ordering::SeqCst) {
+                break;
+            }
+            if scheduled.swap(true, Ordering::SeqCst) {
+                break;
+            }
         }
     });
 }
@@ -969,6 +1379,10 @@ mod tests {
             created_at: "1".to_string(),
             updated_at: "2".to_string(),
             metadata: None,
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         });
         store.chat_messages.push(crate::ChatMessageRecord {
             id: "message-1".to_string(),
@@ -1047,9 +1461,11 @@ mod tests {
             .iter()
             .find(|item| item.name == "image-prompt-optimizer")
             .expect("refreshed image-prompt-optimizer should exist");
-        assert!(refreshed
-            .body
-            .contains("allowedRuntimeModes: [team, redclaw, image-generation]"));
+        assert!(
+            refreshed
+                .body
+                .contains("allowedRuntimeModes: [team, redclaw, image-generation]")
+        );
         assert_eq!(refreshed.disabled, Some(false));
         assert_eq!(refreshed.source_scope.as_deref(), Some("builtin"));
         assert_eq!(refreshed.is_builtin, Some(true));

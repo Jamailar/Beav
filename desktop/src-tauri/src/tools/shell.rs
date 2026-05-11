@@ -1,11 +1,11 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Runtime, State};
 
+use crate::AppState;
 use crate::cli_runtime::{
-    execute_cli_command, load_cli_execution_snapshot, CliExecuteRequest, CliExecutionStatus,
+    CliExecuteRequest, CliExecutionStatus, execute_cli_command, load_cli_execution_snapshot,
 };
 use crate::interactive_runtime_shared::resolve_workspace_tool_path_for_session;
-use crate::AppState;
 
 const DEFAULT_OUTPUT_CHARS: usize = 8_000;
 const MAX_OUTPUT_CHARS: usize = 40_000;

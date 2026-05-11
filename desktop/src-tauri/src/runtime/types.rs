@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::async_runtime::JoinHandle;
 
 use crate::runtime::RuntimeContextBundleSummary;

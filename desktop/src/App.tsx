@@ -3,7 +3,7 @@ import { FileText, Link2, Loader2, MessageSquareWarning, ShieldCheck } from 'luc
 import QRCode from 'qrcode';
 import { AppDialogsHost } from './components/AppDialogsHost';
 import { Layout } from './components/Layout';
-import { FirstRunTour } from './components/FirstRunTour';
+import { AppOnboarding, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
 import { FeedbackReportDialog, OPEN_FEEDBACK_REPORT_EVENT, type FeedbackReportContext } from './components/FeedbackReportDialog';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
@@ -339,7 +339,7 @@ function clearStaleOfficialAuthSnapshots(): boolean {
   return cleared;
 }
 
-function AuthenticatedApp() {
+function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => void }) {
   const { t } = useI18n();
 
   const [currentView, setCurrentView] = useState<ViewType>('home');
@@ -917,6 +917,7 @@ function AuthenticatedApp() {
             <Suspense fallback={currentView === 'settings' ? <ViewLoadingFallback /> : null}>
               <SettingsPage
                 isActive={currentView === 'settings'}
+                onOpenAppOnboarding={onOpenAppOnboarding}
                 onOpenRedClawOnboarding={openRedClawOnboarding}
                 redclawOnboardingVersion={redclawOnboardingVersion}
                 navigationTarget={settingsNavigationTarget}
@@ -1112,7 +1113,6 @@ function AuthenticatedApp() {
           setRedclawOnboardingVersion((value) => value + 1);
         }}
       />
-      <FirstRunTour currentView={currentView} onNavigate={navigateToView} />
       <NotificationsHost currentView={currentView} />
       <AppDialogsHost />
     </>
@@ -1536,20 +1536,51 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
 function App() {
   useOfficialAuthLifecycle();
   const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
+  const [appOnboardingOpen, setAppOnboardingOpen] = useState(false);
   const officialAuthStatus = String(officialAuthState?.status || '').trim();
   const officialAuthPending = !officialAuthBootstrapped
     || officialAuthStatus === 'restoring'
     || officialAuthStatus === 'refreshing';
 
+  const openAppOnboarding = useCallback(() => {
+    setAppOnboardingOpen(true);
+  }, []);
+
+  const closeAppOnboarding = useCallback(() => {
+    markAppOnboardingSeen();
+    setAppOnboardingOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!hasSeenAppOnboarding()) {
+      setAppOnboardingOpen(true);
+    }
+  }, []);
+
   if (officialAuthPending) {
-    return <OfficialLoginGate mode="checking" />;
+    return (
+      <>
+        <OfficialLoginGate mode="checking" />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
   }
 
   if (!isOfficialAuthLoggedIn(officialAuthState, officialAuthBootstrapped)) {
-    return <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />;
+    return (
+      <>
+        <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />
+        <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+      </>
+    );
   }
 
-  return <AuthenticatedApp />;
+  return (
+    <>
+      <AuthenticatedApp onOpenAppOnboarding={openAppOnboarding} />
+      <AppOnboarding open={appOnboardingOpen} onClose={closeAppOnboarding} />
+    </>
+  );
 }
 
 export default App;

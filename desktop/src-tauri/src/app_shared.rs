@@ -1,9 +1,9 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::{payload_string, workspace_root, AppState};
+use crate::{AppState, payload_string, workspace_root};
 
 pub(crate) fn collect_json_files(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     if depth == 0 || !root.exists() {

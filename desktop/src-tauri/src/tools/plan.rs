@@ -7,8 +7,8 @@ use crate::mcp::{McpToolInfo, McpToolInventorySnapshot};
 use crate::runtime::RedboxTurnContext;
 use crate::skills::build_skill_runtime_state;
 use crate::tools::catalog::{
-    action_descriptors_for_tool, descriptor_by_name, ActionDescriptor, ActionVisibility,
-    ToolDescriptor,
+    ActionDescriptor, ActionVisibility, ToolDescriptor, action_descriptors_for_tool,
+    descriptor_by_name,
 };
 use crate::tools::compat::canonical_tool_name;
 use crate::tools::families;
@@ -333,11 +333,7 @@ pub fn base_tool_names_for_metadata(runtime_mode: &str, metadata: Option<&Value>
         .into_iter()
         .filter(|item| base.iter().any(|allowed| allowed == item))
         .collect::<Vec<_>>();
-    if filtered.is_empty() {
-        base
-    } else {
-        filtered
-    }
+    if filtered.is_empty() { base } else { filtered }
 }
 
 pub fn visible_tool_names_for_internal_tools(
@@ -655,10 +651,11 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.direct_app_cli_actions.len() <= DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS);
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
-        assert!(plan
-            .visible_tools
-            .iter()
-            .any(|tool| tool.name == "tool_search"));
+        assert!(
+            plan.visible_tools
+                .iter()
+                .any(|tool| tool.name == "tool_search")
+        );
         assert!(plan.has_direct_app_cli_action("memory.add"));
     }
 
@@ -683,10 +680,11 @@ mod tests {
         assert!(plan.has_direct_app_cli_action("image.generate"));
         assert!(!plan.has_direct_app_cli_action("tools.search"));
         assert!(plan.visible_tools.iter().any(|tool| tool.name == "Operate"));
-        assert!(plan
-            .visible_tools
-            .iter()
-            .any(|tool| tool.name == "tool_search"));
+        assert!(
+            plan.visible_tools
+                .iter()
+                .any(|tool| tool.name == "tool_search")
+        );
     }
 
     #[test]
@@ -834,10 +832,11 @@ mod tests {
 
         assert!(!plan.direct_app_cli_actions.is_empty());
         assert!(plan.direct_app_cli_actions.len() <= 3);
-        assert!(plan
-            .direct_app_cli_actions
-            .iter()
-            .all(|descriptor| descriptor.namespace == "mcp"));
+        assert!(
+            plan.direct_app_cli_actions
+                .iter()
+                .all(|descriptor| descriptor.namespace == "mcp")
+        );
     }
 
     #[test]

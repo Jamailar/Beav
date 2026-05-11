@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::runtime::{request_collab_report, submit_collab_report};
-use crate::{now_i64, AppStore};
+use crate::{AppStore, now_i64};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

@@ -3,7 +3,7 @@ use super::quality::quality_ready_for_runtime;
 use super::{DistillationModel, PatternStat};
 use crate::json_util::{json_string, write_json_pretty};
 use crate::truncate_chars;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 

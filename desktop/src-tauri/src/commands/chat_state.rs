@@ -1,10 +1,10 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::State;
 
 use crate::persistence::with_store_mut;
 use crate::{
-    append_debug_trace_state, make_id, now_iso, now_ms, slug_from_relative_path, AppState,
-    AppStore, ChatMessageRecord, ChatRuntimeStateRecord, ChatSessionRecord,
+    AppState, AppStore, ChatMessageRecord, ChatRuntimeStateRecord, ChatSessionRecord,
+    append_debug_trace_state, make_id, now_iso, now_ms, slug_from_relative_path,
 };
 
 pub const DIAGNOSTICS_CONTEXT_TYPE: &str = "diagnostics";
@@ -122,6 +122,10 @@ pub fn ensure_chat_session<'a>(
         created_at: timestamp.clone(),
         updated_at: timestamp,
         metadata,
+        starred: false,
+        archived: false,
+        archived_at: None,
+        deleted_at: None,
     });
     let last_index = sessions.len() - 1;
     (&mut sessions[last_index], true)
@@ -342,6 +346,10 @@ mod tests {
             metadata: Some(json!({
                 "allowedTools": ["resource"]
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         };
 
         apply_context_binding_metadata(
@@ -386,6 +394,10 @@ mod tests {
                 "contextId": "manuscripts/demo",
                 "agentProfile": "manuscript-editor"
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         });
 
         assert_eq!(
@@ -406,6 +418,10 @@ mod tests {
                 "contextId": "note-1",
                 "isContextBound": true
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         };
 
         assert!(session_matches_context_binding(

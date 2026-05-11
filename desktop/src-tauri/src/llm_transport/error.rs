@@ -202,7 +202,7 @@ impl From<(TransportMode, reqwest::Error)> for LlmTransportError {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_raw_transport_message, TransportErrorKind};
+    use super::{TransportErrorKind, classify_raw_transport_message};
 
     #[test]
     fn classifies_http2_errors_as_retryable_transport() {

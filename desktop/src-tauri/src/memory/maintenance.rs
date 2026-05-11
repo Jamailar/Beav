@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::PathBuf;
 use tauri::State;
@@ -7,10 +7,10 @@ use super::index::rebuild_memory_index_from_store;
 use super::store::{memory_root, memory_workspace_snapshot, persist_memory_workspace_state};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    app_brand_display_name, load_redbox_prompt, make_id, now_i64, now_iso,
-    parse_json_value_from_text, payload_string, render_redbox_prompt,
-    run_model_structured_task_with_settings, truncate_chars, value_to_i64_string, AppState,
-    AppStore, MemoryHistoryRecord, UserMemoryRecord,
+    AppState, AppStore, MemoryHistoryRecord, UserMemoryRecord, app_brand_display_name,
+    load_redbox_prompt, make_id, now_i64, now_iso, parse_json_value_from_text, payload_string,
+    render_redbox_prompt, run_model_structured_task_with_settings, truncate_chars,
+    value_to_i64_string,
 };
 
 fn memory_maintenance_status_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
@@ -570,6 +570,10 @@ mod tests {
             metadata: Some(json!({
                 "contextType": context_type
             })),
+            starred: false,
+            archived: false,
+            archived_at: None,
+            deleted_at: None,
         }
     }
 
@@ -624,8 +628,10 @@ mod tests {
             conversations[1].get("sessionId").and_then(Value::as_str),
             Some("session-old")
         );
-        assert!(!serde_json::to_string(&conversations)
-            .unwrap()
-            .contains("chatroom-advisor"));
+        assert!(
+            !serde_json::to_string(&conversations)
+                .unwrap()
+                .contains("chatroom-advisor")
+        );
     }
 }

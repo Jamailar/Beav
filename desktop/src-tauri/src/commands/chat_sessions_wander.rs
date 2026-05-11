@@ -1,23 +1,22 @@
-use crate::chat_binding::{bind_editor_session, EditorChatBindingRequest};
+use crate::chat_binding::{EditorChatBindingRequest, bind_editor_session};
 use crate::commands::chat_state::diagnostics_session_defaults;
-use crate::member_skill::{
-    attach_member_skill_metadata, detach_member_skill_metadata,
-};
+use crate::member_skill::{attach_member_skill_metadata, detach_member_skill_metadata};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
-    tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
-    transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
+    SessionTranscriptFileMeta, append_compact_boundary_entry, list_transcript_sessions,
+    session_context_usage_value, tool_results_value_for_session, trace_value_for_session,
+    transcript_resume_messages, transcript_session_meta_by_id, update_session_context_record,
 };
 use crate::session_manager::{
     create_context_session, create_session, delete_session, ensure_context_session, fork_session,
-    list_context_sessions, list_sessions, rename_session, resolve_resume_target_session_id,
-    session_detail_value, session_list_item_value, session_resume_value, update_metadata,
+    list_context_sessions, list_sessions, remove_session_artifacts, rename_session,
+    resolve_resume_target_session_id, session_detail_value, session_list_item_value,
+    session_resume_value, update_metadata,
 };
-use crate::skills::{merge_requested_skills_into_metadata, SkillActivationSource};
+use crate::skills::{SkillActivationSource, merge_requested_skills_into_metadata};
 use crate::*;
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1982,7 +1981,11 @@ pub fn handle_chat_sessions_wander_channel(
                 if let Some(wd) = working_directory {
                     metadata.insert("workingDirectory".to_string(), Value::String(wd));
                 }
-                let metadata_value = if metadata.is_empty() { None } else { Some(Value::Object(metadata)) };
+                let metadata_value = if metadata.is_empty() {
+                    None
+                } else {
+                    Some(Value::Object(metadata))
+                };
                 let session = with_store_mut(state, |store| {
                     let session = ensure_context_session(
                         store,
@@ -2015,13 +2018,16 @@ pub fn handle_chat_sessions_wander_channel(
                         })
                         .collect();
                 with_store(state, |store| {
-                    Ok(json!(items
-                        .iter()
-                        .map(|session| {
-                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
-                            session_list_item_value(&store, session, transcript_meta)
-                        })
-                        .collect::<Vec<_>>()))
+                    Ok(json!(
+                        items
+                            .iter()
+                            .map(|session| {
+                                let transcript_meta =
+                                    transcript_meta_by_session_id.get(&session.id);
+                                session_list_item_value(&store, session, transcript_meta)
+                            })
+                            .collect::<Vec<_>>()
+                    ))
                 })
             }
             "chat:create-context-session" => {
@@ -2040,7 +2046,8 @@ pub fn handle_chat_sessions_wander_channel(
                     metadata.insert("advisorId".to_string(), Value::String(context_id.clone()));
                     let skill_ref = crate::persistence::with_store(state, |store| {
                         Ok(crate::member_skill::advisor_member_skill_ref(
-                            &store, &context_id,
+                            &store,
+                            &context_id,
                         ))
                     })
                     .ok()
@@ -2054,7 +2061,11 @@ pub fn handle_chat_sessions_wander_channel(
                 if let Some(wd) = working_directory {
                     metadata.insert("workingDirectory".to_string(), Value::String(wd));
                 }
-                let metadata_value = if metadata.is_empty() { None } else { Some(Value::Object(metadata)) };
+                let metadata_value = if metadata.is_empty() {
+                    None
+                } else {
+                    Some(Value::Object(metadata))
+                };
                 let session = with_store_mut(state, |store| {
                     let session = create_context_session(
                         store,
@@ -2351,7 +2362,68 @@ pub fn handle_chat_sessions_wander_channel(
                     Ok(json!({ "success": true }))
                 })?;
                 let _ = crate::runtime::remove_session_bundle(state, &session_id);
+                let _ = crate::persistence::delete_session_file(&state.store_path, &session_id);
                 Ok(json!({ "success": true }))
+            }
+            "chat:archive-session" => {
+                let session_id = payload_value_as_string(&payload).unwrap_or_default();
+                with_store_mut(state, |store| {
+                    if let Some(session) =
+                        store.chat_sessions.iter_mut().find(|s| s.id == session_id)
+                    {
+                        session.archived = true;
+                        session.archived_at = Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0),
+                        );
+                    }
+                    remove_session_artifacts(store, &session_id);
+                    Ok(json!({ "success": true }))
+                })?;
+                let _ = crate::persistence::archive_session(&state.store_path, &session_id);
+                let _ = crate::runtime::remove_session_bundle(state, &session_id);
+                if let Ok(mut guard) = state.chat_runtime_states.lock() {
+                    guard.remove(&session_id);
+                }
+                Ok(json!({ "success": true }))
+            }
+            "chat:unarchive-session" => {
+                let session_id = payload_value_as_string(&payload).unwrap_or_default();
+                let loaded =
+                    crate::persistence::unarchive_session(&state.store_path, &session_id).is_ok();
+                if loaded {
+                    // Reload session data into memory
+                    if let Ok(entries) =
+                        crate::persistence::load_session_file(&state.store_path, &session_id)
+                    {
+                        with_store_mut(state, |store| {
+                            crate::persistence::apply_session_file_entries_to_store(store, entries);
+                            Ok(json!({ "success": true }))
+                        })?;
+                    }
+                }
+                Ok(json!({ "success": loaded }))
+            }
+            "chat:list-archived-sessions" => {
+                let index =
+                    crate::persistence::load_session_index(&state.store_path).unwrap_or_default();
+                let archived: Vec<Value> = index
+                    .into_iter()
+                    .filter(|e| e.archived)
+                    .map(|e| {
+                        json!({
+                            "id": e.id,
+                            "title": e.title,
+                            "createdAt": e.created_at,
+                            "updatedAt": e.updated_at,
+                            "archivedAt": e.archived_at,
+                            "messageCount": e.message_count,
+                        })
+                    })
+                    .collect();
+                Ok(json!(archived))
             }
             "chat:clear-messages" => {
                 let session_id = payload_value_as_string(&payload).unwrap_or_default();

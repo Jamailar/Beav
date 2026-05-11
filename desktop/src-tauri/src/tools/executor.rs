@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::events::emit_runtime_event;
@@ -8,13 +8,13 @@ use crate::mcp::config::{
 use crate::mcp::{resource_templates_from_response, resources_from_response};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    append_session_checkpoint, request_runtime_approval, runtime_approval_confirmed_by_call_id,
-    RuntimeApprovalDetails, RuntimeApprovalRecord,
+    RuntimeApprovalDetails, RuntimeApprovalRecord, append_session_checkpoint,
+    request_runtime_approval, runtime_approval_confirmed_by_call_id,
 };
 use crate::tools::plan::build_tool_registry_plan_for_session_with_mcp;
 use crate::tools::router::{McpResourcePreparedCall, PreparedToolCall, ToolRouter};
 use crate::tools::tool_search::tool_search_payload;
-use crate::{append_session_transcript, AppState};
+use crate::{AppState, append_session_transcript};
 
 pub struct InteractiveToolExecutor<'a> {
     app: &'a AppHandle,

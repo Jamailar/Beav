@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::cli_runtime::installers::{environment_bin_dir, CliInstallPlan, CliInstallerBackend};
+use crate::cli_runtime::installers::{CliInstallPlan, CliInstallerBackend, environment_bin_dir};
 use crate::cli_runtime::{CliEnvironmentRecord, CliInstallMethod, CliInstallRequest};
 
 #[derive(Debug, Clone, Copy)]

@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use tauri::{AppHandle, State};
 
@@ -7,9 +7,9 @@ use crate::persistence::{
     with_store_mut,
 };
 use crate::{
-    active_space_workspace_root_from_store, emit_space_changed, emit_space_renamed,
+    AppState, active_space_workspace_root_from_store, emit_space_changed, emit_space_renamed,
     ensure_redclaw_space_writing_style_skill, now_iso, payload_string, payload_value_as_string,
-    update_workspace_root_cache, AppState,
+    update_workspace_root_cache,
 };
 
 pub(crate) const SPACE_CREATION_DISABLED_ERROR: &str = "创建新空间功能已关闭";

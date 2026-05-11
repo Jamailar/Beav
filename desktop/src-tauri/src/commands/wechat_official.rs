@@ -1,12 +1,12 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    create_wechat_remote_draft, extract_cover_source, fetch_wechat_access_token, make_id,
-    materialize_image_source, now_iso, payload_field, payload_string, slug_from_relative_path,
-    upload_wechat_thumb_media, wechat_binding_public_value, wechat_drafts_dir, write_text_file,
-    AppState, WechatOfficialBindingRecord,
+    AppState, WechatOfficialBindingRecord, create_wechat_remote_draft, extract_cover_source,
+    fetch_wechat_access_token, make_id, materialize_image_source, now_iso, payload_field,
+    payload_string, slug_from_relative_path, upload_wechat_thumb_media,
+    wechat_binding_public_value, wechat_drafts_dir, write_text_file,
 };
 
 pub fn handle_wechat_official_channel(

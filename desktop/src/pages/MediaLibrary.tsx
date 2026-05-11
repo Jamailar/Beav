@@ -1434,14 +1434,14 @@ export function MediaLibrary({
                                         <Sparkles className="w-4 h-4 text-accent-primary" />
                                         最新生成结果（{generatedAssets.length}）
                                     </div>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         {generatedAssets.map((asset) => (
                                             <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                                                 {asset.previewUrl && asset.exists ? (
                                                     isVideoAsset(asset) ? (
-                                                        <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-[4/5] object-cover bg-black" controls preload="metadata" />
+                                                        <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-video object-cover bg-black" controls preload="metadata" />
                                                     ) : isAudioAsset(asset) ? (
-                                                        <div className="flex aspect-[4/5] flex-col justify-center gap-4 bg-surface-secondary px-4">
+                                                        <div className="flex aspect-video flex-col justify-center gap-4 bg-surface-secondary px-4">
                                                             <div className="inline-flex items-center gap-2 text-sm font-medium text-text-secondary">
                                                                 <Music2 className="h-4 w-4 text-accent-primary" />
                                                                 音频
@@ -1449,10 +1449,10 @@ export function MediaLibrary({
                                                             <audio src={resolveAssetUrl(asset.previewUrl)} className="w-full" controls preload="metadata" />
                                                         </div>
                                                     ) : (
-                                                        <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full aspect-[4/5] object-cover" />
+                                                        <img src={resolveAssetUrl(asset.previewUrl)} alt={asset.title || asset.id} className="w-full aspect-video object-cover" />
                                                     )
                                                 ) : (
-                                                    <div className="w-full aspect-[4/5] bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
+                                                    <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
                                                 )}
                                                 <div className="p-3 space-y-1.5">
                                                     <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>
@@ -1776,13 +1776,13 @@ export function MediaLibrary({
                                         <Sparkles className="w-4 h-4 text-accent-primary" />
                                         最新生视频结果（{generatedVideoAssets.length}）
                                     </div>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         {generatedVideoAssets.map((asset) => (
                                             <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                                                 {asset.previewUrl && asset.exists ? (
-                                                    <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-[4/5] object-cover bg-black" controls preload="metadata" />
+                                                    <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-video object-cover bg-black" controls preload="metadata" />
                                                 ) : (
-                                                    <div className="w-full aspect-[4/5] bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
+                                                    <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
                                                 )}
                                                 <div className="p-3 space-y-1.5">
                                                     <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>

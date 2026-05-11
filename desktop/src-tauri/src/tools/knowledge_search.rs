@@ -1,6 +1,6 @@
 use glob::{MatchOptions, Pattern};
-use rusqlite::{params, Connection};
-use serde_json::{json, Value};
+use rusqlite::{Connection, params};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -14,7 +14,7 @@ use crate::knowledge_index::{
     retrieval_audit,
 };
 use crate::persistence::with_store;
-use crate::{payload_field, payload_string, AppState};
+use crate::{AppState, payload_field, payload_string};
 
 const DEFAULT_GLOB_LIMIT: usize = 50;
 const MAX_GLOB_LIMIT: usize = 200;

@@ -23,6 +23,14 @@
       "model": "deepseek-v4-flash",
       "summary": "# You are the Team Leader\n\n## Your Role\nYou coordinate a team of AI agents. Y...",
       "message_count": 5
+    },
+    {
+      "id": "cc109aca",
+      "created_at": "2026-05-11T03:17:03.935110Z",
+      "updated_at": "2026-05-11T03:56:41.247253Z",
+      "model": "deepseek-v4-pro",
+      "summary": "对比一下Codex的会话归档功能/Users/Jam/LocalDev/GitHub/codex\n我的app现在好像会话都是直接删除，无法归档。\n主要是对...",
+      "message_count": 106
     }
   ]
 }

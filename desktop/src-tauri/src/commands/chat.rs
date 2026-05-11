@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{build_chat_send_turn, run_chat_send_turn, PreparedSessionAgentTurn};
+use crate::agent::{PreparedSessionAgentTurn, build_chat_send_turn, run_chat_send_turn};
 use crate::commands::chat_state::{
     ensure_chat_session_record, latest_session_id, request_chat_runtime_cancel,
     resolve_runtime_mode_for_session,
@@ -10,18 +10,18 @@ use crate::events::{emit_runtime_task_checkpoint_saved, emit_runtime_tool_result
 use crate::member_skill::advisor_member_skill_ref;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    resolve_runtime_approval_by_approval_id, resolve_runtime_approval_by_call_id,
     RuntimeApprovalResolutionPayload, SessionToolResultRecord,
+    resolve_runtime_approval_by_approval_id, resolve_runtime_approval_by_call_id,
 };
 use crate::session_lineage_fields;
 use crate::skills::{
-    active_skill_activation_items, merge_requested_skills_into_session,
-    requested_skill_names_from_task_hints, SkillActivationSource,
+    SkillActivationSource, active_skill_activation_items, merge_requested_skills_into_session,
+    requested_skill_names_from_task_hints,
 };
 use crate::{
-    append_debug_log_state, append_debug_trace_state, append_session_transcript, log_timing_event,
-    make_id, now_i64, now_iso, now_ms, payload_field, payload_string, session_title_from_message,
-    AppState, ChatMessageRecord,
+    AppState, ChatMessageRecord, append_debug_log_state, append_debug_trace_state,
+    append_session_transcript, log_timing_event, make_id, now_i64, now_iso, now_ms, payload_field,
+    payload_string, session_title_from_message,
 };
 
 const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[

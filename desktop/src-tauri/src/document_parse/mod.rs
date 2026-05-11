@@ -4,9 +4,9 @@ mod visual_llm;
 mod visual_manifest;
 
 use base64::Engine;
-use calamine::{open_workbook_auto, Data, Reader};
+use calamine::{Data, Reader, open_workbook_auto};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -1294,9 +1294,11 @@ mod tests {
         zip.finish().unwrap();
 
         let parsed = parse_zip(&path).unwrap().unwrap();
-        assert!(parsed
-            .iter()
-            .any(|section| section.text.contains("zip attachment body")));
+        assert!(
+            parsed
+                .iter()
+                .any(|section| section.text.contains("zip attachment body"))
+        );
         let _ = fs::remove_dir_all(root);
     }
 

@@ -136,12 +136,16 @@ mod tests {
         assert!(bundle.catalog_section.contains(
             "call `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"skill-name\" })`"
         ));
-        assert!(bundle
-            .catalog_section
-            .contains("Only the inactive skills listed below may need manual invocation"));
-        assert!(bundle
-            .catalog_section
-            .contains("Activate when: when writing"));
+        assert!(
+            bundle
+                .catalog_section
+                .contains("Only the inactive skills listed below may need manual invocation")
+        );
+        assert!(
+            bundle
+                .catalog_section
+                .contains("Activate when: when writing")
+        );
     }
 
     #[test]
@@ -166,11 +170,15 @@ mod tests {
             &["workflow".to_string()],
         );
         let bundle = build_skill_prompt_bundle(&resolved);
-        assert!(bundle
-            .catalog_section
-            .contains("Already active in this session: session-writer"));
-        assert!(bundle
-            .catalog_section
-            .contains("All visible skills for this runtime are already active"));
+        assert!(
+            bundle
+                .catalog_section
+                .contains("Already active in this session: session-writer")
+        );
+        assert!(
+            bundle
+                .catalog_section
+                .contains("All visible skills for this runtime are already active")
+        );
     }
 }

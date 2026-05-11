@@ -6,7 +6,7 @@ use crate::persistence::{
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1897,7 +1897,11 @@ pub fn handle_library_channel(
                             state,
                             format!(
                                 "[cover-gen] request:start endpoint={} provider={} template={} model={} title={}",
-                                endpoint, effective_provider, effective_template, effective_model, asset_title
+                                endpoint,
+                                effective_provider,
+                                effective_template,
+                                effective_model,
+                                asset_title
                             ),
                         );
                         let request_payload =
@@ -1916,7 +1920,10 @@ pub fn handle_library_channel(
                                     state,
                                     format!(
                                         "[cover-gen] request:error endpoint={} provider={} template={} model={} error={error}",
-                                        endpoint, effective_provider, effective_template, effective_model
+                                        endpoint,
+                                        effective_provider,
+                                        effective_template,
+                                        effective_model
                                     ),
                                 );
                                 if placeholder_fallback_allowed {
@@ -1978,7 +1985,10 @@ pub fn handle_library_channel(
                                     state,
                                     format!(
                                         "[cover-gen] response:empty endpoint={} provider={} template={} model={}",
-                                        endpoint, effective_provider, effective_template, effective_model
+                                        endpoint,
+                                        effective_provider,
+                                        effective_template,
+                                        effective_model
                                     ),
                                 );
                                 return Err(

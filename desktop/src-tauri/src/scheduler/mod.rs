@@ -6,12 +6,12 @@ mod retry;
 pub mod task_policy;
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use chrono::{NaiveTime, Timelike};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -20,7 +20,7 @@ use crate::runtime::{
     RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
     RuntimeCheckpointRecord, RuntimeTaskRecord,
 };
-use crate::{format_timestamp_rfc3339_from_ms, AppState, AppStore};
+use crate::{AppState, AppStore, format_timestamp_rfc3339_from_ms};
 use task_policy::{
     fingerprint_for_definition_payload, next_daily_timestamp_in_timezone,
     next_weekly_timestamp_in_timezone,
@@ -721,8 +721,10 @@ mod tests {
 
         let tasks = derived_background_tasks(&store);
 
-        assert!(!tasks
-            .iter()
-            .any(|item| { item.get("id").and_then(Value::as_str) == Some("task-1") }));
+        assert!(
+            !tasks
+                .iter()
+                .any(|item| { item.get("id").and_then(Value::as_str) == Some("task-1") })
+        );
     }
 }

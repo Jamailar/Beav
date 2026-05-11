@@ -211,7 +211,7 @@ fn input_summary_for_schema(schema: Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::catalog::{action_descriptors_for_tool, ActionVisibility};
+    use crate::tools::catalog::{ActionVisibility, action_descriptors_for_tool};
 
     #[test]
     fn search_matches_image_generation_by_prompt_field() {
@@ -235,13 +235,15 @@ mod tests {
             results.first().map(|item| item.action.as_str()),
             Some("image.generate")
         );
-        assert!(results
-            .first()
-            .map(|item| item
-                .input_summary
-                .iter()
-                .any(|field| field == "aspectRatio"))
-            .unwrap_or(false));
+        assert!(
+            results
+                .first()
+                .map(|item| item
+                    .input_summary
+                    .iter()
+                    .any(|field| field == "aspectRatio"))
+                .unwrap_or(false)
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,22 +50,14 @@ pub struct ActionDescriptor {
     pub visibility: ActionVisibility,
 }
 
-const APP_CLI_DESCRIPTION: &str =
-    "Structured business actions for the current runtime mode. Always call it with `action` and an optional `payload` object.";
-const REDBOX_EDITOR_DESCRIPTION: &str =
-    "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg/remotion actions.";
-const READ_DESCRIPTION: &str =
-    "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion. Do not use bash/curl for web pages.";
-const LIST_DESCRIPTION: &str =
-    "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, assets:// for asset library entries, or media:// for media.";
-const SEARCH_DESCRIPTION: &str =
-    "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. This is not a web search tool.";
-const WRITE_DESCRIPTION: &str =
-    "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
-const REDBOX_DESCRIPTION: &str =
-    "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
-const TOOL_SEARCH_DESCRIPTION: &str =
-    "Search deferred Operate actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
+const APP_CLI_DESCRIPTION: &str = "Structured business actions for the current runtime mode. Always call it with `action` and an optional `payload` object.";
+const REDBOX_EDITOR_DESCRIPTION: &str = "Structured editor actions for the currently bound video/audio manuscript package. Use the script-first flow and controlled ffmpeg/remotion actions.";
+const READ_DESCRIPTION: &str = "Read one local, web URL, or virtual resource. Use paths like https://example.com/page, workspace://docs/a.md, knowledge://, profiles://creator_profile, manuscripts://current, editor://current/script, or editor://current/remotion. Do not use bash/curl for web pages.";
+const LIST_DESCRIPTION: &str = "List a directory or virtual collection. Use workspace:// for files, knowledge:// for knowledge, manuscripts:// for manuscript projects, assets:// for asset library entries, or media:// for media.";
+const SEARCH_DESCRIPTION: &str = "Search files or virtual collections by query. Use workspace:// for workspace content, knowledge:// for advisor/shared knowledge, and assets:// for asset library lookup. This is not a web search tool.";
+const WRITE_DESCRIPTION: &str = "Write content to a virtual resource. Use manuscripts://current for the bound manuscript body or editor://current/script for the bound editor script.";
+const REDBOX_DESCRIPTION: &str = "Run product-level operations that are not simple read/list/search/write, such as creating manuscripts, generating media, managing tasks, invoking skills, editor workflows, or MCP calls.";
+const TOOL_SEARCH_DESCRIPTION: &str = "Search deferred Operate actions and MCP tools that are available to this session but not exposed directly in the current turn. Use this when a tool or action is reported as deferred.";
 const ALL_APP_RUNTIME_MODES: &[&str] = &[
     "team",
     "default",
@@ -504,7 +496,9 @@ fn redclaw_task_preview_input_schema() -> Value {
             ),
             (
                 "stepPrompt",
-                string_schema("Per-round instruction for long-cycle tasks. Required for long_cycle."),
+                string_schema(
+                    "Per-round instruction for long-cycle tasks. Required for long_cycle.",
+                ),
             ),
             (
                 "metadata",
@@ -584,7 +578,9 @@ fn redclaw_task_cancel_input_schema() -> Value {
             ("reason", string_schema("Optional cancellation reason.")),
             (
                 "deleteSource",
-                bool_schema("Set true to remove the underlying scheduled or long-cycle task instead of only disabling it."),
+                bool_schema(
+                    "Set true to remove the underlying scheduled or long-cycle task instead of only disabling it.",
+                ),
             ),
         ],
         &["jobDefinitionId"],
@@ -697,17 +693,48 @@ fn subjects_output_schema() -> Value {
 fn voice_clone_input_schema() -> Value {
     object_schema(
         &[
-            ("samplePath", string_schema("Managed local audio sample path. Relative paths are resolved inside the workspace or the owner asset folder.")),
-            ("sampleFileKey", string_schema("Managed OSS sample file key. Use only for samples already uploaded to the platform.")),
-            ("ownerAssetId", string_schema("Optional asset library subject id that owns this sample.")),
+            (
+                "samplePath",
+                string_schema(
+                    "Managed local audio sample path. Relative paths are resolved inside the workspace or the owner asset folder.",
+                ),
+            ),
+            (
+                "sampleFileKey",
+                string_schema(
+                    "Managed OSS sample file key. Use only for samples already uploaded to the platform.",
+                ),
+            ),
+            (
+                "ownerAssetId",
+                string_schema("Optional asset library subject id that owns this sample."),
+            ),
             ("name", string_schema("Optional user-facing voice name.")),
-            ("language", string_schema("Optional sample language, such as zh, en, or nl.")),
-            ("model", string_schema("Optional clone model key; omit to use backend default.")),
-            ("writeBack", bool_schema("Whether to write the resulting voiceId back to ownerAssetId. Defaults to true.")),
-            ("waitForCompletion", bool_schema("When true, wait for the queued voice clone job to complete before returning.")),
+            (
+                "language",
+                string_schema("Optional sample language, such as zh, en, or nl."),
+            ),
+            (
+                "model",
+                string_schema("Optional clone model key; omit to use backend default."),
+            ),
+            (
+                "writeBack",
+                bool_schema(
+                    "Whether to write the resulting voiceId back to ownerAssetId. Defaults to true.",
+                ),
+            ),
+            (
+                "waitForCompletion",
+                bool_schema(
+                    "When true, wait for the queued voice clone job to complete before returning.",
+                ),
+            ),
         ],
         &[],
-        Some("Queue a managed local or OSS audio sample for cloning into a reusable platform voice_id. Do not pass external URLs."),
+        Some(
+            "Queue a managed local or OSS audio sample for cloning into a reusable platform voice_id. Do not pass external URLs.",
+        ),
     )
 }
 
@@ -746,18 +773,49 @@ fn voice_speech_input_schema() -> Value {
     object_schema(
         &[
             ("input", string_schema("Text to synthesize.")),
-            ("voiceId", string_schema("Platform voice id returned by voice.clone or stored on an asset.")),
-            ("voice", string_schema("OpenAI-compatible alias for voiceId.")),
-            ("model", string_schema("Optional TTS model key; omit to use backend default.")),
-            ("languageBoost", string_schema("Optional language boost value, such as Chinese.")),
-            ("responseFormat", string_schema("Audio format, usually mp3.")),
-            ("title", string_schema("Optional media library title for the generated audio asset.")),
-            ("projectId", string_schema("Optional project id to attach to the generated media asset.")),
-            ("boundManuscriptPath", string_schema("Optional manuscript path to bind the generated audio asset.")),
-            ("waitForCompletion", bool_schema("When true, wait for the queued audio job to complete before returning.")),
+            (
+                "voiceId",
+                string_schema("Platform voice id returned by voice.clone or stored on an asset."),
+            ),
+            (
+                "voice",
+                string_schema("OpenAI-compatible alias for voiceId."),
+            ),
+            (
+                "model",
+                string_schema("Optional TTS model key; omit to use backend default."),
+            ),
+            (
+                "languageBoost",
+                string_schema("Optional language boost value, such as Chinese."),
+            ),
+            (
+                "responseFormat",
+                string_schema("Audio format, usually mp3."),
+            ),
+            (
+                "title",
+                string_schema("Optional media library title for the generated audio asset."),
+            ),
+            (
+                "projectId",
+                string_schema("Optional project id to attach to the generated media asset."),
+            ),
+            (
+                "boundManuscriptPath",
+                string_schema("Optional manuscript path to bind the generated audio asset."),
+            ),
+            (
+                "waitForCompletion",
+                bool_schema(
+                    "When true, wait for the queued audio job to complete before returning.",
+                ),
+            ),
         ],
         &["input", "voiceId"],
-        Some("Queue speech synthesis with a cloned or platform voice id and save the audio into the media library when the job completes."),
+        Some(
+            "Queue speech synthesis with a cloned or platform voice id and save the audio into the media library when the job completes.",
+        ),
     )
 }
 
@@ -836,7 +894,9 @@ fn approval_request_input_schema() -> Value {
             ),
             (
                 "decisionType",
-                string_schema("Optional decision type, such as approve_reject, choose_option, or review_changes."),
+                string_schema(
+                    "Optional decision type, such as approve_reject, choose_option, or review_changes.",
+                ),
             ),
             (
                 "priority",
@@ -864,7 +924,9 @@ fn approval_request_input_schema() -> Value {
             ),
             (
                 "waitForDecision",
-                bool_schema("Whether the tool should wait for the user's decision before returning."),
+                bool_schema(
+                    "Whether the tool should wait for the user's decision before returning.",
+                ),
             ),
             (
                 "timeoutMs",
@@ -943,7 +1005,9 @@ fn team_session_create_input_schema() -> Value {
             ),
         ],
         &["objective", "userConfirmedTeamPlan"],
-        Some("Create a Workboard collaboration project for internal runtime agents. Before calling this, propose the team members and division of work to the user and wait for explicit confirmation."),
+        Some(
+            "Create a Workboard collaboration project for internal runtime agents. Before calling this, propose the team members and division of work to the user and wait for explicit confirmation.",
+        ),
     )
 }
 
@@ -988,7 +1052,9 @@ fn team_member_spawn_input_schema() -> Value {
             ),
         ],
         &["sessionId", "displayName", "userConfirmedTeamPlan"],
-        Some("Create one internal runtime team member. Do not create external ACP/CLI members. Before spawning members, the user must have confirmed the member list and responsibilities."),
+        Some(
+            "Create one internal runtime team member. Do not create external ACP/CLI members. Before spawning members, the user must have confirmed the member list and responsibilities.",
+        ),
     )
 }
 
@@ -1007,11 +1073,15 @@ fn team_member_match_input_schema() -> Value {
             ),
             (
                 "taskType",
-                string_schema("Optional task type such as research, image_generation, review, or planning."),
+                string_schema(
+                    "Optional task type such as research, image_generation, review, or planning.",
+                ),
             ),
             (
                 "roleId",
-                string_schema("Optional desired role id when the caller already knows the best role."),
+                string_schema(
+                    "Optional desired role id when the caller already knows the best role.",
+                ),
             ),
             (
                 "requiredCapabilities",
@@ -1025,10 +1095,15 @@ fn team_member_match_input_schema() -> Value {
                 "preferredTasks",
                 json!({ "type": "array", "items": { "type": "string" } }),
             ),
-            ("limit", integer_schema("Maximum candidates to return.", 1, 20)),
+            (
+                "limit",
+                integer_schema("Maximum candidates to return.", 1, 20),
+            ),
         ],
         &["sessionId"],
-        Some("Rank existing internal runtime team members by persisted agent card, capabilities, tool policy, and current load."),
+        Some(
+            "Rank existing internal runtime team members by persisted agent card, capabilities, tool policy, and current load.",
+        ),
     )
 }
 
@@ -1296,9 +1371,7 @@ fn cli_runtime_inspect_input_schema() -> Value {
             ),
             (
                 "executable",
-                string_schema(
-                    "Compatibility alias for the exact command/executable to inspect.",
-                ),
+                string_schema("Compatibility alias for the exact command/executable to inspect."),
             ),
             (
                 "name",
@@ -1703,7 +1776,9 @@ fn skills_install_from_repo_input_schema() -> Value {
             ),
             (
                 "path",
-                string_schema("Optional repository-relative skill directory or bundle subdirectory."),
+                string_schema(
+                    "Optional repository-relative skill directory or bundle subdirectory.",
+                ),
             ),
             (
                 "paths",
@@ -2073,19 +2148,22 @@ fn fs_knowledge_list_input_schema() -> Value {
             ),
             (
                 "memberId",
-                string_schema("Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source."),
+                string_schema(
+                    "Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source.",
+                ),
             ),
-            (
-                "collabMemberId",
-                string_schema("Alias for memberId."),
-            ),
+            ("collabMemberId", string_schema("Alias for memberId.")),
             (
                 "sourceId",
-                string_schema("Optional registered document source id to search instead of advisor/shared knowledge."),
+                string_schema(
+                    "Optional registered document source id to search instead of advisor/shared knowledge.",
+                ),
             ),
             (
                 "rootPath",
-                string_schema("Optional registered document source root path when sourceId is not available."),
+                string_schema(
+                    "Optional registered document source root path when sourceId is not available.",
+                ),
             ),
             (
                 "path",
@@ -2114,19 +2192,22 @@ fn fs_knowledge_search_input_schema() -> Value {
             ),
             (
                 "memberId",
-                string_schema("Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source."),
+                string_schema(
+                    "Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source.",
+                ),
             ),
-            (
-                "collabMemberId",
-                string_schema("Alias for memberId."),
-            ),
+            ("collabMemberId", string_schema("Alias for memberId.")),
             (
                 "sourceId",
-                string_schema("Optional registered document source id to search instead of advisor/shared knowledge."),
+                string_schema(
+                    "Optional registered document source id to search instead of advisor/shared knowledge.",
+                ),
             ),
             (
                 "rootPath",
-                string_schema("Optional registered document source root path when sourceId is not available."),
+                string_schema(
+                    "Optional registered document source root path when sourceId is not available.",
+                ),
             ),
             (
                 "path",
@@ -2164,19 +2245,22 @@ fn fs_knowledge_read_input_schema() -> Value {
             ),
             (
                 "memberId",
-                string_schema("Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source."),
+                string_schema(
+                    "Optional collaboration member id; when provided, knowledge resolves to that member's bound advisor or document source.",
+                ),
             ),
-            (
-                "collabMemberId",
-                string_schema("Alias for memberId."),
-            ),
+            ("collabMemberId", string_schema("Alias for memberId.")),
             (
                 "sourceId",
-                string_schema("Optional registered document source id to read instead of advisor/shared knowledge."),
+                string_schema(
+                    "Optional registered document source id to read instead of advisor/shared knowledge.",
+                ),
             ),
             (
                 "rootPath",
-                string_schema("Optional registered document source root path when sourceId is not available."),
+                string_schema(
+                    "Optional registered document source root path when sourceId is not available.",
+                ),
             ),
             (
                 "blockId",
@@ -2195,7 +2279,11 @@ fn fs_knowledge_read_input_schema() -> Value {
             ),
             (
                 "maxBytes",
-                integer_schema("Maximum media bytes for knowledge.attach.", 1, 20 * 1024 * 1024),
+                integer_schema(
+                    "Maximum media bytes for knowledge.attach.",
+                    1,
+                    20 * 1024 * 1024,
+                ),
             ),
         ],
         &[],
@@ -4687,11 +4775,12 @@ mod tests {
             read.pointer("/function/name").and_then(Value::as_str),
             Some("Read")
         );
-        assert!(read
-            .pointer("/function/parameters/properties/path/description")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("Resource path"));
+        assert!(
+            read.pointer("/function/parameters/properties/path/description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("Resource path")
+        );
 
         let redbox = schema_for_tool_for_runtime_mode("Operate", Some("redclaw"))
             .expect("Operate schema should exist");

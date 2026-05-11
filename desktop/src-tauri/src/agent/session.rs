@@ -5,7 +5,7 @@ use crate::commands::chat_state::{
     is_first_assistant_turn_for_session, resolve_runtime_mode_for_session,
 };
 use crate::persistence::with_store;
-use crate::{make_id, AppState};
+use crate::{AppState, make_id};
 
 pub fn resolve_chat_exchange_context(
     state: &State<'_, AppState>,

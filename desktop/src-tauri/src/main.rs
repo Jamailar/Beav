@@ -50,7 +50,7 @@ mod tools;
 mod voice_service;
 mod workspace_loaders;
 
-use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
+use agent::{PreparedWanderTurn, execute_prepared_wander_turn};
 use base64::Engine;
 use commands::chat_state::{
     ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
@@ -66,9 +66,6 @@ use persistence::{
     load_store, persist_store, with_store, with_store_mut,
 };
 use runtime::{
-    append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
-    resolve_runtime_mode_from_context_type, role_sequence_for_route, runtime_error_payload,
-    runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
     ApprovalRuntimeState, CollabMailboxMessageRecord, CollabMemberRecord,
     CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, InteractiveLoopGuard,
     InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord, RedclawJobDefinitionRecord,
@@ -76,11 +73,14 @@ use runtime::{
     RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, ReviewDecisionRecord,
     ReviewDocketRecord, RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
     RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord, SkillRecord,
+    SessionTranscriptRecord, SkillRecord, append_session_checkpoint, infer_protocol,
+    next_memory_maintenance_at_ms, resolve_chat_config, resolve_runtime_mode_from_context_type,
+    role_sequence_for_route, runtime_error_payload, runtime_warm_settings_fingerprint,
+    session_lineage_fields, session_title_from_message,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -88,8 +88,8 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, AtomicU64},
 };
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -166,6 +166,14 @@ struct ChatSessionRecord {
     created_at: String,
     updated_at: String,
     metadata: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deleted_at: Option<i64>,
+    #[serde(default)]
+    starred: bool,
+    #[serde(default)]
+    archived: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1550,7 +1558,9 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_generated_media_markdown, asset_preview_url_from_result,
+        GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
+        SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
+        SubjectVoiceInput, append_generated_media_markdown, asset_preview_url_from_result,
         authoring_saved_final_summary, build_interactive_user_turn_messages,
         build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
         decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
@@ -1564,11 +1574,8 @@ mod tests {
         normalized_structured_payload_arguments, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
         validate_runtime_tool_message_sequence, workspace_read_directory_response,
-        GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
-        SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
-        SubjectVoiceInput,
     };
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::fs;
     use std::path::Path;
     use std::time::Instant;
@@ -1747,10 +1754,12 @@ mod tests {
         assert_eq!(subjects[0].name, "测试资产");
         assert_eq!(subjects[0].category_id.as_deref(), Some("category-test"));
         assert_eq!(subjects[0].image_paths.len(), 1);
-        assert!(subjects_root
-            .join("subject-test")
-            .join(&subjects[0].image_paths[0])
-            .exists());
+        assert!(
+            subjects_root
+                .join("subject-test")
+                .join(&subjects[0].image_paths[0])
+                .exists()
+        );
         assert!(subjects[0].voice_path.is_some());
         assert!(subjects[0].primary_preview_url.is_some());
         assert!(subjects[0].voice_preview_url.is_some());
@@ -2190,7 +2199,9 @@ mod tests {
                 preview_url: "file:///C:/Users/Jam/My Images/cover (1).png".to_string(),
             }],
         );
-        assert!(markdown.contains("![generated-1](<file:///C:/Users/Jam/My Images/cover (1).png>)"));
+        assert!(
+            markdown.contains("![generated-1](<file:///C:/Users/Jam/My Images/cover (1).png>)")
+        );
     }
 
     #[test]
@@ -3221,18 +3232,9 @@ fn build_wander_items_text(items: &[Value]) -> String {
         .join("\n\n")
 }
 
-fn resolve_wander_model_config(settings: &Value) -> Value {
-    let base_url = payload_string(settings, "api_endpoint").unwrap_or_default();
-    let api_key = payload_string(settings, "api_key").unwrap_or_default();
-    let model_name = payload_string(settings, "model_name_wander")
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| payload_string(settings, "model_name"))
-        .unwrap_or_default();
+fn resolve_wander_model_config(_settings: &Value) -> Value {
     json!({
-        "baseURL": base_url,
-        "apiKey": api_key,
-        "modelName": model_name,
-        "protocol": "openai"
+        "runtimeMode": "wander"
     })
 }
 
@@ -3568,13 +3570,13 @@ fn execute_interactive_tool_call(
                         return Ok(());
                     }
                     Err(format!(
-                    "脚本尚未确认，暂时不能执行 `{next_action}`。请先使用 `script_read` 读取脚本，再用 `script_update` 写入脚本草案，让用户阅读；用户明确确认后，再调用 `script_confirm`，之后才能改时间线、生成 Remotion 动画或导出。"
-                ))
+                        "脚本尚未确认，暂时不能执行 `{next_action}`。请先使用 `script_read` 读取脚本，再用 `script_update` 写入脚本草案，让用户阅读；用户明确确认后，再调用 `script_confirm`，之后才能改时间线、生成 Remotion 动画或导出。"
+                    ))
                 };
                 let reject_video_timeline_action = |legacy_action: &str| -> Result<Value, String> {
                     Err(format!(
-                    "视频稿件已切换到 AI 简化编辑流，`{legacy_action}` 不再可用。请改用 `project_read` 读取工程，或用 `ffmpeg_edit` 执行受控剪辑。"
-                ))
+                        "视频稿件已切换到 AI 简化编辑流，`{legacy_action}` 不再可用。请改用 `project_read` 读取工程，或用 `ffmpeg_edit` 执行受控剪辑。"
+                    ))
                 };
                 match action.as_str() {
                     "script_read" | "script-read" => call_manuscript_channel(
@@ -4829,9 +4831,15 @@ fn interactive_attachment_tool_read_note(
             .filter(|value| !value.is_empty())
             .unwrap_or("workspace-tool");
         let tool_hint = match delivery_mode {
-            "document-tool" => "优先使用文档解析/知识库导入工具抽取正文；如果只能使用 workspace.read，先读取并如实说明无法解析的格式边界。",
-            "media-tool" if kind == "video" => "必须立即调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"})`，让专用 Video Analysis Agent 读取真实视频内容。若用户随后要求字幕、转录、SRT 或按口播时间轴剪辑，应先调用 `Operate(resource=\"media\", operation=\"transcribe\", input={\"sourcePath\":\"该工作区路径\",\"format\":\"srt\"})` 生成字幕文件；若用户要求剪辑、切片、拼接、静音、变速、裁切或导出该视频，应调用 `Operate(resource=\"media\", operation=\"edit\", input={\"sourcePath\":\"该工作区路径\",\"operations\":[...]})` 直接产出剪辑文件，不要只生成 ffmpeg 命令或声称无法本地剪辑。不要先用 `Read`、`bash`、目录列表、`meta.json` 或文案元数据替代视频分析；这些只能作为 video.analyze 失败后的辅助证据。",
-            "media-tool" => "优先使用对应的媒体、转写或视频处理工具读取真实媒体内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始媒体。",
+            "document-tool" => {
+                "优先使用文档解析/知识库导入工具抽取正文；如果只能使用 workspace.read，先读取并如实说明无法解析的格式边界。"
+            }
+            "media-tool" if kind == "video" => {
+                "必须立即调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"})`，让专用 Video Analysis Agent 读取真实视频内容。若用户随后要求字幕、转录、SRT 或按口播时间轴剪辑，应先调用 `Operate(resource=\"media\", operation=\"transcribe\", input={\"sourcePath\":\"该工作区路径\",\"format\":\"srt\"})` 生成字幕文件；若用户要求剪辑、切片、拼接、静音、变速、裁切或导出该视频，应调用 `Operate(resource=\"media\", operation=\"edit\", input={\"sourcePath\":\"该工作区路径\",\"operations\":[...]})` 直接产出剪辑文件，不要只生成 ffmpeg 命令或声称无法本地剪辑。不要先用 `Read`、`bash`、目录列表、`meta.json` 或文案元数据替代视频分析；这些只能作为 video.analyze 失败后的辅助证据。"
+            }
+            "media-tool" => {
+                "优先使用对应的媒体、转写或视频处理工具读取真实媒体内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始媒体。"
+            }
             _ => "先调用 `Read(path=\"workspace://...\")` 或相关 workspace 工具读取。",
         };
         let concrete_video_call = if delivery_mode == "media-tool" && kind == "video" {
@@ -5033,8 +5041,7 @@ fn canonical_assistant_message(content: String, tool_calls: &[InteractiveToolCal
 }
 
 const INTERACTIVE_MAX_TOOL_TURNS: usize = 100;
-const TOOL_BUDGET_EXHAUSTED_MESSAGE: &str =
-    "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。";
+const TOOL_BUDGET_EXHAUSTED_MESSAGE: &str = "你已经用完本次会话允许的工具轮次预算。不要继续调用工具；基于已有上下文和工具结果直接完成最终答复，如果仍有缺口，请明确指出缺口。";
 
 fn canonical_tool_result_message(
     call_id: &str,

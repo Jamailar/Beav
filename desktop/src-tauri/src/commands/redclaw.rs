@@ -1,14 +1,14 @@
 #[path = "redclaw_task_control.rs"]
 pub(crate) mod redclaw_task_control;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -18,10 +18,10 @@ use crate::commands::redclaw_runtime::{
 };
 use crate::persistence::{ensure_store_hydrated_for_redclaw, with_store, with_store_mut};
 use crate::runtime::{
+    CollabSessionSnapshot, RedclawAgentId, RedclawOrchestrationPlan, RedclawRuntime,
     add_collab_member, collab_session_snapshot, create_collab_session, create_collab_task,
     plan_redclaw_orchestration, redclaw_orchestration_registry_value, runtime_direct_route_record,
-    store_runtime_task, CollabSessionSnapshot, RedclawAgentId, RedclawOrchestrationPlan,
-    RedclawRuntime,
+    store_runtime_task,
 };
 use crate::scheduler::task_policy::TaskIntentSchema;
 use crate::scheduler::{
@@ -30,12 +30,12 @@ use crate::scheduler::{
     run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
 use crate::{
-    complete_redclaw_mvp_onboarding, handle_redclaw_onboarding_turn,
+    AppState, complete_redclaw_mvp_onboarding, handle_redclaw_onboarding_turn,
     load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
     load_redclaw_profile_prompt_bundle, load_redclaw_style_profile, now_i64, now_iso,
     parse_json_value_from_text, payload_field, payload_string, redclaw_state_value,
     save_redclaw_mvp_onboarding_progress, update_redclaw_profile_doc, workspace_root,
-    write_text_file, AppState,
+    write_text_file,
 };
 use redclaw_task_control::{
     create_confirmed_task_from_intent, handle_task_cancel, handle_task_confirm, handle_task_create,
@@ -1921,18 +1921,22 @@ mod redclaw_media_plan_tests {
             Some("high")
         );
         assert_eq!(report.get("approved").and_then(Value::as_bool), Some(false));
-        assert!(report
-            .get("blockingIssues")
-            .and_then(Value::as_array)
-            .is_some_and(|items| items
-                .iter()
-                .any(|item| item.get("term").and_then(Value::as_str) == Some("治愈"))));
-        assert!(report
-            .get("suggestedRewrites")
-            .and_then(Value::as_array)
-            .is_some_and(|items| items
-                .iter()
-                .any(|item| item.get("term").and_then(Value::as_str) == Some("最好"))));
+        assert!(
+            report
+                .get("blockingIssues")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items
+                    .iter()
+                    .any(|item| item.get("term").and_then(Value::as_str) == Some("治愈")))
+        );
+        assert!(
+            report
+                .get("suggestedRewrites")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items
+                    .iter()
+                    .any(|item| item.get("term").and_then(Value::as_str) == Some("最好")))
+        );
     }
 }
 

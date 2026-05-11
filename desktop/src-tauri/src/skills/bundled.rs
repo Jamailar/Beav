@@ -32,8 +32,10 @@ mod tests {
             ])
         );
         assert!(skills.iter().all(|item| item.is_builtin == Some(true)));
-        assert!(skills
-            .iter()
-            .all(|item| item.source_scope.as_deref() == Some("builtin")));
+        assert!(
+            skills
+                .iter()
+                .all(|item| item.source_scope.as_deref() == Some("builtin"))
+        );
     }
 }

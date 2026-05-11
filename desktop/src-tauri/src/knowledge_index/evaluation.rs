@@ -487,16 +487,20 @@ mod tests {
     #[test]
     fn fixture_contains_visual_image_and_scanned_pdf_coverage() {
         let cases = fixture_claim_audit_cases();
-        assert!(cases.iter().any(|case| case
-            .anchor_ids
-            .iter()
-            .any(|anchor| anchor.starts_with("visual-landscape"))));
-        assert!(cases.iter().any(|case| case
-            .anchor_ids
-            .iter()
-            .any(|anchor| anchor.starts_with("visual-scan-law"))));
-        assert!(cases
-            .iter()
-            .any(|case| case.claim.contains("grounded as visual evidence")));
+        assert!(cases.iter().any(|case| {
+            case.anchor_ids
+                .iter()
+                .any(|anchor| anchor.starts_with("visual-landscape"))
+        }));
+        assert!(cases.iter().any(|case| {
+            case.anchor_ids
+                .iter()
+                .any(|anchor| anchor.starts_with("visual-scan-law"))
+        }));
+        assert!(
+            cases
+                .iter()
+                .any(|case| case.claim.contains("grounded as visual evidence"))
+        );
     }
 }

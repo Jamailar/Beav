@@ -11,7 +11,7 @@ use super::config::{
 use super::resources::McpCapabilitySnapshot;
 use super::session::{McpSession, McpSessionSnapshot};
 use super::tool_inventory::{
-    inventory_from_tools_response, mcp_tools_fingerprint, McpToolInfo, McpToolInventorySnapshot,
+    McpToolInfo, McpToolInventorySnapshot, inventory_from_tools_response, mcp_tools_fingerprint,
 };
 
 #[derive(Debug, Clone, Serialize)]

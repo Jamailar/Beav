@@ -361,6 +361,7 @@ interface GeneralSettingsSectionProps {
     handleDismissPendingReport: (reportId: string) => Promise<void>;
     handleVersionTap: () => void;
     handleOpenDownloadPage: () => Promise<void>;
+    handleOpenAppOnboarding?: () => void;
 }
 
 interface RemoteConnectionSettingsSectionProps {
@@ -583,6 +584,7 @@ function GeneralSettingsSectionInner({
     handleDismissPendingReport,
     handleVersionTap,
     handleOpenDownloadPage,
+    handleOpenAppOnboarding,
 }: GeneralSettingsSectionProps) {
     const { language, setLanguage, t } = useI18n();
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
@@ -650,6 +652,21 @@ function GeneralSettingsSectionInner({
                     </button>
                 </div>
             </div>
+
+            {handleOpenAppOnboarding && (
+                <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-text-primary">教程</span>
+                        <button
+                            type="button"
+                            onClick={handleOpenAppOnboarding}
+                            className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
+                        >
+                            重新观看
+                        </button>
+                    </div>
+                </div>
+            )}
 
             <div className="group">
                 <label className="block text-xs font-medium text-text-secondary mb-1.5">

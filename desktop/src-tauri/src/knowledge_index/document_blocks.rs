@@ -1,25 +1,26 @@
 use glob::Pattern;
-use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::{collections::HashSet, fs};
 use tauri::State;
 use time::OffsetDateTime;
 
 use crate::{
+    AppState,
     document_parse::{
-        CanonicalBlock, CanonicalDocument, LegalMetadata, ParserInfo, ParserProviderConfig,
-        VisualIndexConfig, PARSER_NAME, PARSER_VERSION, VISUAL_DEFAULT_PROMPT_VERSION,
-        VISUAL_SCHEMA_VERSION,
+        CanonicalBlock, CanonicalDocument, LegalMetadata, PARSER_NAME, PARSER_VERSION, ParserInfo,
+        ParserProviderConfig, VISUAL_DEFAULT_PROMPT_VERSION, VISUAL_SCHEMA_VERSION,
+        VisualIndexConfig,
     },
     knowledge_index::{
         canonical_store::{self, CanonicalDocumentRow},
         catalog_db_path,
         fingerprint::fingerprint_file,
         hybrid::{
-            citation_rerank_bonus, expand_query, query_embedding, semantic_similarity,
-            semantic_vector_json, weighted_rrf, RetrievalMode,
+            RetrievalMode, citation_rerank_bonus, expand_query, query_embedding,
+            semantic_similarity, semantic_vector_json, weighted_rrf,
         },
         query_profile::{self, QueryLanguage},
         schema::ensure_catalog_ready,
@@ -27,7 +28,6 @@ use crate::{
     },
     payload_field, payload_string,
     persistence::with_store,
-    AppState,
 };
 
 const MAX_INDEXED_TEXT_FILE_BYTES: u64 = 4 * 1024 * 1024;

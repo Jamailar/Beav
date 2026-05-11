@@ -1,15 +1,16 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::{
-    auth, compatible_workspace_base_dir, create_manuscript_package, detect_best_legacy_db,
-    emit_space_changed, is_legacy_workspace_base, is_manuscript_package_path, join_relative,
-    legacy_workspace_dir, maybe_import_legacy_store, normalize_relative_path, now_iso,
-    persist_store, preferred_workspace_dir, title_from_relative_path, AppState, AppStore,
+    AppState, AppStore, auth, compatible_workspace_base_dir, create_manuscript_package,
+    detect_best_legacy_db, emit_space_changed, is_legacy_workspace_base,
+    is_manuscript_package_path, join_relative, legacy_workspace_dir, maybe_import_legacy_store,
+    normalize_relative_path, now_iso, persist_store, preferred_workspace_dir,
+    title_from_relative_path,
 };
 
 pub(crate) const STARTUP_MIGRATION_EVENT: &str = "app:startup-migration-status";
@@ -222,8 +223,7 @@ fn startup_pending_message(needs_db_import: bool, legacy_markdown_count: usize) 
             "检测到旧版数据库，同时发现 {legacy_markdown_count} 个旧版 Markdown 稿件。需要把数据库导入到新版状态，并把这些 `.md` 自动升级成稿件文件夹。"
         ),
         (true, false) => {
-            "检测到旧版数据库，需要导入到新版数据格式。文件目录会继续直接使用旧版位置。"
-                .to_string()
+            "检测到旧版数据库，需要导入到新版数据格式。文件目录会继续直接使用旧版位置。".to_string()
         }
         (false, true) => format!(
             "检测到 {legacy_markdown_count} 个旧版 Markdown 稿件，需要自动升级成稿件文件夹。"
@@ -254,7 +254,10 @@ fn startup_completed_message(
         .and_then(Value::as_u64)
         .unwrap_or(0);
 
-    match (imported_counts.is_some(), project_upgraded > 0 || project_skipped > 0) {
+    match (
+        imported_counts.is_some(),
+        project_upgraded > 0 || project_skipped > 0,
+    ) {
         (true, true) => format!(
             "旧版数据库导入完成，旧稿件工程升级也已完成。已升级 {project_upgraded} 个 Markdown 稿件，跳过 {project_skipped} 个已有同名工程的文件。"
         ),
@@ -747,10 +750,12 @@ mod tests {
         assert!(manuscripts_root.join("nested").join("deep").exists());
         assert!(!manuscripts_root.join("draft.md").exists());
         assert!(!manuscripts_root.join("nested").join("deep.md").exists());
-        assert!(manuscripts_root
-            .join("existing")
-            .join("content.md")
-            .exists());
+        assert!(
+            manuscripts_root
+                .join("existing")
+                .join("content.md")
+                .exists()
+        );
 
         let _ = fs::remove_dir_all(&workspace_root);
     }

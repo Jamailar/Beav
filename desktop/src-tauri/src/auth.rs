@@ -1,14 +1,14 @@
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    app_brand_display_name, append_debug_trace_state, now_iso, now_ms, payload_field,
-    payload_string, AppState, AppStore, REDBOX_OFFICIAL_BASE_URL,
+    AppState, AppStore, REDBOX_OFFICIAL_BASE_URL, app_brand_display_name, append_debug_trace_state,
+    now_iso, now_ms, payload_field, payload_string,
 };
 
 pub(crate) const AUTH_STATE_CHANGED_EVENT: &str = "auth:state-changed";
@@ -826,9 +826,10 @@ pub(crate) fn initialize_auth_runtime(
             cache.models = payload_string(&store.settings, "redbox_official_models_json")
                 .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
                 .unwrap_or_default();
-            cache.call_records = payload_string(&store.settings, "redbox_official_call_records_json")
-                .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
-                .unwrap_or_default();
+            cache.call_records =
+                payload_string(&store.settings, "redbox_official_call_records_json")
+                    .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+                    .unwrap_or_default();
             Ok(())
         })?;
     }

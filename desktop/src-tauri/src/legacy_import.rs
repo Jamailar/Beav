@@ -1,16 +1,16 @@
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use url::Url;
 
 use crate::{
-    compatible_workspace_base_dir, configured_workspace_dir, copy_dir_recursive, file_url_for_path,
-    hydrate_store_from_workspace_files, is_same_path, legacy_workspace_dir, now_iso, AppStore,
-    ArchiveProfileRecord, ArchiveSampleRecord, ChatMessageRecord, ChatSessionRecord,
+    AppStore, ArchiveProfileRecord, ArchiveSampleRecord, ChatMessageRecord, ChatSessionRecord,
     SessionCheckpointRecord, SessionToolResultRecord, SessionTranscriptRecord, SpaceRecord,
-    UserMemoryRecord, WanderHistoryRecord,
+    UserMemoryRecord, WanderHistoryRecord, compatible_workspace_base_dir, configured_workspace_dir,
+    copy_dir_recursive, file_url_for_path, hydrate_store_from_workspace_files, is_same_path,
+    legacy_workspace_dir, now_iso,
 };
 
 pub(crate) fn legacy_db_candidates() -> Vec<PathBuf> {
@@ -775,6 +775,10 @@ fn import_legacy_store_from_db(
                     .unwrap_or("0")
                     .to_string(),
                 metadata,
+                starred: false,
+                archived: false,
+                archived_at: None,
+                deleted_at: None,
             });
         }
     }

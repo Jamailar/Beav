@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{app_brand_display_name, AppStore};
+use crate::{AppStore, app_brand_display_name};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

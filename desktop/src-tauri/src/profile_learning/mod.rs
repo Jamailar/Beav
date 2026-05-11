@@ -1,14 +1,14 @@
 use crate::json_util::{json_string, read_json_value, write_json_pretty};
 use crate::knowledge::{
-    ingest_entry, KnowledgeEntryContentInput, KnowledgeEntryIngestRequest,
-    KnowledgeEntryStatsInput, KnowledgeIngestOptionsInput, KnowledgeSourceInput,
+    KnowledgeEntryContentInput, KnowledgeEntryIngestRequest, KnowledgeEntryStatsInput,
+    KnowledgeIngestOptionsInput, KnowledgeSourceInput, ingest_entry,
 };
 use crate::llm_transport::run_openai_json_chat_completion_transport;
 use crate::persistence::with_store;
 use crate::runtime::resolve_chat_config;
-use crate::{now_iso, AppState};
+use crate::{AppState, now_iso};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use tauri::State;
