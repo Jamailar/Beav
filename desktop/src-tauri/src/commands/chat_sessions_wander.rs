@@ -1,7 +1,7 @@
 use crate::chat_binding::{bind_editor_session, EditorChatBindingRequest};
 use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::member_skill::{
-    advisor_member_skill_ref, attach_member_skill_metadata, detach_member_skill_metadata,
+    attach_member_skill_metadata, detach_member_skill_metadata,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
@@ -1975,7 +1975,14 @@ pub fn handle_chat_sessions_wander_channel(
                 let title =
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
                 let initial_context = payload_string(&payload, "initialContext");
-                let metadata = payload_field(&payload, "metadata").cloned();
+                let working_directory = payload_string(&payload, "workingDirectory");
+                let mut metadata = payload_field(&payload, "metadata")
+                    .and_then(|value| value.as_object().cloned())
+                    .unwrap_or_default();
+                if let Some(wd) = working_directory {
+                    metadata.insert("workingDirectory".to_string(), Value::String(wd));
+                }
+                let metadata_value = if metadata.is_empty() { None } else { Some(Value::Object(metadata)) };
                 let session = with_store_mut(state, |store| {
                     let session = ensure_context_session(
                         store,
@@ -1985,7 +1992,7 @@ pub fn handle_chat_sessions_wander_channel(
                         initial_context.as_deref(),
                     );
                     Ok(
-                        merge_session_metadata_fields(store, &session.id, metadata.as_ref())
+                        merge_session_metadata_fields(store, &session.id, metadata_value.as_ref())
                             .unwrap_or(session),
                     )
                 })?;
@@ -2025,21 +2032,30 @@ pub fn handle_chat_sessions_wander_channel(
                 let title =
                     payload_string(&payload, "title").unwrap_or_else(|| "New Chat".to_string());
                 let initial_context = payload_string(&payload, "initialContext");
-                let metadata = payload_field(&payload, "metadata").cloned();
-                let session = with_store_mut(state, |store| {
-                    let mut metadata = metadata;
-                    if context_type == "advisor-discussion" {
-                        let mut object = metadata
-                            .and_then(|value| value.as_object().cloned())
-                            .unwrap_or_default();
-                        object.insert("advisorId".to_string(), Value::String(context_id.clone()));
-                        if let Some(skill_ref) = advisor_member_skill_ref(store, &context_id) {
-                            attach_member_skill_metadata(&mut object, &skill_ref);
-                        } else {
-                            detach_member_skill_metadata(&mut object);
-                        }
-                        metadata = Some(Value::Object(object));
+                let working_directory = payload_string(&payload, "workingDirectory");
+                let mut metadata = payload_field(&payload, "metadata")
+                    .and_then(|value| value.as_object().cloned())
+                    .unwrap_or_default();
+                if context_type == "advisor-discussion" {
+                    metadata.insert("advisorId".to_string(), Value::String(context_id.clone()));
+                    let skill_ref = crate::persistence::with_store(state, |store| {
+                        Ok(crate::member_skill::advisor_member_skill_ref(
+                            &store, &context_id,
+                        ))
+                    })
+                    .ok()
+                    .flatten();
+                    if let Some(skill_ref) = skill_ref {
+                        attach_member_skill_metadata(&mut metadata, &skill_ref);
+                    } else {
+                        detach_member_skill_metadata(&mut metadata);
                     }
+                }
+                if let Some(wd) = working_directory {
+                    metadata.insert("workingDirectory".to_string(), Value::String(wd));
+                }
+                let metadata_value = if metadata.is_empty() { None } else { Some(Value::Object(metadata)) };
+                let session = with_store_mut(state, |store| {
                     let session = create_context_session(
                         store,
                         &context_type,
@@ -2048,7 +2064,7 @@ pub fn handle_chat_sessions_wander_channel(
                         initial_context.as_deref(),
                     );
                     Ok(
-                        merge_session_metadata_fields(store, &session.id, metadata.as_ref())
+                        merge_session_metadata_fields(store, &session.id, metadata_value.as_ref())
                             .unwrap_or(session),
                     )
                 })?;

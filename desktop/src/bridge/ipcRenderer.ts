@@ -1302,9 +1302,9 @@ function createIpcRenderer() {
         invokeChannel('chat:create-diagnostics-session', payload || {}),
       listContextSessions: (payload: { contextId: string; contextType: string }) =>
         invokeChannel('chat:list-context-sessions', payload),
-      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; metadata?: Record<string, unknown> }) =>
+      createContextSession: (payload: { contextId: string; contextType: string; title?: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) =>
         invokeChannel('chat:create-context-session', payload),
-      getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; metadata?: Record<string, unknown> }) =>
+      getOrCreateContextSession: (params: { contextId: string; contextType: string; title: string; initialContext?: string; workingDirectory?: string; metadata?: Record<string, unknown> }) =>
         invokeChannel('chat:getOrCreateContextSession', params),
       renameSession: (payload: { sessionId: string; title: string }) => invokeChannel('chat:rename-session', payload),
       deleteSession: (sessionId: string) => invokeChannel('chat:delete-session', sessionId),
