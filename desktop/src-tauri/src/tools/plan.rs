@@ -16,7 +16,7 @@ use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_ru
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{AppStore, ChatSessionRecord};
 
-pub const DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS: usize = 16;
+pub const DEFAULT_MAX_DIRECT_APP_CLI_ACTIONS: usize = 24;
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolRegistryPlanParams<'a> {
@@ -222,7 +222,7 @@ pub fn build_tool_registry_plan(params: ToolRegistryPlanParams<'_>) -> ToolRegis
         .filter_map(|name| descriptor_by_name(name))
         .collect::<Vec<_>>();
     if artifact_authoring_manuscript {
-        visible_tools.retain(|tool| !matches!(tool.name, "Search" | "bash" | "tool_search"));
+        visible_tools.retain(|tool| !matches!(tool.name, "Search" | "shell" | "tool_search"));
     }
     let mut app_cli_descriptors = if internal_tool_names.iter().any(|name| name == "workflow") {
         action_descriptors_for_tool("workflow", Some(&runtime_mode), ActionVisibility::Model)
@@ -457,18 +457,10 @@ fn pinned_direct_app_cli_actions(
     {
         &[
             "video.analyze",
-            "media.edit",
-            "media.transcribe",
             "image.generate",
             "skills.invoke",
             "skills.installFromRepo",
             "skills.uninstall",
-            "web.fetch",
-            "cli_runtime.inspect",
-            "cli_runtime.diagnose",
-            "cli_runtime.discover",
-            "cli_runtime.install",
-            "cli_runtime.execute",
             "cli_runtime.execution.get",
             "mcp.list",
             "mcp.discoverLocal",
@@ -774,7 +766,7 @@ mod tests {
         assert_eq!(actions.len(), 4);
         assert!(!plan.has_direct_app_cli_action("manuscripts.writeCurrent"));
         assert!(!visible.contains(&"tool_search"));
-        assert!(!visible.contains(&"bash"));
+        assert!(!visible.contains(&"shell"));
         assert!(!visible.contains(&"Search"));
         assert!(!plan.has_deferred_app_cli_action("redclaw.task.create"));
         assert!(!plan.has_deferred_app_cli_action("team.session.create"));
@@ -856,14 +848,14 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
-        assert!(plan.has_direct_app_cli_action("media.edit"));
-        assert!(plan.has_direct_app_cli_action("media.transcribe"));
-        assert!(plan.has_direct_app_cli_action("web.fetch"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.discover"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.install"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
+        assert!(!plan.has_direct_app_cli_action("media.edit"));
+        assert!(!plan.has_direct_app_cli_action("media.transcribe"));
+        assert!(!plan.has_direct_app_cli_action("web.fetch"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.install"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("image.generate"));
     }
@@ -876,14 +868,14 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
-        assert!(plan.has_direct_app_cli_action("media.edit"));
-        assert!(plan.has_direct_app_cli_action("media.transcribe"));
-        assert!(plan.has_direct_app_cli_action("web.fetch"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.inspect"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.diagnose"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.discover"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.install"));
-        assert!(plan.has_direct_app_cli_action("cli_runtime.execute"));
+        assert!(!plan.has_direct_app_cli_action("media.edit"));
+        assert!(!plan.has_direct_app_cli_action("media.transcribe"));
+        assert!(!plan.has_direct_app_cli_action("web.fetch"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.discover"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.install"));
+        assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
     }
 
@@ -922,8 +914,6 @@ mod tests {
         assert_ne!(first.fingerprint, second.fingerprint);
         assert_eq!(first.direct_app_cli_actions[0].action, "image.generate");
         assert_eq!(second.direct_app_cli_actions[0].action, "video.generate");
-        assert!(second.has_direct_app_cli_action("media.edit"));
-        assert!(second.has_direct_app_cli_action("media.transcribe"));
     }
 
     #[test]
@@ -936,7 +926,7 @@ mod tests {
             session_metadata: None,
             active_skills: Vec::new(),
             allowed_tool_names: vec![
-                "bash".to_string(),
+                "shell".to_string(),
                 "resource".to_string(),
                 "workflow".to_string(),
             ],

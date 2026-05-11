@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 pub enum ToolKind {
     AppCli,
     Bash,
+    Shell,
     AppQuery,
     FileSystem,
     ProfileDoc,
@@ -2522,7 +2523,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "memory.list",
@@ -3193,7 +3194,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.discover",
@@ -3204,7 +3205,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.inspect",
@@ -3215,7 +3216,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.diagnose",
@@ -3226,7 +3227,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.environment.list",
@@ -3237,7 +3238,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: false,
         concurrency_safe: true,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.environment.create",
@@ -3248,7 +3249,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.install",
@@ -3259,7 +3260,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.execute",
@@ -3270,7 +3271,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.execution.get",
@@ -3292,7 +3293,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "cli_runtime.escalation.approve",
@@ -3600,7 +3601,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
         action: "media.transcribe",
@@ -3611,7 +3612,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::Model,
+        visibility: ActionVisibility::CompatOnly,
     },
 ];
 
@@ -4038,6 +4039,14 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
             concurrency_safe: false,
             output_budget_chars: 20_000,
         }),
+        "shell" => Some(ToolDescriptor {
+            name: "shell",
+            description: "Execute arbitrary shell commands inside a sandboxed environment with policy-controlled access. Use this for all CLI operations including curl, ffmpeg, gh, npm, pip, node, python, which, git, rg, jq, and any host-installed tool. The sandbox allows reading system paths and the workspace, blocks destructive operations by default. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
+            kind: ToolKind::Shell,
+            requires_approval: false,
+            concurrency_safe: false,
+            output_budget_chars: 40_000,
+        }),
         "bash" => Some(ToolDescriptor {
             name: "bash",
             description: "Read-only shell inspection inside currentSpaceRoot. Supports pwd, ls, find, rg, cat, head, tail, sed, wc, jq, and read-only git commands. Do not use this for real host CLI execution, PATH checks, curl, which, type, command -v, node, npm, pnpm, or tool-specific CLIs; use Operate(resource=\"cli_runtime\", operation=\"inspect|diagnose|run\") instead.",
@@ -4210,6 +4219,25 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
             APP_CLI_DESCRIPTION,
             &action_descriptors_for_tool("workflow", runtime_mode, ActionVisibility::Model),
         )),
+        "shell" => Some(json!({
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "description": "Execute arbitrary shell commands inside a sandboxed environment with policy-controlled access. Use this for all CLI operations including curl, ffmpeg, gh, npm, pip, node, python, which, git, rg, jq, and any host-installed tool. The sandbox allows reading system paths and the workspace, blocks destructive operations by default. Commands that need network access, write outside the workspace, or elevated privileges will trigger an approval flow.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string", "description": "The shell command to execute. Supports pipes, redirects, and all standard shell syntax." },
+                        "cwd": { "type": "string", "description": "Working directory for the command." },
+                        "maxChars": { "type": "integer", "minimum": 200, "maximum": 40000, "description": "Maximum output characters." },
+                        "usePty": { "type": "boolean", "description": "Use PTY for interactive or long-running commands." },
+                        "executionId": { "type": "string", "description": "Poll a previous async execution by its ID instead of running a new command." }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false
+                }
+            }
+        })),
         "bash" => Some(json!({
             "type": "function",
             "function": {
@@ -4512,8 +4540,8 @@ mod tests {
             .expect("action enum");
         let actions = actions.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         assert!(actions.contains(&"runtime.query"));
-        assert!(actions.contains(&"cli_runtime.detect"));
-        assert!(actions.contains(&"cli_runtime.discover"));
+        assert!(!actions.contains(&"cli_runtime.detect"));
+        assert!(!actions.contains(&"cli_runtime.discover"));
         assert!(actions.contains(&"cli_runtime.execution.get"));
         assert!(actions.contains(&"mcp.list"));
         assert!(actions.contains(&"mcp.add"));
@@ -4573,8 +4601,8 @@ mod tests {
         assert!(actions.contains(&"image.generate"));
         assert!(actions.contains(&"video.generate"));
         assert!(actions.contains(&"video.analyze"));
-        assert!(actions.contains(&"media.edit"));
-        assert!(actions.contains(&"media.transcribe"));
+        assert!(!actions.contains(&"media.edit"));
+        assert!(!actions.contains(&"media.transcribe"));
         assert!(actions.contains(&"voice.clone"));
         assert!(actions.contains(&"voice.bindAsset"));
         assert!(actions.contains(&"voice.speech"));
@@ -4593,9 +4621,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(actions.contains(&"redclaw.task.preview"));
         assert!(actions.contains(&"redclaw.task.list"));
-        assert!(actions.contains(&"cli_runtime.inspect"));
+        assert!(!actions.contains(&"cli_runtime.inspect"));
         assert!(!actions.contains(&"runtime.tasks.list"));
-        assert!(actions.contains(&"cli_runtime.detect"));
+        assert!(!actions.contains(&"cli_runtime.detect"));
     }
 
     #[test]
@@ -4741,12 +4769,6 @@ mod tests {
             .and_then(Value::as_array)
             .expect("action enum should exist");
         for action in [
-            "web.fetch",
-            "cli_runtime.inspect",
-            "cli_runtime.diagnose",
-            "cli_runtime.discover",
-            "cli_runtime.install",
-            "cli_runtime.execute",
             "cli_runtime.execution.get",
             "mcp.list",
             "mcp.discoverLocal",
@@ -4756,6 +4778,19 @@ mod tests {
             "mcp.listTools",
         ] {
             assert!(actions.iter().any(|item| item == action), "{action}");
+        }
+        for action in [
+            "web.fetch",
+            "cli_runtime.inspect",
+            "cli_runtime.diagnose",
+            "cli_runtime.discover",
+            "cli_runtime.install",
+            "cli_runtime.execute",
+        ] {
+            assert!(
+                !actions.iter().any(|item| item == action),
+                "{action} should be hidden"
+            );
         }
     }
 

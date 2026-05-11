@@ -67,7 +67,7 @@ pub fn canonical_tool_name(name: &str) -> &str {
         | "redbox_list_redclaw_projects"
         | "redclaw_update_profile_doc"
         | "redclaw_update_creator_profile" => "workflow",
-        "bash" | "Bash" => "bash",
+        "bash" | "Bash" => "shell",
         "resource"
         | "redbox_fs"
         | "redbox_list_directory"
@@ -89,7 +89,7 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "Write" => normalize_write_call(arguments),
         "Operate" | "Redbox" => normalize_redbox_call(arguments),
         "workflow" | "app_cli" => normalize_app_cli_call(arguments),
-        "bash" | "Bash" => passthrough("bash", arguments),
+        "bash" | "Bash" => passthrough("shell", arguments),
         "tool_search" => passthrough("tool_search", arguments),
         "redbox_list_spaces" => app_query("spaces.list", arguments),
         "redbox_list_advisors" => app_query("advisors.list", arguments),

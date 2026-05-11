@@ -25,7 +25,7 @@ pub fn default_exposure_policy(runtime_mode: &str) -> ActionExposurePolicy {
         runtime_mode: normalized,
         direct_namespaces: default_direct_namespaces(normalized, None),
         deferred_namespaces: default_deferred_namespaces(normalized),
-        max_direct_actions: 16,
+        max_direct_actions: 24,
     }
 }
 
@@ -39,7 +39,6 @@ pub fn default_direct_namespaces(
             "video_analysis",
             subjects::NAMESPACE,
             "skills",
-            "media",
             voice::NAMESPACE,
         ],
         "knowledge" => vec![subjects::NAMESPACE, memory::NAMESPACE, "skills"],
@@ -48,7 +47,6 @@ pub fn default_direct_namespaces(
             redclaw::PROFILE_NAMESPACE,
             image::NAMESPACE,
             "video_analysis",
-            "media",
             voice::NAMESPACE,
             redclaw::TASK_NAMESPACE,
             "video",
@@ -60,7 +58,6 @@ pub fn default_direct_namespaces(
             runtime::NAMESPACE,
             runtime::TASKS_NAMESPACE,
             redclaw::TASK_NAMESPACE,
-            cli_runtime::NAMESPACE,
             cli_runtime::EXECUTION_NAMESPACE,
             "settings",
         ],
@@ -68,10 +65,8 @@ pub fn default_direct_namespaces(
             "video_analysis",
             image::NAMESPACE,
             "video",
-            "media",
             voice::NAMESPACE,
             subjects::NAMESPACE,
-            cli_runtime::NAMESPACE,
             cli_runtime::EXECUTION_NAMESPACE,
             "skills",
         ],
@@ -85,7 +80,6 @@ pub fn default_direct_namespaces(
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",
-            "media",
             voice::NAMESPACE,
         ],
         _ => vec![
@@ -95,7 +89,6 @@ pub fn default_direct_namespaces(
             image::NAMESPACE,
             manuscripts::NAMESPACE,
             "video_analysis",
-            "media",
             voice::NAMESPACE,
         ],
     };
@@ -113,9 +106,6 @@ pub fn default_direct_namespaces(
         }
         "video" | "video-generation" => prepend_namespace(&mut namespaces, "video"),
         "voice" | "tts" | "speech" => prepend_namespace(&mut namespaces, voice::NAMESPACE),
-        "video-edit" | "video_edit" | "media-edit" | "media_edit" => {
-            prepend_namespace(&mut namespaces, "media")
-        }
         "redclaw-task" | "scheduled-task" => {
             prepend_namespace(&mut namespaces, redclaw::TASK_NAMESPACE)
         }

@@ -16,6 +16,7 @@ fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {
         crate::tools::catalog::ToolKind::AppCli => "workflow",
         crate::tools::catalog::ToolKind::Bash => "bash",
+        crate::tools::catalog::ToolKind::Shell => "shell",
         crate::tools::catalog::ToolKind::AppQuery => "app_query",
         crate::tools::catalog::ToolKind::FileSystem => "file_system",
         crate::tools::catalog::ToolKind::ProfileDoc => "profile_doc",
@@ -454,7 +455,7 @@ fn normalize_mcp_input_schema(schema: &Value) -> Value {
 }
 
 pub fn diagnostics_tool_items() -> Vec<Value> {
-    ["bash", "resource", "workflow", "editor"]
+    ["shell", "resource", "workflow", "editor"]
         .iter()
         .filter_map(|name| descriptor_by_name(name))
         .map(|tool| {
@@ -585,7 +586,7 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
 
-        assert!(resources.contains(&"web"));
+        assert!(!resources.contains(&"web"));
         assert!(resources.contains(&"cli_runtime"));
         assert!(operations.contains(&"get"));
         assert!(operations.contains(&"run"));

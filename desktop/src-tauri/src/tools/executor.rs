@@ -65,7 +65,7 @@ impl<'a> InteractiveToolExecutor<'a> {
     ) -> Option<Result<Value, String>> {
         match prepared.name.as_str() {
             "workflow" => Some(self.execute_app_cli(&prepared.arguments)),
-            "bash" => Some(self.execute_bash(&prepared.arguments)),
+            "shell" => Some(self.execute_shell(&prepared.arguments)),
             _ => None,
         }
     }
@@ -465,7 +465,13 @@ impl<'a> InteractiveToolExecutor<'a> {
         .execute(arguments)
     }
 
-    fn execute_bash(&self, arguments: &Value) -> Result<Value, String> {
-        crate::tools::bash::execute_bash(arguments, self.state, self.session_id)
+    fn execute_shell(&self, arguments: &Value) -> Result<Value, String> {
+        crate::tools::shell::execute_shell(
+            arguments,
+            self.app,
+            self.state,
+            self.session_id,
+            self.tool_call_id,
+        )
     }
 }
