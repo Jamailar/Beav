@@ -6140,6 +6140,16 @@ export function Settings({
     <div className="flex h-full min-w-0 text-text-primary">
       {/* Sidebar */}
       <div className="w-48 border-r border-border pt-6 pb-4 flex flex-col gap-1 px-3 bg-surface-secondary/20">
+        {onReturn && (
+          <button
+            type="button"
+            onClick={onReturn}
+            className="mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-secondary/50 hover:text-text-primary"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            返回应用
+          </button>
+        )}
         <h1 className="px-3 mb-4 text-xs font-bold text-text-tertiary uppercase tracking-wider">{t('settings.title')}</h1>
         <div className="flex flex-1 flex-col gap-1 min-h-0">
           {tabs.map(tab => (
@@ -6158,16 +6168,6 @@ export function Settings({
             </button>
           ))}
         </div>
-        {onReturn && (
-          <button
-            type="button"
-            onClick={onReturn}
-            className="mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-text-secondary transition-colors hover:bg-surface-secondary/50 hover:text-text-primary"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            返回
-          </button>
-        )}
       </div>
 
       {/* Content */}
