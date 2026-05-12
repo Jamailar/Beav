@@ -476,7 +476,7 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
     || channel === 'plugins:sync-capabilities'
     || channel === 'plugins:read-data'
   ) {
-    return { success: false, error: `Thrive plugin action failed for "${channel}": ${message}` };
+    return { success: false, error: `${APP_BRAND.displayName} plugin action failed for "${channel}": ${message}` };
   }
   if (channel === 'plugins:home') {
     return { success: true, widgets: [], sidebarSections: [], quickActions: [] };

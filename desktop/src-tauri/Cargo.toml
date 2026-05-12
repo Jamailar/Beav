@@ -1,10 +1,10 @@
 [package]
-name = "thrive"
+name = "redbox"
 version = "1.11.0"
 description = "Rust host for the RedConvert desktop migration"
 authors = ["Codex"]
 edition = "2021"
-default-run = "thrive"
+default-run = "redbox"
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }

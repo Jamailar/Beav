@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getForcedModelCapabilities, inferModelCapabilities, normalizeModelCapabilities, type ModelCapability } from '../../shared/modelCapabilities';
+import { OFFICIAL_AUTO_SOURCE_ID } from '../config/aiSources';
 import { resolveAssetUrl } from '../utils/pathManager';
 import { ChatComposerFrame, getChatComposerPalette, type ChatComposerTheme, type ChatComposerVariant } from './ChatComposerFrame';
 
@@ -366,7 +367,7 @@ function renderMemberMentionAvatar(member: ChatMemberMentionOption, darkEmbedded
   const avatar = String(member.avatar || '').trim();
   const avatarClass = clsx(
     'flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full text-[13px] font-semibold',
-    darkEmbedded ? 'bg-white/10 text-white/80' : 'bg-[#f2eee5] text-[#6f665a]',
+    darkEmbedded ? 'bg-white/10 text-white/80' : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))]',
   );
   if (avatar && /^(https?:|file:|data:|local-file:|asset:)/i.test(avatar)) {
     return <img src={resolveAssetUrl(avatar)} alt="" className={clsx(avatarClass, 'object-cover')} />;
@@ -388,7 +389,7 @@ function ComposerRecordingStatus({
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden px-1" aria-live="polite">
       <div className="flex items-center gap-1.5 shrink-0">
-        <span className={clsx('h-2 w-2 rounded-full', darkEmbedded ? 'bg-red-400/90' : 'bg-[#dd6b5b]', 'animate-pulse')} />
+        <span className={clsx('h-2 w-2 rounded-full', darkEmbedded ? 'bg-[rgb(var(--color-status-error)/0.9)]' : 'bg-[rgb(var(--color-status-error))]', 'animate-pulse')} />
       </div>
       <div className="flex min-w-0 flex-1 items-center">
         <div className="relative z-[1] flex h-5 min-w-0 flex-1 items-center justify-center gap-[3px] px-1">
@@ -397,7 +398,7 @@ function ComposerRecordingStatus({
               key={`${index}-${height}`}
               className={clsx(
                 'recording-wave-bar w-[2px] shrink-0 rounded-full',
-                darkEmbedded ? 'bg-white/68' : 'bg-[#697885]',
+                darkEmbedded ? 'bg-white/68' : 'bg-[rgb(var(--color-text-secondary))]',
               )}
               style={{
                 height: `${5 + Math.round(height * 9)}px`,
@@ -407,7 +408,7 @@ function ComposerRecordingStatus({
           ))}
         </div>
       </div>
-      <div className={clsx('shrink-0 text-[11px] font-medium tabular-nums', darkEmbedded ? 'text-white/58' : 'text-[#8a94a0]')}>
+      <div className={clsx('shrink-0 text-[11px] font-medium tabular-nums', darkEmbedded ? 'text-white/58' : 'text-[rgb(var(--color-text-tertiary))]')}>
         {formatRecordingDuration(elapsedMs)}
       </div>
     </div>
@@ -440,7 +441,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
 
   const options: ChatModelOption[] = [];
   const defaultSourceId = String(settings.default_ai_source_id || '').trim();
-  const prefersOfficialDefault = defaultSourceId.toLowerCase() === 'redbox_official_auto';
+  const prefersOfficialDefault = defaultSourceId.toLowerCase() === OFFICIAL_AUTO_SOURCE_ID;
   let hasExplicitDefaultSource = false;
 
   try {
@@ -542,13 +543,13 @@ function ComposerAttachmentPreview({
   const titleClass = darkEmbedded ? 'text-white/88' : 'text-text-primary';
   const badgeClass = darkEmbedded
     ? 'border-white/10 bg-white/[0.05] text-white/58'
-    : 'border-black/[0.06] bg-[#f7f2e7] text-[#7f715f]';
+    : 'border-black/[0.06] bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))]';
   const previewShellClass = darkEmbedded
     ? 'border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.03))] shadow-[0_12px_34px_rgba(0,0,0,0.35)]'
-    : 'border-black/[0.07] bg-[linear-gradient(180deg,#fbf6ec,#f2eadb)] shadow-[0_12px_28px_rgba(110,84,44,0.12)]';
+    : 'border-black/[0.07] bg-[linear-gradient(180deg,rgb(var(--color-surface-secondary)),rgb(var(--color-surface-tertiary)))] shadow-[0_12px_28px_rgba(110,84,44,0.12)]';
   const removeButtonClass = darkEmbedded
-    ? 'border-white/12 bg-[#1b2026] text-white/62 hover:text-white hover:bg-[#222831]'
-    : 'border-white bg-white text-[#786d5f] hover:text-[#2d2822] hover:bg-[#f8f4ea]';
+    ? 'border-white/12 bg-[rgb(var(--color-surface-secondary))] text-white/62 hover:text-white hover:bg-[rgb(var(--color-surface-primary))]'
+    : 'border-white bg-white text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-secondary))]';
   const infoTokens = [typeLabel, extLabel, sizeLabel].filter(Boolean);
 
   return (
@@ -574,11 +575,11 @@ function ComposerAttachmentPreview({
             <div className="flex flex-col items-center gap-1.5 px-2 text-center">
               {getAttachmentKindIcon(visualKind, clsx(
                 variant === 'empty' ? 'h-5 w-5' : 'h-[18px] w-[18px]',
-                darkEmbedded ? 'text-white/68' : 'text-[#7f715f]',
+                darkEmbedded ? 'text-white/68' : 'text-[rgb(var(--color-text-secondary))]',
               ))}
               <span className={clsx(
                 'max-w-full truncate text-[10px] font-semibold tracking-[0.18em]',
-                darkEmbedded ? 'text-white/42' : 'text-[#9d8f7b]',
+                darkEmbedded ? 'text-white/42' : 'text-[rgb(var(--color-text-tertiary))]',
               )}>
                 {extLabel || typeLabel}
               </span>
@@ -654,18 +655,18 @@ function ComposerCompactAttachmentTray({
   const metaLabel = [typeLabel, sizeLabel].filter(Boolean).join(' · ');
   const cardClass = darkEmbedded
     ? 'border-white/10 bg-white/[0.06] text-white shadow-[0_10px_28px_rgba(0,0,0,0.28)]'
-    : 'border-black/[0.06] bg-[#f3f0eb] text-[#2f2b26] shadow-[0_8px_22px_rgba(36,32,24,0.07)]';
+    : 'border-black/[0.06] bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] shadow-[0_8px_22px_rgba(36,32,24,0.07)]';
   const mediaClass = darkEmbedded
     ? 'border-white/10 bg-white/[0.08] text-white/68'
-    : 'border-black/[0.06] bg-white text-[#756b5c]';
-  const metaClass = darkEmbedded ? 'text-white/46' : 'text-[#8a8175]';
+    : 'border-black/[0.06] bg-white text-[rgb(var(--color-text-secondary))]';
+  const metaClass = darkEmbedded ? 'text-white/46' : 'text-[rgb(var(--color-text-tertiary))]';
   const statusClass = uploading
     ? darkEmbedded
-      ? 'text-amber-200'
-      : 'text-amber-700'
+      ? 'text-[rgb(var(--color-warning-text))]'
+      : 'text-[rgb(var(--color-status-warning))]'
     : darkEmbedded
-      ? 'text-emerald-200'
-      : 'text-emerald-700';
+      ? 'text-[rgb(var(--color-success-text))]'
+      : 'text-[rgb(var(--color-status-success))]';
 
   return (
     <div className="flex flex-wrap items-center gap-2 px-3.5 pt-3">
@@ -700,7 +701,7 @@ function ComposerCompactAttachmentTray({
           'absolute bottom-2 right-3 flex items-center gap-1 text-[10px] font-medium',
           statusClass,
         )}>
-          <span className={clsx('h-1.5 w-1.5 rounded-full', uploading ? 'bg-amber-400' : 'bg-emerald-500')} />
+          <span className={clsx('h-1.5 w-1.5 rounded-full', uploading ? 'bg-[rgb(var(--color-status-warning))]' : 'bg-[rgb(var(--color-status-success))]')} />
           {uploading ? '上传中' : '已上传'}
         </div>
 
@@ -710,7 +711,7 @@ function ComposerCompactAttachmentTray({
             onClick={onRemove}
             className={clsx(
               'absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full opacity-70 transition hover:opacity-100',
-              darkEmbedded ? 'text-white/62 hover:bg-white/10' : 'text-[#756b5c] hover:bg-white',
+              darkEmbedded ? 'text-white/62 hover:bg-white/10' : 'text-[rgb(var(--color-text-secondary))] hover:bg-white',
             )}
             title="移除文件"
             aria-label={`移除 ${attachment.name}`}
@@ -747,7 +748,7 @@ function ComposerAttachmentPlaceholder({
         frameClass,
         darkEmbedded
           ? 'border-white/12 bg-white/[0.035] text-white/44 hover:border-white/22 hover:bg-white/[0.06] hover:text-white/68'
-          : 'border-[#d8d8d4] bg-[#f4f4f1] text-[#9aa1a8] hover:border-[#c9c9c2] hover:bg-[#f8f8f5] hover:text-[#7d878f]',
+          : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-tertiary))] hover:border-[rgb(var(--color-border))] hover:bg-[rgb(var(--color-surface-primary))] hover:text-[rgb(var(--color-text-secondary))]',
         !disabled && 'hover:rotate-[-5deg]',
       )}
       title="添加文件"
@@ -777,7 +778,7 @@ function ComposerMediaAttachmentSlot({
   const iconClass = variant === 'empty' ? 'h-6 w-6' : 'h-5 w-5';
   const frameToneClass = darkEmbedded
     ? 'border-white/12 bg-white/[0.045] text-white/58'
-    : 'border-[#d8d8d4] bg-[#f4f4f1] text-[#7d878f]';
+    : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-tertiary))]';
 
   return (
     <div className={clsx(
@@ -802,8 +803,8 @@ function ComposerMediaAttachmentSlot({
         className={clsx(
           'absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full border text-[11px] opacity-0 shadow-sm transition-opacity group-hover/media:opacity-100 disabled:cursor-not-allowed',
           darkEmbedded
-            ? 'border-white/10 bg-[#1b2026] text-white/70 hover:text-white'
-            : 'border-white bg-white text-[#786d5f] hover:text-[#2d2822]',
+            ? 'border-white/10 bg-[rgb(var(--color-surface-secondary))] text-white/70 hover:text-white'
+            : 'border-white bg-white text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))]',
         )}
         title="移除文件"
         aria-label={`移除 ${attachment.name}`}
@@ -926,7 +927,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   const showMemberMentionPicker = memberMentionEnabled && Boolean(memberMentionTrigger);
   const showKnowledgeMentionPicker = knowledgeMentionEnabled && Boolean(knowledgeMentionTrigger);
   const modelPickerClass = darkEmbedded
-    ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#181b20] shadow-xl z-[130]'
+    ? 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[rgb(var(--color-background))] shadow-xl z-[130]'
     : 'absolute left-0 bottom-full mb-2 w-72 max-h-72 overflow-auto rounded-xl border border-border bg-surface-primary shadow-xl z-[130]';
   const subtleButtonClass = palette.subtleButton;
   const sendButtonClass = submitDisabled ? palette.sendButtonIdle : palette.sendButtonActive;
@@ -1284,7 +1285,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           ref={memberPickerRef}
           className={clsx(
             'absolute bottom-full left-3 z-[140] mb-2 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border shadow-xl',
-            darkEmbedded ? 'border-white/10 bg-[#181b20] text-white' : 'border-[#ece6dc] bg-[#fffefa] text-text-primary',
+            darkEmbedded ? 'border-white/10 bg-[rgb(var(--color-background))] text-white' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-text-primary',
           )}
         >
           <div className={clsx('px-3 py-2 text-[11px] font-medium', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')}>
@@ -1301,8 +1302,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                 className={clsx(
                   'flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors',
                   active
-                    ? darkEmbedded ? 'bg-white/10' : 'bg-[#f5f0e7]'
-                    : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[#f8f4ec]',
+                    ? darkEmbedded ? 'bg-white/10' : 'bg-[rgb(var(--color-surface-secondary))]'
+                    : darkEmbedded ? 'hover:bg-white/[0.06]' : 'hover:bg-[rgb(var(--color-surface-secondary))]',
                 )}
               >
                 {renderMemberMentionAvatar(member, darkEmbedded)}
@@ -1328,10 +1329,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
           ref={knowledgePickerRef}
           className={clsx(
             'absolute bottom-full left-0 right-0 z-[150] mb-3 max-h-[min(70vh,560px)] overflow-hidden rounded-2xl border shadow-2xl',
-            darkEmbedded ? 'border-white/10 bg-[#15191e] text-white' : 'border-[#e9dfcf] bg-[#fffefa] text-text-primary',
+            darkEmbedded ? 'border-white/10 bg-[rgb(var(--color-background))] text-white' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-primary))] text-text-primary',
           )}
         >
-          <div className={clsx('flex items-center gap-2 border-b px-4 py-3', darkEmbedded ? 'border-white/10' : 'border-[#eee6da]')}>
+          <div className={clsx('flex items-center gap-2 border-b px-4 py-3', darkEmbedded ? 'border-white/10' : 'border-[rgb(var(--color-divider))]')}>
             <Search className={clsx('h-4 w-4 shrink-0', darkEmbedded ? 'text-white/45' : 'text-text-tertiary')} />
             <input
               ref={knowledgeSearchInputRef}
@@ -1366,22 +1367,22 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                       className={clsx(
                         'group flex h-[58px] w-full items-center gap-2 overflow-hidden rounded-xl border px-2 py-1.5 text-left transition-colors',
                         selected
-                          ? darkEmbedded ? 'border-emerald-400/45 bg-emerald-400/10' : 'border-emerald-500/35 bg-emerald-50'
+                          ? darkEmbedded ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.10)]' : 'border-[rgb(var(--color-accent-primary)/0.35)] bg-[rgb(var(--color-accent-muted))]'
                           : active
-                            ? darkEmbedded ? 'border-white/18 bg-white/[0.08]' : 'border-[#ded2c1] bg-[#f7f1e8]'
-                            : darkEmbedded ? 'border-white/10 bg-white/[0.04] hover:bg-white/[0.07]' : 'border-[#eee6da] bg-white/75 hover:bg-[#faf6ef]',
+                            ? darkEmbedded ? 'border-white/18 bg-white/[0.08]' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-secondary))]'
+                            : darkEmbedded ? 'border-white/10 bg-white/[0.04] hover:bg-white/[0.07]' : 'border-[rgb(var(--color-divider))] bg-white/75 hover:bg-[rgb(var(--color-surface-primary))]',
                       )}
                     >
-                      <div className={clsx('relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border', darkEmbedded ? 'border-white/10 bg-white/[0.06]' : 'border-[#eee6da] bg-[#f5efe5]')}>
+                      <div className={clsx('relative h-11 w-11 shrink-0 overflow-hidden rounded-lg border', darkEmbedded ? 'border-white/10 bg-white/[0.06]' : 'border-[rgb(var(--color-divider))] bg-[rgb(var(--color-surface-secondary))]')}>
                         {cover ? (
                           <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
                         ) : (
-                          <div className={clsx('flex h-full w-full items-center justify-center', darkEmbedded ? 'text-white/58' : 'text-[#827666]')}>
+                          <div className={clsx('flex h-full w-full items-center justify-center', darkEmbedded ? 'text-white/58' : 'text-[rgb(var(--color-text-tertiary))]')}>
                             {renderKnowledgeMentionIcon(item, 'h-4 w-4')}
                           </div>
                         )}
                         {selected ? (
-                          <span className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm">
+                          <span className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-[rgb(var(--color-accent-primary))] text-white shadow-sm">
                             <Check className="h-3 w-3" />
                           </span>
                         ) : null}
@@ -1389,7 +1390,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                       <span
                         className={clsx(
                           'block min-w-0 flex-1 text-sm font-medium leading-5 line-clamp-2',
-                          darkEmbedded ? 'text-white/86' : 'text-[#322d26]',
+                          darkEmbedded ? 'text-white/86' : 'text-[rgb(var(--color-text-primary))]',
                         )}
                         title={item.title}
                       >
@@ -1413,7 +1414,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
             {selectedMemberMention ? (
               <span className={clsx(
                 'inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium',
-                darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[#e9dfcf] bg-[#f7f2e8] text-[#5f574d]',
+                darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))]',
               )}>
                 {renderMemberMentionAvatar(selectedMemberMention, darkEmbedded)}
                 <span className="truncate">@{selectedMemberMention.name}</span>
@@ -1435,18 +1436,18 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                   key={item.id}
                   className={clsx(
                     'group/knowledge inline-flex h-12 max-w-full items-center gap-2 rounded-xl border px-2 pr-1.5 text-xs',
-                    darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[#e9dfcf] bg-[#f7f2e8] text-[#5f574d]',
+                    darkEmbedded ? 'border-white/10 bg-white/[0.06] text-white/78' : 'border-[rgb(var(--color-border))] bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))]',
                   )}
                 >
-                  <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border', darkEmbedded ? 'border-white/10 bg-white/[0.06]' : 'border-[#eadfcc] bg-white/80')}>
+                  <span className={clsx('flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg border', darkEmbedded ? 'border-white/10 bg-white/[0.06]' : 'border-[rgb(var(--color-border))] bg-white/80')}>
                     {cover ? (
                       <img src={resolveAssetUrl(cover)} alt="" className="h-full w-full object-cover" />
                     ) : (
-                      renderKnowledgeMentionIcon(item, clsx('h-4 w-4', darkEmbedded ? 'text-white/58' : 'text-[#827666]'))
+                      renderKnowledgeMentionIcon(item, clsx('h-4 w-4', darkEmbedded ? 'text-white/58' : 'text-[rgb(var(--color-text-tertiary))]'))
                     )}
                   </span>
                   <span className="min-w-0">
-                    <span className={clsx('block text-[10px] leading-3', darkEmbedded ? 'text-white/42' : 'text-[#908575]')}>
+                    <span className={clsx('block text-[10px] leading-3', darkEmbedded ? 'text-white/42' : 'text-[rgb(var(--color-text-tertiary))]')}>
                       #{getKnowledgeKindLabel(item)}
                     </span>
                     <span className="block max-w-[180px] truncate font-medium leading-4" title={item.title}>
@@ -1580,7 +1581,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                 onClick={() => void onCancel?.()}
                 className={clsx(
                   'rounded-lg p-2 transition-colors',
-                  darkEmbedded ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50',
+                  darkEmbedded ? 'text-[rgb(var(--color-status-error)/0.8)] hover:bg-[rgb(var(--color-status-error)/0.1)]' : 'text-[rgb(var(--color-status-error))] hover:bg-[rgb(var(--color-danger-bg))]',
                 )}
                 title="停止生成"
               >
@@ -1593,7 +1594,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                 disabled={audioState === 'transcribing' || disabled}
                 className={clsx(
                   'p-2 transition-colors',
-                  audioState === 'recording' ? 'text-red-500 hover:text-red-600' : subtleButtonClass,
+                  audioState === 'recording' ? 'text-[rgb(var(--color-status-error))] hover:opacity-80' : subtleButtonClass,
                   (audioState === 'transcribing' || disabled) && 'cursor-not-allowed opacity-60',
                 )}
                 title={
@@ -1621,7 +1622,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
               disabled={submitDisabled}
               className={clsx('flex h-9 w-9 items-center justify-center rounded-full transition-all duration-200', sendButtonClass)}
             >
-              {isBusy ? <Loader2 className="h-4 w-4 animate-spin text-[#b4b2a8]" /> : <ArrowUp className="h-5 w-5" />}
+              {isBusy ? <Loader2 className="h-4 w-4 animate-spin text-[rgb(var(--color-text-tertiary))]" /> : <ArrowUp className="h-5 w-5" />}
             </button>
           </div>
         </div>

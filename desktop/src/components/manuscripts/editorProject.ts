@@ -8,6 +8,7 @@ import type {
 } from './remotion/types';
 import type { ItemKeyframes } from '@/types/keyframe';
 import type { ProjectMarker } from '@/types/timeline';
+import { APP_BRAND } from '../../config/brand';
 import type { Transition } from '@/types/transition';
 
 export type EditorTrackKind = 'video' | 'audio' | 'subtitle' | 'text' | 'motion';
@@ -232,7 +233,7 @@ function sanitizeRemotionOutName(title: string): string {
         .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '');
-    return normalized || 'redbox-motion';
+    return normalized || `${APP_BRAND.variant}-motion`;
 }
 
 function defaultRemotionRenderConfig(title: string, renderMode: RemotionRenderMode) {

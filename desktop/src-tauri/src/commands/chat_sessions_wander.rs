@@ -30,6 +30,39 @@ const CHAT_ATTACHMENT_INLINE_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const CHAT_ATTACHMENT_STAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const CHAT_ATTACHMENT_PENDING_TTL_MS: u128 = 72 * 60 * 60 * 1000;
 
+fn hydrate_session_file_if_needed(
+    state: &State<'_, AppState>,
+    session_id: &str,
+) -> Result<(), String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Ok(());
+    }
+    let needs_load = with_store(state, |store| {
+        Ok(!crate::persistence::is_session_file_loaded(&store, session_id))
+    })?;
+    if !needs_load {
+        return Ok(());
+    }
+    let entries = match crate::persistence::load_session_file(&state.store_path, session_id) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!(
+                "[{}] failed to lazy-load session {}: {error}",
+                app_brand_display_name(),
+                session_id,
+            );
+            return Ok(());
+        }
+    };
+    with_store_mut(state, |store| {
+        if !crate::persistence::is_session_file_loaded(store, session_id) {
+            crate::persistence::apply_session_file_entries_to_store(store, entries);
+        }
+        Ok(())
+    })
+}
+
 fn chat_attachment_registry_path(state: &State<'_, AppState>) -> Result<PathBuf, String> {
     Ok(workspace_root(state)?
         .join(".redbox")
@@ -2211,6 +2244,7 @@ pub fn handle_chat_sessions_wander_channel(
                 let Some(session_id) = session_id else {
                     return Ok(Value::Null);
                 };
+                hydrate_session_file_if_needed(state, &session_id)?;
                 let transcript_meta = transcript_session_meta_by_id(state, &session_id)
                     .ok()
                     .flatten();
@@ -2231,6 +2265,8 @@ pub fn handle_chat_sessions_wander_channel(
                 ) else {
                     return Ok(Value::Null);
                 };
+                hydrate_session_file_if_needed(state, &session_id)?;
+                let store_snapshot = with_store(state, |store| Ok(store.clone()))?;
                 let transcript_meta = transcript_session_meta_by_id(state, &session_id)
                     .ok()
                     .flatten();
@@ -2294,18 +2330,25 @@ pub fn handle_chat_sessions_wander_channel(
                     .get("limit")
                     .and_then(Value::as_u64)
                     .map(|value| value as usize);
-                with_store(state, |store| {
-                    if let Some(room_id) = requested_session_id
-                        .as_deref()
-                        .and_then(room_id_from_synthetic_session_id)
-                    {
+                if let Some(room_id) = requested_session_id
+                    .as_deref()
+                    .and_then(room_id_from_synthetic_session_id)
+                {
+                    return with_store(state, |store| {
                         return Ok(synthetic_chatroom_transcript_value(&store, room_id, limit));
-                    }
-                    let Some(session_id) =
-                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
-                    else {
-                        return Ok(json!([]));
-                    };
+                    });
+                }
+                let session_id = with_store(state, |store| {
+                    Ok(resolve_resume_target_session_id(
+                        &store,
+                        requested_session_id.as_deref(),
+                    ))
+                })?;
+                let Some(session_id) = session_id else {
+                    return Ok(json!([]));
+                };
+                hydrate_session_file_if_needed(state, &session_id)?;
+                with_store(state, |store| {
                     Ok(trace_value_for_session(&store, &session_id, false, limit))
                 })
             }
@@ -2315,12 +2358,17 @@ pub fn handle_chat_sessions_wander_channel(
                     .get("limit")
                     .and_then(Value::as_u64)
                     .map(|value| value as usize);
+                let session_id = with_store(state, |store| {
+                    Ok(resolve_resume_target_session_id(
+                        &store,
+                        requested_session_id.as_deref(),
+                    ))
+                })?;
+                let Some(session_id) = session_id else {
+                    return Ok(json!([]));
+                };
+                hydrate_session_file_if_needed(state, &session_id)?;
                 with_store(state, |store| {
-                    let Some(session_id) =
-                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
-                    else {
-                        return Ok(json!([]));
-                    };
                     Ok(tool_results_value_for_session(
                         &store,
                         &session_id,
@@ -2332,16 +2380,43 @@ pub fn handle_chat_sessions_wander_channel(
             }
             "chat:get-messages" => {
                 let requested_session_id = payload_value_as_string(&payload);
+                let session_id = with_store(state, |store| {
+                    Ok(resolve_resume_target_session_id(
+                        &store,
+                        requested_session_id.as_deref(),
+                    ))
+                })?;
+                let Some(session_id) = session_id else {
+                    return Ok(json!([]));
+                };
+                let loaded_messages = with_store(state, |store| {
+                    Ok(crate::persistence::is_session_file_loaded(&store, &session_id))
+                })?;
+                if !loaded_messages {
+                    let messages = crate::persistence::load_session_messages_from_file(
+                        &state.store_path,
+                        &session_id,
+                    )
+                    .unwrap_or_else(|error| {
+                        eprintln!(
+                            "[{}] failed to stream session messages {}: {error}",
+                            app_brand_display_name(),
+                            session_id,
+                        );
+                        Vec::new()
+                    });
+                    return Ok(json!(messages));
+                }
                 with_store(state, |store| {
-                    let Some(session_id) =
-                        resolve_resume_target_session_id(&store, requested_session_id.as_deref())
-                    else {
-                        return Ok(json!([]));
-                    };
+                    let mut seen = HashSet::new();
                     let mut messages: Vec<ChatMessageRecord> = store
                         .chat_messages
                         .iter()
-                        .filter(|item| item.session_id == session_id)
+                        .filter(|item| {
+                            item.session_id == session_id
+                                && (item.role == "user" || item.role == "assistant")
+                                && seen.insert(item.id.clone())
+                        })
                         .cloned()
                         .collect();
                     messages.sort_by(|a, b| a.created_at.cmp(&b.created_at));

@@ -379,6 +379,9 @@ function resolveBrand(config, requestedVariant) {
     identifier,
     appIcon,
     logo,
+    downloadUrl: variantConfig.downloadUrl || '',
+    githubIssuesUrl: variantConfig.githubIssuesUrl || '',
+    githubRepoUrl: variantConfig.githubRepoUrl || '',
     theme,
   };
 }
@@ -456,6 +459,9 @@ export async function syncBrand({ cwd = process.cwd(), variant: requestedVariant
     htmlTitle: brand.htmlTitle,
     aiDisplayName: brand.aiDisplayName,
     logoSrc: '/branding/logo.png',
+    downloadUrl: brand.downloadUrl,
+    githubIssuesUrl: brand.githubIssuesUrl,
+    githubRepoUrl: brand.githubRepoUrl,
     theme: brand.theme,
   };
 

@@ -26,6 +26,8 @@ export interface AiSourceConfig {
 
 export const DEFAULT_AI_PRESET_ID = 'openai';
 
+export const OFFICIAL_AUTO_SOURCE_ID = `${APP_BRAND.variant}_official_auto`;
+
 // Presets aligned with common OpenAI-compatible providers (referencing AionUi design).
 export const AI_SOURCE_PRESETS: AiSourcePreset[] = [
   { id: 'redbox-official', label: `${APP_BRAND.displayName} Official`, baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL, protocol: 'openai' },

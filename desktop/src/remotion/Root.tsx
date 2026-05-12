@@ -50,12 +50,12 @@ export const RemotionRoot: React.FC = () => {
                 const defaultOutName = typeof requestedRender.defaultOutName === 'string' && requestedRender.defaultOutName.trim()
                     ? requestedRender.defaultOutName.trim()
                     : String(
-                        (composition.title || 'redbox-motion')
+                        (composition.title || `${APP_BRAND.variant}-motion`)
                             .trim()
                             .replace(/[^\w\u4e00-\u9fa5-]+/g, '-')
                             .replace(/-+/g, '-')
                             .replace(/^-|-$/g, '')
-                            || 'redbox-motion',
+                            || `${APP_BRAND.variant}-motion`,
                     );
                 return {
                     width: composition.width,

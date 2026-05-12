@@ -8,6 +8,9 @@
       "windowTitle": "RedBox",
       "identifier": "com.redconvert.redbox",
       "htmlTitle": "RedBox",
+      "downloadUrl": "https://redbox.ziz.hk/download",
+      "githubIssuesUrl": "https://github.com/Jamailar/RedBox/issues",
+      "githubRepoUrl": "https://github.com/Jamailar/RedBox",
       "appIcon": {
         "png": "branding/variants/redbox/icons/icon.png",
         "icns": "branding/variants/redbox/icons/icon.icns",
@@ -38,6 +41,7 @@
       "windowTitle": "Thrive",
       "identifier": "com.redconvert.thrive",
       "htmlTitle": "Thrive",
+      "downloadUrl": "https://thrive.ziz.hk/download",
       "appIcon": {
         "png": "branding/variants/thrive/icons/icon.png",
         "icns": "branding/variants/thrive/icons/icon.icns",

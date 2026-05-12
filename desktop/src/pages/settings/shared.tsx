@@ -6,6 +6,7 @@ import {
   type AiSourcePreset,
   type AiSourceConfig,
   DEFAULT_AI_PRESET_ID,
+  OFFICIAL_AUTO_SOURCE_ID,
   findAiPresetById,
   inferPresetIdByEndpoint,
 } from '../../config/aiSources';
@@ -522,7 +523,7 @@ export const isLikelyLocalEndpoint = (baseURL: string): boolean => {
 
 export const AI_PRESET_LOGO_BY_ID: Record<string, string> = {
   'redbox-official': REDBOX_OFFICIAL_LOGO_URL,
-  redbox_official_auto: REDBOX_OFFICIAL_LOGO_URL,
+  [OFFICIAL_AUTO_SOURCE_ID]: REDBOX_OFFICIAL_LOGO_URL,
   openai: 'provider-logos/openai.svg',
   anthropic: 'provider-logos/anthropic.svg',
   gemini: 'provider-logos/gemini.svg',
@@ -639,7 +640,7 @@ export const AiSourceLogo = ({
   const normalizedId = String(source.id || '').trim().toLowerCase();
   const normalizedName = String(source.name || '').trim().toLowerCase();
   const resolvedPresetId = (
-    normalizedId === 'redbox_official_auto' || normalizedName === 'redbox official'
+    normalizedId === OFFICIAL_AUTO_SOURCE_ID || normalizedName === 'redbox official'
       ? 'redbox-official'
       : source.presetId
   );

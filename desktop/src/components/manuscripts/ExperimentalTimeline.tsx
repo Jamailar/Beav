@@ -132,13 +132,13 @@ function itemLabel(item: EditorItem, assetMap: Record<string, EditorAsset>) {
 }
 
 function itemToneClass(item: EditorItem, assetMap: Record<string, EditorAsset>) {
-    if (item.type === 'motion') return 'border-violet-300/40 bg-violet-500/22';
-    if (item.type === 'subtitle') return 'border-amber-700/45 bg-amber-700/30';
-    if (item.type === 'text') return 'border-amber-700/45 bg-amber-700/30';
+    if (item.type === 'motion') return 'border-[rgb(var(--color-info)/0.4)] bg-[rgb(var(--color-info)/0.22)]';
+    if (item.type === 'subtitle') return 'border-[rgb(var(--color-status-warning)/0.45)] bg-[rgb(var(--color-status-warning)/0.3)]';
+    if (item.type === 'text') return 'border-[rgb(var(--color-status-warning)/0.45)] bg-[rgb(var(--color-status-warning)/0.3)]';
     const assetKind = assetMap[item.assetId]?.kind || 'video';
-    if (assetKind === 'audio') return 'border-sky-300/40 bg-sky-500/22';
-    if (assetKind === 'image') return 'border-emerald-300/40 bg-emerald-500/22';
-    return 'border-emerald-300/40 bg-emerald-500/22';
+    if (assetKind === 'audio') return 'border-[rgb(var(--color-info)/0.4)] bg-[rgb(var(--color-info)/0.22)]';
+    if (assetKind === 'image') return 'border-[rgb(var(--color-status-success)/0.4)] bg-[rgb(var(--color-status-success)/0.22)]';
+    return 'border-[rgb(var(--color-status-success)/0.4)] bg-[rgb(var(--color-status-success)/0.22)]';
 }
 
 function itemTrackKind(item: EditorItem, assetMap: Record<string, EditorAsset>): EditorTrackKind {
@@ -653,7 +653,7 @@ export function ExperimentalTimeline({
                     type="button"
                     onClick={deleteSelected}
                     disabled={!canDeleteSelection}
-                    className={clsx(toolbarIconButtonClass, 'text-red-200/80 hover:bg-red-400/10 hover:text-red-100 disabled:opacity-40')}
+                    className={clsx(toolbarIconButtonClass, 'text-[rgb(var(--color-status-error)/0.8)] hover:bg-[rgb(var(--color-status-error)/0.1)] hover:text-[rgb(var(--color-status-error))] disabled:opacity-40')}
                     title="删除"
                     aria-label="删除"
                 >
@@ -665,7 +665,7 @@ export function ExperimentalTimeline({
                     disabled={!canAutoTranscribeSubtitles || isTranscribingSubtitles}
                     className={clsx(
                         toolbarIconButtonClass,
-                        'text-cyan-100/85 hover:bg-cyan-400/10 hover:text-cyan-50 disabled:opacity-40',
+                        'text-[rgb(var(--color-accent-primary)/0.85)] hover:bg-[rgb(var(--color-accent-primary)/0.1)] hover:text-[rgb(var(--color-accent-primary))] disabled:opacity-40',
                         isTranscribingSubtitles && 'animate-pulse',
                     )}
                     title={isTranscribingSubtitles ? '字幕识别中' : '自动识别字幕'}
@@ -677,12 +677,12 @@ export function ExperimentalTimeline({
 
             <div
                 ref={bodyRef}
-                className="min-h-0 flex-1 overflow-auto rounded-2xl border border-white/10 bg-[#0f1013]"
+                className="min-h-0 flex-1 overflow-auto rounded-2xl border border-white/10 bg-[rgb(var(--color-surface-primary))]"
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={onDropAsset}
             >
                 <div className="relative" style={{ width: contentWidth, minHeight: RULER_HEIGHT + rowOffsets.reduce((sum, row) => sum + row.height, 0) }}>
-                    <div className="sticky top-0 z-20 flex h-[38px] border-b border-white/10 bg-[#141519]">
+                    <div className="sticky top-0 z-20 flex h-[38px] border-b border-white/10 bg-[rgb(var(--color-surface-secondary))]">
                         <div className="flex items-center px-3 text-[11px] uppercase tracking-[0.2em] text-white/35" style={{ width: RAIL_WIDTH }}>Tracks</div>
                         <div
                             className="relative flex-1 cursor-pointer"
@@ -702,12 +702,12 @@ export function ExperimentalTimeline({
                                     <div className="absolute left-2 top-2 text-[11px] text-white/35">{index}s</div>
                                 </div>
                             ))}
-                            <div className="absolute inset-y-0 w-[2px] bg-cyan-300" style={{ left: (currentTimeMs / 1000) * pixelsPerSecond }} />
-                            <div className="absolute -top-[1px] h-3.5 w-3.5 -translate-x-1/2 rounded-full border border-cyan-200/70 bg-cyan-300 shadow-[0_0_0_3px_rgba(34,211,238,0.18)]" style={{ left: (currentTimeMs / 1000) * pixelsPerSecond }} />
+                            <div className="absolute inset-y-0 w-[2px] bg-[rgb(var(--color-accent-primary))]" style={{ left: (currentTimeMs / 1000) * pixelsPerSecond }} />
+                            <div className="absolute -top-[1px] h-3.5 w-3.5 -translate-x-1/2 rounded-full border border-[rgb(var(--color-accent-primary)/0.7)] bg-[rgb(var(--color-accent-primary))] shadow-[0_0_0_3px_rgb(var(--color-accent-primary)/0.18)]" style={{ left: (currentTimeMs / 1000) * pixelsPerSecond }} />
                         </div>
                     </div>
                     <div
-                        className="pointer-events-none absolute z-[18] w-[2px] bg-cyan-300/95 shadow-[0_0_0_1px_rgba(34,211,238,0.18)]"
+                        className="pointer-events-none absolute z-[18] w-[2px] bg-[rgb(var(--color-accent-primary)/0.95)] shadow-[0_0_0_1px_rgb(var(--color-accent-primary)/0.18)]"
                         style={{
                             left: playheadLeft,
                             top: RULER_HEIGHT,
@@ -716,7 +716,7 @@ export function ExperimentalTimeline({
                     />
                     {trackReorderIndicatorTop !== null ? (
                         <div
-                            className="pointer-events-none absolute left-0 right-0 z-[19] h-[2px] bg-cyan-300 shadow-[0_0_0_1px_rgba(34,211,238,0.18)]"
+                            className="pointer-events-none absolute left-0 right-0 z-[19] h-[2px] bg-[rgb(var(--color-accent-primary))] shadow-[0_0_0_1px_rgb(var(--color-accent-primary)/0.18)]"
                             style={{ top: RULER_HEIGHT + trackReorderIndicatorTop }}
                         />
                     ) : null}
@@ -732,8 +732,8 @@ export function ExperimentalTimeline({
                                 <div
                                     className={clsx(
                                         'sticky left-0 z-10 flex shrink-0 items-center justify-between gap-1.5 border-r border-white/10 px-2.5',
-                                        selectedTrackIds.includes(track.id) ? 'bg-cyan-400/10' : 'bg-[#141519]',
-                                        activeTrackReorderId === track.id && 'bg-cyan-400/14'
+                                        selectedTrackIds.includes(track.id) ? 'bg-[rgb(var(--color-accent-primary)/0.1)]' : 'bg-[rgb(var(--color-surface-secondary))]',
+                                        activeTrackReorderId === track.id && 'bg-[rgb(var(--color-accent-primary)/0.14)]'
                                     )}
                                     style={{ width: RAIL_WIDTH }}
                                     onClick={() => onSelectionChange({ itemIds: [], primaryItemId: null, trackIds: [track.id] })}
@@ -792,8 +792,8 @@ export function ExperimentalTimeline({
                                 <div
                                     className={clsx(
                                         'relative flex-1',
-                                        selectedTrackIds.includes(track.id) && 'bg-cyan-400/[0.04]',
-                                        activeDragTrackId === track.id && 'bg-cyan-300/[0.08]',
+                                        selectedTrackIds.includes(track.id) && 'bg-[rgb(var(--color-accent-primary)/0.04)]',
+                                        activeDragTrackId === track.id && 'bg-[rgb(var(--color-accent-primary)/0.08)]',
                                     )}
                                     onPointerDown={(event) => {
                                         if (event.target !== event.currentTarget) return;
@@ -950,14 +950,14 @@ export function ExperimentalTimeline({
                 </div>
             ) : null}
             {subtitleTranscriptionNotice ? (
-                <div className="mt-3 rounded-2xl border border-cyan-300/18 bg-cyan-400/[0.06] px-3 py-2 text-xs text-cyan-100/85">
+                <div className="mt-3 rounded-2xl border border-[rgb(var(--color-accent-primary)/0.18)] bg-[rgb(var(--color-accent-primary)/0.06)] px-3 py-2 text-xs text-[rgb(var(--color-accent-primary)/0.85)]">
                     {subtitleTranscriptionNotice}
                 </div>
             ) : null}
             {trackContextMenu && trackContextMenuTrack ? (
                 <div
                     ref={trackContextMenuRef}
-                    className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+                    className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[rgb(var(--color-surface-elevated))] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
                     style={{ left: trackContextMenu.x, top: trackContextMenu.y }}
                 >
                     <button
@@ -973,7 +973,7 @@ export function ExperimentalTimeline({
                     <button
                         type="button"
                         disabled={isProtectedTrackId(trackContextMenuTrack.id)}
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10 disabled:cursor-not-allowed disabled:text-red-200/40 disabled:hover:bg-transparent"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-[rgb(var(--color-status-error))] hover:bg-[rgb(var(--color-status-error)/0.1)] disabled:cursor-not-allowed disabled:text-[rgb(var(--color-status-error)/0.4)] disabled:hover:bg-transparent"
                         onClick={() => {
                             if (isProtectedTrackId(trackContextMenuTrack.id)) return;
                             onApplyCommands([{ type: 'delete_tracks', trackIds: [trackContextMenuTrack.id] }]);
@@ -988,7 +988,7 @@ export function ExperimentalTimeline({
             {contextMenu && contextMenuItem ? (
                 <div
                     ref={contextMenuRef}
-                    className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[#111111] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+                    className="fixed z-[120] min-w-[150px] rounded-xl border border-white/10 bg-[rgb(var(--color-surface-elevated))] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
                     style={{ left: contextMenu.x, top: contextMenu.y }}
                 >
                     <button
@@ -1029,7 +1029,7 @@ export function ExperimentalTimeline({
                     </button>
                     <button
                         type="button"
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-red-200 hover:bg-red-400/10"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-[rgb(var(--color-status-error))] hover:bg-[rgb(var(--color-status-error)/0.1)]"
                         onClick={() => {
                             onApplyCommands([
                                 contextMenuItem.type === 'motion'

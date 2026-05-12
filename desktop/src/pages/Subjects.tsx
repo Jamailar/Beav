@@ -1200,14 +1200,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         <button
                             type="button"
                             onClick={onReturnHome}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-[rgb(var(--color-border))] bg-white text-[rgb(var(--color-text-primary))] shadow-sm transition hover:bg-[rgb(var(--color-surface-primary))] hover:text-[rgb(var(--color-text-primary))]"
                             aria-label="返回主页"
                             title="返回主页"
                         >
                             <ArrowLeft className="h-4 w-4" />
                         </button>
                     )}
-                    <h1 className={clsx('leading-none font-semibold tracking-[0.01em] text-slate-900', isModalVariant ? 'text-[20px]' : 'text-[26px]')}>资产库</h1>
+                    <h1 className={clsx('leading-none font-semibold tracking-[0.01em] text-[rgb(var(--color-text-primary))]', isModalVariant ? 'text-[20px]' : 'text-[26px]')}>资产库</h1>
                     {showAssetControls && (
                         <button
                             onClick={openCreateModal}
@@ -1225,18 +1225,18 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     <div className="ml-auto flex items-center gap-3">
                         <button
                             onClick={() => void loadData()}
-                            className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-100"
+                            className="inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
                         >
                             <RefreshCw className={clsx('h-3.5 w-3.5', loading && 'animate-spin')} />
                             刷新
                         </button>
-                        <div className="inline-flex rounded-xl bg-slate-100 p-1">
+                        <div className="inline-flex rounded-xl bg-[rgb(var(--color-surface-secondary))] p-1">
                             <button
                                 type="button"
                                 onClick={() => setViewMode('grid')}
                                 className={clsx(
                                     'inline-flex h-8 w-8 items-center justify-center rounded-lg transition',
-                                    viewMode === 'grid' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                                    viewMode === 'grid' ? 'bg-white text-[rgb(var(--color-text-primary))] shadow-sm' : 'text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))]'
                                 )}
                                 aria-label="网格视图"
                                 title="网格视图"
@@ -1248,7 +1248,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 onClick={() => setViewMode('list')}
                                 className={clsx(
                                     'inline-flex h-8 w-8 items-center justify-center rounded-lg transition',
-                                    viewMode === 'list' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                                    viewMode === 'list' ? 'bg-white text-[rgb(var(--color-text-primary))] shadow-sm' : 'text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))]'
                                 )}
                                 aria-label="列表视图"
                                 title="列表视图"
@@ -1261,8 +1261,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 type="button"
                                 onClick={() => setFilterOpen((value) => !value)}
                                 className={clsx(
-                                    'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-slate-800 transition',
-                                    filterOpen || query ? 'bg-slate-200' : 'bg-slate-100 hover:bg-slate-200'
+                                    'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition',
+                                    filterOpen || query ? 'bg-[rgb(var(--color-surface-tertiary))]' : 'bg-[rgb(var(--color-surface-secondary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
                                 )}
                             >
                                 <SlidersHorizontal className="h-4 w-4" />
@@ -1273,7 +1273,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <button
                                 type="button"
                                 onClick={onClose}
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-600 transition hover:bg-slate-100 hover:text-slate-950"
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
                                 aria-label="关闭资产库"
                                 title="关闭"
                             >
@@ -1285,7 +1285,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             </div>
 
             {isModalVariant && (
-                <div className="mx-5 flex items-center gap-1 border-b border-slate-200 pb-2">
+                <div className="mx-5 flex items-center gap-1 border-b border-[rgb(var(--color-border))] pb-2">
                     {([
                         { id: 'assets' as const, label: '资产', icon: Package, count: subjects.length },
                         { id: 'media' as const, label: '媒体', icon: Clapperboard, count: mediaAssets.length },
@@ -1299,12 +1299,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 onClick={() => setLibraryTab(item.id)}
                                 className={clsx(
                                     'inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition',
-                                    active ? 'bg-slate-950 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+                                    active ? 'bg-[rgb(var(--color-text-primary))] text-white' : 'text-[rgb(var(--color-text-secondary))] hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]'
                                 )}
                             >
                                 <Icon className="h-3.5 w-3.5" />
                                 {item.label}
-                                <span className={clsx('text-[10px]', active ? 'text-white/70' : 'text-slate-400')}>{item.count}</span>
+                                <span className={clsx('text-[10px]', active ? 'text-white/70' : 'text-[rgb(var(--color-text-tertiary))]')}>{item.count}</span>
                             </button>
                         );
                     })}
@@ -1312,7 +1312,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             )}
 
             {showAssetControls && (
-            <div className={clsx('flex min-h-[48px] items-end border-b border-slate-200', isModalVariant ? 'mx-5' : 'mx-8')}>
+            <div className={clsx('flex min-h-[48px] items-end border-b border-[rgb(var(--color-border))]', isModalVariant ? 'mx-5' : 'mx-8')}>
                 <div className="flex min-w-0 flex-1 items-end gap-6 overflow-x-auto no-scrollbar">
                     {categoryTabs.map((item) => {
                         const active = categoryFilter === item.id;
@@ -1327,8 +1327,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 className={clsx(
                                     'inline-flex h-10 items-center gap-2 border-b-2 px-0 pb-3 text-sm font-semibold transition-colors',
                                     active
-                                        ? 'border-black text-slate-950'
-                                        : 'border-transparent text-slate-500 hover:text-slate-800',
+                                        ? 'border-black text-[rgb(var(--color-text-primary))]'
+                                        : 'border-transparent text-[rgb(var(--color-text-secondary))] hover:text-[rgb(var(--color-text-primary))]',
                                     item.disabled && 'cursor-wait opacity-50'
                                 )}
                             >
@@ -1339,7 +1339,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     })}
                     <button
                         onClick={openCreateCategoryDialog}
-                        className="mb-3 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                        className="mb-3 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[rgb(var(--color-text-secondary))] transition hover:bg-[rgb(var(--color-surface-secondary))] hover:text-[rgb(var(--color-text-primary))]"
                         aria-label="新建分类"
                         title="新建分类"
                     >
@@ -1347,17 +1347,17 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                     </button>
                 </div>
                 <div className="mb-3 ml-auto flex shrink-0 items-center gap-4">
-                    <div className="hidden items-center gap-1.5 text-xs font-medium text-slate-500 md:inline-flex">
+                    <div className="hidden items-center gap-1.5 text-xs font-medium text-[rgb(var(--color-text-secondary))] md:inline-flex">
                         <CalendarClock className="h-4 w-4" />
                         按时间倒序展示
                     </div>
-                    <div className="h-4 w-px bg-slate-200" />
+                    <div className="h-4 w-px bg-[rgb(var(--color-surface-tertiary))]" />
                     <button
                         type="button"
                         onClick={() => setFilterOpen((value) => !value)}
                         className={clsx(
-                            'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-slate-800 transition',
-                            filterOpen || query ? 'bg-slate-200' : 'bg-slate-100 hover:bg-slate-200'
+                            'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition',
+                            filterOpen || query ? 'bg-[rgb(var(--color-surface-tertiary))]' : 'bg-[rgb(var(--color-surface-secondary))] hover:bg-[rgb(var(--color-surface-tertiary))]'
                         )}
                     >
                         <SlidersHorizontal className="h-4 w-4" />
@@ -1369,14 +1369,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
             )}
 
             {filterOpen && (
-                <div className={clsx('border-b border-slate-200 py-3', isModalVariant ? 'mx-5' : 'mx-8')}>
+                <div className={clsx('border-b border-[rgb(var(--color-border))] py-3', isModalVariant ? 'mx-5' : 'mx-8')}>
                     <div className="relative max-w-[420px]">
-                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                        <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[rgb(var(--color-text-tertiary))]" />
                         <input
                             value={query}
                             onChange={(event) => setQuery(event.target.value)}
                             placeholder={activeLibraryTab === 'media' ? '搜索媒体标题、项目、稿件、路径' : '搜索名称、标签、属性、描述'}
-                            className="h-9 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-slate-400"
+                            className="h-9 w-full rounded-lg border border-[rgb(var(--color-border))] bg-white pl-10 pr-3 text-sm text-[rgb(var(--color-text-primary))] outline-none transition focus:border-[rgb(var(--color-border))]"
                         />
                     </div>
                 </div>
@@ -1391,9 +1391,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
                 {activeLibraryTab === 'media' ? (
                     loading && mediaAssets.length === 0 ? (
-                        <div className="text-sm text-slate-500">媒体加载中...</div>
+                        <div className="text-sm text-[rgb(var(--color-text-secondary))]">媒体加载中...</div>
                     ) : filteredMediaAssets.length === 0 ? (
-                        <div className={clsx('flex flex-col items-center justify-center text-center text-slate-500', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
+                        <div className={clsx('flex flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
                             <Clapperboard className="mb-4 h-12 w-12 stroke-[1.8]" />
                             <div className="text-sm font-medium">暂无媒体</div>
                         </div>
@@ -1437,7 +1437,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             })}
                         </div>
                     ) : (
-                        <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
+                        <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
                             {filteredMediaAssets.map((asset) => {
                                 const previewUrl = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
                                 const source = normalizeMediaSource(asset.source);
@@ -1446,9 +1446,9 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         key={asset.id}
                                         type="button"
                                         onClick={() => void window.ipcRenderer.invoke('media:open', { assetId: asset.id })}
-                                        className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-slate-50"
+                                        className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
                                     >
-                                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                                        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
                                             {previewUrl && asset.exists ? (
                                                 isVideoAsset(asset) ? (
                                                     <video src={previewUrl} className="h-full w-full bg-black object-cover" muted playsInline preload="metadata" />
@@ -1456,19 +1456,19 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     <img src={previewUrl} alt={asset.title || asset.id} className="h-full w-full object-cover" />
                                                 )
                                             ) : (
-                                                <div className="flex h-full w-full items-center justify-center text-slate-400">
+                                                <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
                                                     <Clapperboard className="h-5 w-5" />
                                                 </div>
                                             )}
                                         </div>
                                         <div className="min-w-0 flex-1">
-                                            <div className="truncate text-xs font-semibold text-slate-900">{asset.title || asset.id}</div>
-                                            <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                                            <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{asset.title || asset.id}</div>
+                                            <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
                                                 {MEDIA_SOURCE_LABEL[source]} · {asset.projectId || '未设置项目ID'}
                                                 {asset.boundManuscriptPath ? ` · ${asset.boundManuscriptPath}` : ''}
                                             </div>
                                         </div>
-                                        <div className="hidden text-xs text-slate-400 md:block">
+                                        <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
                                             {formatAssetDate(asset.updatedAt || asset.createdAt)}
                                         </div>
                                     </button>
@@ -1477,12 +1477,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         </div>
                     )
                 ) : loading && subjects.length === 0 && categories.length === 0 ? (
-                    <div className="text-sm text-slate-500">资产库加载中...</div>
+                    <div className="text-sm text-[rgb(var(--color-text-secondary))]">资产库加载中...</div>
                 ) : filteredSubjects.length === 0 ? (
-                    <div className={clsx('flex flex-col items-center justify-center text-center text-slate-500', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
+                    <div className={clsx('flex flex-col items-center justify-center text-center text-[rgb(var(--color-text-secondary))]', isModalVariant ? 'min-h-[360px]' : 'min-h-[54vh]')}>
                         <CalendarClock className="mb-4 h-12 w-12 stroke-[1.8]" />
                         <div className="text-sm font-medium">暂无数据，尝试刷新</div>
-                        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-xs text-slate-500">已加载全部</div>
+                        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 text-xs text-[rgb(var(--color-text-secondary))]">已加载全部</div>
                     </div>
                 ) : viewMode === 'grid' ? (
                     <div className={clsx('grid gap-3', isModalVariant ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5')}>
@@ -1549,7 +1549,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                         })}
                     </div>
                 ) : (
-                    <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
+                    <div className="divide-y divide-[rgb(var(--color-border))] rounded-xl border border-[rgb(var(--color-border))] bg-white">
                         {filteredSubjects.map((subject) => {
                             const voiceInfo = subjectVoiceInfo(subject, voiceJobsById[subjectVoiceString(subject, ['jobId'])]);
                             return (
@@ -1557,25 +1557,25 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                 key={subject.id}
                                 type="button"
                                 onClick={() => openEditModal(subject)}
-                                className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-slate-50"
+                                className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-[rgb(var(--color-surface-primary))]"
                             >
-                                <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-slate-100">
+                                <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
                                     {subject.primaryPreviewUrl ? (
                                         <img src={resolveAssetUrl(subject.primaryPreviewUrl)} alt={subject.name} className="h-full w-full object-cover" />
                                     ) : (
-                                        <div className="flex h-full w-full items-center justify-center text-slate-400">
+                                        <div className="flex h-full w-full items-center justify-center text-[rgb(var(--color-text-tertiary))]">
                                             <Package className="h-5 w-5" />
                                         </div>
                                     )}
                                 </div>
                                 <div className="min-w-0 flex-1">
-                                    <div className="truncate text-xs font-semibold text-slate-900">{subject.name}</div>
-                                    <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                                    <div className="truncate text-xs font-semibold text-[rgb(var(--color-text-primary))]">{subject.name}</div>
+                                    <div className="mt-0.5 truncate text-[11px] text-[rgb(var(--color-text-secondary))]">
                                         {categoryNameMap.get(subject.categoryId || '') || '未分类'}
                                         {subject.description ? ` · ${subject.description}` : ''}
                                     </div>
                                 </div>
-                                <div className="hidden text-xs text-slate-400 md:block">
+                                <div className="hidden text-xs text-[rgb(var(--color-text-tertiary))] md:block">
                                     {new Date(subject.updatedAt).toLocaleDateString()}
                                 </div>
                                 <div className={clsx('hidden rounded-md border px-2 py-1 text-[11px] md:block', voiceInfoClassName(voiceInfo.tone))}>
@@ -1592,13 +1592,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4">
                     <div className="flex max-h-[88vh] w-full max-w-[960px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
                         <div className="flex items-center justify-between px-8 pb-4 pt-6">
-                            <h2 className="text-xl font-semibold leading-none text-slate-950">
+                            <h2 className="text-xl font-semibold leading-none text-[rgb(var(--color-text-primary))]">
                                 {draft.id ? `编辑${draftEntityLabel}` : `新建${draftEntityLabel}`}
                             </h2>
                             <button
                                 type="button"
                                 onClick={closeModal}
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-slate-950 transition hover:bg-slate-100"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]"
                                 aria-label="关闭"
                             >
                                 <X className="h-5 w-5" />
@@ -1615,7 +1615,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                             <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
                                 <div className="space-y-4">
                                     <div className="block">
-                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">类别</div>
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">类别</div>
                                         <div className="flex gap-2">
                                             <div className="relative flex-1">
                                                 <button
@@ -1625,20 +1625,20 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                         'flex h-10 w-full items-center justify-between gap-3 rounded-lg border px-3 text-left text-sm transition',
                                                         isDraftCategoryMenuOpen
                                                             ? 'border-violet-400 bg-white ring-2 ring-violet-500/15'
-                                                            : 'border-transparent bg-slate-100 hover:bg-slate-200/70'
+                                                            : 'border-transparent bg-[rgb(var(--color-surface-secondary))] hover:bg-[rgb(var(--color-surface-tertiary))]/70'
                                                     )}
                                                 >
                                                     <span className="flex min-w-0 items-center gap-2">
-                                                        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white text-slate-500 shadow-sm">
+                                                        <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white text-[rgb(var(--color-text-secondary))] shadow-sm">
                                                             <SelectedDraftCategoryIcon className="h-3.5 w-3.5" />
                                                         </span>
-                                                        <span className="truncate font-medium text-slate-900">{selectedDraftCategory.name}</span>
+                                                        <span className="truncate font-medium text-[rgb(var(--color-text-primary))]">{selectedDraftCategory.name}</span>
                                                     </span>
-                                                    <ChevronDown className={clsx('h-4 w-4 shrink-0 text-slate-400 transition-transform', isDraftCategoryMenuOpen && 'rotate-180')} />
+                                                    <ChevronDown className={clsx('h-4 w-4 shrink-0 text-[rgb(var(--color-text-tertiary))] transition-transform', isDraftCategoryMenuOpen && 'rotate-180')} />
                                                 </button>
 
                                                 {isDraftCategoryMenuOpen && (
-                                                    <div className="absolute left-0 right-0 top-full z-[140] mt-1.5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
+                                                    <div className="absolute left-0 right-0 top-full z-[140] mt-1.5 overflow-hidden rounded-xl border border-[rgb(var(--color-border))] bg-white shadow-[0_18px_50px_rgba(15,23,42,0.16)]">
                                                         <div className="max-h-60 overflow-y-auto p-1">
                                                             {draftCategoryOptions.map((category) => {
                                                                 const Icon = category.icon;
@@ -1653,12 +1653,12 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                                         }}
                                                                         className={clsx(
                                                                             'flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm transition',
-                                                                            selected ? 'bg-violet-50 text-violet-700' : 'text-slate-700 hover:bg-slate-50'
+                                                                            selected ? 'bg-violet-50 text-violet-700' : 'text-[rgb(var(--color-text-primary))] hover:bg-[rgb(var(--color-surface-primary))]'
                                                                         )}
                                                                     >
                                                                         <span className={clsx(
                                                                             'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md',
-                                                                            selected ? 'bg-violet-100 text-violet-700' : 'bg-slate-100 text-slate-500'
+                                                                            selected ? 'bg-violet-100 text-violet-700' : 'bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))]'
                                                                         )}>
                                                                             <Icon className="h-3.5 w-3.5" />
                                                                         </span>
@@ -1677,7 +1677,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     setIsDraftCategoryMenuOpen(false);
                                                     openCreateCategoryDialog();
                                                 }}
-                                                className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700 transition hover:bg-slate-200"
+                                                className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]"
                                                 aria-label="新建分类"
                                                 title="新建分类"
                                             >
@@ -1685,14 +1685,14 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             </button>
                                         </div>
                                         {draft.categoryId && (
-                                            <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+                                            <div className="mt-2 flex items-center gap-2 text-xs text-[rgb(var(--color-text-secondary))]">
                                                 <button
                                                     type="button"
                                                     onClick={() => {
                                                         const category = categories.find((item) => item.id === draft.categoryId);
                                                         if (category) openRenameCategoryDialog(category);
                                                     }}
-                                                    className="transition hover:text-slate-950"
+                                                    className="transition hover:text-[rgb(var(--color-text-primary))]"
                                                 >
                                                     重命名当前分类
                                                 </button>
@@ -1712,19 +1712,19 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     </div>
 
                                     <label className="block">
-                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">
                                             {draftEntityLabel}名称 <span className="text-red-500">*</span>
                                         </div>
                                         <input
                                             value={draft.name}
                                             onChange={(event) => updateDraft({ name: event.target.value })}
                                             placeholder={`${draftEntityLabel}名称`}
-                                            className="h-10 w-full rounded-lg border border-violet-500 bg-white px-3 text-sm text-slate-900 outline-none ring-2 ring-violet-500/15 placeholder:text-slate-400 focus:ring-violet-500/20"
+                                            className="h-10 w-full rounded-lg border border-violet-500 bg-white px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none ring-2 ring-violet-500/15 placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-violet-500/20"
                                         />
                                     </label>
 
                                     <label className="block">
-                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">{draftEntityLabel}描述</div>
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">{draftEntityLabel}描述</div>
                                         <div className="relative">
                                             <textarea
                                                 value={draft.description}
@@ -1732,16 +1732,16 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 rows={5}
                                                 maxLength={200}
                                                 placeholder={`描述${draftEntityLabel}特征或用途`}
-                                                className="min-h-[92px] w-full resize-y rounded-lg border-0 bg-slate-100 px-3 py-2.5 pr-12 text-sm leading-5 text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-violet-500"
+                                                className="min-h-[92px] w-full resize-y rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 py-2.5 pr-12 text-sm leading-5 text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
                                             />
-                                            <div className="absolute bottom-2.5 right-3 text-xs text-slate-500">{draft.description.length}/200</div>
+                                            <div className="absolute bottom-2.5 right-3 text-xs text-[rgb(var(--color-text-secondary))]">{draft.description.length}/200</div>
                                         </div>
                                     </label>
 
                                     {isRoleDraft && (
                                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                             <label className="block">
-                                                <div className="mb-1.5 text-sm font-semibold text-slate-800">性别</div>
+                                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">性别</div>
                                                 <SelectMenu
                                                     value={draftAttributeValue('性别')}
                                                     onChange={(value) => handleNamedAttributeChange('性别', value)}
@@ -1755,44 +1755,44 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                 />
                                             </label>
                                             <label className="block">
-                                                <div className="mb-1.5 text-sm font-semibold text-slate-800">年龄</div>
+                                                <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">年龄</div>
                                                 <input
                                                     value={draftAttributeValue('年龄')}
                                                     onChange={(event) => handleNamedAttributeChange('年龄', event.target.value)}
                                                     placeholder="角色年龄"
-                                                    className="h-10 w-full rounded-lg border-0 bg-slate-100 px-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-violet-500"
+                                                    className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
                                                 />
                                             </label>
                                         </div>
                                     )}
 
                                     <label className="block">
-                                        <div className="mb-1.5 text-sm font-semibold text-slate-800">标签</div>
+                                        <div className="mb-1.5 text-sm font-semibold text-[rgb(var(--color-text-primary))]">标签</div>
                                         <div className="relative">
-                                            <Tag className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                                            <Tag className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[rgb(var(--color-text-tertiary))]" />
                                             <input
                                                 value={draft.tagsText}
                                                 onChange={(event) => updateDraft({ tagsText: event.target.value })}
                                                 placeholder="多个标签用逗号分隔"
-                                                className="h-10 w-full rounded-lg border-0 bg-slate-100 pl-9 pr-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-violet-500"
+                                                className="h-10 w-full rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] pl-9 pr-3 text-sm text-[rgb(var(--color-text-primary))] outline-none placeholder:text-[rgb(var(--color-text-tertiary))] focus:ring-2 focus:ring-violet-500"
                                             />
                                         </div>
                                     </label>
 
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between">
-                                            <div className="text-sm font-semibold text-slate-800">扩展属性</div>
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">扩展属性</div>
                                             <button
                                                 type="button"
                                                 onClick={handleAddAttribute}
-                                                className="inline-flex h-8 items-center gap-1 rounded-lg bg-slate-100 px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200"
+                                                className="inline-flex h-8 items-center gap-1 rounded-lg bg-[rgb(var(--color-surface-secondary))] px-2.5 text-xs font-medium text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]"
                                             >
                                                 <Plus className="h-3.5 w-3.5" />
                                                 添加
                                             </button>
                                         </div>
                                         {visibleDraftAttributes.length === 0 ? (
-                                            <div className="rounded-lg border border-dashed border-slate-200 px-3 py-2.5 text-xs text-slate-500">
+                                            <div className="rounded-lg border border-dashed border-[rgb(var(--color-border))] px-3 py-2.5 text-xs text-[rgb(var(--color-text-secondary))]">
                                                 可添加颜色、材质、职业、人设、价格区间等结构化信息。
                                             </div>
                                         ) : (
@@ -1803,18 +1803,18 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                             value={attribute.key}
                                                             onChange={(event) => handleAttributeChange(index, { key: event.target.value })}
                                                             placeholder="属性名"
-                                                            className="h-9 rounded-lg border-0 bg-slate-100 px-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-violet-500"
+                                                            className="h-9 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
                                                         />
                                                         <input
                                                             value={attribute.value}
                                                             onChange={(event) => handleAttributeChange(index, { value: event.target.value })}
                                                             placeholder="属性值"
-                                                            className="h-9 rounded-lg border-0 bg-slate-100 px-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-violet-500"
+                                                            className="h-9 rounded-lg border-0 bg-[rgb(var(--color-surface-secondary))] px-3 text-sm text-[rgb(var(--color-text-primary))] outline-none focus:ring-2 focus:ring-violet-500"
                                                         />
                                                         <button
                                                             type="button"
                                                             onClick={() => handleRemoveAttribute(index)}
-                                                            className="inline-flex h-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500 transition hover:bg-red-50 hover:text-red-600"
+                                                            className="inline-flex h-9 items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-[rgb(var(--color-text-secondary))] transition hover:bg-red-50 hover:text-red-600"
                                                             aria-label="删除属性"
                                                         >
                                                             <X className="h-4 w-4" />
@@ -1827,13 +1827,13 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
                                     <div className="space-y-2">
                                         <div className="flex items-center justify-between gap-2">
-                                            <div className="text-sm font-semibold text-slate-800">{draftEntityLabel}图片</div>
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">{draftEntityLabel}图片</div>
                                             {isRoleDraft && (
                                                 <button
                                                     type="button"
                                                     onClick={() => void handleGenerateCharacterCard()}
                                                     disabled={working || generatingCardSubjectId === draft.id || draft.images.length === 0}
-                                                    className="inline-flex h-8 items-center gap-1 rounded-lg bg-slate-950 px-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    className="inline-flex h-8 items-center gap-1 rounded-lg bg-[rgb(var(--color-text-primary))] px-2.5 text-xs font-semibold text-white transition hover:bg-[rgb(var(--color-surface-elevated))] disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     <Sparkles className={clsx('h-3.5 w-3.5', generatingCardSubjectId === draft.id && 'animate-pulse')} />
                                                     {generatingCardSubjectId === draft.id ? '生成中' : '角色卡'}
@@ -1841,7 +1841,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                             )}
                                         </div>
                                         <label className={clsx(
-                                            'flex h-10 cursor-pointer items-center justify-center rounded-lg bg-slate-100 text-sm font-semibold text-slate-950 transition hover:bg-slate-200',
+                                            'flex h-10 cursor-pointer items-center justify-center rounded-lg bg-[rgb(var(--color-surface-secondary))] text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))]',
                                             draft.images.length >= 5 && 'pointer-events-none opacity-50'
                                         )}>
                                             选择图片
@@ -1859,7 +1859,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                         {draft.images.length > 0 && (
                                             <div className="grid grid-cols-6 gap-2">
                                                 {draft.images.map((image, index) => (
-                                                    <div key={`${image.relativePath || image.name}-${index}`} className="group relative aspect-video overflow-hidden rounded-lg bg-slate-100">
+                                                    <div key={`${image.relativePath || image.name}-${index}`} className="group relative aspect-video overflow-hidden rounded-lg bg-[rgb(var(--color-surface-secondary))]">
                                                         <button
                                                             type="button"
                                                             onClick={() => setPreviewImage(image)}
@@ -1883,11 +1883,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     </div>
 
                                     {isRoleDraft && (
-                                        <div className="space-y-2 rounded-xl bg-slate-50 p-4">
-                                            <div className="text-sm font-semibold text-slate-800">声音参考</div>
+                                        <div className="space-y-2 rounded-xl bg-[rgb(var(--color-surface-primary))] p-4">
+                                            <div className="text-sm font-semibold text-[rgb(var(--color-text-primary))]">声音参考</div>
                                             <div className="rounded-xl bg-white px-4 py-3">
-                                                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">朗读采样句</div>
-                                                <div className="mt-1.5 text-sm font-medium leading-6 text-slate-900">{SUBJECT_VOICE_SAMPLE_TEXT}</div>
+                                                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[rgb(var(--color-text-tertiary))]">朗读采样句</div>
+                                                <div className="mt-1.5 text-sm font-medium leading-6 text-[rgb(var(--color-text-primary))]">{SUBJECT_VOICE_SAMPLE_TEXT}</div>
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <button
@@ -1917,7 +1917,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                             : '录制音频'}
                                                 </button>
                                                 <label className={clsx(
-                                                    'inline-flex h-9 items-center rounded-lg bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100',
+                                                    'inline-flex h-9 items-center rounded-lg bg-white px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))]',
                                                     audioRecording.isRecording || audioRecording.isWorking
                                                         ? 'pointer-events-none opacity-50'
                                                         : 'cursor-pointer',
@@ -1948,11 +1948,11 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                     已录 {voiceRecordingElapsedSeconds} 秒
                                                 </div>
                                             )}
-                                            {recordingHint && <div className="text-xs text-slate-500">{recordingHint}</div>}
+                                            {recordingHint && <div className="text-xs text-[rgb(var(--color-text-secondary))]">{recordingHint}</div>}
                                             {recordingError && <div className="text-xs text-red-600">{recordingError}</div>}
                                             {draft.voice?.previewUrl && (
                                                 <div className="space-y-2 rounded-lg bg-white px-3 py-2.5">
-                                                    <div className="text-xs text-slate-500">{draft.voice.name}</div>
+                                                    <div className="text-xs text-[rgb(var(--color-text-secondary))]">{draft.voice.name}</div>
                                                     <audio controls src={resolveAssetUrl(draft.voice.previewUrl)} className="w-full" />
                                                 </div>
                                             )}
@@ -1962,7 +1962,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                                         type="button"
                                                         onClick={() => void handleRetryVoiceClone(activeDraftSubject)}
                                                         disabled={!activeDraftVoiceInfo.canRetry || retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active'}
-                                                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-secondary))] disabled:cursor-not-allowed disabled:opacity-50"
                                                     >
                                                         <RefreshCw className={clsx('h-3.5 w-3.5', (retryingVoiceSubjectId === activeDraftSubject.id || activeDraftVoiceInfo.tone === 'active') && 'animate-spin')} />
                                                         {retryingVoiceSubjectId === activeDraftSubject.id
@@ -1988,31 +1988,31 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     )}
                                 </div>
 
-                                <aside className="h-fit rounded-2xl bg-slate-100 p-4">
-                                    <div className="mb-3 text-base font-semibold text-slate-800">{draft.id ? '编辑预览' : '新增预览'}</div>
+                                <aside className="h-fit rounded-2xl bg-[rgb(var(--color-surface-secondary))] p-4">
+                                    <div className="mb-3 text-base font-semibold text-[rgb(var(--color-text-primary))]">{draft.id ? '编辑预览' : '新增预览'}</div>
                                     <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-white">
                                         {draftPreviewImage ? (
                                             <img src={resolveAssetUrl(draftPreviewImage)} alt={draft.name || draftEntityLabel} className="h-full w-full object-cover" />
                                         ) : (
-                                            <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
+                                            <div className="flex items-center gap-2 text-sm font-medium text-[rgb(var(--color-text-secondary))]">
                                                 <ImagePlus className="h-5 w-5" />
                                                 暂无封面
                                             </div>
                                         )}
                                     </div>
                                     <div className="mt-4 space-y-2">
-                                        <div className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                                        <div className="flex items-center gap-1.5 text-xs font-medium text-[rgb(var(--color-text-secondary))]">
                                             <span className="rounded-full bg-white px-2 py-0.5">{draftCategoryName || '未分类'}</span>
                                             <span>{draft.images.length}/5 张图片</span>
                                             {isRoleDraft && <span>{draft.voice?.previewUrl ? '有声音' : '未录音'}</span>}
                                         </div>
-                                        <div className="text-base font-semibold text-slate-900">{draft.name || `${draftEntityLabel}名称`}</div>
-                                        <div className="min-h-[36px] text-xs leading-5 text-slate-500">
+                                        <div className="text-base font-semibold text-[rgb(var(--color-text-primary))]">{draft.name || `${draftEntityLabel}名称`}</div>
+                                        <div className="min-h-[36px] text-xs leading-5 text-[rgb(var(--color-text-secondary))]">
                                             {draft.description || `选择图片后实时查看${draftEntityLabel}素材预览`}
                                         </div>
                                     </div>
                                     {draft.id && (
-                                        <div className="mt-4 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-slate-500">
+                                        <div className="mt-4 space-y-1 rounded-lg bg-white px-3 py-2 text-[11px] leading-5 text-[rgb(var(--color-text-secondary))]">
                                             <div>ID：{draft.id}</div>
                                             {activeDraftVoiceInfo?.voiceId && (
                                                 <div>音色ID：<span className="font-mono">{activeDraftVoiceInfo.voiceId}</span></div>
@@ -2042,7 +2042,7 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                                     type="button"
                                     onClick={closeModal}
                                     disabled={working}
-                                    className="h-9 rounded-lg bg-slate-100 px-5 text-sm font-semibold text-slate-950 transition hover:bg-slate-200 disabled:opacity-60"
+                                    className="h-9 rounded-lg bg-[rgb(var(--color-surface-secondary))] px-5 text-sm font-semibold text-[rgb(var(--color-text-primary))] transition hover:bg-[rgb(var(--color-surface-tertiary))] disabled:opacity-60"
                                 >
                                     取消
                                 </button>

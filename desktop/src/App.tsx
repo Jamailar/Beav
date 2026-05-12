@@ -1060,7 +1060,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
               <button
                 onClick={() => void confirmCaptureFromClipboard()}
                 disabled={captureStatus === 'saving'}
-                className="h-9 px-4 rounded-md bg-red-600 text-white text-sm hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-2"
+                className="h-9 px-4 rounded-md bg-[rgb(var(--color-accent-primary))] text-white text-sm hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-50 inline-flex items-center gap-2"
               >
                 {captureStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
                 {t('app.confirmCapture')}
@@ -1375,8 +1375,8 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
 
   return (
     <>
-      <div className="min-h-screen overflow-hidden bg-[#f7fbfb] text-slate-950">
-        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_85%,rgba(80,215,191,0.26),transparent_34%),radial-gradient(circle_at_32%_45%,rgba(158,230,207,0.18),transparent_28%),linear-gradient(135deg,#f9fbfb_0%,#ffffff_52%,#f6faf9_100%)]" />
+      <div className="min-h-screen overflow-hidden bg-[rgb(var(--color-background))] text-slate-950">
+        <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_85%,rgb(var(--color-accent-primary)/0.18),transparent_34%),radial-gradient(circle_at_32%_45%,rgb(var(--color-accent-muted)/0.5),transparent_28%),linear-gradient(135deg,rgb(var(--color-background))_0%,rgb(var(--color-surface-primary))_52%,rgb(var(--color-surface-secondary))_100%)]" />
         <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[1fr_520px]">
           <section className="hidden lg:flex min-h-screen flex-col justify-center px-[11vw]">
             <div className="relative h-[420px] w-[360px]">
@@ -1394,7 +1394,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
               The AI content workspace that helps your ideas <span className="font-semibold text-emerald-500">thrive.</span>
             </p>
             <div className="absolute bottom-10 left-12 flex items-center gap-2 text-xs text-slate-500">
-              <ShieldCheck className="h-4 w-4 text-emerald-500" />
+              <ShieldCheck className="h-4 w-4 text-[rgb(var(--color-accent-primary))]" />
               Your data is encrypted and secure.
             </div>
           </section>
@@ -1469,7 +1469,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                       <button
                         type="submit"
                         disabled={authBusy}
-                        className="h-12 w-full rounded-xl bg-emerald-500 text-sm font-medium text-white shadow-[0_14px_28px_rgba(16,185,129,0.22)] transition hover:bg-emerald-600 disabled:opacity-60"
+                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgba(16,185,129,0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
                       >
                         {smsBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '登录 / 注册'}
                       </button>
