@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SetStateAction } from 'react';
 import { Save, RefreshCw, AlertCircle, FolderOpen, Wrench, Download, LayoutGrid, Cpu, Trash2, Eye, EyeOff, Info, Plus, Star, ChevronDown, Check, FileText, FlaskConical, Users, GripVertical, Settings as SettingsIcon, ArrowLeft, Server, Store, X } from 'lucide-react';
 import clsx from 'clsx';
 import {
@@ -6,6 +6,7 @@ import {
   type AiSourcePreset,
   type AiSourceConfig,
   DEFAULT_AI_PRESET_ID,
+  OFFICIAL_AUTO_SOURCE_ID,
   findAiPresetById,
   inferPresetIdByEndpoint
 } from '../config/aiSources';
@@ -140,7 +141,7 @@ type SettingsNavigationTarget = {
   nonce?: number;
 };
 
-type AiModelRouteMode = 'inherit' | 'official' | 'custom' | 'disabled';
+type AiModelRouteMode = 'official' | 'custom' | 'disabled';
 type AiModelRouteScope =
   | 'chat'
   | 'wander'
@@ -164,18 +165,18 @@ type AiModelRouteConfig = {
 type AiModelRoutes = Record<AiModelRouteScope, AiModelRouteConfig>;
 
 const DEFAULT_AI_MODEL_ROUTES: AiModelRoutes = {
-  chat: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
-  wander: { mode: 'inherit', model: '' },
-  team: { mode: 'inherit', model: '' },
-  knowledge: { mode: 'inherit', model: '' },
-  redclaw: { mode: 'inherit', model: '' },
-  transcription: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
-  embedding: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
-  image: { mode: 'official', sourceId: 'redbox_official_auto', model: '' },
-  visualIndex: { mode: 'disabled', sourceId: 'redbox_official_auto', model: '' },
-  videoAnalysis: { mode: 'disabled', sourceId: 'redbox_official_auto', model: '' },
-  voiceTts: { mode: 'official', sourceId: 'redbox_official_auto', model: 'speech-2.8-turbo' },
-  voiceClone: { mode: 'official', sourceId: 'redbox_official_auto', model: 'minimax-voice-clone' },
+  chat: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  wander: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  team: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  knowledge: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  redclaw: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  transcription: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  embedding: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  image: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  visualIndex: { mode: 'disabled', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  videoAnalysis: { mode: 'disabled', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: '' },
+  voiceTts: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: 'speech-2.8-turbo' },
+  voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: 'minimax-voice-clone' },
 };
 
 type SettingsSkill = {
@@ -843,9 +844,11 @@ function normalizeAiModelRoutes(value: unknown): AiModelRoutes {
     if (!route || typeof route !== 'object') continue;
     const mode = String(route.mode || '').trim();
     next[key] = {
-      mode: mode === 'inherit' || mode === 'custom' || mode === 'disabled' || mode === 'official'
+      mode: mode === 'custom' || mode === 'disabled' || mode === 'official'
         ? mode
-        : DEFAULT_AI_MODEL_ROUTES[key].mode,
+        : mode === 'inherit'
+          ? 'official'
+          : DEFAULT_AI_MODEL_ROUTES[key].mode,
       sourceId: String(route.sourceId || '').trim() || DEFAULT_AI_MODEL_ROUTES[key].sourceId,
       model: String(route.model || '').trim() || DEFAULT_AI_MODEL_ROUTES[key].model,
     };
@@ -980,12 +983,13 @@ export function Settings({
   const [addModelModalSourceId, setAddModelModalSourceId] = useState('');
   const [isCreateAiSourceModalOpen, setIsCreateAiSourceModalOpen] = useState(false);
   const [createAiSourceDraft, setCreateAiSourceDraft] = useState<CreateAiSourceDraft>(() => createAiSourceDraftFromPreset(DEFAULT_AI_PRESET_ID));
+  const [missingCustomSourceNoticeScope, setMissingCustomSourceNoticeScope] = useState<AiModelRouteScope | null>(null);
   const [transcriptionSourceId, setTranscriptionSourceId] = useState('');
   const [embeddingSourceId, setEmbeddingSourceId] = useState('');
   const [visualIndexSourceId, setVisualIndexSourceId] = useState('');
   const [videoAnalysisSourceId, setVideoAnalysisSourceId] = useState('');
   const [imageSourceId, setImageSourceId] = useState('');
-  const [voiceSourceId, setVoiceSourceId] = useState('');
+  const [, setVoiceSourceId] = useState('');
   const [modelsBySource, setModelsBySource] = useState<Record<string, AiModelDescriptor[]>>({});
   const [fetchingModelsBySourceId, setFetchingModelsBySourceId] = useState<Record<string, boolean>>({});
   const [testStatus, setTestStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -1054,7 +1058,6 @@ export function Settings({
   const [assistantDaemonDraftDirty, setAssistantDaemonDraftDirty] = useState(false);
   const [assistantDaemonWeixinLoginBusy, setAssistantDaemonWeixinLoginBusy] = useState(false);
   const [assistantDaemonWeixinLogin, setAssistantDaemonWeixinLogin] = useState<AssistantDaemonWeixinLoginState | null>(null);
-  const [showScopedModelOverrides, setShowScopedModelOverrides] = useState(false);
   const [developerVersionTapCount, setDeveloperVersionTapCount] = useState(0);
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsPayload>(DEFAULT_NOTIFICATION_SETTINGS);
   const hasSelectedRuntimeSession = useMemo(
@@ -1561,10 +1564,6 @@ export function Settings({
     return getAiSourceById(imageSourceId);
   }, [getAiSourceById, imageSourceId]);
 
-  const selectedVoiceSource = useMemo(() => {
-    return getAiSourceById(voiceSourceId);
-  }, [getAiSourceById, voiceSourceId]);
-
   const transcriptionSourceModels = useMemo(() => {
     return selectedTranscriptionSource ? filterAiModelsByCapability(getSourceModelList(selectedTranscriptionSource), 'transcription') : [];
   }, [getSourceModelList, selectedTranscriptionSource]);
@@ -1584,33 +1583,6 @@ export function Settings({
   const imageSourceModels = useMemo(() => {
     return selectedImageSource ? filterAiModelsByCapability(getSourceModelList(selectedImageSource), 'image') : [];
   }, [getSourceModelList, selectedImageSource]);
-
-  const voiceSourceModels = useMemo(() => {
-    return selectedVoiceSource ? filterAiModelsByCapability(getSourceModelList(selectedVoiceSource), 'audio') : [];
-  }, [getSourceModelList, selectedVoiceSource]);
-
-  const allConfiguredModels = useMemo(() => {
-    const collected: string[] = [];
-    for (const source of aiSources) {
-      const models = getSourceModelList(source);
-      collected.push(...models.map((item) => item.id));
-    }
-    return normalizeSourceModels(collected);
-  }, [aiSources, getSourceModelList]);
-
-  const scopedModelOverridesCount = useMemo(() => {
-    return [
-      formData.model_name_wander,
-      formData.model_name_chatroom,
-      formData.model_name_knowledge,
-      formData.model_name_redclaw,
-    ].filter((value) => String(value || '').trim()).length;
-  }, [
-    formData.model_name_wander,
-    formData.model_name_chatroom,
-    formData.model_name_knowledge,
-    formData.model_name_redclaw,
-  ]);
 
   const addModelModalRemoteModels = useMemo(() => {
     if (!addModelModalSource) return [];
@@ -1769,7 +1741,7 @@ export function Settings({
     const sourceId = String(source.id || '').trim().toLowerCase();
     const sourceName = String(source.name || '').trim().toLowerCase();
     const presetId = String(source.presetId || '').trim().toLowerCase();
-    return sourceId === 'redbox_official_auto' || sourceName === 'redbox official' || sourceName === `${APP_BRAND.displayName} official`.toLowerCase() || presetId === 'redbox-official';
+    return sourceId === OFFICIAL_AUTO_SOURCE_ID || sourceName === 'redbox official' || sourceName === `${APP_BRAND.displayName} official`.toLowerCase() || presetId === 'redbox-official';
   }, []);
 
   const hasOfficialManagedSource = useMemo(
@@ -1783,7 +1755,7 @@ export function Settings({
     }
     return [
       {
-        id: 'redbox_official_auto',
+        id: OFFICIAL_AUTO_SOURCE_ID,
         name: `${APP_BRAND.displayName} Official`,
         presetId: 'redbox-official',
         baseURL: REDBOX_OFFICIAL_VIDEO_BASE_URL,
@@ -1815,6 +1787,12 @@ export function Settings({
     aiSources.filter((source) => !isOfficialManagedSource(source))
   ), [aiSources, isOfficialManagedSource]);
   const firstCustomAiSource = customAiSources[0] || null;
+
+  useEffect(() => {
+    if (firstCustomAiSource && missingCustomSourceNoticeScope) {
+      setMissingCustomSourceNoticeScope(null);
+    }
+  }, [firstCustomAiSource, missingCustomSourceNoticeScope]);
 
   const defaultSourceModels = useMemo(() => {
     if (!defaultAiSource) return [];
@@ -2265,9 +2243,14 @@ export function Settings({
   }, []);
 
   const applyRouteSource = useCallback((scope: AiModelRouteScope, mode: AiModelRouteMode) => {
+    if (mode === 'custom' && !firstCustomAiSource) {
+      setMissingCustomSourceNoticeScope(scope);
+      return;
+    }
+    setMissingCustomSourceNoticeScope(null);
     const source = mode === 'official' ? officialAiSource : mode === 'custom' ? firstCustomAiSource : null;
-    const nextSourceId = source?.id || (mode === 'official' ? 'redbox_official_auto' : '');
-    updateAiModelRoute(scope, { mode, sourceId: nextSourceId });
+    const nextSourceId = source?.id || (mode === 'official' ? OFFICIAL_AUTO_SOURCE_ID : '');
+    updateAiModelRoute(scope, { mode, sourceId: nextSourceId, model: '' });
     if (!source) {
       if (scope === 'visualIndex') {
         setFormData((prev) => ({ ...prev, visual_index_enabled: false }));
@@ -2300,7 +2283,7 @@ export function Settings({
   const applyRouteModel = useCallback((scope: AiModelRouteScope, modelId: string) => {
     const normalizedModel = String(modelId || '').trim();
     updateAiModelRoute(scope, { model: normalizedModel });
-    if (scope === 'chat' && defaultAiSource) {
+    if (scope === 'chat' && defaultAiSource && aiModelRoutes.chat.mode === 'custom') {
       handleSetSourceDefaultModel(defaultAiSource.id, normalizedModel);
     } else if (scope === 'wander') {
       setFormData((prev) => ({ ...prev, model_name_wander: normalizedModel }));
@@ -2325,7 +2308,7 @@ export function Settings({
     } else if (scope === 'voiceClone') {
       setFormData((prev) => ({ ...prev, voice_clone_model: normalizedModel }));
     }
-  }, [defaultAiSource, updateAiModelRoute]);
+  }, [aiModelRoutes.chat.mode, defaultAiSource, updateAiModelRoute]);
 
   const handleRemoveSourceModel = (sourceId: string, modelId: string) => {
     const normalizedModel = String(modelId || '').trim();
@@ -3778,7 +3761,7 @@ export function Settings({
 
   const handleOpenDownloadPage = useCallback(async () => {
     try {
-      const result = await window.ipcRenderer.openAppReleasePage('https://redbox.ziz.hk/download');
+      const result = await window.ipcRenderer.openAppReleasePage(APP_BRAND.downloadUrl);
       if (!result?.success) {
         void appAlert(result?.error || '打开下载页面失败');
       }
@@ -3845,7 +3828,7 @@ export function Settings({
         };
 
         const requestedDefaultSourceId = String(settings.default_ai_source_id || '').trim();
-        const prefersOfficialDefault = requestedDefaultSourceId.toLowerCase() === 'redbox_official_auto';
+        const prefersOfficialDefault = requestedDefaultSourceId.toLowerCase() === OFFICIAL_AUTO_SOURCE_ID;
         let sourceList = parseAiSources(settings.ai_sources_json).filter((source) => !isDeprecatedEmptyOpenAiSource(source));
         if (!sourceList.length && !prefersOfficialDefault && (settings.api_endpoint || settings.api_key || settings.model_name)) {
           const inferredPresetId = inferPresetIdByEndpoint(settings.api_endpoint || '');
@@ -3862,10 +3845,10 @@ export function Settings({
           }];
         }
 
-        const loadedDefaultId = requestedDefaultSourceId || sourceList[0]?.id || 'redbox_official_auto';
+        const loadedDefaultId = requestedDefaultSourceId || sourceList[0]?.id || OFFICIAL_AUTO_SOURCE_ID;
         const normalizedDefaultId = sourceList.some((source) => source.id === loadedDefaultId)
           ? loadedDefaultId
-          : (loadedDefaultId === 'redbox_official_auto' ? 'redbox_official_auto' : (sourceList[0]?.id || 'redbox_official_auto'));
+          : (loadedDefaultId === OFFICIAL_AUTO_SOURCE_ID ? OFFICIAL_AUTO_SOURCE_ID : (sourceList[0]?.id || OFFICIAL_AUTO_SOURCE_ID));
         const resolvedDefaultSource = sourceList.find((source) => source.id === normalizedDefaultId) || sourceList[0] || null;
         const resolvedTranscriptionSourceId = resolveLinkedSourceIdFromList({
           endpoint: String(settings.transcription_endpoint || settings.api_endpoint || '').trim(),
@@ -3913,7 +3896,7 @@ export function Settings({
         );
         const loadedModelRoutes = normalizeAiModelRoutes(settings.ai_model_routes_json);
         const routeSourceMode = (sourceId: string, fallback: AiModelRouteMode = 'custom'): AiModelRouteMode => (
-          sourceId === 'redbox_official_auto' ? 'official' : fallback
+          sourceId === OFFICIAL_AUTO_SOURCE_ID ? 'official' : fallback
         );
         const nextModelRoutes: AiModelRoutes = {
           ...loadedModelRoutes,
@@ -3976,13 +3959,13 @@ export function Settings({
           voiceTts: {
             ...loadedModelRoutes.voiceTts,
             mode: 'official',
-            sourceId: 'redbox_official_auto',
+            sourceId: OFFICIAL_AUTO_SOURCE_ID,
             model: String(settings.voice_tts_model || settings.tts_model || loadedModelRoutes.voiceTts.model || 'speech-2.8-turbo').trim(),
           },
           voiceClone: {
             ...loadedModelRoutes.voiceClone,
             mode: 'official',
-            sourceId: 'redbox_official_auto',
+            sourceId: OFFICIAL_AUTO_SOURCE_ID,
             model: String(settings.voice_clone_model || loadedModelRoutes.voiceClone.model || 'minimax-voice-clone').trim(),
           },
         };
@@ -3999,7 +3982,7 @@ export function Settings({
             return normalizedDefaultId;
           }
           const currentActiveId = String(prevActiveId || '').trim();
-          if (currentActiveId === 'redbox_official_auto') {
+          if (currentActiveId === OFFICIAL_AUTO_SOURCE_ID) {
             return currentActiveId;
           }
           if (currentActiveId && sourceList.some((source) => source.id === currentActiveId)) {
@@ -4013,7 +3996,7 @@ export function Settings({
           }
           const validSourceIds = new Set(sourceList.map((source) => source.id));
           return Object.fromEntries(
-            Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
+            Object.entries(prev).filter(([sourceId]) => sourceId === OFFICIAL_AUTO_SOURCE_ID || validSourceIds.has(sourceId))
           );
         });
         setFetchingModelsBySourceId((prev) => {
@@ -4022,7 +4005,7 @@ export function Settings({
           }
           const validSourceIds = new Set(sourceList.map((source) => source.id));
           return Object.fromEntries(
-            Object.entries(prev).filter(([sourceId]) => sourceId === 'redbox_official_auto' || validSourceIds.has(sourceId))
+            Object.entries(prev).filter(([sourceId]) => sourceId === OFFICIAL_AUTO_SOURCE_ID || validSourceIds.has(sourceId))
           );
         });
         setDetectedAiProtocol((resolvedDefaultSource?.protocol || findAiPresetById(resolvedDefaultSource?.presetId || '')?.protocol || 'openai') as AiProtocol);
@@ -4153,12 +4136,12 @@ export function Settings({
         if (requestId !== settingsLoadRequestRef.current) return;
         setCurrentSpaceState(DEFAULT_SPACE_ID);
         setAiSources([]);
-        setDefaultAiSourceId('redbox_official_auto');
+        setDefaultAiSourceId(OFFICIAL_AUTO_SOURCE_ID);
         setActiveAiSourceId((prevActiveId) => {
-          if (preserveViewState && String(prevActiveId || '').trim() === 'redbox_official_auto') {
+          if (preserveViewState && String(prevActiveId || '').trim() === OFFICIAL_AUTO_SOURCE_ID) {
             return prevActiveId;
           }
-          return 'redbox_official_auto';
+          return OFFICIAL_AUTO_SOURCE_ID;
         });
         setModelsBySource((prev) => (preserveRemoteModels ? prev : {}));
         setFetchingModelsBySourceId((prev) => (preserveRemoteModels ? prev : {}));
@@ -4586,7 +4569,7 @@ export function Settings({
   }, [loadThrivePlugins]);
 
   const handleUninstallThrivePlugin = useCallback(async (plugin: ThrivePluginSummary) => {
-    const confirmed = await appConfirm(`卸载 Thrive 插件“${plugin.displayName}”？\n\n插件缓存会被删除，插件数据目录会保留。`);
+    const confirmed = await appConfirm(`卸载 ${APP_BRAND.displayName} 插件”${plugin.displayName}”？\n\n插件缓存会被删除，插件数据目录会保留。`);
     if (!confirmed) return;
     setThrivePluginBusyId(plugin.id);
     setThrivePluginStatusMessage(`正在卸载 ${plugin.displayName}`);
@@ -5668,14 +5651,14 @@ export function Settings({
       const resolvedVisualIndexSource = getAiSourceById(visualIndexSourceId) || defaultSource || null;
       const resolvedVideoAnalysisSource = getAiSourceById(videoAnalysisSourceId) || defaultSource || null;
       const resolvedImageSource = getAiSourceById(imageSourceId) || defaultSource || null;
-      const resolvedVoiceSource = getAiSourceById(voiceSourceId) || defaultSource || null;
+      const resolvedVoiceSource = officialAiSource || null;
       const resolvedTranscriptionModel = String(formData.transcription_model || pickBestModelForSource(resolvedTranscriptionSource) || '').trim();
       const resolvedEmbeddingModel = String(formData.embedding_model || pickBestModelForSource(resolvedEmbeddingSource) || '').trim();
       const resolvedVisualIndexModel = String(formData.visual_index_model || pickBestVisualIndexModelForSource(resolvedVisualIndexSource) || '').trim();
       const resolvedVideoAnalysisModel = String(formData.video_analysis_model || pickBestVideoAnalysisModelForSource(resolvedVideoAnalysisSource) || '').trim();
       const resolvedImageModel = String(formData.image_model || pickBestModelForSource(resolvedImageSource) || '').trim();
-      const resolvedVoiceTtsModel = String(formData.voice_tts_model || formData.tts_model || pickBestModelForSource(resolvedVoiceSource, '', 'audio') || 'speech-2.8-turbo').trim();
-      const resolvedVoiceCloneModel = String(formData.voice_clone_model || 'minimax-voice-clone').trim();
+      const resolvedVoiceTtsModel = 'speech-2.8-turbo';
+      const resolvedVoiceCloneModel = 'minimax-voice-clone';
       const resolvedVideoModel = REDBOX_OFFICIAL_VIDEO_MODEL_LIST.includes(String(formData.video_model || '').trim() as typeof REDBOX_OFFICIAL_VIDEO_MODEL_LIST[number])
         ? String(formData.video_model || '').trim()
         : REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video'];
@@ -5730,34 +5713,97 @@ export function Settings({
       if (formData.video_analysis_enabled && (!normalizedVideoAnalysisEndpoint || !resolvedVideoAnalysisModel)) {
         throw new Error('启用视频分析专用模型时必须填写 Endpoint 和模型名');
       }
+      const routeScopedSource = (scope: AiModelRouteScope) => getRouteSource(aiModelRoutes[scope]) || officialAiSource || defaultSource || null;
+      const routeModel = (
+        scope: AiModelRouteScope,
+        value: string,
+        fallbackSource: AiSourceConfig | null,
+        fallbackPicker: (source: AiSourceConfig | null, preferred?: string) => string,
+      ) => {
+        const mode = aiModelRoutes[scope].mode;
+        if (mode === 'disabled') return '';
+        const explicitModel = mode === 'official'
+          ? String(aiModelRoutes[scope].model || '').trim()
+          : String(aiModelRoutes[scope].model || value || '').trim();
+        if (explicitModel) return explicitModel;
+        return String(fallbackPicker(fallbackSource) || '').trim();
+      };
+      const routeChatModel = (scope: AiModelRouteScope, value: string) => routeModel(
+        scope,
+        value,
+        routeScopedSource(scope),
+        (source) => pickBestModelForSource(source, '', 'chat'),
+      );
+      const routeTranscriptionModel = routeModel(
+        'transcription',
+        resolvedTranscriptionModel,
+        resolvedTranscriptionSource,
+        (source) => pickBestModelForSource(source, '', 'transcription'),
+      );
+      const routeEmbeddingModel = routeModel(
+        'embedding',
+        resolvedEmbeddingModel,
+        resolvedEmbeddingSource,
+        (source) => pickBestModelForSource(source, '', 'embedding'),
+      );
+      const routeImageModel = routeModel(
+        'image',
+        resolvedImageModel,
+        resolvedImageSource,
+        (source) => pickBestModelForSource(source, '', 'image'),
+      );
+      const routeVisualIndexModel = routeModel(
+        'visualIndex',
+        resolvedVisualIndexModel,
+        resolvedVisualIndexSource,
+        pickBestVisualIndexModelForSource,
+      );
+      const routeVideoAnalysisModel = routeModel(
+        'videoAnalysis',
+        resolvedVideoAnalysisModel,
+        resolvedVideoAnalysisSource,
+        pickBestVideoAnalysisModelForSource,
+      );
+      const routeVoiceTtsModel = routeModel(
+        'voiceTts',
+        resolvedVoiceTtsModel,
+        resolvedVoiceSource,
+        (source) => pickBestModelForSource(source, '', 'audio') || 'speech-2.8-turbo',
+      ) || 'speech-2.8-turbo';
+      const routeVoiceCloneModel = routeModel(
+        'voiceClone',
+        resolvedVoiceCloneModel,
+        resolvedVoiceSource,
+        (source) => pickBestModelForSource(source, '', 'audio') || 'minimax-voice-clone',
+      ) || 'minimax-voice-clone';
       const normalizedModelRoutes: AiModelRoutes = {
         ...aiModelRoutes,
         chat: {
           ...aiModelRoutes.chat,
           sourceId: resolvedDefaultSourceId || defaultSource?.id || '',
-          model: resolvedModelName,
+          model: routeChatModel('chat', resolvedModelName),
         },
-        wander: { ...aiModelRoutes.wander, model: String(formData.model_name_wander || '').trim() },
-        team: { ...aiModelRoutes.team, model: String(formData.model_name_chatroom || '').trim() },
-        knowledge: { ...aiModelRoutes.knowledge, model: String(formData.model_name_knowledge || '').trim() },
-        redclaw: { ...aiModelRoutes.redclaw, model: String(formData.model_name_redclaw || '').trim() },
-        transcription: { ...aiModelRoutes.transcription, sourceId: resolvedTranscriptionSource?.id || '', model: resolvedTranscriptionModel },
-        embedding: { ...aiModelRoutes.embedding, sourceId: resolvedEmbeddingSource?.id || '', model: resolvedEmbeddingModel },
-        image: { ...aiModelRoutes.image, sourceId: resolvedImageSource?.id || '', model: resolvedImageModel },
+        wander: { ...aiModelRoutes.wander, model: routeChatModel('wander', formData.model_name_wander) },
+        team: { ...aiModelRoutes.team, model: routeChatModel('team', formData.model_name_chatroom) },
+        knowledge: { ...aiModelRoutes.knowledge, model: routeChatModel('knowledge', formData.model_name_knowledge) },
+        redclaw: { ...aiModelRoutes.redclaw, model: routeChatModel('redclaw', formData.model_name_redclaw) },
+        transcription: { ...aiModelRoutes.transcription, sourceId: resolvedTranscriptionSource?.id || '', model: routeTranscriptionModel },
+        embedding: { ...aiModelRoutes.embedding, sourceId: resolvedEmbeddingSource?.id || '', model: routeEmbeddingModel },
+        image: { ...aiModelRoutes.image, sourceId: resolvedImageSource?.id || '', model: routeImageModel },
         visualIndex: {
           ...aiModelRoutes.visualIndex,
           mode: formData.visual_index_enabled ? aiModelRoutes.visualIndex.mode === 'disabled' ? 'official' : aiModelRoutes.visualIndex.mode : 'disabled',
           sourceId: resolvedVisualIndexSource?.id || '',
-          model: resolvedVisualIndexModel,
+          model: routeVisualIndexModel,
         },
         videoAnalysis: {
           ...aiModelRoutes.videoAnalysis,
           mode: formData.video_analysis_enabled ? aiModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : aiModelRoutes.videoAnalysis.mode : 'disabled',
           sourceId: resolvedVideoAnalysisSource?.id || '',
-          model: resolvedVideoAnalysisModel,
+          model: routeVideoAnalysisModel,
         },
-        voiceTts: { mode: 'official', sourceId: 'redbox_official_auto', model: resolvedVoiceTtsModel },
-        voiceClone: { mode: 'official', sourceId: 'redbox_official_auto', model: resolvedVoiceCloneModel },
+        voiceTts: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: routeVoiceTtsModel },
+        voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: routeVoiceCloneModel },
       };
       const parsedParserTimeoutSeconds = Number(formData.parser_timeout_seconds);
       const parserTimeoutSeconds = Number.isFinite(parsedParserTimeoutSeconds)
@@ -5776,24 +5822,24 @@ export function Settings({
         api_endpoint: resolvedApiEndpoint,
         api_key: resolvedApiKey,
         model_name: resolvedModelName,
-        model_name_wander: String(formData.model_name_wander || '').trim(),
-        model_name_chatroom: String(formData.model_name_chatroom || '').trim(),
-        model_name_knowledge: String(formData.model_name_knowledge || '').trim(),
-        model_name_redclaw: String(formData.model_name_redclaw || '').trim(),
+        model_name_wander: routeChatModel('wander', formData.model_name_wander),
+        model_name_chatroom: routeChatModel('team', formData.model_name_chatroom),
+        model_name_knowledge: routeChatModel('knowledge', formData.model_name_knowledge),
+        model_name_redclaw: routeChatModel('redclaw', formData.model_name_redclaw),
         proxy_enabled: Boolean(formData.proxy_enabled),
         proxy_url: String(formData.proxy_url || '').trim(),
         proxy_bypass: String(formData.proxy_bypass || '').trim(),
-        transcription_model: resolvedTranscriptionModel,
+        transcription_model: routeTranscriptionModel,
         transcription_endpoint: String(resolvedTranscriptionSource?.baseURL || formData.transcription_endpoint || resolvedApiEndpoint).trim(),
         transcription_key: String(resolvedTranscriptionSource?.apiKey || formData.transcription_key || '').trim(),
-        embedding_model: resolvedEmbeddingModel,
+        embedding_model: routeEmbeddingModel,
         embedding_endpoint: String(resolvedEmbeddingSource?.baseURL || formData.embedding_endpoint || resolvedApiEndpoint).trim(),
         embedding_key: String(resolvedEmbeddingSource?.apiKey || formData.embedding_key || '').trim(),
         visual_index_enabled: Boolean(formData.visual_index_enabled) && normalizedVisualIndexProvider !== 'disabled',
         visual_index_provider: normalizedVisualIndexProvider,
         visual_index_endpoint: normalizedVisualIndexEndpoint,
         visual_index_api_key: normalizedVisualIndexApiKey,
-        visual_index_model: normalizedVisualIndexModel,
+        visual_index_model: routeVisualIndexModel,
         visual_index_prompt_version: normalizeVisualIndexPromptVersion(formData.visual_index_prompt_version),
         visual_index_timeout_seconds: visualIndexTimeoutSeconds,
         visual_index_max_image_edge: visualIndexMaxImageEdge,
@@ -5804,7 +5850,7 @@ export function Settings({
         video_analysis_enabled: Boolean(formData.video_analysis_enabled),
         video_analysis_endpoint: normalizedVideoAnalysisEndpoint,
         video_analysis_api_key: normalizedVideoAnalysisApiKey,
-        video_analysis_model: resolvedVideoAnalysisModel,
+        video_analysis_model: routeVideoAnalysisModel,
         video_analysis_protocol: normalizedVideoAnalysisProtocol,
         video_analysis_max_direct_video_bytes: Number(formData.video_analysis_max_direct_video_bytes || 64 * 1024 * 1024),
         docling_endpoint: String(formData.docling_endpoint || '').trim(),
@@ -5820,13 +5866,13 @@ export function Settings({
         image_provider_template: formData.image_provider_template,
         image_endpoint: String(resolvedImageSource?.baseURL || formData.image_endpoint || '').trim(),
         image_api_key: String(resolvedImageSource?.apiKey || formData.image_api_key || '').trim(),
-        image_model: resolvedImageModel,
+        image_model: routeImageModel,
         voice_provider: 'voice',
         voice_endpoint: String(resolvedVoiceSource?.baseURL || formData.voice_endpoint || formData.api_endpoint || '').trim(),
         voice_api_key: String(resolvedVoiceSource?.apiKey || formData.voice_api_key || formData.api_key || '').trim(),
-        voice_tts_model: resolvedVoiceTtsModel,
-        tts_model: resolvedVoiceTtsModel,
-        voice_clone_model: resolvedVoiceCloneModel,
+        voice_tts_model: routeVoiceTtsModel,
+        tts_model: routeVoiceTtsModel,
+        voice_clone_model: routeVoiceCloneModel,
         video_endpoint: REDBOX_OFFICIAL_VIDEO_BASE_URL,
         video_api_key: String(formData.video_api_key || formData.api_key || '').trim(),
         video_model: resolvedVideoModel,
@@ -5893,9 +5939,79 @@ export function Settings({
     if (scope === 'image') return filterAiModelsByCapability(models, 'image');
     if (scope === 'visualIndex') return filterVisualIndexModels(models);
     if (scope === 'videoAnalysis') return filterVideoAnalysisModels(models);
-    if (scope === 'voiceTts') return filterAiModelsByCapability(models, 'audio');
+    if (scope === 'voiceTts' || scope === 'voiceClone') return filterAiModelsByCapability(models, 'audio');
     return filterAiModelsByCapability(models, 'chat');
   }, [filterVideoAnalysisModels, filterVisualIndexModels, getSourceModelList]);
+
+  const currentRouteModelValue = useCallback((scope: AiModelRouteScope): string => {
+    if (scope === 'chat') return String(aiModelRoutes.chat.model || formData.model_name || defaultAiSource?.model || '').trim();
+    if (scope === 'wander') return String(aiModelRoutes.wander.model || formData.model_name_wander || '').trim();
+    if (scope === 'team') return String(aiModelRoutes.team.model || formData.model_name_chatroom || '').trim();
+    if (scope === 'knowledge') return String(aiModelRoutes.knowledge.model || formData.model_name_knowledge || '').trim();
+    if (scope === 'redclaw') return String(aiModelRoutes.redclaw.model || formData.model_name_redclaw || '').trim();
+    if (scope === 'transcription') return String(aiModelRoutes.transcription.model || formData.transcription_model || '').trim();
+    if (scope === 'embedding') return String(aiModelRoutes.embedding.model || formData.embedding_model || '').trim();
+    if (scope === 'image') return String(aiModelRoutes.image.model || formData.image_model || '').trim();
+    if (scope === 'visualIndex') return String(aiModelRoutes.visualIndex.model || formData.visual_index_model || '').trim();
+    if (scope === 'videoAnalysis') return String(aiModelRoutes.videoAnalysis.model || formData.video_analysis_model || '').trim();
+    if (scope === 'voiceTts') return String(aiModelRoutes.voiceTts.model || formData.voice_tts_model || formData.tts_model || 'speech-2.8-turbo').trim();
+    if (scope === 'voiceClone') return String(aiModelRoutes.voiceClone.model || formData.voice_clone_model || 'minimax-voice-clone').trim();
+    return '';
+  }, [
+    aiModelRoutes,
+    defaultAiSource?.model,
+    formData.embedding_model,
+    formData.image_model,
+    formData.model_name,
+    formData.model_name_chatroom,
+    formData.model_name_knowledge,
+    formData.model_name_redclaw,
+    formData.model_name_wander,
+    formData.transcription_model,
+    formData.tts_model,
+    formData.video_analysis_model,
+    formData.visual_index_model,
+    formData.voice_clone_model,
+    formData.voice_tts_model,
+  ]);
+
+  const fallbackOfficialRouteModel = useCallback((scope: AiModelRouteScope, preferredModel = ''): string => {
+    if (scope === 'voiceTts') return 'speech-2.8-turbo';
+    if (scope === 'voiceClone') return 'minimax-voice-clone';
+    if (scope === 'transcription') return pickBestModelForSource(officialAiSource, preferredModel, 'transcription') || 'step-asr';
+    if (scope === 'embedding') return pickBestModelForSource(officialAiSource, preferredModel, 'embedding') || 'text-embedding-3-small';
+    if (scope === 'image') return pickBestModelForSource(officialAiSource, preferredModel, 'image') || 'gpt-image-1';
+    if (scope === 'visualIndex') return pickBestVisualIndexModelForSource(officialAiSource, preferredModel) || pickBestModelForSource(officialAiSource, preferredModel, 'chat');
+    if (scope === 'videoAnalysis') return pickBestVideoAnalysisModelForSource(officialAiSource, preferredModel) || pickBestModelForSource(officialAiSource, preferredModel, 'chat');
+    return pickBestModelForSource(officialAiSource, preferredModel, 'chat') || String(defaultAiSource?.model || formData.model_name || '').trim();
+  }, [
+    defaultAiSource?.model,
+    formData.model_name,
+    officialAiSource,
+    pickBestModelForSource,
+    pickBestVideoAnalysisModelForSource,
+    pickBestVisualIndexModelForSource,
+  ]);
+
+  const effectiveRouteModelValue = useCallback((scope: AiModelRouteScope): string => {
+    if (aiModelRoutes[scope].mode === 'official') {
+      const officialModel = String(aiModelRoutes[scope].model || '').trim();
+      return officialModel || fallbackOfficialRouteModel(scope);
+    }
+    return currentRouteModelValue(scope);
+  }, [aiModelRoutes, currentRouteModelValue, fallbackOfficialRouteModel]);
+
+  const routeModelSelectOptions = useCallback((models: AiModelDescriptor[], value: string) => {
+    const normalizedValue = String(value || '').trim();
+    const options = models.map((model) => ({
+      id: model.id,
+      label: model.id,
+    }));
+    if (normalizedValue && !options.some((item) => item.id === normalizedValue)) {
+      options.unshift({ id: normalizedValue, label: normalizedValue });
+    }
+    return options;
+  }, []);
 
   const renderRouteModeButton = (
     scope: AiModelRouteScope,
@@ -5912,7 +6028,7 @@ export function Settings({
         disabled={disabled}
         onClick={() => applyRouteSource(scope, mode)}
         className={clsx(
-          'h-8 rounded-md px-2.5 text-xs font-medium transition-colors',
+          'h-8 rounded-md px-2 text-xs font-medium transition-colors',
           active
             ? 'bg-surface-primary text-text-primary shadow-sm'
             : 'text-text-tertiary hover:bg-surface-primary/70 hover:text-text-primary',
@@ -5924,58 +6040,90 @@ export function Settings({
     );
   };
 
-  const renderModelRouteRow = (params: {
-    scope: AiModelRouteScope;
-    label: string;
-    value: string;
-    fixedOfficial?: boolean;
-    allowInherit?: boolean;
-    allowDisabled?: boolean;
-  }) => {
-    const route = aiModelRoutes[params.scope];
-    const source = getRouteSource(route);
-    const options = routeModelOptions(params.scope, source);
-    const disabled = route.mode === 'disabled' || route.mode === 'inherit' || params.fixedOfficial;
-    const selectedValue = params.value || route.model || '';
-    const customDisabled = !firstCustomAiSource;
-    const officialDisabled = !officialAuthLoggedIn && !params.fixedOfficial;
-
-    return (
-      <div key={params.scope} className="grid grid-cols-[minmax(112px,0.8fr)_minmax(210px,1fr)_minmax(220px,1.2fr)] items-center gap-3 border-t border-border/70 px-3 py-2.5 first:border-t-0">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-text-primary">{params.label}</div>
-          {route.mode === 'official' && officialAuthNeedsLogin && !params.fixedOfficial && (
-            <div className="mt-0.5 text-[11px] text-amber-600">需要登录</div>
-          )}
-        </div>
-        <div className="inline-grid w-fit grid-flow-col gap-1 rounded-lg border border-border bg-surface-secondary/50 p-1">
-          {params.allowDisabled && renderRouteModeButton(params.scope, 'disabled', '关闭')}
-          {params.allowInherit && renderRouteModeButton(params.scope, 'inherit', '跟随默认')}
-          {renderRouteModeButton(params.scope, 'official', '官方', officialDisabled)}
-          {!params.fixedOfficial && renderRouteModeButton(params.scope, 'custom', '自定义', customDisabled)}
-        </div>
-        {params.fixedOfficial ? (
-          <div className="truncate rounded-md border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary">
-            {selectedValue || '官方自动管理'}
-          </div>
-        ) : (
-          <AiModelSelect
-            value={selectedValue}
-            onChange={(modelId) => applyRouteModel(params.scope, modelId)}
-            disabled={disabled || !options.length}
-            placeholder={route.mode === 'inherit' ? '跟随默认模型' : route.mode === 'disabled' ? '已关闭' : '请选择模型'}
-            className="w-full"
-            options={options.map((model) => ({
-              id: model.id,
-              label: model.id,
-              badges: buildModelCapabilityBadges(model.capabilities),
-              inputIcons: buildModelInputIcons(model.inputCapabilities),
-            }))}
-          />
-        )}
+  const renderMissingCustomSourceNotice = (scope: AiModelRouteScope) => (
+    missingCustomSourceNoticeScope === scope && (
+      <div className="flex items-center gap-1.5 text-xs text-amber-600">
+        <AlertCircle className="h-3.5 w-3.5" />
+        请先在上方创建一个自定义模型源。
       </div>
+    )
+  );
+
+  const renderCompactModelRouteRow = (
+    label: string,
+    controls: ReactNode,
+    children?: ReactNode,
+  ) => (
+    <div className="py-2.5">
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-[112px_180px_minmax(0,1fr)] md:items-start">
+        <div className="pt-1 text-sm font-medium text-text-primary">{label}</div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">{controls}</div>
+        {children ? <div className="min-w-0 space-y-2">{children}</div> : <div />}
+      </div>
+    </div>
+  );
+
+  const renderCompactRouteControls = (
+    scope: AiModelRouteScope,
+    options: Array<{ mode: AiModelRouteMode; label: string; disabled?: boolean }>,
+  ) => (
+    <>
+      <div className="inline-grid grid-flow-col gap-1 rounded-lg border border-border bg-surface-secondary/50 p-1">
+        {options.map((option) => renderRouteModeButton(scope, option.mode, option.label, option.disabled))}
+      </div>
+      {renderMissingCustomSourceNotice(scope)}
+    </>
+  );
+
+  const renderOfficialRouteModelField = (scope: AiModelRouteScope, placeholder = '默认模型') => {
+    const value = effectiveRouteModelValue(scope);
+    const models = routeModelOptions(scope, officialAiSource);
+    const options = routeModelSelectOptions(models, value);
+    const disabled = !officialAuthLoggedIn || (!options.length && !value);
+    return (
+      <AiModelSelect
+        value={value}
+        onChange={(modelId) => applyRouteModel(scope, modelId)}
+        disabled={disabled}
+        className="w-full min-w-0"
+        placeholder={!officialAuthLoggedIn ? '请先登录官方账号' : placeholder}
+        options={options}
+      />
     );
   };
+
+  const renderCustomRouteFields = (
+    sourceValue: string,
+    sources: AiSourceConfig[],
+    onSourceChange: (sourceId: string) => void,
+    modelValue: string,
+    models: AiModelDescriptor[],
+    onModelChange: (modelId: string) => void,
+    modelPlaceholder = '请选择模型',
+    modelDisabled = false,
+  ) => (
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+      <AiSourceSelect
+        value={sourceValue}
+        sources={sources}
+        onChange={onSourceChange}
+        className="w-full"
+      />
+      <AiModelSelect
+        value={modelValue}
+        onChange={onModelChange}
+        className="w-full"
+        disabled={modelDisabled || !models.length}
+        placeholder={modelPlaceholder}
+        options={models.map((model) => ({
+          id: model.id,
+          label: model.id,
+          badges: buildModelCapabilityBadges(model.capabilities),
+          inputIcons: buildModelInputIcons(model.inputCapabilities),
+        }))}
+      />
+    </div>
+  );
 
   const tabs = [
     { id: 'ai', labelKey: 'settings.tabs.ai', icon: Cpu },
@@ -6088,98 +6236,6 @@ export function Settings({
                     </div>
                   )}
 
-                  <div className="overflow-hidden rounded-xl border border-border bg-surface-secondary/20">
-                    <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-                      <div>
-                        <h3 className="text-sm font-medium text-text-primary">模型路由</h3>
-                        <p className="mt-0.5 text-[11px] text-text-tertiary">
-                          每个功能选择官方或自定义；生视频、TTS、声音复刻暂时固定官方。
-                        </p>
-                      </div>
-                      {officialAuthNeedsLogin && (
-                        <button
-                          type="button"
-                          onClick={() => setShowAiModelSettings(false)}
-                          className="rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-secondary hover:text-text-primary"
-                        >
-                          登录
-                        </button>
-                      )}
-                    </div>
-                    <div className="overflow-x-auto">
-                    <div className="min-w-[620px]">
-                      {renderModelRouteRow({
-                        scope: 'chat',
-                        label: '默认聊天',
-                        value: defaultAiSource?.model || formData.model_name,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'wander',
-                        label: '漫步',
-                        value: formData.model_name_wander,
-                        allowInherit: true,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'team',
-                        label: 'Team',
-                        value: formData.model_name_chatroom,
-                        allowInherit: true,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'knowledge',
-                        label: '知识库问答',
-                        value: formData.model_name_knowledge,
-                        allowInherit: true,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'redclaw',
-                        label: APP_BRAND.aiDisplayName,
-                        value: formData.model_name_redclaw,
-                        allowInherit: true,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'transcription',
-                        label: '转录',
-                        value: formData.transcription_model,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'embedding',
-                        label: 'Embedding',
-                        value: formData.embedding_model,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'image',
-                        label: '生图',
-                        value: formData.image_model,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'visualIndex',
-                        label: '视觉索引',
-                        value: formData.visual_index_model,
-                        allowDisabled: true,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'videoAnalysis',
-                        label: '视频分析',
-                        value: formData.video_analysis_model,
-                        allowDisabled: true,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'voiceTts',
-                        label: 'TTS',
-                        value: formData.voice_tts_model || formData.tts_model || 'speech-2.8-turbo',
-                        fixedOfficial: true,
-                      })}
-                      {renderModelRouteRow({
-                        scope: 'voiceClone',
-                        label: '声音复刻',
-                        value: formData.voice_clone_model || 'minimax-voice-clone',
-                        fixedOfficial: true,
-                      })}
-                    </div>
-                    </div>
-                  </div>
-
                   <div className="rounded-xl border border-border bg-surface-secondary/20 overflow-hidden">
                     <button
                       type="button"
@@ -6197,9 +6253,9 @@ export function Settings({
                   <div className="space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <h3 className="text-sm font-medium text-text-primary">聊天 AI 源</h3>
+                        <h3 className="text-sm font-medium text-text-primary">自定义模型源</h3>
                         <p className="text-[11px] text-text-tertiary mt-1">
-                          支持多模型源、多模型，并可指定默认聊天源与默认模型。
+                          先添加可用来源，再在下面为需要自定义的功能选择模型。
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -6225,128 +6281,8 @@ export function Settings({
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] font-medium text-text-secondary mb-1">默认聊天源</label>
-                          <AiSourceSelect
-                            value={defaultAiSourceId}
-                            sources={aiSources}
-                            onChange={(nextSourceId) => {
-                              markAiSourceDraftDirty();
-                              setDefaultAiSourceId(nextSourceId);
-                              setActiveAiSourceId(nextSourceId);
-                              setAiSourceExpandState((prev) => ({ ...prev, [nextSourceId]: true }));
-                            }}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[11px] font-medium text-text-secondary mb-1">默认聊天模型</label>
-                          <AiModelSelect
-                            value={defaultAiSource?.model || ''}
-                            disabled={!defaultAiSource || defaultSourceModels.length === 0}
-                            onChange={(modelId) => {
-                              if (!defaultAiSource) return;
-                              handleSetSourceDefaultModel(defaultAiSource.id, modelId);
-                              setActiveAiSourceId(defaultAiSource.id);
-                            }}
-                            className="w-full"
-                            placeholder="请先为默认源添加模型"
-                            options={defaultSourceModels.map((model) => ({
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            }))}
-                          />
-                        </div>
-                      </div>
-
-                      <p className={clsx(
-                        'text-[11px]',
-                        defaultOfficialSourceUnavailable ? 'text-amber-600' : 'text-text-tertiary'
-                      )}>
-                        {defaultOfficialSourceUnavailable
-                          ? '当前官方源未登录，请重新登录或切换到其他默认聊天源。'
-                          : `当前生效：${defaultAiSource?.name || '未设置'} / ${defaultAiSource?.model || '未设置'}`}
-                      </p>
-                    </div>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => setShowScopedModelOverrides((prev) => !prev)}
-                        className="w-full px-3 py-2.5 flex items-center justify-between hover:bg-surface-secondary/40 transition-colors"
-                      >
-                        <span className="text-sm font-medium text-text-primary">高级：页面模型覆盖（可选）</span>
-                        <span className="flex items-center gap-2 text-[11px] text-text-tertiary">
-                          已设置 {scopedModelOverridesCount} 项
-                          <ChevronDown className={clsx('w-4 h-4 transition-transform', showScopedModelOverrides && 'rotate-180')} />
-                        </span>
-                      </button>
-
-                      {showScopedModelOverrides && (
-                        <div className="px-3 pb-3 space-y-3 border-t border-border/70">
-                          <p className="text-[11px] text-text-tertiary pt-3">
-                            留空表示跟随“默认聊天模型”。此配置面向高级用户，分别作用于漫步、Team、知识库、{APP_BRAND.aiDisplayName}。
-                          </p>
-                          <datalist id="scoped-model-candidates">
-                            {allConfiguredModels.map((modelId) => (
-                              <option key={modelId} value={modelId} />
-                            ))}
-                          </datalist>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">漫步默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_wander}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_wander: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">Team 默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_chatroom}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_chatroom: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">知识库默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_knowledge}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_knowledge: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] text-text-secondary">{APP_BRAND.aiDisplayName} 默认模型</label>
-                              <input
-                                type="text"
-                                list="scoped-model-candidates"
-                                value={formData.model_name_redclaw}
-                                onChange={(e) => setFormData((d) => ({ ...d, model_name_redclaw: e.target.value }))}
-                                placeholder="留空跟随默认模型"
-                                className="w-full bg-surface-primary rounded border border-border px-3 py-2 text-sm focus:outline-none focus:border-accent-primary transition-colors"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
                     <div className="rounded-xl border border-border bg-surface-secondary/20 p-2 space-y-2">
-                      {displayedAiSources.map((source) => {
+                      {customAiSources.length ? customAiSources.map((source) => {
                         const preset = findAiPresetById(source.presetId);
                         const isDefaultSource = source.id === defaultAiSourceId;
                         const isExpanded = aiSourceExpandState[source.id] ?? false;
@@ -6681,445 +6617,294 @@ export function Settings({
                             )}
                           </div>
                         );
+                      }) : (
+                        <div className="rounded-lg border border-dashed border-border px-3 py-3 text-xs text-text-tertiary">
+                          暂无自定义模型源，请先点击“添加模型源”。
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium text-text-primary">模型设置</h3>
+                    <div className="divide-y divide-border/70 border-y border-border/70">
+                      {renderCompactModelRouteRow(
+                        '默认聊天',
+                        renderCompactRouteControls('chat', [
+                          { mode: 'official', label: '官方', disabled: !officialAuthLoggedIn },
+                          { mode: 'custom', label: '自定义' },
+                        ]),
+                        <>
+                          {aiModelRoutes.chat.mode === 'official' && renderOfficialRouteModelField('chat')}
+                          {aiModelRoutes.chat.mode === 'custom' && renderCustomRouteFields(
+                            defaultAiSourceId,
+                            customAiSources,
+                            (nextSourceId) => {
+                              markAiSourceDraftDirty();
+                              setDefaultAiSourceId(nextSourceId);
+                              setActiveAiSourceId(nextSourceId);
+                              updateAiModelRoute('chat', { mode: 'custom', sourceId: nextSourceId });
+                              setAiSourceExpandState((prev) => ({ ...prev, [nextSourceId]: true }));
+                            },
+                            defaultAiSource?.model || '',
+                            defaultSourceModels,
+                            (modelId) => {
+                              if (!defaultAiSource) return;
+                              handleSetSourceDefaultModel(defaultAiSource.id, modelId);
+                              updateAiModelRoute('chat', { mode: 'custom', sourceId: defaultAiSource.id, model: modelId });
+                              setActiveAiSourceId(defaultAiSource.id);
+                            },
+                            '请先为默认源添加模型',
+                            !defaultAiSource,
+                          )}
+                          {defaultOfficialSourceUnavailable && aiModelRoutes.chat.mode === 'official' && (
+                            <p className="text-[11px] text-amber-600">当前官方源未登录，请重新登录或切换到自定义。</p>
+                          )}
+                        </>,
+                      )}
+
+                      {([
+                        ['wander', '漫步'] as const,
+                        ['team', 'Team'] as const,
+                        ['knowledge', '知识库问答'] as const,
+                        ['redclaw', APP_BRAND.aiDisplayName] as const,
+                      ]).map(([scope, label]) => {
+                        const route = aiModelRoutes[scope];
+                        const source = getRouteSource(route);
+                        const options = routeModelOptions(scope, source);
+                        const value = scope === 'wander'
+                          ? formData.model_name_wander
+                          : scope === 'team'
+                          ? formData.model_name_chatroom
+                          : scope === 'knowledge'
+                          ? formData.model_name_knowledge
+                          : formData.model_name_redclaw;
+                        return (
+                          <div key={scope}>
+                            {renderCompactModelRouteRow(
+                              label,
+                              renderCompactRouteControls(scope, [
+                                { mode: 'official', label: '官方', disabled: !officialAuthLoggedIn },
+                                { mode: 'custom', label: '自定义' },
+                              ]),
+                              route.mode === 'official'
+                                ? renderOfficialRouteModelField(scope)
+                                : route.mode === 'custom' && renderCustomRouteFields(
+                                  route.sourceId || firstCustomAiSource?.id || '',
+                                  customAiSources,
+                                  (nextSourceId) => updateAiModelRoute(scope, { mode: 'custom', sourceId: nextSourceId, model: '' }),
+                                  value || route.model || '',
+                                  options,
+                                  (modelId) => applyRouteModel(scope, modelId),
+                                ),
+                            )}
+                          </div>
+                        );
                       })}
-                    </div>
-                  </div>
 
-                  <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-medium text-text-primary">转录模型设置</h3>
-                      <span className="text-[11px] text-text-tertiary">选择已保存的 AI 源与模型</span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="group">
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                          转录 AI 源
-                        </label>
-                        <AiSourceSelect
-                          value={transcriptionSourceId}
-                          sources={aiSources}
-                          onChange={(nextSourceId) => handleLinkedSourceChange('transcription', nextSourceId)}
-                          className="w-full"
-                        />
-                      </div>
-                      <div className="group">
-                        <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                          转录模型
-                        </label>
-                        <AiModelSelect
-                          value={formData.transcription_model}
-                          onChange={(modelId) => setFormData((d) => ({ ...d, transcription_model: modelId }))}
-                          options={transcriptionSourceModels.map((model) => {
-                            const isRecommended = String(model.id).trim().toLowerCase() === 'step-asr';
-                            return {
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities, { recommended: isRecommended }),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            };
-                          })}
-                          disabled={!transcriptionSourceModels.length}
-                          placeholder="请先在该源中添加模型"
-                          className="w-full"
-                        />
-                      </div>
-                    </div>
-                    <p className="text-[11px] text-text-tertiary">
-                      转录会自动复用所选 AI 源的 Endpoint 与 API Key。
-                    </p>
-                  </div>
+                      {renderCompactModelRouteRow(
+                        '转录',
+                        renderCompactRouteControls('transcription', [
+                          { mode: 'official', label: '官方', disabled: !officialAuthLoggedIn },
+                          { mode: 'custom', label: '自定义' },
+                        ]),
+                        aiModelRoutes.transcription.mode === 'official'
+                          ? renderOfficialRouteModelField('transcription')
+                          : aiModelRoutes.transcription.mode === 'custom' && renderCustomRouteFields(
+                            transcriptionSourceId,
+                            customAiSources,
+                            (nextSourceId) => {
+                              updateAiModelRoute('transcription', { mode: 'custom', sourceId: nextSourceId, model: '' });
+                              handleLinkedSourceChange('transcription', nextSourceId);
+                            },
+                            formData.transcription_model,
+                            transcriptionSourceModels,
+                            (modelId) => applyRouteModel('transcription', modelId),
+                            '请先在该源中添加模型',
+                          ),
+                      )}
 
-                  <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">Embedding 模型设置</h3>
+                      {renderCompactModelRouteRow(
+                        'Embedding',
+                        renderCompactRouteControls('embedding', [
+                          { mode: 'official', label: '官方', disabled: !officialAuthLoggedIn },
+                          { mode: 'custom', label: '自定义' },
+                        ]),
+                        aiModelRoutes.embedding.mode === 'official'
+                          ? renderOfficialRouteModelField('embedding')
+                          : aiModelRoutes.embedding.mode === 'custom' && renderCustomRouteFields(
+                            embeddingSourceId,
+                            customAiSources,
+                            (nextSourceId) => {
+                              updateAiModelRoute('embedding', { mode: 'custom', sourceId: nextSourceId, model: '' });
+                              handleLinkedSourceChange('embedding', nextSourceId);
+                            },
+                            formData.embedding_model,
+                            embeddingSourceModels,
+                            (modelId) => applyRouteModel('embedding', modelId),
+                            '请先在该源中添加模型',
+                          ),
+                      )}
 
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            Embedding AI 源
-                          </label>
-                          <AiSourceSelect
-                            value={embeddingSourceId}
-                            sources={aiSources}
-                            onChange={(nextSourceId) => handleLinkedSourceChange('embedding', nextSourceId)}
-                            className="w-full"
-                          />
-                        </div>
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            Embedding 模型
-                          </label>
-                          <AiModelSelect
-                            value={formData.embedding_model}
-                            onChange={(modelId) => setFormData((d) => ({ ...d, embedding_model: modelId }))}
-                            className="w-full"
-                            disabled={!embeddingSourceModels.length}
-                            placeholder="请先在该源中添加模型"
-                            options={embeddingSourceModels.map((model) => ({
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            }))}
-                          />
-                        </div>
-                      </div>
-                      <p className="text-[11px] text-text-tertiary">
-                        Embedding 会自动复用所选 AI 源的 Endpoint 与 API Key。
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">生图模型设置</h3>
-
-                    <div className="space-y-4">
-                      <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          <div className="group">
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              生图 AI 源
-                            </label>
-                            <AiSourceSelect
-                              value={imageSourceId}
-                              sources={aiSources}
-                              onChange={(nextSourceId) => handleLinkedSourceChange('image', nextSourceId)}
-                              className="w-full"
-                            />
-                          </div>
-                          <div className="group">
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              生图模型
-                            </label>
-                            <AiModelSelect
-                              value={formData.image_model}
-                              onChange={(modelId) => setFormData((d) => ({ ...d, image_model: modelId }))}
-                              className="w-full"
-                              disabled={isDashscopeImageTemplate || !imageSourceModels.length}
-                              placeholder={isDashscopeImageTemplate ? DASHSCOPE_LOCKED_IMAGE_MODEL : '请先在该源中添加模型'}
-                              options={isDashscopeImageTemplate
-                                ? [{ id: DASHSCOPE_LOCKED_IMAGE_MODEL, label: DASHSCOPE_LOCKED_IMAGE_MODEL }]
-                                : imageSourceModels.map((model) => ({
-                                  id: model.id,
-                                  label: model.id,
-                                  badges: buildModelCapabilityBadges(model.capabilities),
-                                  inputIcons: buildModelInputIcons(model.inputCapabilities),
-                                }))}
-                            />
-                          </div>
-                          <div className="group">
-                            <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                              默认清晰度
-                            </label>
-                            <select
-                              value={formData.image_quality || 'auto'}
-                              onChange={(event) => setFormData((d) => ({ ...d, image_quality: event.target.value }))}
-                              className="w-full rounded-md border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
-                            >
-                              <option value="auto">默认（2K / medium）</option>
-                              <option value="medium">medium</option>
-                              <option value="high">high</option>
-                              <option value="standard">standard</option>
-                              <option value="hd">hd</option>
-                            </select>
-                          </div>
-                        </div>
-                        <p className="text-[11px] text-text-tertiary">
-                          生图会自动复用所选 AI 源的 Endpoint 与 API Key；模型的增删请到上方对应源卡片中管理。
-                        </p>
-                      </div>
-
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-border">
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-medium text-text-primary">知识库视觉索引模型</h3>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const source = getAiSourceById(visualIndexSourceId);
-                          setFormData((d) => {
-                            const nextEnabled = !d.visual_index_enabled;
-                            return {
-                              ...d,
-                              visual_index_enabled: nextEnabled,
-                              visual_index_provider: nextEnabled ? 'openai-compatible' : 'disabled',
-                              visual_index_endpoint: nextEnabled ? String(source?.baseURL || d.visual_index_endpoint || '').trim() : d.visual_index_endpoint,
-                              visual_index_api_key: nextEnabled ? String(source?.apiKey || d.visual_index_api_key || '').trim() : d.visual_index_api_key,
-                              visual_index_model: nextEnabled ? String(d.visual_index_model || pickBestVisualIndexModelForSource(source) || '').trim() : d.visual_index_model,
-                            };
-                          });
-                        }}
-                        className="ui-switch-track shrink-0"
-                        data-size="md"
-                        data-state={formData.visual_index_enabled ? 'on' : 'off'}
-                        aria-label="启用知识库视觉索引"
-                      >
-                        <span className="ui-switch-thumb" />
-                      </button>
-                    </div>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            视觉索引 AI 源
-                          </label>
-                          <AiSourceSelect
-                            value={visualIndexSourceId}
-                            sources={aiSources}
-                            onChange={(nextSourceId) => handleLinkedSourceChange('visual', nextSourceId)}
-                            className="w-full"
-                          />
-                        </div>
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            视觉索引模型
-                          </label>
-                          <AiModelSelect
-                            value={formData.visual_index_model}
-                            onChange={(modelId) => setFormData((d) => ({ ...d, visual_index_model: modelId }))}
-                            className="w-full"
-                            disabled={!visualIndexSourceModels.length}
-                            placeholder="请先在该源中添加支持图片输入的模型"
-                            options={visualIndexSourceModels.map((model) => ({
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            }))}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">超时秒数</label>
-                          <input
-                            type="number"
-                            min={10}
-                            max={300}
-                            value={formData.visual_index_timeout_seconds}
-                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_timeout_seconds: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">并发数</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={4}
-                            value={formData.visual_index_concurrency}
-                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_concurrency: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">最长边</label>
-                          <input
-                            type="number"
-                            min={512}
-                            max={4096}
-                            value={formData.visual_index_max_image_edge}
-                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_max_image_edge: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">PDF 页数</label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={200}
-                            value={formData.visual_index_pdf_max_pages}
-                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_pdf_max_pages: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">PDF DPI</label>
-                          <input
-                            type="number"
-                            min={72}
-                            max={300}
-                            value={formData.visual_index_pdf_render_dpi}
-                            onChange={(e) => setFormData((d) => ({ ...d, visual_index_pdf_render_dpi: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                          />
-                        </div>
-                      </div>
-
-                      <label className="flex items-center gap-2 text-xs text-text-secondary">
-                        <input
-                          type="checkbox"
-                          checked={formData.visual_index_skip_small_images}
-                          onChange={(e) => setFormData((d) => ({ ...d, visual_index_skip_small_images: e.target.checked }))}
-                          className="rounded border-border"
-                        />
-                        跳过 64px 以下的小图标
-                      </label>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-border">
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <h3 className="text-sm font-medium text-text-primary">视频分析专用模型</h3>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const source = getAiSourceById(videoAnalysisSourceId);
-                          setFormData((d) => {
-                            const nextEnabled = !d.video_analysis_enabled;
-                            return {
-                              ...d,
-                              video_analysis_enabled: nextEnabled,
-                              video_analysis_endpoint: nextEnabled ? String(source?.baseURL || d.video_analysis_endpoint || '').trim() : d.video_analysis_endpoint,
-                              video_analysis_api_key: nextEnabled ? String(source?.apiKey || d.video_analysis_api_key || '').trim() : d.video_analysis_api_key,
-                              video_analysis_protocol: nextEnabled ? String(source?.protocol || d.video_analysis_protocol || 'gemini').trim() : d.video_analysis_protocol,
-                              video_analysis_model: nextEnabled ? String(d.video_analysis_model || pickBestVideoAnalysisModelForSource(source) || '').trim() : d.video_analysis_model,
-                            };
-                          });
-                        }}
-                        className="ui-switch-track shrink-0"
-                        data-size="md"
-                        data-state={formData.video_analysis_enabled ? 'on' : 'off'}
-                        aria-label="启用视频分析专用模型"
-                      >
-                        <span className="ui-switch-thumb" />
-                      </button>
-                    </div>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            视频分析 AI 源
-                          </label>
-                          <AiSourceSelect
-                            value={videoAnalysisSourceId}
-                            sources={aiSources}
-                            onChange={(nextSourceId) => handleLinkedSourceChange('videoAnalysis', nextSourceId)}
-                            className="w-full"
-                          />
-                        </div>
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            Video Analysis Agent 模型
-                          </label>
-                          <AiModelSelect
-                            value={formData.video_analysis_model}
-                            onChange={(modelId) => setFormData((d) => ({ ...d, video_analysis_model: modelId }))}
-                            className="w-full"
-                            disabled={!videoAnalysisSourceModels.length}
-                            placeholder="请先在该源中添加支持视频输入的模型"
-                            options={videoAnalysisSourceModels.map((model) => ({
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            }))}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">直传上限（bytes）</label>
-                          <input
-                            type="number"
-                            min={1048576}
-                            max={536870912}
-                            value={formData.video_analysis_max_direct_video_bytes}
-                            onChange={(e) => setFormData((d) => ({ ...d, video_analysis_max_direct_video_bytes: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">协议</label>
-                          <input
-                            value={formData.video_analysis_protocol}
-                            onChange={(e) => setFormData((d) => ({ ...d, video_analysis_protocol: e.target.value }))}
-                            className="w-full rounded border border-border bg-surface-secondary/30 px-3 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">生视频模型设置</h3>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="rounded-lg border border-border bg-surface-primary/70 p-3 text-xs text-text-secondary">
-                        由于各家视频 api 差异巨大，AI 智能选择效果不佳，暂时仅支持{APP_BRAND.displayName}官方源，其他厂商模型适配陆续开发中。
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
-                          <div className="text-[11px] text-text-tertiary mb-1">文生视频</div>
-                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video']}</div>
-                        </div>
-                        <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
-                          <div className="text-[11px] text-text-tertiary mb-1">参考图视频</div>
-                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['reference-guided']}</div>
-                        </div>
-                        <div className="rounded-lg border border-border bg-surface-primary/70 p-3">
-                          <div className="text-[11px] text-text-tertiary mb-1">图片/首尾帧视频</div>
-                          <div className="text-sm font-medium text-text-primary">{REDBOX_OFFICIAL_VIDEO_MODELS['first-last-frame']}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-border">
-                    <h3 className="text-sm font-medium text-text-primary mb-4">TTS / 声音复刻模型设置</h3>
-
-                    <div className="rounded-xl border border-border bg-surface-secondary/20 p-3 space-y-3">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            语音 AI 源
-                          </label>
-                          <AiSourceSelect
-                            value={voiceSourceId}
-                            sources={aiSources}
-                            onChange={(nextSourceId) => handleLinkedSourceChange('voice', nextSourceId)}
-                            className="w-full"
-                          />
-                        </div>
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            TTS 发声模型
-                          </label>
-                          <AiModelSelect
-                            value={formData.voice_tts_model || formData.tts_model || 'speech-2.8-turbo'}
-                            onChange={(modelId) => setFormData((d) => ({ ...d, voice_tts_model: modelId, tts_model: modelId }))}
-                            className="w-full"
-                            disabled={!voiceSourceModels.length}
-                            placeholder="请先在该源中添加音频模型"
-                            options={voiceSourceModels.map((model) => ({
-                              id: model.id,
-                              label: model.id,
-                              badges: buildModelCapabilityBadges(model.capabilities),
-                              inputIcons: buildModelInputIcons(model.inputCapabilities),
-                            }))}
-                          />
-                        </div>
-                        <div className="group">
-                          <label className="block text-xs font-medium text-text-secondary mb-1.5">
-                            声音复刻模型
-                          </label>
-                          <input
-                            value={formData.voice_clone_model || 'minimax-voice-clone'}
-                            onChange={(event) => setFormData((d) => ({ ...d, voice_clone_model: event.target.value }))}
+                      {renderCompactModelRouteRow(
+                        '生图',
+                        renderCompactRouteControls('image', [
+                          { mode: 'official', label: '官方', disabled: !officialAuthLoggedIn },
+                          { mode: 'custom', label: '自定义' },
+                        ]),
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                          {aiModelRoutes.image.mode === 'official' && renderOfficialRouteModelField('image')}
+                          {aiModelRoutes.image.mode === 'custom' && (
+                            <>
+                              <AiSourceSelect
+                                value={imageSourceId}
+                                sources={customAiSources}
+                                onChange={(nextSourceId) => {
+                                  updateAiModelRoute('image', { mode: 'custom', sourceId: nextSourceId, model: '' });
+                                  handleLinkedSourceChange('image', nextSourceId);
+                                }}
+                                className="w-full"
+                              />
+                              <AiModelSelect
+                                value={formData.image_model}
+                                onChange={(modelId) => applyRouteModel('image', modelId)}
+                                className="w-full"
+                                disabled={isDashscopeImageTemplate || !imageSourceModels.length}
+                                placeholder={isDashscopeImageTemplate ? DASHSCOPE_LOCKED_IMAGE_MODEL : '请先在该源中添加模型'}
+                                options={isDashscopeImageTemplate
+                                  ? [{ id: DASHSCOPE_LOCKED_IMAGE_MODEL, label: DASHSCOPE_LOCKED_IMAGE_MODEL }]
+                                  : imageSourceModels.map((model) => ({
+                                    id: model.id,
+                                    label: model.id,
+                                    badges: buildModelCapabilityBadges(model.capabilities),
+                                    inputIcons: buildModelInputIcons(model.inputCapabilities),
+                                  }))}
+                              />
+                            </>
+                          )}
+                          <select
+                            value={formData.image_quality || 'auto'}
+                            onChange={(event) => setFormData((d) => ({ ...d, image_quality: event.target.value }))}
                             className="w-full rounded-md border border-border bg-surface-primary px-3 py-2 text-sm text-text-primary outline-none transition-colors focus:border-accent-primary focus:ring-1 focus:ring-accent-primary"
-                            placeholder="minimax-voice-clone"
-                          />
-                        </div>
-                      </div>
-                      <p className="text-[11px] text-text-tertiary">
-                        TTS 和声音复刻会复用所选语音 AI 源的 Endpoint 与 API Key；生成结果进入媒体库，人物音频样本会自动记录平台 voice_id。
-                      </p>
+                          >
+                            <option value="auto">默认清晰度</option>
+                            <option value="medium">medium</option>
+                            <option value="high">high</option>
+                            <option value="standard">standard</option>
+                            <option value="hd">hd</option>
+                          </select>
+                        </div>,
+                      )}
+
+                      {renderCompactModelRouteRow(
+                        '视觉索引',
+                        renderCompactRouteControls('visualIndex', [
+                          { mode: 'disabled', label: '关闭' },
+                          { mode: 'official', label: '官方', disabled: !officialAuthLoggedIn },
+                          { mode: 'custom', label: '自定义' },
+                        ]),
+                        aiModelRoutes.visualIndex.mode !== 'disabled' && (
+                          <div className="space-y-2">
+                            {aiModelRoutes.visualIndex.mode === 'official' && renderOfficialRouteModelField('visualIndex')}
+                            {aiModelRoutes.visualIndex.mode === 'custom' && renderCustomRouteFields(
+                              visualIndexSourceId,
+                              customAiSources,
+                              (nextSourceId) => {
+                                updateAiModelRoute('visualIndex', { mode: 'custom', sourceId: nextSourceId, model: '' });
+                                handleLinkedSourceChange('visual', nextSourceId);
+                              },
+                              formData.visual_index_model,
+                              visualIndexSourceModels,
+                              (modelId) => applyRouteModel('visualIndex', modelId),
+                              '请先在该源中添加支持图片输入的模型',
+                            )}
+                            <label className="flex items-center gap-2 text-xs text-text-secondary">
+                              <input
+                                type="checkbox"
+                                checked={formData.visual_index_skip_small_images}
+                                onChange={(e) => setFormData((d) => ({ ...d, visual_index_skip_small_images: e.target.checked }))}
+                                className="rounded border-border"
+                              />
+                              跳过 64px 以下的小图标
+                            </label>
+                          </div>
+                        ),
+                      )}
+
+                      {renderCompactModelRouteRow(
+                        '视频分析',
+                        renderCompactRouteControls('videoAnalysis', [
+                          { mode: 'disabled', label: '关闭' },
+                          { mode: 'official', label: '官方', disabled: !officialAuthLoggedIn },
+                          { mode: 'custom', label: '自定义' },
+                        ]),
+                        aiModelRoutes.videoAnalysis.mode !== 'disabled' && (
+                          <div className="space-y-2">
+                            {aiModelRoutes.videoAnalysis.mode === 'official' && renderOfficialRouteModelField('videoAnalysis')}
+                            {aiModelRoutes.videoAnalysis.mode === 'custom' && renderCustomRouteFields(
+                              videoAnalysisSourceId,
+                              customAiSources,
+                              (nextSourceId) => {
+                                updateAiModelRoute('videoAnalysis', { mode: 'custom', sourceId: nextSourceId, model: '' });
+                                handleLinkedSourceChange('videoAnalysis', nextSourceId);
+                              },
+                              formData.video_analysis_model,
+                              videoAnalysisSourceModels,
+                              (modelId) => applyRouteModel('videoAnalysis', modelId),
+                              '请先在该源中添加支持视频输入的模型',
+                            )}
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                              <input
+                                type="number"
+                                min={1048576}
+                                max={536870912}
+                                title="直传上限（bytes）"
+                                value={formData.video_analysis_max_direct_video_bytes}
+                                onChange={(e) => setFormData((d) => ({ ...d, video_analysis_max_direct_video_bytes: e.target.value }))}
+                                className="w-full rounded border border-border bg-surface-secondary/30 px-2.5 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                              />
+                              <input
+                                title="协议"
+                                value={formData.video_analysis_protocol}
+                                onChange={(e) => setFormData((d) => ({ ...d, video_analysis_protocol: e.target.value }))}
+                                className="w-full rounded border border-border bg-surface-secondary/30 px-2.5 py-2 text-sm transition-colors focus:border-accent-primary focus:outline-none"
+                              />
+                            </div>
+                          </div>
+                        ),
+                      )}
+
+                      {renderCompactModelRouteRow(
+                        '生视频',
+                        <div className="inline-grid grid-flow-col gap-1 rounded-lg border border-border bg-surface-secondary/50 p-1">
+                          <button
+                            type="button"
+                            disabled
+                            className="h-8 rounded-md bg-surface-primary px-2.5 text-xs font-medium text-text-primary shadow-sm"
+                          >
+                            官方
+                          </button>
+                        </div>,
+                        <AiModelSelect
+                          value={formData.video_model || REDBOX_OFFICIAL_VIDEO_MODELS['text-to-video']}
+                          onChange={(modelId) => setFormData((d) => ({ ...d, video_model: modelId }))}
+                          className="w-full min-w-0"
+                          options={REDBOX_OFFICIAL_VIDEO_MODEL_LIST.map((modelId) => ({ id: modelId, label: modelId }))}
+                        />,
+                      )}
+
+                      {renderCompactModelRouteRow(
+                        'TTS',
+                        renderCompactRouteControls('voiceTts', [{ mode: 'official', label: '官方' }]),
+                        renderOfficialRouteModelField('voiceTts'),
+                      )}
+
+                      {renderCompactModelRouteRow(
+                        '声音复刻',
+                        renderCompactRouteControls('voiceClone', [{ mode: 'official', label: '官方' }]),
+                        renderOfficialRouteModelField('voiceClone'),
+                      )}
                     </div>
                   </div>
 

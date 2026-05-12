@@ -1,6 +1,7 @@
-import { memo, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { Activity, Bell, Check, ChevronDown, Copy, Database, Download, FolderOpen, Info, MessageSquareText, RefreshCw, Save, Search, Square, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
+import { APP_BRAND } from '../../config/brand';
 import { SUPPORTED_LANGUAGES, useI18n, type AppLanguage } from '../../i18n';
 import { PasswordInput, resolveRuntimeAssetUrl } from './shared';
 import type {
@@ -587,8 +588,21 @@ function GeneralSettingsSectionInner({
     handleOpenAppOnboarding,
 }: GeneralSettingsSectionProps) {
     const { language, setLanguage, t } = useI18n();
+    const [isLanguageOpen, setIsLanguageOpen] = useState(false);
+    const languageRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!isLanguageOpen) return;
+        const handleClickOutside = (e: MouseEvent) => {
+            if (languageRef.current && !languageRef.current.contains(e.target as Node)) {
+                setIsLanguageOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isLanguageOpen]);
     const [isProxySettingsExpanded, setIsProxySettingsExpanded] = useState(false);
     const [isDebugLogsExpanded, setIsDebugLogsExpanded] = useState(false);
+    const [isNotificationExpanded, setIsNotificationExpanded] = useState(false);
 
     return (
         <section className="space-y-6">
@@ -596,28 +610,47 @@ function GeneralSettingsSectionInner({
 
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0">
+                    <div>
                         <h3 className="text-sm font-medium text-text-primary">
                             {t('settings.language.title')}
                         </h3>
-                        <p className="text-xs text-text-tertiary mt-1">
-                            {t('settings.language.description')}
-                        </p>
                     </div>
-                    <label className="shrink-0">
+                    <div className="shrink-0 relative" ref={languageRef}>
                         <span className="sr-only">{t('settings.language.selectLabel')}</span>
-                        <select
-                            value={language}
-                            onChange={(event) => setLanguage(event.target.value as AppLanguage)}
-                            className="h-8 rounded-md border border-border bg-surface-primary px-2.5 text-xs text-text-primary focus:border-accent-primary focus:outline-none"
+                        <button
+                            type="button"
+                            onClick={() => setIsLanguageOpen((prev) => !prev)}
+                            className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface-primary px-2.5 text-xs text-text-primary hover:bg-surface-secondary transition-colors"
                         >
-                            {SUPPORTED_LANGUAGES.map((item) => (
-                                <option key={item.value} value={item.value}>
-                                    {item.label}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
+                            {SUPPORTED_LANGUAGES.find((l) => l.value === language)?.label}
+                            <ChevronDown className="h-3.5 w-3.5 text-text-tertiary" />
+                        </button>
+                        {isLanguageOpen && (
+                            <div className="absolute right-0 top-full z-50 mt-1 min-w-full rounded-lg border border-border bg-surface-primary py-1 shadow-lg">
+                                {SUPPORTED_LANGUAGES.map((item) => (
+                                    <button
+                                        key={item.value}
+                                        type="button"
+                                        onClick={() => {
+                                            setLanguage(item.value as AppLanguage);
+                                            setIsLanguageOpen(false);
+                                        }}
+                                        className={clsx(
+                                            'flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-xs text-left transition-colors',
+                                            item.value === language
+                                                ? 'text-text-primary'
+                                                : 'text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
+                                        )}
+                                    >
+                                        {item.value === language && (
+                                            <Check className="h-3.5 w-3.5" />
+                                        )}
+                                        <span className={item.value === language ? '' : 'ml-5'}>{item.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 
@@ -653,28 +686,10 @@ function GeneralSettingsSectionInner({
                 </div>
             </div>
 
-            {handleOpenAppOnboarding && (
-                <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-medium text-text-primary">教程</span>
-                        <button
-                            type="button"
-                            onClick={handleOpenAppOnboarding}
-                            className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
-                        >
-                            重新观看
-                        </button>
-                    </div>
-                </div>
-            )}
-
             <div className="group">
                 <label className="block text-xs font-medium text-text-secondary mb-1.5">
                     {t('settings.general.workspaceRoot')}
                 </label>
-                <p className="text-[10px] text-text-tertiary mb-2">
-                    {t('settings.general.workspaceDescription')}
-                </p>
                 <div className="flex items-center gap-2">
                     <div className="flex-1 relative">
                         <FolderOpen className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary" />
@@ -702,9 +717,34 @@ function GeneralSettingsSectionInner({
                         {t('settings.general.restoreDefault')}
                     </button>
                 </div>
-                <p className="text-[10px] text-text-tertiary mt-2">
-                    {t('settings.general.workspaceWarningPrefix')}<code className="bg-surface-secondary px-1 rounded">manuscripts</code> {t('settings.general.workspaceWarningMiddle')} <code className="bg-surface-secondary px-1 rounded">documents</code>{t('settings.general.workspaceWarningSuffix')} <code className="bg-surface-secondary px-1 rounded">/skills/</code>、<code className="bg-surface-secondary px-1 rounded">/knowledge/</code>、<code className="bg-surface-secondary px-1 rounded">/advisors/</code>、<code className="bg-surface-secondary px-1 rounded">/manuscripts/</code> {t('settings.general.workspaceWarningEnd')}
-                </p>
+            </div>
+
+            {handleOpenAppOnboarding && (
+                <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium text-text-primary">教程</span>
+                        <button
+                            type="button"
+                            onClick={handleOpenAppOnboarding}
+                            className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
+                        >
+                            重新观看
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-text-primary">知识库导入</span>
+                    <button
+                        type="button"
+                        onClick={() => void handleOpenKnowledgeApiGuide()}
+                        className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
+                    >
+                        打开 API 文档
+                    </button>
+                </div>
             </div>
 
             <FileIndexSettingsPanel
@@ -713,84 +753,100 @@ function GeneralSettingsSectionInner({
                 onRefresh={handleRefreshFileIndexDashboard}
             />
 
-            <div className="bg-surface-secondary/30 rounded-lg border border-border p-4 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                    <div>
-                        <h3 className="text-sm font-medium text-text-primary flex items-center gap-2">
+            <div className={clsx(
+                'overflow-hidden rounded-lg border border-border bg-surface-secondary/30 transition-colors',
+                isNotificationExpanded && 'border-accent-primary/30',
+            )}>
+                <div className="flex items-center gap-3 px-4 py-3">
+                    <button
+                        type="button"
+                        onClick={() => setIsNotificationExpanded((prev) => !prev)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                        aria-expanded={isNotificationExpanded}
+                        aria-controls="general-notification-panel"
+                    >
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-text-tertiary">
+                            <ChevronDown className={clsx('h-4 w-4 transition-transform', isNotificationExpanded ? 'rotate-0' : '-rotate-90')} />
+                        </span>
+                        <h3 className="truncate text-sm font-medium text-text-primary flex items-center gap-1.5">
                             <Bell className="w-4 h-4" />
                             {t('settings.general.notificationCenter')}
                         </h3>
-                    </div>
+                    </button>
                     <button
                         type="button"
+                        role="switch"
+                        aria-checked={notificationSettings.enabled}
+                        aria-label={t('settings.general.notificationCenter')}
                         onClick={() => setNotificationSettings((current) => ({ ...current, enabled: !current.enabled }))}
-                        className={clsx(
-                            'h-8 px-3 rounded-md border text-xs font-medium transition-colors',
-                            notificationSettings.enabled
-                                ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                                : 'border-border text-text-secondary hover:text-text-primary hover:bg-surface-secondary'
-                        )}
+                        className="ui-switch-track shrink-0"
+                        data-size="lg"
+                        data-state={notificationSettings.enabled ? 'on' : 'off'}
                     >
-                        {notificationSettings.enabled ? t('settings.general.enabled') : t('settings.general.disabled')}
+                        <span className="ui-switch-thumb" />
                     </button>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]">
-                    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
-                        <div className="text-xs font-medium text-text-primary">{t('settings.general.sound')}</div>
-                        <button
-                            type="button"
-                            role="switch"
-                            aria-checked={notificationSettings.sound.enabled}
-                            aria-label={t('settings.general.sound')}
-                            onClick={() => setNotificationSettings((current) => ({
-                                ...current,
-                                sound: { ...current.sound, enabled: !current.sound.enabled },
-                            }))}
-                            className={clsx(
-                                'relative inline-flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-primary/30',
-                                notificationSettings.sound.enabled ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
-                            )}
-                        >
-                            <span
-                                className={clsx(
-                                    'block h-6 w-6 rounded-full bg-white shadow-sm transition-transform',
-                                    notificationSettings.sound.enabled ? 'translate-x-5' : 'translate-x-0'
-                                )}
-                            />
-                        </button>
-                    </div>
-                    <div className="rounded-lg border border-border bg-surface-primary px-3 py-2">
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                            <label className="text-xs font-medium text-text-primary">{t('settings.general.volume')}</label>
-                            <span className="text-[11px] text-text-tertiary">
-                                {Math.round(notificationSettings.sound.volume * 100)}%
-                            </span>
+                {isNotificationExpanded && (
+                    <div id="general-notification-panel" className="space-y-4 border-t border-border/70 px-4 py-4">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]">
+                            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-primary px-3 py-2">
+                                <div className="text-xs font-medium text-text-primary">{t('settings.general.sound')}</div>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={notificationSettings.sound.enabled}
+                                    aria-label={t('settings.general.sound')}
+                                    onClick={() => setNotificationSettings((current) => ({
+                                        ...current,
+                                        sound: { ...current.sound, enabled: !current.sound.enabled },
+                                    }))}
+                                    className={clsx(
+                                        'relative inline-flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition-colors focus:outline-none focus:ring-2 focus:ring-accent-primary/30',
+                                        notificationSettings.sound.enabled ? 'bg-[#34c759]' : 'bg-[#d1d1d6]'
+                                    )}
+                                >
+                                    <span
+                                        className={clsx(
+                                            'block h-6 w-6 rounded-full bg-white shadow-sm transition-transform',
+                                            notificationSettings.sound.enabled ? 'translate-x-5' : 'translate-x-0'
+                                        )}
+                                    />
+                                </button>
+                            </div>
+                            <div className="rounded-lg border border-border bg-surface-primary px-3 py-2">
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                    <label className="text-xs font-medium text-text-primary">{t('settings.general.volume')}</label>
+                                    <span className="text-[11px] text-text-tertiary">
+                                        {Math.round(notificationSettings.sound.volume * 100)}%
+                                    </span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value={notificationSettings.sound.volume}
+                                    onChange={(event) => setNotificationSettings((current) => ({
+                                        ...current,
+                                        sound: { ...current.sound, volume: Number(event.target.value) },
+                                    }))}
+                                    className="w-full"
+                                />
+                            </div>
                         </div>
-                        <input
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.05"
-                            value={notificationSettings.sound.volume}
-                            onChange={(event) => setNotificationSettings((current) => ({
-                                ...current,
-                                sound: { ...current.sound, volume: Number(event.target.value) },
-                            }))}
-                            className="w-full"
-                        />
-                    </div>
-                </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => void handleTestNotificationSound()}
-                        className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
-                    >
-                        测试提醒音
-                    </button>
-                </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => void handleTestNotificationSound()}
+                                className="px-3 py-1.5 border border-border rounded text-xs hover:bg-surface-secondary transition-colors"
+                            >
+                                测试提醒音
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             <div className={clsx(
@@ -852,19 +908,6 @@ function GeneralSettingsSectionInner({
                         </p>
                     </div>
                 )}
-            </div>
-
-            <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium text-text-primary">知识库导入</span>
-                    <button
-                        type="button"
-                        onClick={() => void handleOpenKnowledgeApiGuide()}
-                        className="text-xs font-medium text-accent-primary transition-colors hover:opacity-80"
-                    >
-                        打开 API 文档
-                    </button>
-                </div>
             </div>
 
             <div className={clsx(
@@ -3679,7 +3722,7 @@ export function ToolsSettingsSection({
             <div className="bg-surface-secondary/30 rounded-lg border border-border p-4">
                 <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                        <h3 className="text-sm font-medium text-text-primary">Thrive 插件</h3>
+                        <h3 className="text-sm font-medium text-text-primary">{APP_BRAND.displayName} 插件</h3>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                         <button
@@ -3723,7 +3766,7 @@ export function ToolsSettingsSection({
                             正在读取插件
                         </div>
                     ) : thrivePlugins.length === 0 ? (
-                        <div className="px-3 py-5 text-center text-xs text-text-tertiary">暂无 Thrive 插件</div>
+                        <div className="px-3 py-5 text-center text-xs text-text-tertiary">暂无 {APP_BRAND.displayName} 插件</div>
                     ) : (
                         <div className="divide-y divide-border">
                             {thrivePlugins.map((plugin) => {

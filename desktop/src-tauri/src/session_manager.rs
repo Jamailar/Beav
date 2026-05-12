@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -324,9 +326,7 @@ pub(crate) fn enforce_retention(
             .iter()
             .map(|session| session.id.clone())
             .collect::<Vec<_>>();
-        for session_id in &removed_ids {
-            remove_session_artifacts(store, session_id);
-        }
+        remove_session_artifacts_batch(store, &removed_ids);
         return SessionRetentionOutcome {
             removed_session_ids: removed_ids,
         };
@@ -340,9 +340,7 @@ pub(crate) fn enforce_retention(
         .drain(max_sessions..)
         .map(|session| session.id)
         .collect::<Vec<_>>();
-    for session_id in &removed_ids {
-        remove_session_artifacts(store, session_id);
-    }
+    remove_session_artifacts_batch(store, &removed_ids);
     SessionRetentionOutcome {
         removed_session_ids: removed_ids,
     }
@@ -582,22 +580,35 @@ pub(crate) fn session_bridge_detail_value(
 }
 
 pub(crate) fn remove_session_artifacts(store: &mut AppStore, session_id: &str) {
-    store.chat_sessions.retain(|item| item.id != session_id);
+    remove_session_artifacts_batch(store, &[session_id.to_string()]);
+}
+
+fn remove_session_artifacts_batch(store: &mut AppStore, session_ids: &[String]) {
+    if session_ids.is_empty() {
+        return;
+    }
+    let removed_ids = session_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    store
+        .chat_sessions
+        .retain(|item| !removed_ids.contains(item.id.as_str()));
     store
         .chat_messages
-        .retain(|item| item.session_id != session_id);
+        .retain(|item| !removed_ids.contains(item.session_id.as_str()));
     store
         .session_context_records
-        .retain(|item| item.session_id != session_id);
+        .retain(|item| !removed_ids.contains(item.session_id.as_str()));
     store
         .session_transcript_records
-        .retain(|item| item.session_id != session_id);
+        .retain(|item| !removed_ids.contains(item.session_id.as_str()));
     store
         .session_checkpoints
-        .retain(|item| item.session_id != session_id);
+        .retain(|item| !removed_ids.contains(item.session_id.as_str()));
     store
         .session_tool_results
-        .retain(|item| item.session_id != session_id);
+        .retain(|item| !removed_ids.contains(item.session_id.as_str()));
 }
 
 fn session_context_summary(session: &ChatSessionRecord) -> Option<SessionContextSummary> {

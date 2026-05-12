@@ -1,7 +1,8 @@
 use dirs::config_dir;
 use serde_json::json;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::MutexGuard;
 use std::sync::atomic::Ordering;
@@ -330,17 +331,14 @@ fn write_session_file_entries(
     entries: &[SessionFileEntry],
 ) -> Result<(), String> {
     let path = session_file_path(store_path, session_id)?;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|error| error.to_string())?;
+    let tmp = path.with_extension("jsonl.tmp");
+    let mut file = std::fs::File::create(&tmp).map_err(|error| error.to_string())?;
     use std::io::Write;
     for entry in entries {
         let line = serde_json::to_string(entry).map_err(|error| error.to_string())?;
         writeln!(file, "{}", line).map_err(|error| error.to_string())?;
     }
-    Ok(())
+    fs::rename(&tmp, &path).map_err(|error| error.to_string())
 }
 
 fn write_session_index(store_path: &Path, entries: &[SessionIndexEntry]) -> Result<(), String> {
@@ -362,9 +360,11 @@ pub(crate) fn load_session_file(
     session_id: &str,
 ) -> Result<Vec<SessionFileEntry>, String> {
     let path = session_file_path(store_path, session_id)?;
-    let content = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let file = fs::File::open(&path).map_err(|error| error.to_string())?;
+    let reader = BufReader::new(file);
     let mut entries: Vec<SessionFileEntry> = Vec::new();
-    for line in content.lines() {
+    for line in reader.lines() {
+        let line = line.map_err(|error| error.to_string())?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -381,29 +381,101 @@ pub(crate) fn load_session_file(
     Ok(entries)
 }
 
+pub(crate) fn load_session_messages_from_file(
+    store_path: &Path,
+    session_id: &str,
+) -> Result<Vec<crate::ChatMessageRecord>, String> {
+    let path = session_file_path(store_path, session_id)?;
+    let file = fs::File::open(&path).map_err(|error| error.to_string())?;
+    let reader = BufReader::new(file);
+    let mut seen = HashSet::new();
+    let mut messages = Vec::new();
+    for line in reader.lines() {
+        let line = line.map_err(|error| error.to_string())?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.contains("\"type\":\"message\"") {
+            continue;
+        }
+        match serde_json::from_str::<crate::ChatMessageRecord>(trimmed) {
+            Ok(message)
+                if message.session_id == session_id
+                    && (message.role == "user" || message.role == "assistant")
+                    && seen.insert(message.id.clone()) =>
+            {
+                messages.push(message);
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!(
+                "[{}] skip malformed message line in {}.jsonl: {e}",
+                app_brand_display_name(),
+                storage_safe_file_stem(session_id),
+            ),
+        }
+    }
+    messages.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    Ok(messages)
+}
+
 pub(crate) fn apply_session_file_entries_to_store(
     store: &mut AppStore,
     entries: Vec<SessionFileEntry>,
 ) {
+    let mut message_ids = store
+        .chat_messages
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
+    let mut context_session_ids = store
+        .session_context_records
+        .iter()
+        .map(|item| item.session_id.clone())
+        .collect::<HashSet<_>>();
+    let mut transcript_ids = store
+        .session_transcript_records
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
+    let mut checkpoint_ids = store
+        .session_checkpoints
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
+    let mut tool_result_ids = store
+        .session_tool_results
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<HashSet<_>>();
     for entry in entries {
         match entry {
             SessionFileEntry::Session(session) => {
-                store.chat_sessions.push(session);
+                if !store.chat_sessions.iter().any(|item| item.id == session.id) {
+                    store.chat_sessions.push(session);
+                }
             }
             SessionFileEntry::Message(msg) => {
-                store.chat_messages.push(msg);
+                if message_ids.insert(msg.id.clone()) {
+                    store.chat_messages.push(msg);
+                }
             }
             SessionFileEntry::Context(ctx) => {
-                store.session_context_records.push(ctx);
+                if context_session_ids.insert(ctx.session_id.clone()) {
+                    store.session_context_records.push(ctx);
+                }
             }
             SessionFileEntry::Transcript(tr) => {
-                store.session_transcript_records.push(tr);
+                if transcript_ids.insert(tr.id.clone()) {
+                    store.session_transcript_records.push(tr);
+                }
             }
             SessionFileEntry::Checkpoint(ch) => {
-                store.session_checkpoints.push(ch);
+                if checkpoint_ids.insert(ch.id.clone()) {
+                    store.session_checkpoints.push(ch);
+                }
             }
             SessionFileEntry::ToolResult(tr) => {
-                store.session_tool_results.push(tr);
+                if tool_result_ids.insert(tr.id.clone()) {
+                    store.session_tool_results.push(tr);
+                }
             }
         }
     }
@@ -414,20 +486,45 @@ fn load_sessions_from_jsonl(store_path: &Path, store: &mut AppStore) -> Result<(
         Ok(idx) => idx,
         Err(_) => return Ok(()),
     };
-    for entry in &index {
-        if entry.archived {
-            continue;
-        }
-        match load_session_file(store_path, &entry.id) {
-            Ok(entries) => apply_session_file_entries_to_store(store, entries),
-            Err(e) => eprintln!(
-                "[{}] failed to load session {}: {e}",
-                app_brand_display_name(),
-                entry.id,
-            ),
-        }
-    }
+    store
+        .chat_sessions
+        .extend(index.into_iter().filter(|entry| !entry.archived).map(|entry| {
+            crate::ChatSessionRecord {
+                id: entry.id,
+                title: entry.title,
+                created_at: entry.created_at,
+                updated_at: entry.updated_at,
+                metadata: entry.metadata,
+                deleted_at: None,
+                starred: entry.starred,
+                archived: false,
+                archived_at: None,
+            }
+        }));
     Ok(())
+}
+
+pub(crate) fn is_session_file_loaded(store: &AppStore, session_id: &str) -> bool {
+    store
+        .chat_messages
+        .iter()
+        .any(|item| item.session_id == session_id)
+        || store
+            .session_context_records
+            .iter()
+            .any(|item| item.session_id == session_id)
+        || store
+            .session_transcript_records
+            .iter()
+            .any(|item| item.session_id == session_id)
+        || store
+            .session_checkpoints
+            .iter()
+            .any(|item| item.session_id == session_id)
+        || store
+            .session_tool_results
+            .iter()
+            .any(|item| item.session_id == session_id)
 }
 
 pub(crate) fn archive_session(store_path: &Path, session_id: &str) -> Result<(), String> {
@@ -583,6 +680,28 @@ fn take_session_artifacts_from_store(store: &mut AppStore) -> Vec<PersistedSessi
                 || !item.session_tool_results.is_empty()
         })
         .collect()
+}
+
+fn dedupe_session_artifacts(artifacts: &mut PersistedSessionArtifacts) {
+    let mut message_ids = HashSet::new();
+    artifacts
+        .chat_messages
+        .retain(|item| message_ids.insert(item.id.clone()));
+
+    let mut transcript_ids = HashSet::new();
+    artifacts
+        .session_transcript_records
+        .retain(|item| transcript_ids.insert(item.id.clone()));
+
+    let mut checkpoint_ids = HashSet::new();
+    artifacts
+        .session_checkpoints
+        .retain(|item| checkpoint_ids.insert(item.id.clone()));
+
+    let mut tool_result_ids = HashSet::new();
+    artifacts
+        .session_tool_results
+        .retain(|item| tool_result_ids.insert(item.id.clone()));
 }
 
 fn apply_session_artifacts_to_store(store: &mut AppStore, artifacts: PersistedSessionArtifacts) {
@@ -937,12 +1056,20 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
     let mut snapshot = store.clone();
     crate::session_manager::enforce_default_retention(&mut snapshot);
     crate::auth::sanitize_store_for_persist(&mut snapshot);
-    let session_artifacts = take_session_artifacts_from_store(&mut snapshot);
+    let mut session_artifacts = take_session_artifacts_from_store(&mut snapshot);
+    for artifact in &mut session_artifacts {
+        dedupe_session_artifacts(artifact);
+    }
     let sessions = std::mem::take(&mut snapshot.chat_sessions);
     let context_records = std::mem::take(&mut snapshot.session_context_records);
     snapshot.debug_logs.clear();
 
     // Write per-session JSONL files
+    let existing_index = load_session_index(path)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| (entry.id.clone(), entry))
+        .collect::<HashMap<_, _>>();
     let mut index_entries: Vec<SessionIndexEntry> = Vec::new();
     for session in &sessions {
         let session_id = &session.id;
@@ -953,7 +1080,15 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
         let artifact = session_artifacts
             .iter()
             .find(|a| a.session_id == *session_id);
-        let message_count = artifact.map(|a| a.chat_messages.len() as i64).unwrap_or(0);
+        let session_context_records = context_records
+            .iter()
+            .filter(|c| c.session_id == *session_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let message_count = artifact
+            .map(|a| a.chat_messages.len() as i64)
+            .or_else(|| existing_index.get(session_id).map(|entry| entry.message_count))
+            .unwrap_or(0);
         if let Some(artifact) = artifact {
             for msg in &artifact.chat_messages {
                 entries.push(SessionFileEntry::Message(msg.clone()));
@@ -970,14 +1105,18 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
         }
 
         // Context records
-        for ctx in context_records
-            .iter()
-            .filter(|c| c.session_id == *session_id)
-        {
+        for ctx in &session_context_records {
             entries.push(SessionFileEntry::Context(ctx.clone()));
         }
 
-        let _ = write_session_file_entries(path, session_id, &entries);
+        let should_write_session_file = artifact.is_some()
+            || !session_context_records.is_empty()
+            || session_file_path(path, session_id)
+                .map(|file_path| !file_path.exists())
+                .unwrap_or(true);
+        if should_write_session_file {
+            let _ = write_session_file_entries(path, session_id, &entries);
+        }
 
         index_entries.push(SessionIndexEntry {
             id: session.id.clone(),
@@ -1231,12 +1370,20 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
             };
             crate::session_manager::enforce_default_retention(&mut snapshot);
             crate::auth::sanitize_store_for_persist(&mut snapshot);
-            let session_artifacts = take_session_artifacts_from_store(&mut snapshot);
+            let mut session_artifacts = take_session_artifacts_from_store(&mut snapshot);
+            for artifact in &mut session_artifacts {
+                dedupe_session_artifacts(artifact);
+            }
             let sessions = std::mem::take(&mut snapshot.chat_sessions);
             let context_records = std::mem::take(&mut snapshot.session_context_records);
             snapshot.debug_logs.clear();
 
             // Write per-session JSONL files
+            let existing_index = load_session_index(&path)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|entry| (entry.id.clone(), entry))
+                .collect::<HashMap<_, _>>();
             let mut index_entries: Vec<SessionIndexEntry> = Vec::new();
             for session in &sessions {
                 let session_id = &session.id;
@@ -1246,7 +1393,15 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
                 let artifact = session_artifacts
                     .iter()
                     .find(|a| a.session_id == *session_id);
-                let message_count = artifact.map(|a| a.chat_messages.len() as i64).unwrap_or(0);
+                let session_context_records = context_records
+                    .iter()
+                    .filter(|c| c.session_id == *session_id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let message_count = artifact
+                    .map(|a| a.chat_messages.len() as i64)
+                    .or_else(|| existing_index.get(session_id).map(|entry| entry.message_count))
+                    .unwrap_or(0);
                 if let Some(artifact) = artifact {
                     for msg in &artifact.chat_messages {
                         entries.push(SessionFileEntry::Message(msg.clone()));
@@ -1261,14 +1416,18 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
                         entries.push(SessionFileEntry::ToolResult(tr.clone()));
                     }
                 }
-                for ctx in context_records
-                    .iter()
-                    .filter(|c| c.session_id == *session_id)
-                {
+                for ctx in &session_context_records {
                     entries.push(SessionFileEntry::Context(ctx.clone()));
                 }
 
-                let _ = write_session_file_entries(&path, session_id, &entries);
+                let should_write_session_file = artifact.is_some()
+                    || !session_context_records.is_empty()
+                    || session_file_path(&path, session_id)
+                        .map(|file_path| !file_path.exists())
+                        .unwrap_or(true);
+                if should_write_session_file {
+                    let _ = write_session_file_entries(&path, session_id, &entries);
+                }
 
                 index_entries.push(SessionIndexEntry {
                     id: session.id.clone(),

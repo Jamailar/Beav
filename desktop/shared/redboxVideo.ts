@@ -1,10 +1,12 @@
+import { APP_BRAND } from '../src/config/brand';
+
 export type RedBoxOfficialVideoMode =
   | 'text-to-video'
   | 'reference-guided'
   | 'first-last-frame'
   | 'continuation';
 
-export const REDBOX_OFFICIAL_VIDEO_BASE_URL = 'https://api.ziz.hk/thrive/v1';
+export const REDBOX_OFFICIAL_VIDEO_BASE_URL = `https://api.ziz.hk/${APP_BRAND.variant}/v1`;
 
 export const REDBOX_OFFICIAL_VIDEO_MODELS = {
   'text-to-video': 'wan2.7-t2v-video',

@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { flushSync } from 'react-dom';
 import { Bot, Image as ImageIcon, Loader2, MessageSquarePlus, Heart, PanelRight, Plus, Sparkles, SlidersHorizontal, X } from 'lucide-react';
 import { clsx } from 'clsx';
+import { APP_BRAND } from '../config/brand';
 import { Chat } from './Chat';
 import { AdvisorModal, type Advisor, type AdvisorProfile } from './Advisors';
 import { TeamWorkbench } from './team-workbench/TeamWorkbench';
@@ -1969,12 +1970,12 @@ export function RedClaw({
         actions.push(
             {
                 label: '想吐槽或提建议?',
-                url: 'https://github.com/Jamailar/RedBox/issues',
+                url: APP_BRAND.githubIssuesUrl || 'https://github.com/Jamailar/RedBox/issues',
                 icon: <MessageSquarePlus className="w-5 h-5" />,
             },
             {
                 label: '喜欢我就点个 Star 吧',
-                url: 'https://github.com/Jamailar/RedBox',
+                url: APP_BRAND.githubRepoUrl || 'https://github.com/Jamailar/RedBox',
                 icon: <Heart className="w-5 h-5 fill-current" />,
                 color: 'text-rose-500'
             }

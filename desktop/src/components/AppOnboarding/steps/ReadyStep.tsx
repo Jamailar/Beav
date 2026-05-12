@@ -1,5 +1,5 @@
 import { ArrowRight, Sparkles } from 'lucide-react';
-import { APP_BRAND } from '../../config/brand';
+import { APP_BRAND } from '../../../config/brand';
 
 interface ReadyStepProps {
   onStart: () => void;

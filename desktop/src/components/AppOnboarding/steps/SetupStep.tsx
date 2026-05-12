@@ -1,5 +1,5 @@
 import { Cpu, FolderOpen } from 'lucide-react';
-import { APP_BRAND } from '../../config/brand';
+import { APP_BRAND } from '../../../config/brand';
 
 export function SetupStep() {
   return (

@@ -839,21 +839,21 @@ export function VideoDraftWorkbench({
         id: 'video',
         label: '视频',
         icon: Clapperboard,
-        accentClass: 'text-cyan-200',
+        accentClass: 'text-[rgb(var(--color-accent-primary))]',
         assets: searchableAssets.filter((item) => item.kind === 'video'),
       },
       {
         id: 'image',
         label: '图片',
         icon: ImageIcon,
-        accentClass: 'text-amber-200',
+        accentClass: 'text-[rgb(var(--color-status-warning))]',
         assets: searchableAssets.filter((item) => item.kind === 'image'),
       },
       {
         id: 'audio',
         label: '音频',
         icon: AudioLines,
-        accentClass: 'text-pink-200',
+        accentClass: 'text-[rgb(var(--color-info))]',
         assets: searchableAssets.filter((item) => item.kind === 'audio'),
       },
     ].filter((section) => section.assets.length > 0 && (effectiveMaterialFilter === 'all' || section.id === effectiveMaterialFilter));
@@ -3447,10 +3447,10 @@ export function VideoDraftWorkbench({
 
   return (
     <>
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#111113] text-white">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[#141417] px-5 py-3">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[rgb(var(--color-surface-primary))] text-white">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-[rgb(var(--color-surface-secondary))] px-5 py-3">
           <div className="min-w-0">
-            <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-cyan-200/65">{APP_BRAND.displayName} Editor</div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-[rgb(var(--color-accent-primary)/0.65)]">{APP_BRAND.displayName} Editor</div>
             <div className="mt-1 truncate text-lg font-semibold text-white">{title}</div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -3466,7 +3466,7 @@ export function VideoDraftWorkbench({
                 className={clsx(
                   'rounded-full border px-3 py-1.5 text-xs font-medium transition',
                   previewTab === tabId
-                    ? 'border-cyan-300/45 bg-cyan-400/14 text-cyan-100'
+                    ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.14)] text-[rgb(var(--color-accent-primary))]'
                     : 'border-white/10 bg-white/[0.03] text-white/55 hover:border-white/20 hover:text-white'
                 )}
               >
@@ -3515,7 +3515,7 @@ export function VideoDraftWorkbench({
                 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
                 isRenderingRemotion || !editableComposition?.scenes?.length || !canRunAiExecution
                   ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
-                  : 'border-cyan-400/40 bg-cyan-400/14 text-cyan-100 hover:border-cyan-300/70'
+                  : 'border-[rgb(var(--color-accent-primary)/0.4)] bg-[rgb(var(--color-accent-primary)/0.14)] text-[rgb(var(--color-accent-primary))] hover:border-[rgb(var(--color-accent-primary)/0.7)]'
               )}
               title={canRunAiExecution ? '导出当前 Remotion 成片' : '先确认脚本，再导出成片'}
             >
@@ -3538,14 +3538,14 @@ export function VideoDraftWorkbench({
               className={clsx(
                 'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium',
                 scriptConfirmed
-                  ? 'border-emerald-400/25 bg-emerald-400/12 text-emerald-100'
-                  : 'border-amber-300/25 bg-amber-400/12 text-amber-100'
+                  ? 'border-[rgb(var(--color-status-success)/0.25)] bg-[rgb(var(--color-status-success)/0.12)] text-[rgb(var(--color-status-success))]'
+                  : 'border-[rgb(var(--color-status-warning)/0.25)] bg-[rgb(var(--color-status-warning)/0.12)] text-[rgb(var(--color-status-warning))]'
               )}
             >
               <Save className="h-3.5 w-3.5" />
               {scriptStatusLabel}
             </div>
-            <div className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-100">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-[rgb(var(--color-accent-primary)/0.2)] bg-[rgb(var(--color-accent-primary)/0.1)] px-3 py-1.5 text-xs font-medium text-[rgb(var(--color-accent-primary))]">
               <MessageSquare className="h-3.5 w-3.5" />
               AI 对话常驻
             </div>
@@ -3582,14 +3582,14 @@ export function VideoDraftWorkbench({
                               <button
                                 type="button"
                                 onClick={() => handleMoveSceneItemsToEdge(selectedSceneItemIds, 'front')}
-                                className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                                className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                               >
                                 置前
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleMoveSceneItemsToEdge(selectedSceneItemIds, 'back')}
-                                className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                                className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                               >
                                 置后
                               </button>
@@ -3599,7 +3599,7 @@ export function VideoDraftWorkbench({
                             <button
                               type="button"
                               onClick={() => handleEnterGroupEditing(null)}
-                              className="inline-flex items-center rounded-full border border-fuchsia-300/35 bg-fuchsia-400/12 px-3 py-1 text-[11px] text-fuchsia-100 transition hover:border-fuchsia-300/60"
+                              className="inline-flex items-center rounded-full border border-[rgb(var(--color-info)/0.35)] bg-[rgb(var(--color-info)/0.12)] px-3 py-1 text-[11px] text-[rgb(var(--color-info))] transition hover:border-[rgb(var(--color-info)/0.6)]"
                             >
                               退出组内编辑
                             </button>
@@ -3611,21 +3611,21 @@ export function VideoDraftWorkbench({
                           <button
                             type="button"
                             onClick={() => handleSetSceneItemVisibility(selectedSceneItemIds, false)}
-                            className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             隐藏所选
                           </button>
                           <button
                             type="button"
                             onClick={() => handleSetSceneItemVisibility(selectedSceneItemIds, true)}
-                            className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             显示所选
                           </button>
                           <button
                             type="button"
                             onClick={() => handleToggleSceneSelectionLock()}
-                            className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             {selectedSceneItemsSummary?.lockedCount === selectedSceneItemIds.length ? '解锁所选' : '锁定所选'}
                           </button>
@@ -3664,7 +3664,7 @@ export function VideoDraftWorkbench({
                             className={clsx(
                               'rounded-xl border bg-black/20 p-3 transition',
                               layerDropTarget?.kind === 'group' && layerDropTarget.id === group.id
-                                ? 'border-fuchsia-300/45 bg-fuchsia-400/10'
+                                ? 'border-[rgb(var(--color-info)/0.45)] bg-[rgb(var(--color-info)/0.1)]'
                                 : 'border-white/10'
                             )}
                           >
@@ -3672,12 +3672,12 @@ export function VideoDraftWorkbench({
                               <button
                                 type="button"
                                 onClick={() => handleEnterGroupEditing(group.id)}
-                                className="text-left text-sm font-medium text-white transition hover:text-cyan-100"
+                                className="text-left text-sm font-medium text-white transition hover:text-[rgb(var(--color-accent-primary))]"
                               >
                                 组 {group.id}
                               </button>
                               <div className="flex items-center gap-2">
-                                {group.focused ? <span className="rounded-full border border-fuchsia-300/35 bg-fuchsia-400/14 px-2 py-0.5 text-[10px] text-fuchsia-100">editing</span> : null}
+                                {group.focused ? <span className="rounded-full border border-[rgb(var(--color-info)/0.35)] bg-[rgb(var(--color-info)/0.14)] px-2 py-0.5 text-[10px] text-[rgb(var(--color-info))]">editing</span> : null}
                                 <span className="rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5 text-[10px] text-white/60">{group.items.length}</span>
                               </div>
                             </div>
@@ -3685,21 +3685,21 @@ export function VideoDraftWorkbench({
                               <button
                                 type="button"
                                 onClick={() => handleSetSceneSelection(group.items.map((item) => item.id), group.items[0]?.id || null)}
-                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                               >
                                 选中整组
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleSetGroupVisibility(group.id, group.items.some((item) => item.visible === false))}
-                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                               >
                                 {group.items.every((item) => item.visible !== false) ? '隐藏整组' : '显示整组'}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleSetGroupLocks(group.id, group.items.some((item) => !item.locked))}
-                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                                className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/70 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                               >
                                 {group.items.every((item) => item.locked) ? '解锁整组' : '锁定整组'}
                               </button>
@@ -3746,9 +3746,9 @@ export function VideoDraftWorkbench({
                                   className={clsx(
                                     'flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left text-xs transition',
                                     draggingSceneItemId === item.id && 'opacity-70',
-                                    layerDropTarget?.kind === 'item' && layerDropTarget.id === item.id && 'border-fuchsia-300/45 bg-fuchsia-400/10',
+                                    layerDropTarget?.kind === 'item' && layerDropTarget.id === item.id && 'border-[rgb(var(--color-info)/0.45)] bg-[rgb(var(--color-info)/0.1)]',
                                     selectedSceneItemIds.includes(item.id)
-                                      ? 'border-cyan-300/35 bg-cyan-400/10 text-cyan-100'
+                                      ? 'border-[rgb(var(--color-accent-primary)/0.35)] bg-[rgb(var(--color-accent-primary)/0.1)] text-[rgb(var(--color-accent-primary))]'
                                       : 'border-white/10 bg-white/[0.03] text-white/70 hover:border-white/20'
                                   )}
                                 >
@@ -3819,7 +3819,7 @@ export function VideoDraftWorkbench({
                             className={clsx(
                               'rounded-xl border bg-black/20 p-3 transition',
                               layerDropTarget?.kind === 'ungroup'
-                                ? 'border-fuchsia-300/45 bg-fuchsia-400/10'
+                                ? 'border-[rgb(var(--color-info)/0.45)] bg-[rgb(var(--color-info)/0.1)]'
                                 : 'border-white/10'
                             )}
                           >
@@ -3866,9 +3866,9 @@ export function VideoDraftWorkbench({
                                   className={clsx(
                                     'flex w-full items-center justify-between rounded-lg border px-2.5 py-2 text-left text-xs transition',
                                     draggingSceneItemId === item.id && 'opacity-70',
-                                    layerDropTarget?.kind === 'item' && layerDropTarget.id === item.id && 'border-fuchsia-300/45 bg-fuchsia-400/10',
+                                    layerDropTarget?.kind === 'item' && layerDropTarget.id === item.id && 'border-[rgb(var(--color-info)/0.45)] bg-[rgb(var(--color-info)/0.1)]',
                                     selectedSceneItemIds.includes(item.id)
-                                      ? 'border-cyan-300/35 bg-cyan-400/10 text-cyan-100'
+                                      ? 'border-[rgb(var(--color-accent-primary)/0.35)] bg-[rgb(var(--color-accent-primary)/0.1)] text-[rgb(var(--color-accent-primary))]'
                                       : 'border-white/10 bg-white/[0.03] text-white/70 hover:border-white/20'
                                   )}
                                 >
@@ -3930,7 +3930,7 @@ export function VideoDraftWorkbench({
                             <button
                               type="button"
                               onClick={() => void handleDuplicateSceneItems(selectedSceneItemIds)}
-                              className="inline-flex items-center rounded-full border border-cyan-300/35 bg-cyan-400/12 px-3 py-1 text-[11px] text-cyan-100 transition hover:border-cyan-300/60"
+                              className="inline-flex items-center rounded-full border border-[rgb(var(--color-accent-primary)/0.35)] bg-[rgb(var(--color-accent-primary)/0.12)] px-3 py-1 text-[11px] text-[rgb(var(--color-accent-primary))] transition hover:border-[rgb(var(--color-accent-primary)/0.6)]"
                             >
                               复制
                             </button>
@@ -3965,21 +3965,21 @@ export function VideoDraftWorkbench({
                           <button
                             type="button"
                             onClick={() => handleSetSceneItemVisibility(selectedSceneItemIds, false)}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             全部隐藏
                           </button>
                           <button
                             type="button"
                             onClick={() => handleSetSceneItemVisibility(selectedSceneItemIds, true)}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             全部显示
                           </button>
                           <button
                             type="button"
                             onClick={() => handleToggleSceneSelectionLock()}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             {selectedSceneItemsSummary?.lockedCount === selectedSceneItemIds.length ? '全部解锁' : '全部锁定'}
                           </button>
@@ -3988,21 +3988,21 @@ export function VideoDraftWorkbench({
                           <button
                             type="button"
                             onClick={() => handleGroupSceneItems()}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             组对象
                           </button>
                           <button
                             type="button"
                             onClick={() => handleUngroupSceneItems()}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             解组
                           </button>
                           <button
                             type="button"
                             onClick={() => handleToggleSceneSelectionLock()}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             {selectedSceneItemsSummary?.lockedCount === selectedSceneItemIds.length ? '解锁选择' : '锁定选择'}
                           </button>
@@ -4020,7 +4020,7 @@ export function VideoDraftWorkbench({
                               key={mode}
                               type="button"
                               onClick={() => handleAlignSceneItems(mode)}
-                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                             >
                               {label}
                             </button>
@@ -4030,14 +4030,14 @@ export function VideoDraftWorkbench({
                           <button
                             type="button"
                             onClick={() => handleDistributeSceneItems('horizontal')}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             水平分布
                           </button>
                           <button
                             type="button"
                             onClick={() => handleDistributeSceneItems('vertical')}
-                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             垂直分布
                           </button>
@@ -4069,7 +4069,7 @@ export function VideoDraftWorkbench({
                                 fontWeight: preset.fontWeight,
                                 animation: preset.animation,
                               })}
-                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-left text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-left text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                             >
                               <div className="font-medium">{preset.label}</div>
                               <div className="mt-1 text-[10px] text-white/45">{preset.animation} · {preset.align}</div>
@@ -4165,7 +4165,7 @@ export function VideoDraftWorkbench({
                                 paddingY: preset.paddingY,
                                 segmentationMode: preset.type === 'word' ? 'singleWord' : 'punctuationOrPause',
                               })}
-                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-left text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-left text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                             >
                               <div className="font-medium">{preset.label}</div>
                               <div className="mt-1 text-[10px] text-white/45">{preset.position} · {preset.animation}</div>
@@ -4184,7 +4184,7 @@ export function VideoDraftWorkbench({
                               onClick={() => void handleBatchUpdateSubtitleStyle(selectedSubtitleSceneItemIds, {
                                 segmentationMode: mode,
                               })}
-                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                              className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                             >
                               {label}
                             </button>
@@ -4347,7 +4347,7 @@ export function VideoDraftWorkbench({
                                       }}
                                       className={clsx(
                                         'rounded-xl border px-3 py-2 text-left text-xs transition',
-                                        active ? 'border-cyan-300/45 bg-cyan-400/12 text-cyan-100' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
+                                        active ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.12)] text-[rgb(var(--color-accent-primary))]' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
                                       )}
                                     >
                                       <div className="font-medium">{preset.label}</div>
@@ -4493,7 +4493,7 @@ export function VideoDraftWorkbench({
                                         }}
                                         className={clsx(
                                           'rounded-xl border px-3 py-2 text-xs text-left transition',
-                                          active ? 'border-cyan-300/45 bg-cyan-400/12 text-cyan-100' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
+                                          active ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.12)] text-[rgb(var(--color-accent-primary))]' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
                                         )}
                                       >
                                         <div className="font-medium">{preset.label}</div>
@@ -4791,7 +4791,7 @@ export function VideoDraftWorkbench({
                                           className={clsx(
                                             'inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium transition',
                                             active
-                                              ? 'border-amber-300/45 bg-amber-400/14 text-amber-100'
+                                              ? 'border-[rgb(var(--color-status-warning)/0.45)] bg-[rgb(var(--color-status-warning)/0.14)] text-[rgb(var(--color-status-warning))]'
                                               : 'border-white/10 bg-white/[0.05] text-white/70 hover:border-white/20 hover:text-white'
                                           )}
                                         >
@@ -4904,7 +4904,7 @@ export function VideoDraftWorkbench({
                                       }}
                                       className={clsx(
                                         'rounded-xl border px-3 py-2 text-left text-xs transition',
-                                        active ? 'border-cyan-300/45 bg-cyan-400/12 text-cyan-100' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
+                                        active ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.12)] text-[rgb(var(--color-accent-primary))]' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
                                       )}
                                     >
                                       <div className="font-medium">{preset.label}</div>
@@ -4996,7 +4996,7 @@ export function VideoDraftWorkbench({
                             'mt-4 inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
                             isSavingSelectedClip
                               ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
-                              : 'border-cyan-300/45 bg-cyan-400/14 text-cyan-100 hover:border-cyan-300/70'
+                              : 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.14)] text-[rgb(var(--color-accent-primary))] hover:border-[rgb(var(--color-accent-primary)/0.7)]'
                           )}
                         >
                           <Save className="h-3.5 w-3.5" />
@@ -5062,22 +5062,22 @@ export function VideoDraftWorkbench({
                           </div>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
-                          <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.locked ? 'border-amber-300/35 bg-amber-300/12 text-amber-100' : 'border-white/10 bg-white/[0.03] text-white/55')}>
+                          <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.locked ? 'border-[rgb(var(--color-status-warning)/0.35)] bg-[rgb(var(--color-status-warning)/0.12)] text-[rgb(var(--color-status-warning))]' : 'border-white/10 bg-white/[0.03] text-white/55')}>
                             {activeTrackSummary.ui.locked ? '已锁定' : '未锁定'}
                           </span>
                           <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.hidden ? 'border-white/20 bg-white/[0.06] text-white/75' : 'border-white/10 bg-white/[0.03] text-white/55')}>
                             {activeTrackSummary.ui.hidden ? '已隐藏' : '可见'}
                           </span>
-                          <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.collapsed ? 'border-cyan-300/30 bg-cyan-400/12 text-cyan-100' : 'border-white/10 bg-white/[0.03] text-white/55')}>
+                          <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.collapsed ? 'border-[rgb(var(--color-accent-primary)/0.3)] bg-[rgb(var(--color-accent-primary)/0.12)] text-[rgb(var(--color-accent-primary))]' : 'border-white/10 bg-white/[0.03] text-white/55')}>
                             {activeTrackSummary.ui.collapsed ? '已折叠' : '已展开'}
                           </span>
                           {activeTrackSummary.id.startsWith('A') ? (
-                            <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.muted ? 'border-rose-300/30 bg-rose-400/12 text-rose-100' : 'border-white/10 bg-white/[0.03] text-white/55')}>
+                            <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.muted ? 'border-[rgb(var(--color-status-error)/0.3)] bg-[rgb(var(--color-status-error)/0.12)] text-[rgb(var(--color-status-error))]' : 'border-white/10 bg-white/[0.03] text-white/55')}>
                               {activeTrackSummary.ui.muted ? '已静音' : '有声'}
                             </span>
                           ) : null}
                           {activeTrackSummary.id.startsWith('A') ? (
-                            <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.solo ? 'border-violet-300/30 bg-violet-400/12 text-violet-100' : 'border-white/10 bg-white/[0.03] text-white/55')}>
+                            <span className={clsx('rounded-full border px-2.5 py-1 text-[10px]', activeTrackSummary.ui.solo ? 'border-[rgb(var(--color-info)/0.3)] bg-[rgb(var(--color-info)/0.12)] text-[rgb(var(--color-info))]' : 'border-white/10 bg-white/[0.03] text-white/55')}>
                               {activeTrackSummary.ui.solo ? '独奏中' : '未独奏'}
                             </span>
                           ) : null}
@@ -5091,7 +5091,7 @@ export function VideoDraftWorkbench({
                           <button
                             type="button"
                             onClick={() => void handleAddTrackFromInspector(activeTrackSummary.id.startsWith('A') ? 'audio' : activeTrackSummary.id.startsWith('S') ? 'subtitle' : 'video')}
-                            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/80 transition hover:border-cyan-300/45 hover:text-cyan-100"
+                            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:text-[rgb(var(--color-accent-primary))]"
                           >
                             <Plus className="h-3.5 w-3.5" />
                             同类新轨
@@ -5120,7 +5120,7 @@ export function VideoDraftWorkbench({
                               'inline-flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs transition',
                               !canDeleteActiveTrack
                                 ? 'cursor-not-allowed border-white/10 bg-white/[0.02] text-white/30'
-                                : 'border-red-400/20 bg-red-400/10 text-red-100 hover:border-red-300/50'
+                                : 'border-[rgb(var(--color-status-error)/0.2)] bg-[rgb(var(--color-status-error)/0.1)] text-[rgb(var(--color-status-error))] hover:border-[rgb(var(--color-status-error)/0.5)]'
                             )}
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -5257,7 +5257,7 @@ export function VideoDraftWorkbench({
                               'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition',
                               !subtitleRecognitionClip || isTranscribingSubtitles
                                 ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
-                                : 'border-cyan-300/45 bg-cyan-400/14 text-cyan-100 hover:border-cyan-300/70'
+                                : 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.14)] text-[rgb(var(--color-accent-primary))] hover:border-[rgb(var(--color-accent-primary)/0.7)]'
                             )}
                           >
                             <Sparkles className="h-3.5 w-3.5" />
@@ -5313,7 +5313,7 @@ export function VideoDraftWorkbench({
                               onClick={() => setSubtitlePresetId(preset.id)}
                               className={clsx(
                                 'rounded-2xl border px-3 py-3 text-left transition',
-                                active ? 'border-cyan-300/45 bg-cyan-400/12 text-cyan-100' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
+                                active ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.12)] text-[rgb(var(--color-accent-primary))]' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
                               )}
                             >
                               <div className="text-sm font-medium">{preset.label}</div>
@@ -5343,7 +5343,7 @@ export function VideoDraftWorkbench({
                         <button
                           type="button"
                           onClick={() => void insertSubtitleAtPlayhead(subtitleDraftText, subtitleDraftDurationMs)}
-                          className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-cyan-300/45 bg-cyan-400/14 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:border-cyan-300/70"
+                          className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.14)] px-3 py-2 text-xs font-medium text-[rgb(var(--color-accent-primary))] transition hover:border-[rgb(var(--color-accent-primary)/0.7)]"
                         >
                           <Plus className="h-3.5 w-3.5" />
                           在游标处加字幕
@@ -5370,7 +5370,7 @@ export function VideoDraftWorkbench({
                               onClick={() => handleTimelineSelectedClipChange(clipId || null)}
                               className={clsx(
                                 'block w-full rounded-2xl border px-3 py-3 text-left transition',
-                                isSelected ? 'border-cyan-300/45 bg-cyan-400/10' : 'border-white/10 bg-black/15 hover:border-white/20'
+                                isSelected ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.1)]' : 'border-white/10 bg-black/15 hover:border-white/20'
                               )}
                             >
                               <div className="flex items-start justify-between gap-3">
@@ -5474,7 +5474,7 @@ export function VideoDraftWorkbench({
                               onClick={() => setTextPresetId(preset.id)}
                               className={clsx(
                                 'rounded-2xl border px-3 py-3 text-left transition',
-                                active ? 'border-cyan-300/45 bg-cyan-400/12 text-cyan-100' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
+                                active ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.12)] text-[rgb(var(--color-accent-primary))]' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
                               )}
                             >
                               <div className="text-sm font-medium">{preset.label}</div>
@@ -5504,7 +5504,7 @@ export function VideoDraftWorkbench({
                         <button
                           type="button"
                           onClick={() => void insertTextAtPlayhead(textDraftText, textDraftDurationMs)}
-                          className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-cyan-300/45 bg-cyan-400/14 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:border-cyan-300/70"
+                          className="mt-5 inline-flex items-center gap-1.5 rounded-full border border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.14)] px-3 py-2 text-xs font-medium text-[rgb(var(--color-accent-primary))] transition hover:border-[rgb(var(--color-accent-primary)/0.7)]"
                         >
                           <Plus className="h-3.5 w-3.5" />
                           在游标处加文本
@@ -5530,7 +5530,7 @@ export function VideoDraftWorkbench({
                               onClick={() => handleTimelineSelectedClipChange(clipId || null)}
                               className={clsx(
                                 'block w-full rounded-2xl border px-3 py-3 text-left transition',
-                                isSelected ? 'border-cyan-300/45 bg-cyan-400/10 text-cyan-100' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
+                                isSelected ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.1)] text-[rgb(var(--color-accent-primary))]' : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
                               )}
                             >
                               <div className="flex items-start justify-between gap-3">
@@ -5579,7 +5579,7 @@ export function VideoDraftWorkbench({
                             转场现在按“上一镜头 → 当前镜头”的关系工作，时间轴、预览画布和片段 inspector 会同步显示这段连接。
                           </div>
                         </div>
-                        <div className="rounded-full border border-cyan-300/25 bg-cyan-400/10 px-3 py-1 text-[11px] font-medium text-cyan-100">
+                        <div className="rounded-full border border-[rgb(var(--color-accent-primary)/0.25)] bg-[rgb(var(--color-accent-primary)/0.1)] px-3 py-1 text-[11px] font-medium text-[rgb(var(--color-accent-primary))]">
                           {transitionClipCount} 段已配置
                         </div>
                       </div>
@@ -5619,12 +5619,12 @@ export function VideoDraftWorkbench({
                             <div className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] font-medium text-white/70">
                               {selectedTransitionContext.durationMs}ms
                             </div>
-                            <div className="rounded-2xl border border-cyan-300/35 bg-cyan-400/10 px-3 py-3">
-                              <div className="text-[10px] uppercase tracking-[0.18em] text-cyan-100/60">To</div>
-                              <div className="mt-1 truncate text-sm font-medium text-cyan-50">
+                            <div className="rounded-2xl border border-[rgb(var(--color-accent-primary)/0.35)] bg-[rgb(var(--color-accent-primary)/0.1)] px-3 py-3">
+                              <div className="text-[10px] uppercase tracking-[0.18em] text-[rgb(var(--color-accent-primary)/0.6)]">To</div>
+                              <div className="mt-1 truncate text-sm font-medium text-[rgb(var(--color-accent-primary))]">
                                 {String(selectedTransitionContext.current.name || selectedTransitionContext.current.clipId || '未命名片段')}
                               </div>
-                              <div className="mt-1 text-[11px] text-cyan-100/60">
+                              <div className="mt-1 text-[11px] text-[rgb(var(--color-accent-primary)/0.6)]">
                                 {String(selectedTransitionContext.current.track || 'V1')} · {formatSecondsLabel(Number(selectedTransitionContext.current.startSeconds || 0))}
                               </div>
                             </div>
@@ -5682,7 +5682,7 @@ export function VideoDraftWorkbench({
                                       !selectedClipSupportsTransition
                                         ? 'cursor-not-allowed border-white/10 bg-black/10 text-white/30'
                                         : active
-                                          ? 'border-cyan-300/45 bg-cyan-400/12 text-cyan-100'
+                                          ? 'border-[rgb(var(--color-accent-primary)/0.45)] bg-[rgb(var(--color-accent-primary)/0.12)] text-[rgb(var(--color-accent-primary))]'
                                           : 'border-white/10 bg-black/15 text-white/75 hover:border-white/20'
                                     )}
                                   >
@@ -5746,7 +5746,7 @@ export function VideoDraftWorkbench({
                     <button
                       type="button"
                       onClick={onOpenBindAssets}
-                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.04] px-4 py-4 text-sm text-white/80 hover:border-cyan-400/40 hover:bg-white/[0.06]"
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 bg-white/[0.04] px-4 py-4 text-sm text-white/80 hover:border-[rgb(var(--color-accent-primary)/0.4)] hover:bg-white/[0.06]"
                     >
                       <Plus className="h-4 w-4" />
                       导入素材
@@ -5762,7 +5762,7 @@ export function VideoDraftWorkbench({
                           },
                         }))}
                         placeholder="搜索素材名或路径"
-                        className="h-10 w-full rounded-2xl border border-white/10 bg-white/[0.04] pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-cyan-300/45 focus:bg-white/[0.06]"
+                        className="h-10 w-full rounded-2xl border border-white/10 bg-white/[0.04] pl-10 pr-3 text-sm text-white outline-none transition placeholder:text-white/30 focus:border-[rgb(var(--color-accent-primary)/0.45)] focus:bg-white/[0.06]"
                       />
                     </div>
                     <div className="mt-4 space-y-5">
@@ -5808,8 +5808,8 @@ export function VideoDraftWorkbench({
                                     onDragEnd={() => setMaterialDragPreview(null)}
                                     className={clsx(
                                       'group rounded-[18px] border bg-white/[0.04] p-2 text-left transition',
-                                      isActiveAsset ? 'border-cyan-400/55 ring-1 ring-cyan-400/35' : 'border-white/10 hover:border-white/20',
-                                      isDraggingThisAsset && 'scale-[0.98] border-cyan-300/55 opacity-45'
+                                      isActiveAsset ? 'border-[rgb(var(--color-accent-primary)/0.55)] ring-1 ring-[rgb(var(--color-accent-primary)/0.35)]' : 'border-white/10 hover:border-white/20',
+                                      isDraggingThisAsset && 'scale-[0.98] border-[rgb(var(--color-accent-primary)/0.55)] opacity-45'
                                     )}
                                   >
                                     <button
@@ -5868,7 +5868,7 @@ export function VideoDraftWorkbench({
                                             event.stopPropagation();
                                             void insertAssetAtPlayhead(asset);
                                           }}
-                                          className="inline-flex h-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-2.5 text-[11px] font-medium text-white/80 transition hover:border-cyan-300/45 hover:bg-cyan-400/14 hover:text-cyan-100"
+                                          className="inline-flex h-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-2.5 text-[11px] font-medium text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:bg-[rgb(var(--color-accent-primary)/0.14)] hover:text-[rgb(var(--color-accent-primary))]"
                                         >
                                           插入
                                         </button>
@@ -5878,7 +5878,7 @@ export function VideoDraftWorkbench({
                                             event.stopPropagation();
                                             void appendAssetToTimeline(asset);
                                           }}
-                                          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-white/80 transition hover:border-cyan-300/45 hover:bg-cyan-400/14 hover:text-cyan-100"
+                                          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-white/80 transition hover:border-[rgb(var(--color-accent-primary)/0.45)] hover:bg-[rgb(var(--color-accent-primary)/0.14)] hover:text-[rgb(var(--color-accent-primary))]"
                                         >
                                           <Plus className="h-3.5 w-3.5" />
                                         </button>
@@ -5904,7 +5904,7 @@ export function VideoDraftWorkbench({
 
           {!materialsCollapsed ? (
           <div
-            className="col-start-2 row-start-1 cursor-col-resize border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-cyan-400/20"
+            className="col-start-2 row-start-1 cursor-col-resize border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-[rgb(var(--color-accent-primary)/0.2)]"
             onPointerDown={(event) => {
               event.preventDefault();
               setDragState({
@@ -5933,7 +5933,7 @@ export function VideoDraftWorkbench({
                         'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition',
                         isGeneratingRemotion || timelineClipCount <= 0 || !canRunAiExecution
                           ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
-                          : 'border-fuchsia-400/40 bg-fuchsia-400/14 text-fuchsia-100 hover:border-fuchsia-300/70'
+                          : 'border-[rgb(var(--color-info)/0.4)] bg-[rgb(var(--color-info)/0.14)] text-[rgb(var(--color-info))] hover:border-[rgb(var(--color-info)/0.7)]'
                       )}
                       title={canRunAiExecution ? '基于已确认脚本生成动画' : '先确认脚本，再生成动画'}
                     >
@@ -5945,7 +5945,7 @@ export function VideoDraftWorkbench({
                     <button
                       type="button"
                       onClick={() => handleChangeRatioPreset(ratioPreset === '16:9' ? '9:16' : '16:9')}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-cyan-300/35 bg-cyan-400/12 px-3 py-1.5 text-xs font-medium text-cyan-100 transition hover:border-cyan-300/60 hover:bg-cyan-400/18"
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[rgb(var(--color-accent-primary)/0.35)] bg-[rgb(var(--color-accent-primary)/0.12)] px-3 py-1.5 text-xs font-medium text-[rgb(var(--color-accent-primary))] transition hover:border-[rgb(var(--color-accent-primary)/0.6)] hover:bg-[rgb(var(--color-accent-primary)/0.18)]"
                       title="切换画面比例"
                     >
                       {ratioPreset}
@@ -6013,7 +6013,7 @@ export function VideoDraftWorkbench({
                           <RemotionVideoPreview composition={editableComposition} playerRef={remotionPlayerRef} />
                         </div>
                       </div>
-                      <div className="min-h-0 overflow-y-auto bg-[#121318] px-4 py-4">
+                      <div className="min-h-0 overflow-y-auto bg-[rgb(var(--color-surface-secondary))] px-4 py-4">
                         <textarea
                           value={motionPrompt}
                           onChange={(event) => editorStore.setState((state) => ({
@@ -6042,7 +6042,7 @@ export function VideoDraftWorkbench({
                               }))}
                               className={clsx(
                                 'block w-full rounded-2xl border px-3 py-3 text-left transition',
-                                scene.id === selectedScene?.id ? 'border-fuchsia-400/45 bg-fuchsia-400/10' : 'border-white/10 bg-white/[0.03] hover:border-white/20'
+                                scene.id === selectedScene?.id ? 'border-[rgb(var(--color-info)/0.45)] bg-[rgb(var(--color-info)/0.1)]' : 'border-white/10 bg-white/[0.03] hover:border-white/20'
                               )}
                             >
                               <div className="truncate text-sm font-medium text-white">{scene.overlayTitle || `场景 ${index + 1}`}</div>
@@ -6055,7 +6055,7 @@ export function VideoDraftWorkbench({
                   ) : (
                     <div className="flex h-full items-center justify-center px-8 text-center text-white/55">
                       <div>
-                        <Wand2 className="mx-auto h-10 w-10 text-fuchsia-300/35" />
+                        <Wand2 className="mx-auto h-10 w-10 text-[rgb(var(--color-info)/0.35)]" />
                         <div className="mt-3 text-sm">还没有动画方案</div>
                         <div className="mt-1 text-xs text-white/35">点击“AI 生成动画”，让 AI 基于当前脚本和时间线生成 Remotion 镜头运动、字幕和动画层。</div>
                       </div>
@@ -6069,7 +6069,7 @@ export function VideoDraftWorkbench({
                       placeholder="在这里写视频脚本、镜头安排、剪辑目标和导出要求。"
                       className="h-full w-full resize-none bg-transparent px-5 py-5 text-sm leading-7 text-white outline-none placeholder:text-white/30"
                     />
-                    <div className="min-h-0 overflow-y-auto border-l border-white/10 bg-[#121318] px-4 py-4">
+                    <div className="min-h-0 overflow-y-auto border-l border-white/10 bg-[rgb(var(--color-surface-secondary))] px-4 py-4">
                       <div className="rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
                         <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/35">Script First</div>
                         <div className="mt-2 text-sm text-white/80">
@@ -6080,8 +6080,8 @@ export function VideoDraftWorkbench({
                             className={clsx(
                               'inline-flex items-center rounded-full border px-3 py-1 text-[11px] font-medium',
                               scriptConfirmed
-                                ? 'border-emerald-400/25 bg-emerald-400/12 text-emerald-100'
-                                : 'border-amber-300/25 bg-amber-400/12 text-amber-100'
+                                ? 'border-[rgb(var(--color-status-success)/0.25)] bg-[rgb(var(--color-status-success)/0.12)] text-[rgb(var(--color-status-success))]'
+                                : 'border-[rgb(var(--color-status-warning)/0.25)] bg-[rgb(var(--color-status-warning)/0.12)] text-[rgb(var(--color-status-warning))]'
                             )}
                           >
                             {scriptStatusLabel}
@@ -6094,7 +6094,7 @@ export function VideoDraftWorkbench({
                               'rounded-full border px-3 py-1 text-[11px] font-medium transition',
                               scriptConfirmed || editorBodyDirty || isSavingEditorBody
                                 ? 'cursor-not-allowed border-white/10 bg-white/[0.03] text-white/35'
-                                : 'border-emerald-400/35 bg-emerald-400/12 text-emerald-100 hover:border-emerald-300/60'
+                                : 'border-[rgb(var(--color-status-success)/0.35)] bg-[rgb(var(--color-status-success)/0.12)] text-[rgb(var(--color-status-success))] hover:border-[rgb(var(--color-status-success)/0.6)]'
                             )}
                           >
                             {scriptConfirmed ? '脚本已确认' : editorBodyDirty || isSavingEditorBody ? '保存后确认脚本' : '确认脚本，解锁剪辑/动画'}
@@ -6111,7 +6111,7 @@ export function VideoDraftWorkbench({
                       <div className="mt-4 rounded-[22px] border border-white/10 bg-white/[0.03] p-4">
                         <div className="flex items-center justify-between gap-3">
                           <div className="text-sm font-medium text-white">执行面板</div>
-                          <div className="inline-flex items-center rounded-full border border-cyan-300/25 bg-cyan-400/10 px-3 py-1 text-[11px] text-cyan-100/90">
+                          <div className="inline-flex items-center rounded-full border border-[rgb(var(--color-accent-primary)/0.25)] bg-[rgb(var(--color-accent-primary)/0.1)] px-3 py-1 text-[11px] text-[rgb(var(--color-accent-primary)/0.9)]">
                             AI 助手常驻
                           </div>
                         </div>
@@ -6143,7 +6143,7 @@ export function VideoDraftWorkbench({
                                     motionPrompt: scriptExecutionPrompts.motionExecutionPrompt,
                                   },
                                 }))}
-                                className="rounded-full border border-fuchsia-300/35 bg-fuchsia-400/12 px-3 py-1 text-[11px] text-fuchsia-100 transition hover:border-fuchsia-300/60"
+                                className="rounded-full border border-[rgb(var(--color-info)/0.35)] bg-[rgb(var(--color-info)/0.12)] px-3 py-1 text-[11px] text-[rgb(var(--color-info))] transition hover:border-[rgb(var(--color-info)/0.6)]"
                               >
                                 同步到动画提示
                               </button>
@@ -6170,15 +6170,15 @@ export function VideoDraftWorkbench({
           </VideoEditorStageShell>
 
           <div
-            className="col-start-4 row-start-1 row-span-3 border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-cyan-400/20"
+            className="col-start-4 row-start-1 row-span-3 border-r border-white/10 bg-white/[0.03] transition-colors hover:bg-[rgb(var(--color-accent-primary)/0.2)]"
           />
 
           <div
-            className="col-start-5 row-start-1 row-end-4 min-h-0 border-l border-white/10 bg-[#131417] shadow-[-24px_0_60px_rgba(0,0,0,0.4)]"
+            className="col-start-5 row-start-1 row-end-4 min-h-0 border-l border-white/10 bg-[rgb(var(--color-surface-secondary))] shadow-[-24px_0_60px_rgba(0,0,0,0.4)]"
           >
             <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
               <div className="flex items-center gap-2 text-sm font-medium text-white">
-                <MessageSquare className="h-4 w-4 text-cyan-400" />
+                <MessageSquare className="h-4 w-4 text-[rgb(var(--color-accent-primary))]" />
                 视频剪辑助手
               </div>
               <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[11px] text-white/55">始终显示</span>
@@ -6212,7 +6212,7 @@ export function VideoDraftWorkbench({
 
           {!timelineCollapsed ? (
           <VideoEditorTimelineShell
-            sectionClassName="col-start-1 col-end-4 row-start-3 min-h-0 overflow-hidden rounded-[20px] bg-[#121315] shadow-[0_12px_32px_rgba(0,0,0,0.22)]"
+            sectionClassName="col-start-1 col-end-4 row-start-3 min-h-0 overflow-hidden rounded-[20px] bg-[rgb(var(--color-surface-secondary))] shadow-[0_12px_32px_rgba(0,0,0,0.22)]"
             onResizeStart={(event) => {
               event.preventDefault();
               setDragState({
@@ -6257,7 +6257,7 @@ export function VideoDraftWorkbench({
 
       {layerContextMenu ? createPortal(
         <div
-          className="fixed z-[140] min-w-[180px] overflow-hidden rounded-2xl border border-white/10 bg-[#17181c] p-1 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
+          className="fixed z-[140] min-w-[180px] overflow-hidden rounded-2xl border border-white/10 bg-[rgb(var(--color-surface-elevated))] p-1 shadow-[0_24px_60px_rgba(0,0,0,0.45)]"
           style={{
             left: `${layerContextMenu.x}px`,
             top: `${layerContextMenu.y}px`,
@@ -6400,7 +6400,7 @@ export function VideoDraftWorkbench({
             top: materialDragPreview.y,
           }}
         >
-          <div className="w-28 overflow-hidden rounded-2xl border border-cyan-300/40 bg-[#111111]/92 shadow-[0_20px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div className="w-28 overflow-hidden rounded-2xl border border-[rgb(var(--color-accent-primary)/0.4)] bg-[rgb(var(--color-surface-elevated)/0.92)] shadow-[0_20px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl">
             <div className="h-20 w-full bg-black/40">
               {inferAssetKind(materialDragPreview.asset) === 'video' ? (
                 <video

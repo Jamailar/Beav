@@ -48,7 +48,7 @@ function QuestionProgress({
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-stone-300/60">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-amber-500 via-orange-400 to-rose-400 transition-[width] duration-300 ease-out"
+          className="h-full rounded-full bg-gradient-to-r from-[rgb(var(--color-accent-primary))] via-[rgb(var(--color-accent-hover))] to-[rgb(var(--color-brand-red))] transition-[width] duration-300 ease-out"
           style={{ width: `${progress}%` }}
         />
       </div>
@@ -65,9 +65,9 @@ function CompletionView({
 }) {
   return (
     <div className="flex h-full min-h-[420px] items-center justify-center">
-      <div className="w-full max-w-3xl rounded-[32px] border border-stone-300/80 bg-[linear-gradient(180deg,rgba(255,252,247,0.96),rgba(246,238,228,0.94))] px-8 py-10 text-center shadow-[0_32px_90px_rgba(120,88,38,0.14)] backdrop-blur-xl">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-amber-300/70 bg-amber-50">
-          <Loader2 className="h-7 w-7 animate-spin text-amber-700" />
+      <div className="w-full max-w-3xl rounded-[32px] border border-stone-300/80 bg-[linear-gradient(180deg,rgb(var(--color-surface-primary)),rgb(var(--color-surface-secondary)))] px-8 py-10 text-center shadow-[0_32px_90px_rgba(120,88,38,0.14)] backdrop-blur-xl">
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-[rgb(var(--color-accent-primary)/0.3)] bg-[rgb(var(--color-accent-muted))]">
+          <Loader2 className="h-7 w-7 animate-spin text-[rgb(var(--color-accent-hover))]" />
         </div>
         <div className="mt-6 text-[11px] font-semibold uppercase tracking-[0.24em] text-stone-600/70">
           {APP_BRAND.aiDisplayName} · {activeSpaceName || '当前空间'}
@@ -88,7 +88,7 @@ function CompletionView({
                 className={clsx(
                   'flex items-center gap-3 rounded-2xl border px-4 py-3 transition-all duration-200',
                   active
-                    ? 'border-amber-300/70 bg-amber-50/90 text-stone-900'
+                    ? 'border-[rgb(var(--color-accent-primary)/0.3)] bg-[rgb(var(--color-accent-muted)/0.9)] text-stone-900'
                     : 'border-stone-200/90 bg-white/70 text-stone-500'
                 )}
               >
@@ -98,7 +98,7 @@ function CompletionView({
                     active ? 'border-amber-300 bg-amber-100' : 'border-stone-300 bg-stone-100/80'
                   )}
                 >
-                  {index === stageIndex ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-700" /> : <span className="text-[11px] font-semibold">{index + 1}</span>}
+                  {index === stageIndex ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[rgb(var(--color-accent-hover))]" /> : <span className="text-[11px] font-semibold">{index + 1}</span>}
                 </div>
                 <div className="text-sm font-medium">{label}</div>
               </div>

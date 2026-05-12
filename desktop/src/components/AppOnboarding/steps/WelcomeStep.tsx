@@ -1,5 +1,5 @@
 import { Library, Sparkles, Timer } from 'lucide-react';
-import { APP_BRAND } from '../../config/brand';
+import { APP_BRAND } from '../../../config/brand';
 import { FeatureCard } from '../FeatureCard';
 
 export function WelcomeStep() {
