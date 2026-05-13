@@ -53,6 +53,8 @@
   --app-sidebar-item-active-background: rgb(var(--color-surface-primary) / 0.28);
   --app-sidebar-item-active-color: rgb(103 116 122 / 1);
   --app-sidebar-item-active-icon-color: rgb(var(--color-accent-primary) / 0.95);
+  --app-main-layer-background: var(--app-shell-background);
+  --app-main-layer-border: rgb(255 255 255 / 0.72);
   --app-card-shadow: 0 18px 44px rgba(30, 24, 16, 0.06);
   --app-card-hover-shadow: 0 24px 64px rgba(30, 24, 16, 0.1);
   --ai-panel-background:
@@ -132,6 +134,8 @@
   --app-sidebar-item-active-background: rgb(var(--color-surface-primary) / 0.28);
   --app-sidebar-item-active-color: rgb(214 218 220 / 1);
   --app-sidebar-item-active-icon-color: rgb(var(--color-accent-primary) / 0.95);
+  --app-main-layer-background: var(--app-shell-background);
+  --app-main-layer-border: rgb(255 255 255 / 0.08);
   --app-card-shadow: 0 24px 70px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   --app-card-hover-shadow: 0 28px 80px rgba(0, 0, 0, 0.36), 0 0 48px rgb(var(--color-accent-primary) / 0.08);
   --ai-panel-background:
@@ -285,10 +289,18 @@ select {
   color: rgb(var(--color-text-tertiary) / 1) !important;
 }
 
+.app-layout-shell--layered {
+  background: var(--app-sidebar-background);
+}
+
 .app-sidebar-shell {
   position: relative;
   background: var(--app-sidebar-background);
   backdrop-filter: saturate(1.05) blur(24px);
+}
+
+.app-layout-shell--layered .app-sidebar-shell {
+  border-right-color: transparent !important;
 }
 
 .app-sidebar-shell--expanded {
@@ -387,6 +399,16 @@ select {
 .app-sidebar-nav-item--active-special {
   background: transparent;
   color: var(--app-sidebar-item-active-icon-color);
+}
+
+.app-sidebar-nav-item[data-guide-id='nav-new-chat'] {
+  background: transparent;
+  color: var(--app-sidebar-item-color);
+}
+
+.app-sidebar-nav-item[data-guide-id='nav-new-chat']:hover {
+  background: var(--app-sidebar-new-chat-hover-background, var(--app-sidebar-item-hover-background));
+  color: var(--app-sidebar-new-chat-color, var(--app-sidebar-item-hover-color));
 }
 
 .app-sidebar-nav-icon {
@@ -1364,6 +1386,23 @@ select {
   background: var(--app-shell-background);
 }
 
+.app-main-shell--layered {
+  z-index: 1;
+  margin-top: 0;
+  margin-bottom: 0;
+  margin-left: -1px;
+  border-left: 1px solid var(--app-main-layer-border);
+  border-top-left-radius: 12px;
+  border-bottom-left-radius: 12px;
+  background: var(--app-main-layer-background);
+  isolation: isolate;
+}
+
+.app-main-shell--layered > .flex-1 {
+  border-top-left-radius: inherit;
+  border-bottom-left-radius: inherit;
+}
+
 /* Runtime fallback: force semantic utility classes to follow CSS variables
    even when Tailwind config changes have not been recompiled in a running dev process. */
 .bg-background { background-color: rgb(var(--color-background) / 1) !important; }
@@ -1402,6 +1441,83 @@ select {
 .border-border\/50 { border-color: rgb(var(--color-border) / 0.5) !important; }
 .border-border\/70 { border-color: rgb(var(--color-border) / 0.7) !important; }
 .border-border\/80 { border-color: rgb(var(--color-border) / 0.8) !important; }
+
+[data-brand='redbox'] .app-sidebar-shell {
+  --redbox-sidebar-text-primary: rgb(255 247 243 / 0.96);
+  --redbox-sidebar-text-secondary: rgb(246 235 232 / 0.76);
+  --redbox-sidebar-text-tertiary: rgb(230 207 202 / 0.62);
+  --redbox-sidebar-border: rgb(255 236 229 / 0.22);
+  --redbox-sidebar-hover: rgb(255 245 241 / 0.08);
+  --redbox-sidebar-active: rgb(255 245 241 / 0.14);
+  --redbox-sidebar-panel: rgb(255 247 243 / 0.08);
+}
+
+[data-brand='redbox'] .app-sidebar-shell .border-border,
+[data-brand='redbox'] .app-sidebar-shell .border-border\/50,
+[data-brand='redbox'] .app-sidebar-shell .border-border\/70,
+[data-brand='redbox'] .app-sidebar-shell .border-border\/80 {
+  border-color: var(--redbox-sidebar-border) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .text-text-primary {
+  color: var(--redbox-sidebar-text-primary) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .text-text-secondary {
+  color: var(--redbox-sidebar-text-secondary) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .text-text-tertiary,
+[data-brand='redbox'] .app-sidebar-shell .text-text-tertiary\/40,
+[data-brand='redbox'] .app-sidebar-shell .text-text-tertiary\/60,
+[data-brand='redbox'] .app-sidebar-shell .text-text-tertiary\/80,
+[data-brand='redbox'] .app-sidebar-shell .text-text-tertiary\/90 {
+  color: var(--redbox-sidebar-text-tertiary) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .bg-surface-primary,
+[data-brand='redbox'] .app-sidebar-shell .bg-surface-primary\/80,
+[data-brand='redbox'] .app-sidebar-shell .bg-surface-primary\/90,
+[data-brand='redbox'] .app-sidebar-shell .bg-surface-elevated {
+  background-color: var(--redbox-sidebar-panel) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .hover\:bg-surface-primary:hover,
+[data-brand='redbox'] .app-sidebar-shell .hover\:bg-surface-secondary:hover,
+[data-brand='redbox'] .app-sidebar-shell .hover\:bg-surface-secondary\/60:hover,
+[data-brand='redbox'] .app-sidebar-shell .hover\:bg-surface-secondary\/70:hover {
+  background-color: var(--redbox-sidebar-hover) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .bg-surface-secondary\/70,
+[data-brand='redbox'] .app-sidebar-shell .bg-accent-primary\/10,
+[data-brand='redbox'] .app-sidebar-shell .bg-accent-primary\/12 {
+  background-color: var(--redbox-sidebar-active) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell .app-sidebar-nav-item[data-guide-id='nav-new-chat'] {
+  background: transparent;
+  color: var(--app-sidebar-item-color);
+}
+
+[data-brand='redbox'] .app-sidebar-shell .app-sidebar-nav-item[data-guide-id='nav-new-chat']:hover {
+  background: var(--app-sidebar-new-chat-hover-background, var(--redbox-sidebar-hover));
+  color: var(--app-sidebar-new-chat-color, var(--redbox-sidebar-text-primary));
+}
+
+[data-brand='redbox'] .app-sidebar-shell .app-sidebar-nav-item--active:not([data-guide-id='nav-new-chat']) {
+  background: var(--app-sidebar-item-active-background);
+  color: var(--app-sidebar-item-active-color);
+}
+
+[data-brand='redbox'] .app-sidebar-shell button[aria-pressed='false'] {
+  color: var(--redbox-sidebar-text-tertiary) !important;
+}
+
+[data-brand='redbox'] .app-sidebar-shell button[aria-pressed='false']:hover {
+  background-color: var(--redbox-sidebar-hover) !important;
+  color: var(--redbox-sidebar-text-secondary) !important;
+}
 
 /* Legacy class bridge: map existing fixed Tailwind gray/white classes in dark mode. */
 [data-theme='dark'] .bg-white,

@@ -55,6 +55,9 @@ const TOKEN_TO_CSS_VAR: Record<keyof AppBrandThemeModeTokens, string> = {
   sidebarItemActiveBackground: '--app-sidebar-item-active-background',
   sidebarItemActiveColor: '--app-sidebar-item-active-color',
   sidebarItemActiveIconColor: '--app-sidebar-item-active-icon-color',
+  sidebarNewChatBackground: '--app-sidebar-new-chat-background',
+  sidebarNewChatHoverBackground: '--app-sidebar-new-chat-hover-background',
+  sidebarNewChatColor: '--app-sidebar-new-chat-color',
   cardShadow: '--app-card-shadow',
   cardHoverShadow: '--app-card-hover-shadow',
   aiPanelBackground: '--ai-panel-background',
@@ -190,6 +193,7 @@ function customTokensForMode(mode: ThemeMode, preference: CustomThemePreference)
 export function applyAppTheme(mode: ThemeMode, brandTheme: AppBrandTheme = APP_BRAND.theme) {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
+  root.setAttribute('data-brand', APP_BRAND.variant);
   root.setAttribute('data-theme', mode);
   root.classList.toggle('dark', mode === 'dark');
   applyTokenSet(mode === 'dark' ? brandTheme.dark : brandTheme.light);

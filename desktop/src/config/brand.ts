@@ -58,6 +58,9 @@ export type AppBrandThemeModeTokens = Partial<{
   sidebarItemActiveBackground: string;
   sidebarItemActiveColor: string;
   sidebarItemActiveIconColor: string;
+  sidebarNewChatBackground: string;
+  sidebarNewChatHoverBackground: string;
+  sidebarNewChatColor: string;
   cardShadow: string;
   cardHoverShadow: string;
   aiPanelBackground: string;
