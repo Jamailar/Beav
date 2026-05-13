@@ -1103,6 +1103,7 @@ impl<'a> AppCliExecutor<'a> {
                 }
             }
             "cli-runtime" | "cli_runtime" => self.handle_cli_runtime(args, payload),
+            "model-config" | "model_config" => self.handle_model_config(args, payload),
             "settings" => self.handle_settings(args, payload),
             "skills" => self.handle_skills(args, payload),
             "mcp" => self.handle_mcp(args, payload),
@@ -2872,6 +2873,29 @@ impl<'a> AppCliExecutor<'a> {
             "get" => self.call_channel("db:get-settings", json!({})),
             "set" => self.call_channel("db:save-settings", payload.clone()),
             _ => Err(format!("unsupported settings action: {action}")),
+        }
+    }
+
+    fn handle_model_config(&self, tokens: &[String], payload: &Value) -> Result<Value, String> {
+        let Some(action) = tokens.first().map(String::as_str) else {
+            return Ok(help_response(Some("model-config")));
+        };
+        let args = parse_cli_args(&tokens[1..])?;
+        match action {
+            "read" => self.call_channel("model-config:read", json!({})),
+            "effective" => {
+                let runtime_mode = args
+                    .string(&["runtime-mode", "runtimeMode", "mode"])
+                    .or_else(|| payload_string(payload, "runtimeMode"))
+                    .or_else(|| payload_string(payload, "runtime_mode"));
+                self.call_channel(
+                    "model-config:effective",
+                    json!({
+                        "runtimeMode": runtime_mode.unwrap_or_else(|| self.runtime_mode.to_string()),
+                    }),
+                )
+            }
+            _ => Err(format!("unsupported model_config action: {action}")),
         }
     }
 
@@ -5602,6 +5626,7 @@ fn help_response(namespace: Option<&str>) -> Value {
             "memory list|search|recall|add|update|archive|delete|rebuild-index|diagnostics",
             "redclaw runner-status|runner-run-now|runner-start|runner-stop|runner-set-config|task-preview|task-create|task-confirm|task-update|task-cancel|task-list|task-stats|profile-bundle|profile-read|profile-update|profile-onboarding",
             "runtime query|resume|fork-session|get-trace|get-checkpoints|get-tool-results|tasks create|list|get|resume|cancel|background list|get|cancel|team list-sessions|create-session|get-session|add-member|create-task|update-task|request-report|submit-report|mcp-contract|session-enter-diagnostics|session-bridge status|list-sessions|get-session",
+            "model-config read|effective",
             "settings summary|get|set",
             "skills list|invoke|create|save|enable|disable|market-install",
             "mcp list|sessions|oauth-status|save|test|call|list-tools|list-resources|list-resource-templates|disconnect|disconnect-all|discover-local|import-local",
@@ -5616,6 +5641,10 @@ fn help_response(namespace: Option<&str>) -> Value {
             "advisors delete --id <advisorId>",
         ],
         "chat" => vec!["chat sessions list", "chat sessions get --id <sessionId>"],
+        "model-config" | "model_config" => vec![
+            "model-config read",
+            "model-config effective [--runtime-mode chat|wander|team|knowledge|redclaw|image|videoAnalysis]",
+        ],
         "spaces" => vec![
             "spaces list",
             "spaces get --id <spaceId>",

@@ -479,6 +479,8 @@ pub fn handle_system_channel(
         | "app:open-knowledge-api-guide"
         | "app:open-path"
         | "settings:pick-workspace-dir"
+        | "model-config:read"
+        | "model-config:effective"
         | "db:get-settings"
         | "db:save-settings"
         | "debug:get-status"
@@ -538,6 +540,22 @@ pub fn handle_system_channel(
                         "path": path,
                     }))
                 }
+                "model-config:read" => with_store(state, |store| {
+                    Ok(crate::model_config::model_config_diagnostics_value(
+                        &state.store_path,
+                        &store.settings,
+                    ))
+                }),
+                "model-config:effective" => {
+                    let runtime_mode = payload_string(payload, "runtimeMode")
+                        .or_else(|| payload_string(payload, "runtime_mode"));
+                    with_store(state, |store| {
+                        Ok(crate::model_config::effective_model_config_value(
+                            &store.settings,
+                            runtime_mode.as_deref(),
+                        ))
+                    })
+                }
                 "db:get-settings" => with_store(state, |store| {
                     let runtime = state
                         .auth_runtime
@@ -561,6 +579,10 @@ pub fn handle_system_channel(
                         store.settings = merged_settings_payload(&store.settings, payload);
                         Ok((store.active_space_id.clone(), store.settings.clone()))
                     })?;
+                    crate::model_config::sync_model_config_file(
+                        &state.store_path,
+                        &settings_snapshot,
+                    )?;
                     let workspace_root =
                         update_workspace_root_cache(state, &settings_snapshot, &active_space_id)?;
                     let workspace_changed = previous_workspace_root

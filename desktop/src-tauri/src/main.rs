@@ -34,6 +34,7 @@ mod media_runtime;
 mod member_skill;
 mod memory;
 mod memory_maintenance;
+mod model_config;
 mod official_support;
 mod persistence;
 mod process_utils;
@@ -10085,6 +10086,19 @@ fn main() {
             "auth",
             "startup.auth_migrate_failed",
             format!("[{} auth migrate] {error}", app_brand_display_name()),
+            json!({ "error": error }),
+            None,
+        );
+    }
+    if let Err(error) =
+        model_config::load_model_config_into_settings(&store_path, &mut store.settings)
+    {
+        logging::emit_legacy_line(
+            logging::event::LogSource::Host,
+            logging::event::LogLevel::Warn,
+            "model_config",
+            "startup.model_config_load_failed",
+            format!("[{} model config] {error}", app_brand_display_name()),
             json!({ "error": error }),
             None,
         );
