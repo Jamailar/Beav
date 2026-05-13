@@ -460,6 +460,8 @@ fn pinned_direct_app_cli_actions(
             "team.guide.create",
             "media.transcribe",
             "image.generate",
+            "model_config.effective",
+            "model_config.read",
             "skills.invoke",
             "skills.installFromRepo",
             "skills.uninstall",
@@ -672,6 +674,8 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("skills.invoke"));
+        assert!(plan.has_direct_app_cli_action("model_config.effective"));
+        assert!(plan.has_direct_app_cli_action("model_config.read"));
         assert!(!plan.has_deferred_app_cli_action("skills.invoke"));
     }
 
@@ -862,6 +866,8 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
         assert!(plan.has_direct_app_cli_action("image.generate"));
+        assert!(plan.has_direct_app_cli_action("model_config.effective"));
+        assert!(plan.has_direct_app_cli_action("model_config.read"));
     }
 
     #[test]
@@ -882,6 +888,8 @@ mod tests {
         assert!(!plan.has_direct_app_cli_action("cli_runtime.install"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.execute"));
         assert!(plan.has_direct_app_cli_action("cli_runtime.execution.get"));
+        assert!(plan.has_direct_app_cli_action("model_config.effective"));
+        assert!(plan.has_direct_app_cli_action("model_config.read"));
     }
 
     #[test]

@@ -660,6 +660,14 @@ impl<'a> AppCliExecutor<'a> {
                 self.handle_memory(&tokens, payload)
             }
             "webfetch" => self.handle_web(&["fetch".to_string()], payload),
+            "modelconfigread" => {
+                let tokens = vec!["read".to_string()];
+                self.handle_model_config(&tokens, payload)
+            }
+            "modelconfigeffective" => {
+                let tokens = vec!["effective".to_string()];
+                self.handle_model_config(&tokens, payload)
+            }
             "videoanalyze" => self.handle_video_analyze(payload),
             "memorysearch" => {
                 let tokens = vec!["search".to_string()];
