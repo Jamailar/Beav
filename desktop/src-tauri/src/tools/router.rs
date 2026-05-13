@@ -669,6 +669,64 @@ mod tests {
     }
 
     #[test]
+    fn router_reports_deferred_team_operate_without_legacy_error() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let error = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "team.session",
+                    "operation": "create",
+                    "input": {
+                        "title": "Video team",
+                        "objective": "Create videos",
+                        "userConfirmedTeamPlan": true
+                    }
+                }),
+            )
+            .expect_err("low-level team creation should be deferred");
+
+        assert!(error.contains("ACTION_DEFERRED"));
+        assert!(!error.contains("LEGACY_COMMAND_DISABLED"));
+    }
+
+    #[test]
+    fn router_prepares_direct_team_guide_operate() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "team.guide",
+                    "operation": "create",
+                    "input": {
+                        "name": "Video content team",
+                        "summary": "Create short-form video content",
+                        "members": [],
+                        "tasks": [],
+                        "userConfirmedTeamPlan": true,
+                        "autoOpen": true
+                    }
+                }),
+            )
+            .expect("team guide create should be direct");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("team.guide.create"))
+        );
+    }
+
+    #[test]
     fn router_prepares_direct_mcp_tool_without_compat_normalization() {
         let inventory = McpToolInventorySnapshot {
             tools: vec![McpToolInfo {

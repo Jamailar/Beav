@@ -1011,6 +1011,69 @@ fn team_session_create_input_schema() -> Value {
     )
 }
 
+fn team_guide_create_input_schema() -> Value {
+    object_schema(
+        &[
+            ("name", string_schema("Confirmed team name.")),
+            (
+                "summary",
+                string_schema("Confirmed team goal, background, and initial instruction."),
+            ),
+            (
+                "members",
+                json!({
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "displayName": { "type": "string" },
+                            "roleId": { "type": "string" },
+                            "responsibility": { "type": "string" },
+                            "capabilities": { "type": "array", "items": { "type": "string" } }
+                        },
+                        "required": ["displayName"]
+                    }
+                }),
+            ),
+            (
+                "tasks",
+                json!({
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" },
+                            "memberRoleId": { "type": "string" },
+                            "description": { "type": "string" },
+                            "objective": { "type": "string" }
+                        },
+                        "required": ["title"]
+                    }
+                }),
+            ),
+            (
+                "metadata",
+                json!({ "type": "object", "additionalProperties": true }),
+            ),
+            (
+                "autoOpen",
+                bool_schema("Whether the RedClaw team room should open automatically."),
+            ),
+            (
+                "userConfirmedTeamPlan",
+                json!({
+                    "type": "boolean",
+                    "description": "Must be true only after the user explicitly confirmed the proposed team members and division of work in a previous message."
+                }),
+            ),
+        ],
+        &["summary", "userConfirmedTeamPlan"],
+        Some(
+            "Create one confirmed internal Team Workboard with members and starter tasks. This is the recommended team creation entrypoint after explicit user confirmation.",
+        ),
+    )
+}
+
 fn team_session_get_input_schema() -> Value {
     object_schema(
         &[
@@ -1951,7 +2014,7 @@ fn video_analyze_input_schema() -> Value {
                 json!({
                     "type": "string",
                     "enum": ["summary", "shot_breakdown", "speech_extract", "highlight_clips", "talking_head_cut", "smart_edit"],
-                    "description": "Video analysis mode."
+                    "description": "Video analysis mode. Do not use speech_extract for subtitle, caption, transcript, SRT, VTT, ASR, or spoken-text extraction; use media.transcribe instead."
                 }),
             ),
             (
@@ -2109,6 +2172,38 @@ fn fs_workspace_read_input_schema() -> Value {
             ),
         ],
         &["path"],
+        None,
+    )
+}
+
+fn fs_workspace_create_directory_input_schema() -> Value {
+    object_schema(
+        &[(
+            "path",
+            string_schema(
+                "Workspace-relative directory path to create. Parent directories are created as needed.",
+            ),
+        )],
+        &["path"],
+        None,
+    )
+}
+
+fn fs_workspace_write_input_schema() -> Value {
+    object_schema(
+        &[
+            (
+                "path",
+                string_schema(
+                    "Workspace-relative file path to write. Parent directories are created as needed.",
+                ),
+            ),
+            (
+                "content",
+                string_schema("Complete UTF-8 text content to write."),
+            ),
+        ],
+        &["path", "content"],
         None,
     )
 }
@@ -2488,6 +2583,7 @@ fn redbox_resource_for_action(action: &str) -> Option<&'static str> {
         "subjects" => Some("subject"),
         "image" => Some("image"),
         "video" => Some("video"),
+        "media" => Some("media"),
         "web" => Some("web"),
         "skills" => Some("skill"),
         "mcp" => Some("mcp"),
@@ -2516,6 +2612,7 @@ fn redbox_operation_for_action(action: &str) -> Option<&'static str> {
         "confirm" | "approve" => Some("confirm"),
         "invoke" | "call" | "execute" => Some("run"),
         "generate" => Some("generate"),
+        "transcribe" => Some("transcribe"),
         "install" | "save" | "importLocal" => Some("install"),
         "verify" | "diagnose" | "inspect" | "detect" | "discover" | "discoverLocal" | "test" => {
             Some("verify")
@@ -3084,6 +3181,17 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         mutating: true,
         concurrency_safe: false,
         runtime_modes: DIAGNOSTIC_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "team.guide.create",
+        namespace: "team.guide",
+        description: "Create one confirmed internal Team Workboard with members and starter tasks, then open the RedClaw team room automatically. Use this after the user explicitly confirms the team plan.",
+        input_schema: team_guide_create_input_schema,
+        output_schema: runtime_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
     ActionDescriptor {
@@ -3672,7 +3780,7 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "video.analyze",
         namespace: "video_analysis",
-        description: "Analyze an attached video by delegating to the locked Video Analysis Agent and return structured JSON.",
+        description: "Analyze an attached video's visual content, scenes, highlights, or edit strategy by delegating to the locked Video Analysis Agent. Do not use for subtitles, captions, transcripts, SRT, VTT, or ASR; use media.transcribe for those.",
         input_schema: video_analyze_input_schema,
         output_schema: media_output_schema,
         mutating: false,
@@ -3694,13 +3802,13 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
     ActionDescriptor {
         action: "media.transcribe",
         namespace: "media",
-        description: "Extract audio from an existing local video/audio file and generate a transcript or subtitle file. Use before subtitle overlay, captioned exports, or semantic video cuts that need timed text.",
+        description: "Extract audio from an existing local video/audio file and generate a transcript or subtitle file. Use for subtitle recognition, captions, SRT, VTT, ASR, spoken-text extraction, subtitle overlay, captioned exports, or semantic video cuts that need timed text.",
         input_schema: media_transcribe_input_schema,
         output_schema: media_output_schema,
         mutating: true,
         concurrency_safe: false,
         runtime_modes: REDCLAW_RUNTIME_MODES,
-        visibility: ActionVisibility::CompatOnly,
+        visibility: ActionVisibility::Model,
     },
 ];
 
@@ -3724,6 +3832,28 @@ const REDBOX_FS_ACTIONS: &[ActionDescriptor] = &[
         output_schema: file_system_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "workspace.createDirectory",
+        namespace: "workspace",
+        description: "Create one workspace-relative directory, including missing parents. Use for project folders and other long-lived workspace artifacts.",
+        input_schema: fs_workspace_create_directory_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "workspace.write",
+        namespace: "workspace",
+        description: "Write one UTF-8 text file inside the workspace, creating parent directories as needed. Use for project manifests, drafts, plans, transcripts, and indexes that should live as user-managed project files.",
+        input_schema: fs_workspace_write_input_schema,
+        output_schema: file_system_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: ALL_FILE_SYSTEM_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -4153,7 +4283,7 @@ pub fn descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
         }),
         "resource" => Some(ToolDescriptor {
             name: "resource",
-            description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            description: "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             kind: ToolKind::FileSystem,
             requires_approval: false,
             concurrency_safe: true,
@@ -4376,7 +4506,7 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
         })),
         "resource" => Some(build_action_tool_schema(
             "resource",
-            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             &action_descriptors_for_tool("resource", runtime_mode, ActionVisibility::Model),
         )),
         "knowledge_glob" => Some(json!({
@@ -4583,7 +4713,7 @@ pub fn schema_for_tool_from_action_descriptors(
         )),
         "resource" => Some(build_action_tool_schema(
             "resource",
-            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
+            "Unified structured file access for workspace and advisor/member knowledge. Prefer explicit actions such as workspace.list, workspace.read, workspace.createDirectory, workspace.write, workspace.search, knowledge.list, knowledge.read, and knowledge.search.",
             descriptors,
         )),
         "editor" => Some(build_action_tool_schema(
@@ -4690,7 +4820,7 @@ mod tests {
         assert!(actions.contains(&"video.generate"));
         assert!(actions.contains(&"video.analyze"));
         assert!(!actions.contains(&"media.edit"));
-        assert!(!actions.contains(&"media.transcribe"));
+        assert!(actions.contains(&"media.transcribe"));
         assert!(actions.contains(&"voice.clone"));
         assert!(actions.contains(&"voice.bindAsset"));
         assert!(actions.contains(&"voice.speech"));
@@ -4742,6 +4872,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(actions.contains(&"workspace.list"));
         assert!(actions.contains(&"workspace.read"));
+        assert!(actions.contains(&"workspace.createDirectory"));
+        assert!(actions.contains(&"workspace.write"));
         assert!(actions.contains(&"workspace.search"));
         assert!(actions.contains(&"knowledge.list"));
         assert!(actions.contains(&"knowledge.read"));

@@ -230,6 +230,7 @@ export interface Message {
     ext?: string;
     size?: number;
     thumbnailDataUrl?: string;
+    thumbnailUrl?: string;
     inlineDataUrl?: string;
     workspaceRelativePath?: string;
     toolPath?: string;
@@ -265,6 +266,7 @@ export interface Message {
     localUrl?: string;
     inlineDataUrl?: string;
     thumbnailDataUrl?: string;
+    thumbnailUrl?: string;
     kind?: string;
     mimeType?: string;
     size?: number;
@@ -304,6 +306,7 @@ export type ChatMessageLinkKind =
   | 'video'
   | 'audio'
   | 'manuscript'
+  | 'document'
   | 'pdf'
   | 'html'
   | 'text'
@@ -428,43 +431,77 @@ const transformMarkdownUrlForPreviewCards: UrlTransform = (url, key, node) => {
   return transformMarkdownUrl(value, key, node);
 };
 
-const IMAGE_LINK_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'avif']);
-const VIDEO_LINK_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi']);
-const AUDIO_LINK_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg']);
+const IMAGE_LINK_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'avif', 'ico', 'tif', 'tiff']);
+const VIDEO_LINK_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'ogv']);
+const AUDIO_LINK_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'flac', 'aac', 'ogg', 'oga', 'opus']);
+const DOCUMENT_LINK_EXTENSIONS = new Set(['doc', 'docx', 'odt', 'ppt', 'pptx', 'odp', 'xls', 'xlsx', 'ods']);
 const TEXT_LINK_EXTENSIONS = new Set([
   'md',
   'markdown',
   'txt',
+  'srt',
+  'vtt',
+  'diff',
+  'patch',
   'json',
   'csv',
+  'tsv',
   'yaml',
   'yml',
+  'toml',
+  'ini',
+  'conf',
+  'config',
+  'env',
   'xml',
   'log',
+  'sql',
+  'sh',
+  'bash',
+  'zsh',
+  'fish',
   'ts',
   'tsx',
   'js',
   'jsx',
+  'mjs',
+  'cjs',
   'rs',
   'py',
   'go',
   'java',
   'c',
   'cpp',
+  'cc',
+  'cxx',
   'h',
   'hpp',
+  'hh',
+  'hxx',
   'css',
   'scss',
-  'doc',
-  'docx',
-  'ppt',
-  'pptx',
-  'xls',
-  'xlsx',
+  'sass',
+  'less',
+  'vue',
+  'svelte',
+  'astro',
+  'rb',
+  'php',
+  'swift',
+  'kt',
+  'kts',
+  'scala',
+  'r',
+  'lua',
+  'pl',
+  'pm',
+  'dart',
+  'dockerfile',
+  'lock',
 ]);
 const ARCHIVE_LINK_EXTENSIONS = new Set(['zip', 'rar', '7z', 'tar', 'gz', 'tgz']);
 const PREVIEW_VIRTUAL_PATH_RE = /^(workspace|knowledge|manuscripts|media|cover|redclaw):\/\/.+/i;
-const PREVIEW_PATH_LINKIFY_EXT_PATTERN = '(?:png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|thrive|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)';
+const PREVIEW_PATH_LINKIFY_EXT_PATTERN = '(?:png|jpe?g|webp|gif|bmp|svg|avif|ico|tiff?|mp4|webm|mov|m4v|mkv|avi|ogv|mp3|wav|m4a|flac|aac|ogg|oga|opus|pdf|docx?|odt|pptx?|odp|xlsx?|ods|html?|md|markdown|thrive|txt|srt|vtt|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|config|env|xml|log|sql|sh|bash|zsh|fish|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|c|cpp|cc|cxx|h|hpp|hh|hxx|css|scss|sass|less|vue|svelte|astro|rb|php|swift|kt|kts|scala|r|lua|pl|pm|dart|dockerfile|lock|zip|rar|7z|tar|gz|tgz)';
 const PREVIEW_PATH_LINKIFY_RE = new RegExp(
   String.raw`(^|[\s([{])((?:(?:workspace|knowledge|manuscripts|media|cover|redclaw):\/\/|file:\/\/|local-file:\/\/|redbox-asset:\/\/asset\/|[A-Za-z]:[\\/]|\\\\|\/|\.{1,2}[\\/]|[A-Za-z0-9._@ -]+[\\/])[^<>"'\n\r]*?\.${PREVIEW_PATH_LINKIFY_EXT_PATTERN})(?=$|[\s)\]},.!?;:'">])`,
   'gi',
@@ -476,7 +513,7 @@ const isPreviewRelativePath = (value: string): boolean => {
   const raw = String(value || '').trim();
   if (!raw || /^https?:/i.test(raw)) return false;
   if (raw.includes('..')) return false;
-  return /\.(png|jpe?g|webp|gif|bmp|svg|avif|mp4|webm|mov|m4v|mkv|avi|mp3|wav|m4a|flac|aac|ogg|pdf|html?|md|markdown|thrive|txt|json|csv|ya?ml|xml|log|ts|tsx|js|jsx|rs|py|go|java|c|cpp|h|hpp|css|scss|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
+  return /\.(png|jpe?g|webp|gif|bmp|svg|avif|ico|tiff?|mp4|webm|mov|m4v|mkv|avi|ogv|mp3|wav|m4a|flac|aac|ogg|oga|opus|pdf|docx?|odt|pptx?|odp|xlsx?|ods|html?|md|markdown|thrive|txt|srt|vtt|diff|patch|json|csv|tsv|ya?ml|toml|ini|conf|config|env|xml|log|sql|sh|bash|zsh|fish|ts|tsx|js|jsx|mjs|cjs|rs|py|go|java|c|cpp|cc|cxx|h|hpp|hh|hxx|css|scss|sass|less|vue|svelte|astro|rb|php|swift|kt|kts|scala|r|lua|pl|pm|dart|dockerfile|lock|zip|rar|7z|tar|gz|tgz)(?:[?#].*)?$/i.test(raw);
 };
 
 const escapeMarkdownLinkLabel = (value: string): string => (
@@ -550,6 +587,7 @@ const inferMessageLinkKind = (href: string, localPathCandidate?: string): ChatMe
   if (AUDIO_LINK_EXTENSIONS.has(extension)) return 'audio';
   if (extension === 'thrive') return 'manuscript';
   if (extension === 'pdf') return 'pdf';
+  if (DOCUMENT_LINK_EXTENSIONS.has(extension)) return 'document';
   if (extension === 'html' || extension === 'htm') return 'html';
   if (TEXT_LINK_EXTENSIONS.has(extension)) return 'text';
   if (ARCHIVE_LINK_EXTENSIONS.has(extension)) return 'archive';
@@ -567,6 +605,8 @@ const getMessageLinkKindLabel = (target: ChatMessageLinkTarget): string => {
         return '音频';
       case 'manuscript':
         return '稿件';
+      case 'document':
+        return '文档';
       case 'web':
       case 'html':
         return '网页';
@@ -591,6 +631,7 @@ const getMessageLinkIcon = (kind: ChatMessageLinkKind) => {
     case 'audio':
       return Music;
     case 'manuscript':
+    case 'document':
       return FileText;
     case 'web':
     case 'html':
@@ -976,7 +1017,8 @@ export const MessageItem = memo(({
 
   const resolveUploadedAttachmentSource = useCallback((attachment: Extract<NonNullable<Message['attachment']>, { type: 'uploaded-file' }>) => {
     const preferred = String(
-      attachment.thumbnailDataUrl
+    attachment.thumbnailDataUrl
+        || attachment.thumbnailUrl
         || attachment.inlineDataUrl
         || attachment.localUrl
         || attachment.absolutePath
@@ -1121,7 +1163,7 @@ export const MessageItem = memo(({
     const imageSrc = isUploadedImageAttachment(attachment)
       ? resolveUploadedAttachmentSource(attachment)
       : isUploadedVideoAttachment(attachment)
-        ? String(attachment.thumbnailDataUrl || '').trim()
+        ? resolveUploadedAttachmentSource(attachment)
         : '';
     const actionSource = resolveUploadedAttachmentActionSource(attachment);
     if (imageSrc) {

@@ -515,6 +515,7 @@ function defaultComposerShortcuts(context: ChatShortcutContext): ChatShortcut[] 
   }
   if (attachmentKind === 'video' && (attachmentCapability(attachment, 'videoAnalyze') || attachmentCapability(attachment, 'videoEdit'))) {
     return [
+      { label: '识别字幕', text: '请调用 Operate(resource="media", operation="transcribe", input={"sourcePath":"该视频附件路径","format":"srt"}) 识别这个视频的字幕，输出 SRT，并告诉我生成的字幕文件路径。不要调用 video.analyze 或 speech_extract。' },
       { label: '剪口播', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，然后把它剪成一条口播短视频，保留核心观点和最有传播力的表达。' },
       { label: '智能剪辑', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，并给出智能剪辑方案，包括结构、节奏、删减点和成片脚本。' },
       { label: '提取精彩切片', text: '请调用 video.analyze 交给 Video Analysis Agent 分析这个视频，提取最精彩的短切片，按传播潜力排序并说明每段用途。' },
@@ -763,7 +764,8 @@ function normalizeChatErrorNotice(payload: ChatErrorEventPayload | string | null
     detail: detail || undefined,
     metaParts: metaParts.length > 0 ? metaParts : undefined,
     action: normalizedTitle.includes('余额不足')
-      || normalizedTitle.includes('登陆失效')
+      ? { label: '去充值', target: 'settings-login' }
+      : normalizedTitle.includes('登陆失效')
       || normalizedTitle.includes('登录失效')
       ? { label: '查看账号', target: 'settings-login' }
       : undefined,

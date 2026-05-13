@@ -1,12 +1,72 @@
 ---
 doc_type: plan
 execution_status: completed
-last_updated: 2026-05-07
+last_updated: 2026-05-13
 ---
 
 # Manuscript Folder Format
 
-RedConvert 稿件工程使用普通文件夹管理，不再使用自定义稿件扩展名或 ZIP 容器。
+RedConvert 稿件工程使用普通文件夹管理，不再使用自定义稿件扩展名或 ZIP 容器。长期项目文件留在用户可管理的工程目录中，`.redbox` 只保存临时任务、缓存、日志和诊断材料。
+
+## Minimal Project Protocol
+
+工程目录的唯一强约束是：根目录必须包含 `manifest.json`。目录内部结构按项目需要自然增长，不要求所有项目都预置同一批子目录。
+
+AI 创建长期项目时，优先使用通用 workspace 文件能力创建目录和写入文件：
+
+1. `workspace.createDirectory` 创建项目目录。
+2. `workspace.write` 写入 `manifest.json`。
+3. `workspace.write` 写入入口文件和按需生成的素材索引、字幕、计划、导出记录等。
+
+不要为每种项目类型新增专用 create tool；只有转写、媒体编辑、图像/视频生成、TTS、embedding、外部集成这类重能力需要专用工具。
+
+最小 manifest：
+
+```json
+{
+  "version": 1,
+  "id": "project_xxx",
+  "type": "manuscript-package",
+  "packageKind": "article",
+  "title": "项目名",
+  "entry": "content.md",
+  "files": []
+}
+```
+
+`files` 是长期相关文件索引，路径必须是工程内相对路径，不允许 `..` 越界。推荐字段：
+
+```json
+{
+  "id": "file_xxx",
+  "role": "transcript",
+  "path": "transcripts/source.zh.srt",
+  "sourceFileId": "asset_xxx",
+  "format": "srt",
+  "createdAt": "2026-05-13T00:00:00Z"
+}
+```
+
+常见 `role`：`entry`、`source`、`asset`、`transcript`、`output`、`plan`、`note`、`metadata`。
+
+推荐但不强制的目录：
+
+- `assets/`
+- `transcripts/`
+- `outputs/`
+- `sources/`
+- `ai/`
+
+例如字幕识别成功后，正式字幕应进入项目目录：
+
+```text
+manuscripts/<project>/
+  manifest.json
+  script.md
+  transcripts/source.zh.srt
+```
+
+抽音频、原始接口响应、job 诊断等仍可保存在 `.redbox/media-transcripts/<jobId>/`。
 
 ## Detection
 

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AlertCircle, ArrowLeft, ArrowRight, Loader2, Sparkles, X } from 'lucide-react';
 import { clsx } from 'clsx';
-import { Slider } from '../../vendor/freecut/components/ui/slider';
 import { APP_BRAND } from '../../config/brand';
 import {
   REDCLAW_ONBOARDING_DEFAULT_ANSWERS,
@@ -159,14 +158,15 @@ function SliderQuestionView({
               />
             </div>
 
-            <Slider
-              value={[value]}
+            <input
+              type="range"
+              value={value}
               min={0}
               max={100}
               step={1}
-              onValueChange={(values) => onChange(values[0] ?? value)}
+              onChange={(event) => onChange(Number(event.currentTarget.value))}
               style={{ '--redclaw-welcome-icon': `url("${APP_BRAND.logoSrc}")` } as CSSProperties}
-              className="relative z-20 w-full cursor-grab py-6 active:cursor-grabbing [&>span:first-child]:h-12 [&>span:first-child]:bg-transparent [&>span:first-child>span]:bg-transparent [&>span:last-child]:h-16 [&>span:last-child]:w-16 [&>span:last-child]:rounded-none [&>span:last-child]:border-0 [&>span:last-child]:bg-[image:var(--redclaw-welcome-icon)] [&>span:last-child]:bg-contain [&>span:last-child]:bg-center [&>span:last-child]:bg-no-repeat [&>span:last-child]:bg-transparent [&>span:last-child]:shadow-none [&>span:last-child]:outline-none [&>span:last-child]:ring-0 [&>span:last-child]:focus:outline-none [&>span:last-child]:focus-visible:outline-none [&>span:last-child]:focus-visible:ring-0"
+              className="relative z-20 h-16 w-full cursor-grab appearance-none bg-transparent active:cursor-grabbing [&::-moz-range-thumb]:h-16 [&::-moz-range-thumb]:w-16 [&::-moz-range-thumb]:cursor-grab [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-[image:var(--redclaw-welcome-icon)] [&::-moz-range-thumb]:bg-contain [&::-moz-range-thumb]:bg-center [&::-moz-range-thumb]:bg-no-repeat [&::-moz-range-thumb]:shadow-none [&::-moz-range-track]:h-12 [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:h-12 [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:mt-[-8px] [&::-webkit-slider-thumb]:h-16 [&::-webkit-slider-thumb]:w-16 [&::-webkit-slider-thumb]:cursor-grab [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:border-0 [&::-webkit-slider-thumb]:bg-[image:var(--redclaw-welcome-icon)] [&::-webkit-slider-thumb]:bg-contain [&::-webkit-slider-thumb]:bg-center [&::-webkit-slider-thumb]:bg-no-repeat [&::-webkit-slider-thumb]:shadow-none"
             />
           </div>
 

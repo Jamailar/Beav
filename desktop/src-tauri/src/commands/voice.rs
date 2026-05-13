@@ -17,7 +17,7 @@ pub fn handle_voice_channel(
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                voice_service::clone_voice(state, payload)
+                voice_service::clone_voice(Some(app), state, payload)
             } else {
                 (|| {
                     let submitted =

@@ -324,7 +324,13 @@ fn attachment_delivery_mode(kind: &str, has_workspace_path: bool) -> &'static st
     }
 }
 
+fn attachment_can_use_original_media_path(kind: &str) -> bool {
+    matches!(kind, "audio" | "video")
+}
+
 fn chat_attachment_value_for_path(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
     original_path: &Path,
     effective_path: &Path,
     file_size: u64,
@@ -334,6 +340,8 @@ fn chat_attachment_value_for_path(
     let (mime_type, kind, direct_upload_eligible) = guess_mime_and_kind(original_path);
     let thumbnail_data_url = if kind == "image" {
         inline_image_thumbnail_data_url(effective_path, &mime_type, file_size)
+    } else if kind == "video" {
+        ensure_video_thumbnail_for_path(Some(app), state, effective_path)
     } else {
         None
     };
@@ -341,9 +349,15 @@ fn chat_attachment_value_for_path(
         .and_then(|asset| asset.relative_path.as_ref())
         .map(|relative_path| format!("media/{relative_path}"))
         .or(staged_relative_path);
-    let has_workspace_path = workspace_relative_path.is_some();
-    let delivery_mode = attachment_delivery_mode(&kind, has_workspace_path);
-    let tool_path = workspace_relative_path.clone();
+    let external_media_tool_path =
+        if workspace_relative_path.is_none() && attachment_can_use_original_media_path(&kind) {
+            Some(effective_path.display().to_string())
+        } else {
+            None
+        };
+    let has_tool_path = workspace_relative_path.is_some() || external_media_tool_path.is_some();
+    let delivery_mode = attachment_delivery_mode(&kind, has_tool_path);
+    let tool_path = workspace_relative_path.clone().or(external_media_tool_path);
     json!({
         "attachmentId": make_id("attachment"),
         "type": "uploaded-file",
@@ -351,6 +365,7 @@ fn chat_attachment_value_for_path(
         "ext": original_path.extension().and_then(|value| value.to_str()).unwrap_or(""),
         "size": file_size,
         "thumbnailDataUrl": thumbnail_data_url,
+        "thumbnailUrl": thumbnail_data_url,
         "workspaceRelativePath": workspace_relative_path.clone(),
         "toolPath": tool_path.clone(),
         "absolutePath": effective_path.display().to_string(),
@@ -361,9 +376,9 @@ fn chat_attachment_value_for_path(
         "storageMode": if effective_path != original_path { "staged" } else { "absolute" },
         "directUploadEligible": direct_upload_eligible,
         "processingStrategy": delivery_mode,
-        "intakeStatus": if has_workspace_path { "ready" } else { "unsupported" },
+        "intakeStatus": if has_tool_path { "ready" } else { "unsupported" },
         "attachmentLifecycle": "pending",
-        "capabilities": attachment_capabilities(&kind, has_workspace_path, direct_upload_eligible),
+        "capabilities": attachment_capabilities(&kind, has_tool_path, direct_upload_eligible),
         "deliveryPlan": {
             "mode": delivery_mode,
             "toolPath": tool_path,
@@ -480,14 +495,23 @@ fn create_chat_attachment_for_path(
         return Err(format!("不是可发送的文件: {}", path.display()));
     }
     let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
-    let imported_media_asset =
-        crate::knowledge::import_chat_attachment_image(Some(app), state, path).ok();
+    let (_, attachment_kind, _) = guess_mime_and_kind(path);
+    let imported_media_asset = if attachment_kind == "image" {
+        crate::knowledge::import_chat_attachment_image(Some(app), state, path).ok()
+    } else {
+        None
+    };
     let staged = if imported_media_asset.is_some() {
+        None
+    } else if attachment_can_use_original_media_path(&attachment_kind) {
         None
     } else {
         stage_chat_attachment_for_workspace(state, path, metadata.len())
     };
-    if imported_media_asset.is_none() && staged.is_none() {
+    if imported_media_asset.is_none()
+        && staged.is_none()
+        && !attachment_can_use_original_media_path(&attachment_kind)
+    {
         if metadata.len() == 0 {
             return Err("文件为空，无法作为聊天附件发送。".to_string());
         }
@@ -508,6 +532,8 @@ fn create_chat_attachment_for_path(
         .or_else(|| staged.as_ref().map(|(absolute, _)| absolute.as_path()))
         .unwrap_or(path);
     let attachment = chat_attachment_value_for_path(
+        app,
+        state,
         path,
         effective_path,
         metadata.len(),
@@ -1974,6 +2000,7 @@ pub fn handle_chat_sessions_wander_channel(
             | "chat:pick-attachment"
             | "chat:create-path-attachment"
             | "chat:create-inline-attachment"
+            | "chat:create-video-thumbnail"
             | "chat:discard-attachments"
             | "chat:transcribe-audio"
             | "wander:list-history"
@@ -2664,15 +2691,24 @@ pub fn handle_chat_sessions_wander_channel(
                 let output_path = temp_dir.join(format!("{}-{}", now_ms(), safe_file_name));
                 write_base64_payload_to_file(&data_url, &output_path)?;
                 let metadata = fs::metadata(&output_path).map_err(|error| error.to_string())?;
-                let imported_media_asset =
+                let (_, attachment_kind, _) = guess_mime_and_kind(&output_path);
+                let imported_media_asset = if attachment_kind == "image" {
                     crate::knowledge::import_chat_attachment_image(Some(app), state, &output_path)
-                        .ok();
+                        .ok()
+                } else {
+                    None
+                };
                 let staged = if imported_media_asset.is_some() {
+                    None
+                } else if attachment_can_use_original_media_path(&attachment_kind) {
                     None
                 } else {
                     stage_chat_attachment_for_workspace(state, &output_path, metadata.len())
                 };
-                if imported_media_asset.is_none() && staged.is_none() {
+                if imported_media_asset.is_none()
+                    && staged.is_none()
+                    && !attachment_can_use_original_media_path(&attachment_kind)
+                {
                     if metadata.len() == 0 {
                         return Err("文件为空，无法作为聊天附件发送。".to_string());
                     }
@@ -2695,6 +2731,8 @@ pub fn handle_chat_sessions_wander_channel(
                     .or_else(|| staged.as_ref().map(|(absolute, _)| absolute.as_path()))
                     .unwrap_or(output_path.as_path());
                 let attachment = chat_attachment_value_for_path(
+                    app,
+                    state,
                     &output_path,
                     effective_path,
                     metadata.len(),
@@ -2703,6 +2741,46 @@ pub fn handle_chat_sessions_wander_channel(
                 );
                 register_pending_chat_attachment(state, &attachment);
                 Ok(json!({ "success": true, "attachment": attachment }))
+            }
+            "chat:create-video-thumbnail" => {
+                let source = payload_string(&payload, "path")
+                    .or_else(|| payload_string(&payload, "source"))
+                    .ok_or_else(|| "缺少视频路径".to_string())?;
+                let source_path =
+                    resolve_local_path(&source).unwrap_or_else(|| PathBuf::from(source.trim()));
+                eprintln!(
+                    "[chat-thumbnail] request source={} resolved={}",
+                    source,
+                    source_path.display()
+                );
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[chat-thumbnail] request source={} resolved={}",
+                        source,
+                        source_path.display()
+                    ),
+                );
+                let thumbnail_url = ensure_video_thumbnail_for_path(Some(app), state, &source_path)
+                    .ok_or_else(|| format!("无法生成视频封面: {}", source_path.display()))?;
+                eprintln!(
+                    "[chat-thumbnail] success source={} thumbnail={}",
+                    source_path.display(),
+                    thumbnail_url
+                );
+                append_debug_log_state(
+                    state,
+                    format!(
+                        "[chat-thumbnail] success source={} thumbnail={}",
+                        source_path.display(),
+                        thumbnail_url
+                    ),
+                );
+                Ok(json!({
+                    "success": true,
+                    "thumbnailUrl": thumbnail_url,
+                    "thumbnailDataUrl": thumbnail_url,
+                }))
             }
             "chat:discard-attachments" => {
                 discard_chat_attachments_state(state, payload_field(&payload, "attachments"))?;

@@ -33,6 +33,8 @@ interface MediaAsset {
     updatedAt: string;
     absolutePath?: string;
     previewUrl?: string;
+    thumbnailUrl?: string;
+    thumbnail_url?: string;
     exists?: boolean;
 }
 
@@ -60,6 +62,8 @@ interface GeneratedAsset {
     title?: string;
     prompt?: string;
     previewUrl?: string;
+    thumbnailUrl?: string;
+    thumbnail_url?: string;
     mimeType?: string;
     exists?: boolean;
     projectId?: string;
@@ -144,6 +148,17 @@ const VIDEO_GENERATION_MODE_OPTIONS = [
     { value: 'continuation', label: '视频续写' },
 ] as const;
 
+function logMediaThumbnailDebug(event: string, fields: Record<string, unknown>) {
+    console.info('[video-thumbnail]', event, fields);
+    void window.ipcRenderer?.logs?.appendRenderer?.({
+        level: 'debug',
+        category: 'media.thumbnail',
+        event,
+        message: event,
+        fields,
+    }).catch(() => undefined);
+}
+
 function normalizeMediaAssetSource(source: unknown): MediaAssetSource {
     const normalized = String(source || '').trim().toLowerCase();
     if (normalized === 'generated' || normalized === 'planned' || normalized === 'imported') {
@@ -153,16 +168,67 @@ function normalizeMediaAssetSource(source: unknown): MediaAssetSource {
 }
 
 function normalizeMediaAsset(asset: MediaAsset): MediaAsset {
-    return {
+    const legacyAsset = asset as MediaAsset & {
+        mime_type?: string;
+        relative_path?: string;
+        absolute_path?: string;
+        preview_url?: string;
+    };
+    const normalized = {
         ...asset,
         source: normalizeMediaAssetSource(asset.source),
+        mimeType: asset.mimeType || legacyAsset.mime_type,
+        relativePath: asset.relativePath || legacyAsset.relative_path,
+        absolutePath: asset.absolutePath || legacyAsset.absolute_path,
+        previewUrl: asset.previewUrl || legacyAsset.preview_url,
+        thumbnailUrl: asset.thumbnailUrl || asset.thumbnail_url,
+    };
+    if (isVideoAsset(normalized)) {
+        console.info('[video-thumbnail] media.normalize', {
+            id: normalized.id,
+            title: normalized.title,
+            mimeType: normalized.mimeType,
+            previewUrl: normalized.previewUrl,
+            absolutePath: normalized.absolutePath,
+            relativePath: normalized.relativePath,
+            thumbnailUrl: normalized.thumbnailUrl,
+            exists: normalized.exists,
+        });
+    }
+    return normalized;
+}
+
+function normalizeGeneratedAsset(asset: GeneratedAsset): GeneratedAsset {
+    const legacyAsset = asset as GeneratedAsset & {
+        mime_type?: string;
+        relative_path?: string;
+        preview_url?: string;
+    };
+    return {
+        ...asset,
+        mimeType: asset.mimeType || legacyAsset.mime_type,
+        relativePath: asset.relativePath || legacyAsset.relative_path,
+        previewUrl: asset.previewUrl || legacyAsset.preview_url,
+        thumbnailUrl: asset.thumbnailUrl || asset.thumbnail_url,
     };
 }
 
-function isVideoAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
+function isVideoAsset(asset: { mimeType?: string; relativePath?: string; absolutePath?: string; previewUrl?: string }): boolean {
     const mimeType = String(asset.mimeType || '').toLowerCase();
     if (mimeType.startsWith('video/')) return true;
-    return /\.(mp4|webm|mov)$/i.test(String(asset.relativePath || '').trim());
+    const source = String(asset.relativePath || asset.absolutePath || asset.previewUrl || '').trim();
+    return /\.(mp4|webm|mov|m4v|avi|mkv)(?:[?#].*)?$/i.test(source);
+}
+
+function getMediaAssetPosterUrl(asset: { mimeType?: string; thumbnailUrl?: string; previewUrl?: string; absolutePath?: string; relativePath?: string }): string {
+    if (isVideoAsset(asset)) {
+        return asset.thumbnailUrl || '';
+    }
+    return asset.thumbnailUrl || asset.previewUrl || asset.absolutePath || asset.relativePath || '';
+}
+
+function getMediaAssetPlayableUrl(asset: { previewUrl?: string; absolutePath?: string; relativePath?: string }): string {
+    return asset.previewUrl || asset.absolutePath || asset.relativePath || '';
 }
 
 function isAudioAsset(asset: { mimeType?: string; relativePath?: string }): boolean {
@@ -690,7 +756,11 @@ export function MediaLibrary({
     }, []);
 
     const openAssetPreview = useCallback((asset: MediaAsset) => {
-        const src = resolveAssetUrl(asset.previewUrl || asset.absolutePath || asset.relativePath || '');
+        const src = resolveAssetUrl(
+            isVideoAsset(asset) || isAudioAsset(asset)
+                ? getMediaAssetPlayableUrl(asset)
+                : getMediaAssetPosterUrl(asset),
+        );
         if (!src || !asset.exists) return;
         setPreviewAsset({ asset, src });
     }, []);
@@ -731,7 +801,7 @@ export function MediaLibrary({
                 setGenError(result?.error || '生图失败');
                 return;
             }
-            setGeneratedAssets(Array.isArray(result.assets) ? result.assets : []);
+            setGeneratedAssets(Array.isArray(result.assets) ? result.assets.map(normalizeGeneratedAsset) : []);
             await loadData();
         } catch (e) {
             console.error('Failed to generate images:', e);
@@ -827,7 +897,7 @@ export function MediaLibrary({
                 setVideoGenError(result?.error || '生视频失败');
                 return;
             }
-            setGeneratedVideoAssets(Array.isArray(result.assets) ? result.assets : []);
+            setGeneratedVideoAssets(Array.isArray(result.assets) ? result.assets.map(normalizeGeneratedAsset) : []);
             await loadData();
         } catch (e) {
             console.error('Failed to generate videos:', e);
@@ -1083,17 +1153,31 @@ export function MediaLibrary({
                                             </div>
 
                                             <div className="bg-surface-secondary">
-                                                {asset.previewUrl && asset.exists ? (
-                                                    isVideoAsset(asset) ? (
-                                                        <video
-                                                            src={resolveAssetUrl(asset.previewUrl)}
-                                                            className="block w-full h-auto bg-black"
-                                                            controls
-                                                            preload="metadata"
-                                                            onClick={(event) => event.stopPropagation()}
-                                                            onLoadedMetadata={() => measureAssetCard(asset.id)}
+                                                {isVideoAsset(asset) ? (
+                                                    asset.thumbnailUrl && asset.exists ? (
+                                                        <img
+                                                            src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                            alt={asset.title || asset.id}
+                                                            className="block w-full h-auto bg-surface-secondary object-cover"
+                                                            onLoad={() => measureAssetCard(asset.id)}
+                                                            onError={() => logMediaThumbnailDebug('media.card.img-error', {
+                                                                id: asset.id,
+                                                                title: asset.title,
+                                                                thumbnailUrl: asset.thumbnailUrl,
+                                                                resolvedUrl: resolveAssetUrl(getMediaAssetPosterUrl(asset)),
+                                                                previewUrl: asset.previewUrl,
+                                                                absolutePath: asset.absolutePath,
+                                                                relativePath: asset.relativePath,
+                                                                exists: asset.exists,
+                                                            })}
                                                         />
-                                                    ) : isAudioAsset(asset) ? (
+                                                    ) : (
+                                                        <div className="flex aspect-video items-center justify-center bg-surface-secondary text-text-tertiary">
+                                                            <Clapperboard className="h-5 w-5" />
+                                                        </div>
+                                                    )
+                                                ) : (asset.thumbnailUrl || asset.previewUrl) && asset.exists ? (
+                                                    isAudioAsset(asset) ? (
                                                         <div className="space-y-3 px-4 py-5">
                                                             <div className="flex items-center gap-2 text-sm font-medium text-text-secondary">
                                                                 <Music2 className="h-4 w-4 text-accent-primary" />
@@ -1437,10 +1521,29 @@ export function MediaLibrary({
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         {generatedAssets.map((asset) => (
                                             <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                                {asset.previewUrl && asset.exists ? (
-                                                    isVideoAsset(asset) ? (
-                                                        <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-video object-cover bg-black" controls preload="metadata" />
-                                                    ) : isAudioAsset(asset) ? (
+                                                {isVideoAsset(asset) ? (
+                                                    asset.thumbnailUrl && asset.exists ? (
+                                                        <img
+                                                            src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                            alt={asset.title || asset.id}
+                                                            className="w-full aspect-video object-cover bg-surface-secondary"
+                                                            onError={() => logMediaThumbnailDebug('media.generated-card.img-error', {
+                                                                id: asset.id,
+                                                                title: asset.title,
+                                                                thumbnailUrl: asset.thumbnailUrl,
+                                                                resolvedUrl: resolveAssetUrl(getMediaAssetPosterUrl(asset)),
+                                                                previewUrl: asset.previewUrl,
+                                                                relativePath: asset.relativePath,
+                                                                exists: asset.exists,
+                                                            })}
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary">
+                                                            <Clapperboard className="h-5 w-5" />
+                                                        </div>
+                                                    )
+                                                ) : (asset.thumbnailUrl || asset.previewUrl) && asset.exists ? (
+                                                    isAudioAsset(asset) ? (
                                                         <div className="flex aspect-video flex-col justify-center gap-4 bg-surface-secondary px-4">
                                                             <div className="inline-flex items-center gap-2 text-sm font-medium text-text-secondary">
                                                                 <Music2 className="h-4 w-4 text-accent-primary" />
@@ -1779,10 +1882,25 @@ export function MediaLibrary({
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         {generatedVideoAssets.map((asset) => (
                                             <div key={asset.id} className="group border border-border rounded-xl bg-surface-primary overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                                                {asset.previewUrl && asset.exists ? (
-                                                    <video src={resolveAssetUrl(asset.previewUrl)} className="w-full aspect-video object-cover bg-black" controls preload="metadata" />
+                                                {asset.thumbnailUrl && asset.exists ? (
+                                                    <img
+                                                        src={resolveAssetUrl(getMediaAssetPosterUrl(asset))}
+                                                        alt={asset.title || asset.id}
+                                                        className="w-full aspect-video object-cover bg-surface-secondary"
+                                                        onError={() => logMediaThumbnailDebug('media.generated-video-card.img-error', {
+                                                            id: asset.id,
+                                                            title: asset.title,
+                                                            thumbnailUrl: asset.thumbnailUrl,
+                                                            resolvedUrl: resolveAssetUrl(getMediaAssetPosterUrl(asset)),
+                                                            previewUrl: asset.previewUrl,
+                                                            relativePath: asset.relativePath,
+                                                            exists: asset.exists,
+                                                        })}
+                                                    />
                                                 ) : (
-                                                    <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary text-xs">无法预览</div>
+                                                    <div className="w-full aspect-video bg-surface-secondary flex items-center justify-center text-text-tertiary">
+                                                        <Clapperboard className="h-5 w-5" />
+                                                    </div>
                                                 )}
                                                 <div className="p-3 space-y-1.5">
                                                     <div className="text-sm text-text-primary truncate">{asset.title || asset.id}</div>

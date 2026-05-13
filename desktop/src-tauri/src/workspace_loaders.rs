@@ -660,11 +660,25 @@ pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetReco
                 .or_else(|| item.get("relative_path"))
                 .and_then(|v| v.as_str())
                 .map(ToString::to_string);
-            let absolute_path = relative_path.as_ref().map(|rel| {
+            let stored_absolute_path = item
+                .get("absolutePath")
+                .or_else(|| item.get("absolute_path"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    normalize_legacy_workspace_path(Path::new(value))
+                        .display()
+                        .to_string()
+                });
+            let relative_absolute_path = relative_path.as_ref().map(|rel| {
                 normalize_legacy_workspace_path(&media_root.join(rel))
                     .display()
                     .to_string()
             });
+            let absolute_path = stored_absolute_path
+                .filter(|path| Path::new(path).is_file())
+                .or(relative_absolute_path);
             Some(MediaAssetRecord {
                 id: item.get("id")?.as_str()?.to_string(),
                 source: item
@@ -759,7 +773,18 @@ pub(crate) fn load_media_assets_from_fs(media_root: &Path) -> Vec<MediaAssetReco
                 absolute_path: absolute_path.clone(),
                 preview_url: absolute_path
                     .as_ref()
-                    .map(|abs| file_url_for_path(Path::new(abs))),
+                    .map(|abs| file_url_for_path(Path::new(abs)))
+                    .or_else(|| {
+                        item.get("previewUrl")
+                            .or_else(|| item.get("preview_url"))
+                            .and_then(|v| v.as_str())
+                            .map(ToString::to_string)
+                    }),
+                thumbnail_url: item
+                    .get("thumbnailUrl")
+                    .or_else(|| item.get("thumbnail_url"))
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string),
                 exists: absolute_path
                     .as_ref()
                     .is_some_and(|abs| Path::new(abs).exists()),

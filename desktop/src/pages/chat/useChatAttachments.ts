@@ -5,6 +5,18 @@ import type { ChatComposerHandle, UploadedFileAttachment } from '../../component
 import { clearAttachmentDraft, loadAttachmentDraft, saveAttachmentDraft } from '../../features/chat/attachmentDraftStore';
 import { resolveAssetUrl } from '../../utils/pathManager';
 
+function logVideoThumbnailDebug(event: string, fields: Record<string, unknown>) {
+  const payload = {
+    level: 'debug' as const,
+    category: 'chat.attachment.thumbnail',
+    event,
+    message: event,
+    fields,
+  };
+  console.info('[chat-thumbnail]', event, fields);
+  void window.ipcRenderer?.logs?.appendRenderer?.(payload).catch(() => undefined);
+}
+
 interface UseChatAttachmentsInput {
   allowFileUpload: boolean;
   attachmentDraftScopeId: string;
@@ -30,11 +42,34 @@ function droppedPaths(paths: string[] | null | undefined): string[] {
     .filter(Boolean)));
 }
 
+function isTauriRuntime(): boolean {
+  if (typeof window === 'undefined') return false;
+  const tauriWindow = window as unknown as {
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  };
+  return Boolean(tauriWindow.__TAURI_INTERNALS__ || tauriWindow.__TAURI__);
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reader.abort();
+      reject(new Error('文件读取超时，请改用桌面端文件选择器或拖拽真实文件路径。'));
+    }, 120000);
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      callback();
+    };
+    reader.onload = () => finish(() => resolve(String(reader.result || '')));
+    reader.onerror = () => finish(() => reject(reader.error || new Error('读取文件失败')));
+    reader.onabort = () => finish(() => reject(new Error('文件读取已取消')));
     reader.readAsDataURL(file);
   });
 }
@@ -45,6 +80,18 @@ function isVideoAttachment(attachment: UploadedFileAttachment | null | undefined
   const mimeType = String(attachment.mimeType || '').trim().toLowerCase();
   const ext = String(attachment.ext || '').trim().replace(/^\./, '').toLowerCase();
   return kind === 'video' || mimeType.startsWith('video/') || ['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'].includes(ext);
+}
+
+function attachmentIdentity(attachment: UploadedFileAttachment): string {
+  return String(
+    attachment.attachmentId
+    || attachment.workspaceRelativePath
+    || attachment.toolPath
+    || attachment.absolutePath
+    || attachment.originalAbsolutePath
+    || attachment.inlineDataUrl
+    || attachment.name
+  ).trim();
 }
 
 function createVideoThumbnailDataUrl(source: string): Promise<string | null> {
@@ -108,8 +155,21 @@ function createVideoThumbnailDataUrl(source: string): Promise<string | null> {
 async function withVideoThumbnail(
   attachment: UploadedFileAttachment,
   preferredSource?: string,
+  sessionId?: string | null,
 ): Promise<UploadedFileAttachment> {
-  if (!isVideoAttachment(attachment) || attachment.thumbnailDataUrl) return attachment;
+  if (!isVideoAttachment(attachment)) {
+    return attachment;
+  }
+  if (attachment.thumbnailDataUrl || attachment.thumbnailUrl) {
+    logVideoThumbnailDebug('attachment.thumbnail.already-present', {
+      name: attachment.name,
+      thumbnailDataUrl: attachment.thumbnailDataUrl,
+      thumbnailUrl: attachment.thumbnailUrl,
+      localUrl: attachment.localUrl,
+      absolutePath: attachment.absolutePath,
+    });
+    return attachment;
+  }
   const source = String(
     preferredSource
     || attachment.localUrl
@@ -118,9 +178,66 @@ async function withVideoThumbnail(
     || attachment.inlineDataUrl
     || '',
   ).trim();
-  if (!source) return attachment;
+  if (!source) {
+    logVideoThumbnailDebug('attachment.thumbnail.no-source', {
+      name: attachment.name,
+      kind: attachment.kind,
+      mimeType: attachment.mimeType,
+      ext: attachment.ext,
+    });
+    return attachment;
+  }
+  const backendSource = String(
+    attachment.absolutePath
+    || attachment.localUrl
+    || attachment.originalAbsolutePath
+    || '',
+  ).trim();
+  logVideoThumbnailDebug('attachment.thumbnail.start', {
+    name: attachment.name,
+    source,
+    backendSource,
+    preferredSource,
+    localUrl: attachment.localUrl,
+    absolutePath: attachment.absolutePath,
+    originalAbsolutePath: attachment.originalAbsolutePath,
+    kind: attachment.kind,
+    mimeType: attachment.mimeType,
+    ext: attachment.ext,
+  });
+  if (backendSource && window.ipcRenderer?.chat?.createVideoThumbnail) {
+    try {
+      const result = await window.ipcRenderer.chat.createVideoThumbnail({
+        source: backendSource,
+        sessionId: sessionId || undefined,
+      });
+      logVideoThumbnailDebug('attachment.thumbnail.backend-result', {
+        name: attachment.name,
+        backendSource,
+        result,
+      });
+      const thumbnailUrl = String(result?.thumbnailUrl || result?.thumbnailDataUrl || '').trim();
+      if (result?.success && thumbnailUrl) {
+        return { ...attachment, thumbnailDataUrl: thumbnailUrl, thumbnailUrl };
+      }
+    } catch (error) {
+      logVideoThumbnailDebug('attachment.thumbnail.backend-error', {
+        name: attachment.name,
+        backendSource,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Browser-based extraction below is only a preview fallback.
+    }
+  }
   const thumbnailDataUrl = await createVideoThumbnailDataUrl(source.startsWith('blob:') || source.startsWith('data:') ? source : resolveAssetUrl(source));
-  return thumbnailDataUrl ? { ...attachment, thumbnailDataUrl } : attachment;
+  logVideoThumbnailDebug('attachment.thumbnail.browser-result', {
+    name: attachment.name,
+    source,
+    resolvedSource: source.startsWith('blob:') || source.startsWith('data:') ? source : resolveAssetUrl(source),
+    hasThumbnail: Boolean(thumbnailDataUrl),
+    thumbnailLength: thumbnailDataUrl?.length || 0,
+  });
+  return thumbnailDataUrl ? { ...attachment, thumbnailDataUrl, thumbnailUrl: thumbnailDataUrl } : attachment;
 }
 
 function isPersistentAttachmentDraftScope(scopeId: string): boolean {
@@ -141,6 +258,7 @@ export function useChatAttachments({
   const [isAttachmentUploading, setIsAttachmentUploading] = useState(false);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
   const fileDragDepthRef = useRef(0);
+  const repairingThumbnailKeysRef = useRef<Set<string>>(new Set());
 
   const focusComposer = useCallback(() => {
     requestAnimationFrame(() => {
@@ -151,24 +269,8 @@ export function useChatAttachments({
 
   const appendPendingAttachment = useCallback((attachment: UploadedFileAttachment) => {
     setPendingAttachments((current) => {
-      const key = String(
-        attachment.attachmentId
-        || attachment.workspaceRelativePath
-        || attachment.toolPath
-        || attachment.absolutePath
-        || attachment.originalAbsolutePath
-        || attachment.inlineDataUrl
-        || attachment.name
-      ).trim();
-      if (key && current.some((item) => String(
-        item.attachmentId
-        || item.workspaceRelativePath
-        || item.toolPath
-        || item.absolutePath
-        || item.originalAbsolutePath
-        || item.inlineDataUrl
-        || item.name
-      ).trim() === key)) {
+      const key = attachmentIdentity(attachment);
+      if (key && current.some((item) => attachmentIdentity(item) === key)) {
         return current;
       }
       return [...current, attachment];
@@ -191,24 +293,8 @@ export function useChatAttachments({
   }, []);
 
   const removePendingAttachment = useCallback((attachment: UploadedFileAttachment) => {
-    const key = String(
-      attachment.attachmentId
-      || attachment.workspaceRelativePath
-      || attachment.toolPath
-      || attachment.absolutePath
-      || attachment.originalAbsolutePath
-      || attachment.inlineDataUrl
-      || attachment.name
-    ).trim();
-    setPendingAttachments((current) => current.filter((item) => String(
-      item.attachmentId
-      || item.workspaceRelativePath
-      || item.toolPath
-      || item.absolutePath
-      || item.originalAbsolutePath
-      || item.inlineDataUrl
-      || item.name
-    ).trim() !== key));
+    const key = attachmentIdentity(attachment);
+    setPendingAttachments((current) => current.filter((item) => attachmentIdentity(item) !== key));
     void window.ipcRenderer.chat.discardAttachments({ attachments: [attachment] });
     focusComposer();
   }, [focusComposer]);
@@ -229,6 +315,46 @@ export function useChatAttachments({
     saveAttachmentDraft('chat', attachmentDraftScopeId, pendingAttachments[0] || null);
   }, [attachmentDraftScopeId, pendingAttachments]);
 
+  useEffect(() => {
+    const missing = pendingAttachments.find((attachment) => (
+      isVideoAttachment(attachment)
+      && !attachment.thumbnailDataUrl
+      && !attachment.thumbnailUrl
+      && !repairingThumbnailKeysRef.current.has(attachmentIdentity(attachment))
+    ));
+    if (!missing) return;
+    const key = attachmentIdentity(missing);
+    if (!key) return;
+    repairingThumbnailKeysRef.current.add(key);
+    logVideoThumbnailDebug('attachment.thumbnail.repair-start', {
+      key,
+      name: missing.name,
+      localUrl: missing.localUrl,
+      absolutePath: missing.absolutePath,
+      originalAbsolutePath: missing.originalAbsolutePath,
+    });
+    void withVideoThumbnail(missing, undefined, currentSessionId).then((repaired) => {
+      if (!repaired.thumbnailDataUrl && !repaired.thumbnailUrl) return;
+      setPendingAttachments((current) => current.map((item) => (
+        attachmentIdentity(item) === key ? { ...item, ...repaired } : item
+      )));
+      logVideoThumbnailDebug('attachment.thumbnail.repair-success', {
+        key,
+        name: repaired.name,
+        thumbnailDataUrl: repaired.thumbnailDataUrl,
+        thumbnailUrl: repaired.thumbnailUrl,
+      });
+    }).catch((error) => {
+      logVideoThumbnailDebug('attachment.thumbnail.repair-error', {
+        key,
+        name: missing.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => {
+      repairingThumbnailKeysRef.current.delete(key);
+    });
+  }, [currentSessionId, pendingAttachments]);
+
   const attachFile = useCallback(async (file: File) => {
     if (!allowFileUpload || isProcessing) return;
     setIsAttachmentUploading(true);
@@ -243,6 +369,12 @@ export function useChatAttachments({
         fileName: file.name || `attachment-${Date.now()}`,
         sessionId: currentSessionId || undefined,
       }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
+      logVideoThumbnailDebug('attachment.inline.result', {
+        fileName: file.name,
+        success: result?.success,
+        error: result?.error,
+        attachment: result?.attachment,
+      });
       if (!result?.success || !result.attachment) {
         throw new Error(result?.error || '上传文件失败');
       }
@@ -251,7 +383,14 @@ export function useChatAttachments({
         previewUrl = URL.createObjectURL(file);
       }
       try {
-        appendPendingAttachment(await withVideoThumbnail(result.attachment, previewUrl));
+        const attachmentWithThumbnail = await withVideoThumbnail(result.attachment, previewUrl, currentSessionId);
+        logVideoThumbnailDebug('attachment.inline.append', {
+          name: attachmentWithThumbnail.name,
+          hasThumbnailDataUrl: Boolean(attachmentWithThumbnail.thumbnailDataUrl),
+          thumbnailDataUrl: attachmentWithThumbnail.thumbnailDataUrl,
+          thumbnailUrl: attachmentWithThumbnail.thumbnailUrl,
+        });
+        appendPendingAttachment(attachmentWithThumbnail);
       } finally {
         if (previewUrl) URL.revokeObjectURL(previewUrl);
       }
@@ -274,10 +413,23 @@ export function useChatAttachments({
         path: normalizedPath,
         sessionId: currentSessionId || undefined,
       }) as { success?: boolean; error?: string; attachment?: UploadedFileAttachment };
+      logVideoThumbnailDebug('attachment.path.result', {
+        path: normalizedPath,
+        success: result?.success,
+        error: result?.error,
+        attachment: result?.attachment,
+      });
       if (!result?.success || !result.attachment) {
         throw new Error(result?.error || '上传文件失败');
       }
-      appendPendingAttachment(await withVideoThumbnail(result.attachment));
+      const attachmentWithThumbnail = await withVideoThumbnail(result.attachment, undefined, currentSessionId);
+      logVideoThumbnailDebug('attachment.path.append', {
+        name: attachmentWithThumbnail.name,
+        hasThumbnailDataUrl: Boolean(attachmentWithThumbnail.thumbnailDataUrl),
+        thumbnailDataUrl: attachmentWithThumbnail.thumbnailDataUrl,
+        thumbnailUrl: attachmentWithThumbnail.thumbnailUrl,
+      });
+      appendPendingAttachment(attachmentWithThumbnail);
       focusComposer();
     } catch (error) {
       setErrorNotice(error instanceof Error ? error.message : String(error || '上传文件失败'));
@@ -376,6 +528,9 @@ export function useChatAttachments({
     event.stopPropagation();
     fileDragDepthRef.current = 0;
     setIsFileDragActive(false);
+    if (isTauriRuntime()) {
+      return;
+    }
     handleDroppedFiles(event.dataTransfer.files);
   }, [allowFileUpload, handleDroppedFiles, isProcessing]);
 

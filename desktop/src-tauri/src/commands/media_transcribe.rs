@@ -1,8 +1,6 @@
 use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
-use crate::desktop_io::{
-    resolve_transcription_settings, run_curl_transcription_with_response_format,
-};
-use crate::{make_id, now_ms, payload_string, workspace_root, AppState};
+use crate::desktop_io::{resolve_transcription_settings, run_curl_transcription_with_parse_format};
+use crate::{ffmpeg_program, make_id, now_ms, payload_string, workspace_root, AppState};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -82,7 +80,7 @@ fn extract_audio_for_transcription(
     source_path: &Path,
     output_dir: &Path,
 ) -> Result<PathBuf, String> {
-    let audio_path = output_dir.join(format!("audio-{}.m4a", now_ms()));
+    let audio_path = output_dir.join(format!("audio-{}.wav", now_ms()));
     let args = vec![
         "-y".to_string(),
         "-i".to_string(),
@@ -92,13 +90,11 @@ fn extract_audio_for_transcription(
         "1".to_string(),
         "-ar".to_string(),
         "16000".to_string(),
-        "-c:a".to_string(),
-        "aac".to_string(),
-        "-b:a".to_string(),
-        "96k".to_string(),
+        "-acodec".to_string(),
+        "pcm_s16le".to_string(),
         audio_path.display().to_string(),
     ];
-    let argv = std::iter::once("ffmpeg".to_string())
+    let argv = std::iter::once(ffmpeg_program(Some(app))?)
         .chain(args)
         .collect::<Vec<_>>();
     run_managed_cli_command(
@@ -160,14 +156,32 @@ pub(crate) fn execute_media_transcribe(
     let output_dir = output_dir_for_request(state, request, &job_id)?;
     let audio_path =
         extract_audio_for_transcription(app, state, session_id, &source_path, &output_dir)?;
-    let transcript = run_curl_transcription_with_response_format(
+    let transcript = run_curl_transcription_with_parse_format(
         &endpoint,
         api_key.as_deref(),
         &model_name,
         &audio_path,
-        "audio/mp4",
+        "audio/wav",
         Some(response_format),
-    )?;
+        Some(response_format),
+    )
+    .or_else(|first_error| {
+        if matches!(response_format, "json" | "verbose_json") {
+            return Err(first_error);
+        }
+        run_curl_transcription_with_parse_format(
+            &endpoint,
+            api_key.as_deref(),
+            &model_name,
+            &audio_path,
+            "audio/wav",
+            None,
+            Some(response_format),
+        )
+        .map_err(|retry_error| {
+            format!("{first_error}；已自动改用默认转写响应重试，仍失败：{retry_error}")
+        })
+    })?;
 
     let output_path = output_dir.join(format!("transcript.{extension}"));
     fs::write(&output_path, &transcript).map_err(|error| error.to_string())?;

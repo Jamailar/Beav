@@ -34,6 +34,7 @@ pub fn handle_runtime_session_channel(
         "team-runtime:create-session" | "collab:sessions:create" => {
             runtime_collab::create_session_value(app, state, payload)
         }
+        "team-runtime:guide-create" => runtime_collab::guide_create_value(app, state, payload),
         "team-runtime:get-session" | "collab:sessions:get" => {
             runtime_collab::session_snapshot_value(state, payload)
         }

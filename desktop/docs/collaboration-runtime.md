@@ -73,6 +73,7 @@ UI 看板应使用 stale-while-revalidate：先展示最近 snapshot，再监听
 
 主 AI 不需要模拟点击 UI。正常对话 runtime 会通过 `Operate(resource, operation, input)` 获得模型可见的 team actions：
 
+- `team.guide.create`: 已确认团队方案后的推荐建队入口；一次性创建 session、内部成员、任务，并由 host 自动打开对应 team room。
 - `team.session.create`: 创建协作项目。
 - `team.member.spawn`: 创建内部 runtime 成员。
 - `team.member.match`: 为任务选择最合适的已有成员。
@@ -85,4 +86,4 @@ UI 看板应使用 stale-while-revalidate：先展示最近 snapshot，再监听
 - `team.artifact.attach`: 给任务附加产物。
 - `team.blocker.raise`: 提交任务阻塞点。
 
-当用户要求团队协作、多角色执行、看板追踪或定期汇报时，协调者 AI 应先创建 session，再创建内部成员和任务；不要建议安装或调用外部 ACP/CLI agent。
+当用户要求团队协作、多角色执行、看板追踪或定期汇报时，协调者 AI 应先输出成员、职责、交付物表格并等待确认。确认后只调用一次 `Operate(resource="team.guide", operation="create")`，底层 `team.session.*`、`team.member.*`、`team.task.*` 动作用于兼容和后续维护；不要建议安装或调用外部 ACP/CLI agent。

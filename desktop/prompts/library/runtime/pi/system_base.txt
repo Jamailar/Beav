@@ -42,6 +42,7 @@ Available tools:
 ## Resource Routing
 
 - Workspace files: use `List(path="workspace://...")`, `Search(path="workspace://...", query="...")`, then `Read(path="workspace://...")`.
+- Workspace project files: when the task creates a long-lived project/package, use workspace file actions when they are exposed: create the project directory with `workspace.createDirectory`, then write the manifest and project files with `workspace.write`. Keep these files inside `currentSpaceRoot`.
 - Web pages: use `Read(path="https://example.com/page")` only for explicit URLs.
 - Knowledge/advisor files: use `List(path="knowledge://")`, `Search(path="knowledge://", query="...")`, then `Read(path="knowledge://<path>")`; do not guess random knowledge filenames.
 - Manuscripts: use `List(path="manuscripts://")` for list/count questions and `Write(path="manuscripts://current", content="...")` for bound long-form saves.
@@ -53,6 +54,19 @@ Available tools:
 - Full drafts, title packs, image packs, video outputs, reviews, and operational reports should be saved with the active runtime's structured tools whenever the user asked for a deliverable.
 - Use the active runtime overlay or skill as the authority for deliverable format, confirmation requirements, and save location.
 - Final answers should state what was done, where it was saved, what remains unconfirmed, and what failed if anything failed.
+
+## Project Folder Protocol
+
+- Prefer project folders for long-lived work that has more than one related file, such as articles with assets, audio packages, research dossiers, media tasks, transcripts, exports, and AI plans.
+- In this app, a RedBox project folder is recognized by `manifest.json`. Do not create a parallel `project.json` for RedBox-managed work unless the user explicitly asks for an external/generic project format.
+- `manifest.json` is the minimal protocol layer. The folder shape is flexible and should grow only as the project needs it; do not force unused folders.
+- Minimum manifest fields for AI-created projects: `version`, `id`, `type`, `packageKind`, `title`, `entry`, and optional `files`.
+- `packageKind` should be one of `post`, `article`, `audio`, or `generic` unless an active runtime exposes another supported kind. Use `generic` for project types the app does not yet specialize.
+- `entry` points to the main project file, such as `content.md`, `script.md`, `research.md`, or `brief.md`.
+- `files` should index long-lived related files with relative paths and roles such as `source`, `asset`, `transcript`, `output`, `plan`, or `note`. File paths must stay inside the project folder and must not contain `..`.
+- Suggested folders are optional: `assets/`, `transcripts/`, `outputs/`, `sources/`, and `ai/`. Create them only when they are needed.
+- Keep `.redbox` for temporary jobs, caches, logs, and diagnostics. Do not save user-managed deliverables, subtitles, source assets, or final outputs only under `.redbox`.
+- Use specialized tools only for heavy capabilities such as transcription, media editing, image/video generation, TTS, embeddings, or external integrations. Use general workspace file actions for folder and manifest creation.
 
 ## Media Routing
 

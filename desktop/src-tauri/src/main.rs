@@ -17,6 +17,7 @@ mod diagnostics;
 mod document_ingest;
 mod document_parse;
 mod events;
+mod ffmpeg_runtime;
 mod helpers;
 mod http_utils;
 mod interactive_runtime_shared;
@@ -61,6 +62,7 @@ use events::{
     emit_runtime_text_delta, emit_runtime_tool_partial, emit_runtime_tool_request,
     emit_runtime_tool_result,
 };
+pub(crate) use ffmpeg_runtime::{ffmpeg_executable, ffmpeg_program};
 use persistence::{
     build_store_path, ensure_store_hydrated_for_knowledge, hydrate_store_from_workspace_files,
     load_store, persist_store, with_store, with_store_mut,
@@ -82,10 +84,12 @@ use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Child;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64},
@@ -673,6 +677,7 @@ struct MediaAssetRecord {
     updated_at: String,
     absolute_path: Option<String>,
     preview_url: Option<String>,
+    thumbnail_url: Option<String>,
     exists: bool,
 }
 
@@ -1552,6 +1557,152 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
             "binary".to_string(),
             false,
         ),
+    }
+}
+
+fn video_thumbnail_key(path: &Path) -> String {
+    let mut hasher = DefaultHasher::new();
+    path.display().to_string().hash(&mut hasher);
+    if let Ok(metadata) = fs::metadata(path) {
+        metadata.len().hash(&mut hasher);
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
+                duration.as_secs().hash(&mut hasher);
+                duration.subsec_nanos().hash(&mut hasher);
+            }
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+pub(crate) fn ensure_video_thumbnail_for_path(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    path: &Path,
+) -> Option<String> {
+    let normalized = normalize_legacy_workspace_path(path);
+    let (_, kind, _) = guess_mime_and_kind(&normalized);
+    eprintln!(
+        "[video-thumbnail] request path={} normalized={} kind={} exists={}",
+        path.display(),
+        normalized.display(),
+        kind,
+        normalized.is_file()
+    );
+    if kind != "video" || !normalized.is_file() {
+        append_debug_log_state(
+            state,
+            format!(
+                "[video-thumbnail] skip path={} kind={} exists={}",
+                normalized.display(),
+                kind,
+                normalized.is_file()
+            ),
+        );
+        return None;
+    }
+
+    let thumbnail_dir = match media_root(state) {
+        Ok(root) => root.join("thumbnails"),
+        Err(error) => {
+            eprintln!("[video-thumbnail] media root failed: {error}");
+            append_debug_log_state(
+                state,
+                format!("[video-thumbnail] media root failed: {error}"),
+            );
+            return None;
+        }
+    };
+    if let Err(error) = fs::create_dir_all(&thumbnail_dir) {
+        eprintln!(
+            "[video-thumbnail] create thumbnail dir failed dir={} error={error}",
+            thumbnail_dir.display()
+        );
+        append_debug_log_state(
+            state,
+            format!(
+                "[video-thumbnail] create thumbnail dir failed dir={} error={error}",
+                thumbnail_dir.display()
+            ),
+        );
+        return None;
+    }
+    let thumbnail_path = thumbnail_dir.join(format!("{}.jpg", video_thumbnail_key(&normalized)));
+    if thumbnail_path.is_file() {
+        eprintln!(
+            "[video-thumbnail] cache hit source={} thumbnail={}",
+            normalized.display(),
+            thumbnail_path.display()
+        );
+        return Some(file_url_for_path(&thumbnail_path));
+    }
+
+    let ffmpeg_path = match ffmpeg_executable(app) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("[video-thumbnail] ffmpeg resolve failed: {error}");
+            append_debug_log_state(
+                state,
+                format!("[video-thumbnail] ffmpeg resolve failed: {error}"),
+            );
+            return None;
+        }
+    };
+    eprintln!(
+        "[video-thumbnail] run ffmpeg={} source={} output={}",
+        ffmpeg_path.display(),
+        normalized.display(),
+        thumbnail_path.display()
+    );
+    let output = match std::process::Command::new(&ffmpeg_path)
+        .args(["-v", "error", "-nostdin", "-y", "-ss", "00:00:00.1", "-i"])
+        .arg(&normalized)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale='min(640,iw)':-2,format=yuvj420p",
+            "-q:v",
+            "3",
+        ])
+        .arg(&thumbnail_path)
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("[video-thumbnail] spawn failed: {error}");
+            append_debug_log_state(state, format!("[video-thumbnail] spawn failed: {error}"));
+            return None;
+        }
+    };
+    if output.status.success() && thumbnail_path.is_file() {
+        eprintln!(
+            "[video-thumbnail] success source={} thumbnail={}",
+            normalized.display(),
+            thumbnail_path.display()
+        );
+        Some(file_url_for_path(&thumbnail_path))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        eprintln!(
+            "[video-thumbnail] failed status={} source={} output={} stderr={}",
+            output.status,
+            normalized.display(),
+            thumbnail_path.display(),
+            stderr
+        );
+        append_debug_log_state(
+            state,
+            format!(
+                "[video-thumbnail] failed status={} source={} output={} stderr={}",
+                output.status,
+                normalized.display(),
+                thumbnail_path.display(),
+                stderr
+            ),
+        );
+        let _ = fs::remove_file(&thumbnail_path);
+        None
     }
 }
 
@@ -3312,6 +3463,16 @@ fn list_directory_entries(path: &Path, limit: usize) -> Result<Vec<Value>, Strin
     interactive_runtime_shared::list_directory_entries(path, limit)
 }
 
+fn reject_parent_directory_traversal(raw_path: &str) -> Result<(), String> {
+    if Path::new(raw_path)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("parent directory traversal is not allowed".to_string());
+    }
+    Ok(())
+}
+
 fn workspace_read_directory_response(path: &Path, limit: usize) -> Result<Value, String> {
     let entries = list_directory_entries(path, limit)?;
     let entry_names = entries
@@ -4423,6 +4584,52 @@ fn execute_interactive_tool_call(
                             }))
                         }
                     }
+                    "workspace.createDirectory" => {
+                        if raw_path.trim().is_empty() {
+                            return Err(
+                                "path is required for workspace.createDirectory".to_string()
+                            );
+                        }
+                        reject_parent_directory_traversal(&raw_path)?;
+                        let resolved =
+                            interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                                state, session_id, &raw_path,
+                            )?;
+                        fs::create_dir_all(&resolved).map_err(|error| error.to_string())?;
+                        Ok(json!({
+                            "success": true,
+                            "path": resolved.display().to_string(),
+                            "kind": "directory"
+                        }))
+                    }
+                    "workspace.write" => {
+                        if raw_path.trim().is_empty() {
+                            return Err("path is required for workspace.write".to_string());
+                        }
+                        reject_parent_directory_traversal(&raw_path)?;
+                        let content = payload_string(&normalized_arguments, "content")
+                            .ok_or_else(|| "content is required for workspace.write".to_string())?;
+                        let resolved =
+                            interactive_runtime_shared::resolve_workspace_tool_path_for_session(
+                                state, session_id, &raw_path,
+                            )?;
+                        if resolved.exists() && resolved.is_dir() {
+                            return Err(format!(
+                                "cannot write file over directory: {}",
+                                resolved.display()
+                            ));
+                        }
+                        if let Some(parent) = resolved.parent() {
+                            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                        }
+                        fs::write(&resolved, content.as_bytes())
+                            .map_err(|error| error.to_string())?;
+                        Ok(json!({
+                            "success": true,
+                            "path": resolved.display().to_string(),
+                            "bytes": content.len()
+                        }))
+                    }
                     _ => Err(format!("unsupported fs action: {action}")),
                 }
             }
@@ -4832,7 +5039,7 @@ fn interactive_attachment_tool_read_note(
                 "优先使用文档解析/知识库导入工具抽取正文；如果只能使用 workspace.read，先读取并如实说明无法解析的格式边界。"
             }
             "media-tool" if kind == "video" => {
-                "必须立即调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该工作区路径\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"})`，让专用 Video Analysis Agent 读取真实视频内容。若用户随后要求字幕、转录、SRT 或按口播时间轴剪辑，应先调用 `Operate(resource=\"media\", operation=\"transcribe\", input={\"sourcePath\":\"该工作区路径\",\"format\":\"srt\"})` 生成字幕文件；若用户要求剪辑、切片、拼接、静音、变速、裁切或导出该视频，应调用 `Operate(resource=\"media\", operation=\"edit\", input={\"sourcePath\":\"该工作区路径\",\"operations\":[...]})` 直接产出剪辑文件，不要只生成 ffmpeg 命令或声称无法本地剪辑。不要先用 `Read`、`bash`、目录列表、`meta.json` 或文案元数据替代视频分析；这些只能作为 video.analyze 失败后的辅助证据。"
+                "如果用户要求识别字幕、提取字幕、转录、SRT、VTT、口播文字或字幕文件，第一次工具调用必须是 `Operate(resource=\"media\", operation=\"transcribe\", input={\"sourcePath\":\"该路径\",\"format\":\"srt\"})`；附件路径已由宿主解析，不要先用 `Read`、`List`、`Search`、`bash`、`shell`、`cli_runtime`、目录列表、`meta.json` 或文案元数据确认文件。不要用 `video.analyze` 或 `speech_extract` 代替字幕/ASR。只有当任务需要理解画面、镜头、视觉内容、精彩片段或智能剪辑策略时，才调用 `Operate(resource=\"video\", operation=\"analyze\", input={\"toolPath\":\"该路径\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"})`。若用户要求剪辑、切片、拼接、静音、变速、裁切或导出该视频，应调用 `Operate(resource=\"media\", operation=\"edit\", input={\"sourcePath\":\"该路径\",\"operations\":[...]})` 直接产出剪辑文件，不要只生成 ffmpeg 命令或声称无法本地剪辑。"
             }
             "media-tool" => {
                 "优先使用对应的媒体、转写或视频处理工具读取真实媒体内容；如果当前工具面没有这类能力，必须先说明无法直接分析原始媒体。"
@@ -4841,7 +5048,7 @@ fn interactive_attachment_tool_read_note(
         };
         let concrete_video_call = if delivery_mode == "media-tool" && kind == "video" {
             format!(
-                " 具体调用：`Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})`。"
+                " 字幕/转录具体调用：`Operate(resource=\"media\", operation=\"transcribe\", input={{\"sourcePath\":\"{relative_path}\",\"format\":\"srt\"}})`；画面分析具体调用：`Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})`。"
             )
         } else {
             String::new()
@@ -4875,7 +5082,7 @@ fn interactive_history_attachment_note(
     if !embedded_directly && kind == "video" {
         if let Some(relative_path) = relative_path {
             return Some(format!(
-                "附件：`{name}`（video，需通过 `Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})` 读取；如果用户要字幕/SRT/转录，调用 `Operate(resource=\"media\", operation=\"transcribe\", input={{\"sourcePath\":\"{relative_path}\",\"format\":\"srt\"}})`；如果用户要剪辑，调用 `Operate(resource=\"media\", operation=\"edit\", input={{\"sourcePath\":\"{relative_path}\",\"operations\":[...]}})` 产出剪辑文件；不要用 Read/bash/meta.json 代替视频分析或剪辑）"
+                "附件：`{name}`（video，字幕/SRT/转录的第一次工具调用必须是 `Operate(resource=\"media\", operation=\"transcribe\", input={{\"sourcePath\":\"{relative_path}\",\"format\":\"srt\"}})`；附件路径已解析，不要先用 Read/List/Search/bash/shell/cli_runtime/meta.json/目录列表确认文件；只有画面/镜头/视觉分析才调用 `Operate(resource=\"video\", operation=\"analyze\", input={{\"toolPath\":\"{relative_path}\",\"mode\":\"summary\",\"instruction\":\"按用户要求分析视频\"}})`；剪辑调用 `Operate(resource=\"media\", operation=\"edit\", input={{\"sourcePath\":\"{relative_path}\",\"operations\":[...]}})`）"
             ));
         }
     }
@@ -8964,7 +9171,7 @@ fn build_advisor_youtube_channel(existing: Option<&Value>, url: &str, channel_id
     Value::Object(next)
 }
 
-fn resolve_local_path(source: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_local_path(source: &str) -> Option<PathBuf> {
     let trimmed = source.trim();
     if trimmed.is_empty() {
         return None;

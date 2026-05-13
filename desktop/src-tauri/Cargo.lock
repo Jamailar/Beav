@@ -4036,6 +4036,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "redbox"
+version = "1.11.0"
+dependencies = [
+ "arboard",
+ "base64 0.22.1",
+ "calamine",
+ "chrono",
+ "chrono-tz",
+ "cpal",
+ "dirs 5.0.1",
+ "futures-util",
+ "glob",
+ "hound",
+ "image",
+ "normalized-line-endings",
+ "notify",
+ "open",
+ "pdf-extract",
+ "pulldown-cmark",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "shell-words",
+ "tantivy",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-notification",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "urlencoding",
+ "zip",
+ "zstd",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5435,49 +5478,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "thrive"
-version = "1.11.0"
-dependencies = [
- "arboard",
- "base64 0.22.1",
- "calamine",
- "chrono",
- "chrono-tz",
- "cpal",
- "dirs 5.0.1",
- "futures-util",
- "glob",
- "hound",
- "image",
- "normalized-line-endings",
- "notify",
- "open",
- "pdf-extract",
- "pulldown-cmark",
- "regex",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "shell-words",
- "tantivy",
- "tauri",
- "tauri-build",
- "tauri-plugin-notification",
- "time",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "zip",
- "zstd",
 ]
 
 [[package]]

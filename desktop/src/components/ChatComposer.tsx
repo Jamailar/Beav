@@ -40,6 +40,7 @@ export interface UploadedFileAttachment {
   ext?: string;
   size?: number;
   thumbnailDataUrl?: string;
+  thumbnailUrl?: string;
   inlineDataUrl?: string;
   workspaceRelativePath?: string;
   toolPath?: string;
@@ -183,6 +184,17 @@ const AUDIO_ATTACHMENT_EXT_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus|webm)(?:[?#].*
 const TEXT_ATTACHMENT_EXT_RE = /\.(txt|md|markdown|json|csv|tsv|doc|docx|pdf|rtf|xml|yaml|yml|ts|tsx|js|jsx|py|rs|java|go|c|cpp|h|hpp)(?:[?#].*)?$/i;
 const DOCUMENT_ATTACHMENT_EXT_RE = /\.(pdf|docx?|xlsx?|pptx?|rtf)(?:[?#].*)?$/i;
 
+function logComposerThumbnailDebug(event: string, fields: Record<string, unknown>) {
+  console.info('[chat-thumbnail]', event, fields);
+  void window.ipcRenderer?.logs?.appendRenderer?.({
+    level: 'debug',
+    category: 'chat.attachment.thumbnail',
+    event,
+    message: event,
+    fields,
+  }).catch(() => undefined);
+}
+
 function modelSupportsChat(model: string | { id?: unknown; capability?: unknown; capabilities?: unknown }): boolean {
   if (typeof model === 'string') {
     const forced = getForcedModelCapabilities(model);
@@ -210,6 +222,7 @@ function modelSupportsChat(model: string | { id?: unknown; capability?: unknown;
 function getAttachmentSource(attachment: UploadedFileAttachment): string {
   const preferred = String(
     attachment.thumbnailDataUrl
+      || attachment.thumbnailUrl
       || attachment.inlineDataUrl
       || attachment.localUrl
       || attachment.absolutePath
@@ -532,8 +545,20 @@ function ComposerAttachmentPreview({
   const previewSrc = isImageAttachment
     ? getAttachmentSource(attachment)
     : isVideoAttachment
-      ? String(attachment.thumbnailDataUrl || '').trim()
+      ? getAttachmentSource(attachment)
       : '';
+  if (isVideoAttachment) {
+    console.info('[chat-thumbnail] composer.preview', {
+      name: attachment.name,
+      visualKind,
+      previewSrc,
+      thumbnailDataUrl: attachment.thumbnailDataUrl,
+      thumbnailUrl: attachment.thumbnailUrl,
+      localUrl: attachment.localUrl,
+      absolutePath: attachment.absolutePath,
+      originalAbsolutePath: attachment.originalAbsolutePath,
+    });
+  }
   const extLabel = getAttachmentExtLabel(attachment);
   const sizeLabel = formatAttachmentSize(attachment.size);
   const typeLabel = getAttachmentKindLabel(visualKind);
@@ -568,7 +593,19 @@ function ComposerAttachmentPreview({
             hasVisualPreview ? 'rotate-0' : (variant === 'empty' ? '-rotate-[4deg]' : '-rotate-[3deg]'),
             previewShellClass,
           )}>
-            <img src={previewSrc} alt={attachment.name} className="h-full w-full object-cover" />
+            <img
+              src={previewSrc}
+              alt={attachment.name}
+              className="h-full w-full object-cover"
+              onError={() => logComposerThumbnailDebug('composer.preview.img-error', {
+                name: attachment.name,
+                previewSrc,
+                thumbnailDataUrl: attachment.thumbnailDataUrl,
+                thumbnailUrl: attachment.thumbnailUrl,
+                localUrl: attachment.localUrl,
+                absolutePath: attachment.absolutePath,
+              })}
+            />
           </div>
         ) : (
           <div className={clsx(
@@ -792,10 +829,21 @@ function ComposerMediaAttachmentSlot({
       frameToneClass,
       !disabled && 'hover:rotate-[-5deg]',
     )}>
-      {source && visualKind === 'image' ? (
-        <img src={source} alt={attachment.name} className="h-full w-full object-cover" />
-      ) : source && visualKind === 'video' ? (
-        <video src={source} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+      {source && (visualKind === 'image' || visualKind === 'video') ? (
+        <img
+          src={source}
+          alt={attachment.name}
+          className="h-full w-full object-cover"
+          onError={() => logComposerThumbnailDebug('composer.media-slot.img-error', {
+            name: attachment.name,
+            visualKind,
+            source,
+            thumbnailDataUrl: attachment.thumbnailDataUrl,
+            thumbnailUrl: attachment.thumbnailUrl,
+            localUrl: attachment.localUrl,
+            absolutePath: attachment.absolutePath,
+          })}
+        />
       ) : (
         <div className="flex h-full w-full items-center justify-center">
           {getAttachmentKindIcon(visualKind, iconClass)}

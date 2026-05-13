@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Thrive",
+  "productName": "RedBox",
   "version": "../package.json",
-  "identifier": "com.redconvert.thrive",
+  "identifier": "com.redconvert.redbox",
   "build": {
     "beforeDevCommand": "pnpm tauri:before-dev",
     "beforeBuildCommand": "pnpm build",
@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "Thrive",
-        "width": 1440,
-        "height": 920,
+        "title": "RedBox",
+        "width": 1280,
+        "height": 820,
         "minWidth": 1180,
         "minHeight": 760,
         "resizable": true,
@@ -52,10 +52,14 @@
       "../prompts/library",
       "../builtin-skills"
     ],
+    "externalBin": [
+      "binaries/ffmpeg",
+      "binaries/ffprobe"
+    ],
     "icon": [
-      "../branding/variants/thrive/icons/icon.png",
-      "../branding/variants/thrive/icons/icon.icns",
-      "../branding/variants/thrive/icons/icon.ico"
+      "../branding/variants/redbox/icons/icon.png",
+      "../branding/variants/redbox/icons/icon.icns",
+      "../branding/variants/redbox/icons/icon.ico"
     ]
   }
 }

@@ -754,6 +754,110 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
             Some("Operate"),
             Some("runtime.cancel"),
         ),
+        ("team.guide" | "team_guide" | "team-guide", "create") => app_cli_action_call(
+            "team.guide.create",
+            payload,
+            Some("Operate"),
+            Some("team.guide.create"),
+        ),
+        ("team.session" | "team_session" | "team-session", "create") => app_cli_action_call(
+            "team.session.create",
+            payload,
+            Some("Operate"),
+            Some("team.session.create"),
+        ),
+        ("team.session" | "team_session" | "team-session", "list") => app_cli_action_call(
+            "team.session.list",
+            payload,
+            Some("Operate"),
+            Some("team.session.list"),
+        ),
+        ("team.session" | "team_session" | "team-session", "get") => app_cli_action_call(
+            "team.session.get",
+            payload,
+            Some("Operate"),
+            Some("team.session.get"),
+        ),
+        ("team.member" | "team_member" | "team-member", "spawn" | "create" | "add") => {
+            app_cli_action_call(
+                "team.member.spawn",
+                payload,
+                Some("Operate"),
+                Some("team.member.spawn"),
+            )
+        }
+        ("team.member" | "team_member" | "team-member", "match") => app_cli_action_call(
+            "team.member.match",
+            payload,
+            Some("Operate"),
+            Some("team.member.match"),
+        ),
+        ("team.member" | "team_member" | "team-member", "rename") => app_cli_action_call(
+            "team.member.rename",
+            payload,
+            Some("Operate"),
+            Some("team.member.rename"),
+        ),
+        ("team.member" | "team_member" | "team-member", "shutdown") => app_cli_action_call(
+            "team.member.shutdown",
+            payload,
+            Some("Operate"),
+            Some("team.member.shutdown"),
+        ),
+        ("team.member" | "team_member" | "team-member", "list") => app_cli_action_call(
+            "team.members.list",
+            payload,
+            Some("Operate"),
+            Some("team.member.list"),
+        ),
+        ("team.task" | "team_task" | "team-task", "create") => app_cli_action_call(
+            "team.task.create",
+            payload,
+            Some("Operate"),
+            Some("team.task.create"),
+        ),
+        ("team.task" | "team_task" | "team-task", "update") => app_cli_action_call(
+            "team.task.update",
+            payload,
+            Some("Operate"),
+            Some("team.task.update"),
+        ),
+        ("team.task" | "team_task" | "team-task", "list") => app_cli_action_call(
+            "team.task.list",
+            payload,
+            Some("Operate"),
+            Some("team.task.list"),
+        ),
+        ("team.message" | "team_message" | "team-message", "send") => app_cli_action_call(
+            "team.message.send",
+            payload,
+            Some("Operate"),
+            Some("team.message.send"),
+        ),
+        ("team.report" | "team_report" | "team-report", "request") => app_cli_action_call(
+            "team.report.request",
+            payload,
+            Some("Operate"),
+            Some("team.report.request"),
+        ),
+        ("team.report" | "team_report" | "team-report", "submit") => app_cli_action_call(
+            "team.report.submit",
+            payload,
+            Some("Operate"),
+            Some("team.report.submit"),
+        ),
+        ("team.report" | "team_report" | "team-report", "list") => app_cli_action_call(
+            "team.report.list",
+            payload,
+            Some("Operate"),
+            Some("team.report.list"),
+        ),
+        ("team.artifact" | "team_artifact" | "team-artifact", "attach") => app_cli_action_call(
+            "team.artifact.attach",
+            payload,
+            Some("Operate"),
+            Some("team.artifact.attach"),
+        ),
         ("cli_runtime", "list") => app_cli_action_call(
             "cli_runtime.environment.list",
             payload,
@@ -1085,13 +1189,32 @@ fn normalize_redbox_fs_action(action: &str, scope: &str) -> String {
             };
             format!("{scope_prefix}.{normalized_action}")
         }
-        "workspace.list" | "workspace.read" | "workspace.search" | "knowledge.list"
-        | "knowledge.read" | "knowledge.attach" | "knowledge.search" => normalized_action,
+        "create.directory" | "createdirectory" | "mkdir" => "workspace.createDirectory".to_string(),
+        "write" => "workspace.write".to_string(),
+        "workspace.create.directory" | "workspace.createdirectory" | "workspace.mkdir" => {
+            "workspace.createDirectory".to_string()
+        }
+        "workspace.list"
+        | "workspace.read"
+        | "workspace.createDirectory"
+        | "workspace.write"
+        | "workspace.search"
+        | "knowledge.list"
+        | "knowledge.read"
+        | "knowledge.attach"
+        | "knowledge.search" => normalized_action,
         other => other.to_string(),
     };
     match combined.as_str() {
-        "workspace.list" | "workspace.read" | "workspace.search" | "knowledge.list"
-        | "knowledge.read" | "knowledge.attach" | "knowledge.search" => combined,
+        "workspace.list"
+        | "workspace.read"
+        | "workspace.createDirectory"
+        | "workspace.write"
+        | "workspace.search"
+        | "knowledge.list"
+        | "knowledge.read"
+        | "knowledge.attach"
+        | "knowledge.search" => combined,
         _ => combined,
     }
 }
@@ -1893,6 +2016,42 @@ mod tests {
             normalized.arguments.get("action"),
             Some(&json!("redclaw.profile.bundle"))
         );
+    }
+
+    #[test]
+    fn normalizes_operate_team_resources_to_structured_actions() {
+        let cases = [
+            ("team.session", "create", "team.session.create"),
+            ("team.session", "list", "team.session.list"),
+            ("team.session", "get", "team.session.get"),
+            ("team.member", "spawn", "team.member.spawn"),
+            ("team.member", "list", "team.members.list"),
+            ("team.task", "create", "team.task.create"),
+            ("team.task", "update", "team.task.update"),
+            ("team.message", "send", "team.message.send"),
+            ("team.report", "request", "team.report.request"),
+            ("team.report", "submit", "team.report.submit"),
+            ("team.artifact", "attach", "team.artifact.attach"),
+            ("team.guide", "create", "team.guide.create"),
+        ];
+
+        for (resource, operation, action) in cases {
+            let normalized = normalize_tool_call(
+                "Operate",
+                &json!({
+                    "resource": resource,
+                    "operation": operation,
+                    "input": { "sessionId": "collab-session-1" }
+                }),
+            );
+            assert_eq!(normalized.name, "workflow", "{resource}.{operation}");
+            assert_eq!(
+                normalized.arguments.get("action"),
+                Some(&json!(action)),
+                "{resource}.{operation}"
+            );
+            assert_eq!(normalized.arguments.get("command"), None);
+        }
     }
 
     #[test]

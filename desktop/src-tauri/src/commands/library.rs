@@ -109,6 +109,81 @@ pub(crate) fn persist_media_workspace_catalog(state: &State<'_, AppState>) -> Re
     )
 }
 
+fn backfill_video_thumbnails_for_media_assets(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    let root = media_root(state)?;
+    let candidates = with_store(state, |store| {
+        Ok(store
+            .media_assets
+            .iter()
+            .filter(|asset| !media_thumbnail_url_is_usable(asset.thumbnail_url.as_deref()))
+            .filter_map(|asset| {
+                let source_path =
+                    asset
+                        .absolute_path
+                        .as_deref()
+                        .map(PathBuf::from)
+                        .or_else(|| {
+                            asset
+                                .relative_path
+                                .as_deref()
+                                .map(|relative| root.join(relative))
+                        })?;
+                let (_, kind, _) = guess_mime_and_kind(&source_path);
+                if kind == "video" && source_path.is_file() {
+                    Some((asset.id.clone(), source_path))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>())
+    })?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let updates = candidates
+        .into_iter()
+        .filter_map(|(asset_id, source_path)| {
+            ensure_video_thumbnail_for_path(Some(app), state, &source_path)
+                .map(|thumbnail_url| (asset_id, thumbnail_url))
+        })
+        .collect::<Vec<_>>();
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    with_store_mut(state, |store| {
+        for (asset_id, thumbnail_url) in &updates {
+            if let Some(asset) = store
+                .media_assets
+                .iter_mut()
+                .find(|asset| asset.id == *asset_id)
+            {
+                asset.thumbnail_url = Some(thumbnail_url.clone());
+                asset.updated_at = now_rfc3339();
+            }
+        }
+        Ok(())
+    })?;
+    persist_media_workspace_catalog(state)
+}
+
+fn media_thumbnail_url_is_usable(value: Option<&str>) -> bool {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    if value.starts_with("file://") {
+        return url::Url::parse(value)
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+            .is_some_and(|path| path.is_file());
+    }
+    true
+}
+
 pub(crate) fn persist_cover_workspace_catalog(state: &State<'_, AppState>) -> Result<(), String> {
     let assets = with_store(state, |store| Ok(store.cover_assets.clone()))?;
     write_json_value(
@@ -1439,6 +1514,7 @@ pub fn handle_library_channel(
             }
             "media:list" => {
                 let _ = ensure_store_hydrated_for_media(state);
+                let _ = backfill_video_thumbnails_for_media_assets(app, state);
                 with_store(state, |store| {
                     let mut assets = store.media_assets.clone();
                     assets.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -1621,7 +1697,12 @@ pub fn handle_library_channel(
                         continue;
                     }
                     let (relative_name, target) = copy_file_into_dir(file, &imports_root)?;
-                    let (mime_type, _kind, _) = guess_mime_and_kind(&target);
+                    let (mime_type, kind, _) = guess_mime_and_kind(&target);
+                    let thumbnail_url = if kind == "video" {
+                        ensure_video_thumbnail_for_path(Some(app), state, &target)
+                    } else {
+                        None
+                    };
                     let asset = MediaAssetRecord {
                         id: make_id("media"),
                         source: "imported".to_string(),
@@ -1647,6 +1728,7 @@ pub fn handle_library_channel(
                         updated_at: now_rfc3339(),
                         absolute_path: Some(target.display().to_string()),
                         preview_url: Some(file_url_for_path(&target)),
+                        thumbnail_url,
                         exists: true,
                     };
                     imported.push(asset.clone());
