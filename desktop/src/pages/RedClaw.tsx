@@ -155,6 +155,7 @@ const PREVIEW_KIND_SET = new Set<ChatMessageLinkKind>([
     'video',
     'audio',
     'manuscript',
+    'document',
     'pdf',
     'html',
     'text',

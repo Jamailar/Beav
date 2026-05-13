@@ -1,8 +1,9 @@
 use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::{
-    file_content_hash, file_url_for_path, guess_mime_and_kind, make_id, media_root, now_ms,
-    now_rfc3339, workspace_root, AppState, MediaAssetRecord,
+    ensure_video_thumbnail_for_path, ffmpeg_program, file_content_hash, file_url_for_path,
+    guess_mime_and_kind, make_id, media_root, now_ms, now_rfc3339, workspace_root, AppState,
+    MediaAssetRecord,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -118,7 +119,7 @@ fn run_ffmpeg_args(
     output_path: &Path,
     args: &[String],
 ) -> Result<(), String> {
-    let argv = std::iter::once("ffmpeg".to_string())
+    let argv = std::iter::once(ffmpeg_program(Some(app))?)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
     run_managed_cli_command(
@@ -180,6 +181,7 @@ fn output_kind(request: &Value) -> String {
 }
 
 fn register_media_edit_assets(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     paths: &[PathBuf],
     request: &Value,
@@ -194,7 +196,12 @@ fn register_media_edit_assets(
     let assets = crate::persistence::with_store_mut(state, |store| {
         let mut assets = Vec::<MediaAssetRecord>::new();
         for (index, path) in paths.iter().enumerate() {
-            let (mime_type, _, _) = guess_mime_and_kind(path);
+            let (mime_type, kind, _) = guess_mime_and_kind(path);
+            let thumbnail_url = if kind == "video" {
+                ensure_video_thumbnail_for_path(Some(app), state, path)
+            } else {
+                None
+            };
             let base_id = make_id("media-edit");
             let asset = MediaAssetRecord {
                 id: if paths.len() > 1 {
@@ -236,6 +243,7 @@ fn register_media_edit_assets(
                 updated_at: created_at.clone(),
                 absolute_path: Some(path.display().to_string()),
                 preview_url: Some(file_url_for_path(path)),
+                thumbnail_url,
                 exists: path.is_file(),
             };
             store.media_assets.push(asset.clone());
@@ -560,7 +568,7 @@ pub(crate) fn execute_media_edit(
     if output_paths.is_empty() {
         return Err("media.edit did not produce output".to_string());
     }
-    let assets = register_media_edit_assets(state, &output_paths, request, &job_id)?;
+    let assets = register_media_edit_assets(app, state, &output_paths, request, &job_id)?;
     Ok(json!({
         "success": true,
         "jobId": job_id,

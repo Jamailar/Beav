@@ -73,6 +73,26 @@ pub(crate) fn run_curl_transcription_with_response_format(
     mime_type: &str,
     response_format: Option<&str>,
 ) -> Result<String, String> {
+    run_curl_transcription_with_parse_format(
+        endpoint,
+        api_key,
+        model_name,
+        file_path,
+        mime_type,
+        response_format,
+        None,
+    )
+}
+
+pub(crate) fn run_curl_transcription_with_parse_format(
+    endpoint: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    file_path: &Path,
+    mime_type: &str,
+    response_format: Option<&str>,
+    parse_format: Option<&str>,
+) -> Result<String, String> {
     let mut command = std::process::Command::new("curl");
     configure_background_command(&mut command);
     command
@@ -106,28 +126,208 @@ pub(crate) fn run_curl_transcription_with_response_format(
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if stdout.is_empty() {
-        return Err("转写接口返回了空结果".to_string());
+        return Err("转写接口返回了空结果：服务响应 stdout 为空".to_string());
     }
 
-    let preferred_format = response_format
+    let preferred_format = parse_format
+        .or(response_format)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("json");
+    parse_transcription_response(&stdout, preferred_format)
+}
+
+pub(crate) fn parse_transcription_response(
+    stdout: &str,
+    preferred_format: &str,
+) -> Result<String, String> {
+    let stdout = stdout.trim();
+    if stdout.is_empty() {
+        return Err("转写接口返回了空结果：服务响应 stdout 为空".to_string());
+    }
     if preferred_format != "json" && !stdout.starts_with('{') && !stdout.starts_with('[') {
-        return Ok(stdout);
+        return Ok(stdout.to_string());
     }
 
     let value: Value =
         serde_json::from_str(&stdout).map_err(|error| format!("Invalid JSON response: {error}"))?;
-    let text = value
-        .get("text")
-        .or_else(|| value.get("transcript"))
-        .or_else(|| value.get("srt"))
-        .and_then(|item| item.as_str())
-        .map(|item| item.trim().to_string())
+    extract_transcription_text(&value, preferred_format).ok_or_else(|| {
+        format!(
+            "转写接口返回了空结果：未在响应中找到可用转写字段（{}）",
+            transcription_response_shape(&value)
+        )
+    })
+}
+
+fn extract_transcription_text(value: &Value, preferred_format: &str) -> Option<String> {
+    for key in ["text", "transcript", "srt", "vtt", "content", "result"] {
+        if let Some(text) = value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            return Some(text.to_string());
+        }
+    }
+    if let Some(data) = value.get("data") {
+        if let Some(text) = extract_transcription_text(data, preferred_format) {
+            return Some(text);
+        }
+    }
+    let segments = value
+        .get("segments")
+        .or_else(|| value.get("sentences"))
+        .or_else(|| value.pointer("/data/segments"))
+        .or_else(|| value.pointer("/data/sentences"))
+        .and_then(Value::as_array)?;
+    if segments.is_empty() {
+        return None;
+    }
+    if matches!(preferred_format, "srt" | "vtt") {
+        let rendered = render_timed_segments(segments, preferred_format);
+        if !rendered.trim().is_empty() {
+            return Some(rendered);
+        }
+    }
+    let text = segments
+        .iter()
+        .filter_map(segment_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn segment_text(segment: &Value) -> Option<String> {
+    if let Some(text) = segment
+        .as_str()
+        .map(str::trim)
         .filter(|item| !item.is_empty())
-        .ok_or_else(|| "转写接口返回了空结果".to_string())?;
-    Ok(text)
+    {
+        return Some(text.to_string());
+    }
+    for key in ["text", "transcript", "content", "sentence"] {
+        if let Some(text) = segment
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            return Some(text.to_string());
+        }
+    }
+    None
+}
+
+fn segment_time_seconds(segment: &Value, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        if let Some(number) = segment.get(key).and_then(Value::as_f64) {
+            return Some(if number > 10_000.0 {
+                number / 1000.0
+            } else {
+                number
+            });
+        }
+        if let Some(text) = segment.get(key).and_then(Value::as_str) {
+            if let Ok(number) = text.trim().parse::<f64>() {
+                return Some(if number > 10_000.0 {
+                    number / 1000.0
+                } else {
+                    number
+                });
+            }
+        }
+    }
+    None
+}
+
+fn format_srt_time(seconds: f64) -> String {
+    let millis = (seconds.max(0.0) * 1000.0).round() as u64;
+    let hours = millis / 3_600_000;
+    let minutes = (millis % 3_600_000) / 60_000;
+    let seconds = (millis % 60_000) / 1000;
+    let millis = millis % 1000;
+    format!("{hours:02}:{minutes:02}:{seconds:02},{millis:03}")
+}
+
+fn format_vtt_time(seconds: f64) -> String {
+    format_srt_time(seconds).replace(',', ".")
+}
+
+fn render_timed_segments(segments: &[Value], preferred_format: &str) -> String {
+    let mut output = String::new();
+    if preferred_format == "vtt" {
+        output.push_str("WEBVTT\n\n");
+    }
+    for (index, segment) in segments.iter().enumerate() {
+        let Some(text) = segment_text(segment) else {
+            continue;
+        };
+        let start = segment_time_seconds(segment, &["start", "start_time", "startTime", "begin"])
+            .unwrap_or(index as f64);
+        let end = segment_time_seconds(segment, &["end", "end_time", "endTime"])
+            .unwrap_or_else(|| start + 3.0);
+        if preferred_format == "srt" {
+            output.push_str(&format!(
+                "{}\n{} --> {}\n{}\n\n",
+                index + 1,
+                format_srt_time(start),
+                format_srt_time(end.max(start + 0.1)),
+                text
+            ));
+        } else {
+            output.push_str(&format!(
+                "{} --> {}\n{}\n\n",
+                format_vtt_time(start),
+                format_vtt_time(end.max(start + 0.1)),
+                text
+            ));
+        }
+    }
+    output
+}
+
+fn transcription_response_shape(value: &Value) -> String {
+    match value {
+        Value::Object(object) => {
+            let keys = object
+                .keys()
+                .take(12)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let segment_count = value
+                .get("segments")
+                .or_else(|| value.get("sentences"))
+                .or_else(|| value.pointer("/data/segments"))
+                .or_else(|| value.pointer("/data/sentences"))
+                .and_then(Value::as_array)
+                .map(|items| items.len());
+            match segment_count {
+                Some(count) => format!("topLevelKeys=[{keys}], segmentCount={count}"),
+                None => format!("topLevelKeys=[{keys}]"),
+            }
+        }
+        Value::Array(items) => format!("arrayLength={}", items.len()),
+        _ => format!("jsonType={}", value_type_name(value)),
+    }
+}
+
+fn value_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 pub(crate) fn resolve_transcription_settings(
@@ -286,4 +486,43 @@ pub(crate) fn copy_image_to_clipboard(path: &Path) -> Result<(), String> {
             .and_then(|value| value.to_str())
             .unwrap_or("unknown")
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_plain_text_from_provider_json() {
+        let value = json!({ "text": "  hello world  " });
+
+        assert_eq!(
+            extract_transcription_text(&value, "json").as_deref(),
+            Some("hello world")
+        );
+    }
+
+    #[test]
+    fn renders_srt_from_segment_json() {
+        let value = json!({
+            "segments": [
+                { "start": 0.0, "end": 1.5, "text": "第一句" },
+                { "start": 1.5, "end": 3.0, "text": "第二句" }
+            ]
+        });
+        let rendered = extract_transcription_text(&value, "srt").expect("srt");
+
+        assert!(rendered.contains("1\n00:00:00,000 --> 00:00:01,500\n第一句"));
+        assert!(rendered.contains("2\n00:00:01,500 --> 00:00:03,000\n第二句"));
+    }
+
+    #[test]
+    fn reports_shape_when_transcription_fields_are_missing() {
+        let value = json!({ "segments": [], "request_id": "abc" });
+        let shape = transcription_response_shape(&value);
+
+        assert!(shape.contains("topLevelKeys=[request_id, segments]"));
+        assert!(shape.contains("segmentCount=0"));
+    }
 }

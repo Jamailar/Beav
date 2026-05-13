@@ -6181,7 +6181,7 @@ fn run_ffmpeg_args(
     output_path: &std::path::Path,
     args: &[String],
 ) -> Result<(), String> {
-    let argv = std::iter::once("ffmpeg".to_string())
+    let argv = std::iter::once(ffmpeg_program(Some(app))?)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
     let _ = run_managed_cli_command(
@@ -8434,7 +8434,12 @@ pub fn handle_manuscripts_channel(
                     }));
                 }
                 let (relative_name, target) = copy_file_into_dir(&source, &imports_root)?;
-                let (mime_type, _kind, _) = guess_mime_and_kind(&target);
+                let (mime_type, kind, _) = guess_mime_and_kind(&target);
+                let thumbnail_url = if kind == "video" {
+                    ensure_video_thumbnail_for_path(Some(app), state, &target)
+                } else {
+                    None
+                };
                 let asset = with_store_mut(state, |store| {
                     let asset = MediaAssetRecord {
                         id: make_id("media"),
@@ -8461,6 +8466,7 @@ pub fn handle_manuscripts_channel(
                         updated_at: now_rfc3339(),
                         absolute_path: Some(target.display().to_string()),
                         preview_url: Some(file_url_for_path(&target)),
+                        thumbnail_url,
                         exists: true,
                     };
                     store.media_assets.push(asset.clone());
@@ -8865,7 +8871,12 @@ pub fn handle_manuscripts_channel(
                         continue;
                     }
                     let (relative_name, target) = copy_file_into_dir(&file, &imports_root)?;
-                    let (mime_type, _kind, _) = guess_mime_and_kind(&target);
+                    let (mime_type, kind, _) = guess_mime_and_kind(&target);
+                    let thumbnail_url = if kind == "video" {
+                        ensure_video_thumbnail_for_path(Some(app), state, &target)
+                    } else {
+                        None
+                    };
                     let asset = with_store_mut(state, |store| {
                         let asset = MediaAssetRecord {
                             id: make_id("media"),
@@ -8892,6 +8903,7 @@ pub fn handle_manuscripts_channel(
                             updated_at: now_rfc3339(),
                             absolute_path: Some(target.display().to_string()),
                             preview_url: Some(file_url_for_path(&target)),
+                            thumbnail_url,
                             exists: true,
                         };
                         store.media_assets.push(asset.clone());

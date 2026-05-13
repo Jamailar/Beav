@@ -1,6 +1,6 @@
 ---
 name: video-director
-description: Use when generating short videos, including motion clips, animated cover/video requests, reference-image video, image-to-video, and first/last-frame transitions. Produces a detailed shot script first, asks the user to confirm it, then chooses between text-to-video, reference-guided, and first-last-frame modes and calls the correct video model with prompt discipline focused on motion, reference elements, and transitions.
+description: Use when generating short videos, including motion clips, animated cover/video requests, reference-image video, image-to-video, and first/last-frame transitions. Produces a detailed shot script first, then generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, including any product or visual reference images, asks the user to confirm, and only then calls the correct video model.
 allowedRuntimeModes: [chatroom, redclaw]
 allowedTools: [workflow]
 activationScope: turn
@@ -16,16 +16,17 @@ Before any video tool call, follow this order:
 
 1. Clarify the intended video mode from the user's goal and assets.
 2. Draft a concise but detailed video script for review.
-3. Default to direct generation.
-4. Only use a video project pack if the user explicitly asks for a project/package/editor workflow, or the task is already bound to an existing pack.
-5. Decide whether this should be a single-video job or a multi-video assembly.
-6. If the script has multiple shots, continuity risk, character consistency requirements, or environment consistency requirements, proactively ask whether storyboard stills / keyframes should be generated first.
-7. If storyboard stills are needed, design a stable keyframe-generation plan first.
-8. Show the script to the user together with explicit video specs.
-9. Ask for confirmation or revision.
-10. Only after confirmation, call `Operate(resource="video", operation="generate", input={ ... })`.
+3. Generate storyboard contact-sheet preview image(s) with `Operate(resource="image", operation="generate", input={ ... })`.
+4. Show the script, storyboard preview image(s), and explicit video specs together.
+5. Ask for confirmation or revision.
+6. Default to direct video generation after confirmation.
+7. Only use a video project pack if the user explicitly asks for a project/package/editor workflow, or the task is already bound to an existing pack.
+8. Decide whether this should be a single-video job or a multi-video assembly.
+9. Only after confirmation, call `Operate(resource="video", operation="generate", input={ ... })`.
 
 If the user has not yet confirmed the script, do not generate the video.
+
+The storyboard contact-sheet preview is mandatory after the first shot script is written. It is not the same as final video keyframes; it is a quick visual proof of the planned shot sequence so the user can approve direction, composition, product placement, and continuity before video generation.
 
 ## Asset-Library Character Talking-Head Rule
 
@@ -118,13 +119,15 @@ Otherwise keep the planning in chat, call `video generate` directly, and let the
   - Generate the required clips one by one, then combine them with `ffmpeg` through the available tool path.
   - When planning multi-video mode, group the storyboard into separate clip units first, then specify the final concatenation order.
 
-- If the request has multiple shots, clear continuity requirements, or a risk of visual drift, ask one more question after drafting the table:
-  - whether storyboard images / keyframes should be generated first.
-- If storyboard images are generated, later video generation should preferentially use image-based modes, and for transition-heavy segments should prefer `first-last-frame`.
+- If the request has multiple shots, clear continuity requirements, or a risk of visual drift, ask one more question after showing the contact-sheet preview:
+  - whether separate storyboard keyframes should also be generated before video production.
+- If separate storyboard keyframes are generated, later video generation should preferentially use image-based modes, and for transition-heavy segments should prefer `first-last-frame`.
 
 ## Storyboard-First Rule
 
-When the request is complex enough that video quality depends on stable keyframes, you must prefer a storyboard-first workflow.
+Every video task needs a storyboard contact-sheet preview after the script table and before user confirmation.
+
+Use generated individual keyframes in addition to the contact sheet when the request is complex enough that video quality depends on stable keyframes.
 
 Use storyboard-first when one or more of these is true:
 
@@ -134,7 +137,7 @@ Use storyboard-first when one or more of these is true:
 - The user wants a sequence that later becomes one assembled video.
 - The user explicitly asks for storyboard frames / keyframes / 分镜图.
 
-When any of the above is true, do not silently continue to video generation. You must explicitly ask the user whether they want image-generated storyboard keyframes first.
+When any of the above is true, do not silently continue to video generation after the contact sheet. Ask the user whether they also want separate image-generated storyboard keyframes before video generation.
 
 When storyboard-first is used, follow this exact process:
 
@@ -161,6 +164,48 @@ It must contain:
 This image acts as the environmental anchor for all later keyframes.
 
 Do not start by generating an isolated close-up if the later sequence depends on environment continuity.
+
+## Storyboard Contact-Sheet Preview
+
+After writing the script table, generate the required storyboard effect image(s) before asking for final video approval.
+
+Use the shot count to choose the grid:
+
+- `1-4` shots -> four-panel grid.
+- `5-6` shots -> six-panel grid.
+- `7-9` shots -> nine-panel grid.
+- More than `9` shots -> split into multiple contact sheets; each generated image contains at most `9` storyboard panels.
+
+Rules:
+
+- One generated image may contain at most `9` storyboard panels.
+- Do not add extra invented shots to fill empty panels.
+- Keep the panel order left-to-right, top-to-bottom, matching the script table.
+- The preview should show composition, subject placement, camera scale, product/prop position, action beat, lighting, and style continuity.
+- Do not render planning labels, shot numbers, table headers, or internal notes inside the image unless the user explicitly asks for visible text.
+- The contact sheet is for visual approval only; it does not replace the approved Markdown script or `storyboardShots` payload used later for video generation.
+
+Reference handling is mandatory:
+
+- If the user attached or selected product images, character images, brand images, scene references, or previous generated images, pass them to `image.generate` as `referenceImages`.
+- If the reference comes from the asset library, read the asset first and pass its resolved image path(s) through `referenceImages` or `subjectIds`.
+- If several references exist, include prompt preface lines that define each role, such as `Image 1: product shape and material reference`, `Image 2: character identity reference`, `Image 3: scene mood reference`.
+- Do not describe reference images only in prose while leaving them out of the tool input.
+- If there are more reference images than the tool supports, prioritize product/character identity first, then scene, then style.
+
+Recommended contact-sheet `image.generate` payload shape:
+
+```json
+{
+  "count": 1,
+  "generationMode": "reference-guided",
+  "aspectRatio": "16:9",
+  "prompt": "Image 1 is the product reference: preserve shape, material, logo position, and main color. Create one cinematic storyboard contact sheet with six panels arranged left-to-right, top-to-bottom. Each panel corresponds to one storyboard row: Panel 1 visual: ... Panel 2 visual: ... Panel 3 visual: ... Panel 4 visual: ... Panel 5 visual: ... Panel 6 visual: ... No visible labels, no captions, no table text.",
+  "referenceImages": ["/absolute/path/to/product.png"]
+}
+```
+
+Use `text-to-image` only when there are no usable visual references. Use `reference-guided` whenever reference images, subject assets, product photos, or prior generated images exist.
 
 ## Prompt Consistency Rules For Keyframe Images
 

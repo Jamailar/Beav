@@ -1900,6 +1900,7 @@ fn create_media_asset_record(
         updated_at: timestamp,
         absolute_path: Some(normalized.display().to_string()),
         preview_url: Some(file_url_for_path(&normalized)),
+        thumbnail_url: None,
         exists: true,
     })
 }

@@ -596,8 +596,10 @@ mod tests {
 
         assert!(!resources.contains(&"web"));
         assert!(resources.contains(&"cli_runtime"));
+        assert!(resources.contains(&"media"));
         assert!(operations.contains(&"get"));
         assert!(operations.contains(&"run"));
+        assert!(operations.contains(&"transcribe"));
         assert!(operations.contains(&"verify"));
         assert!(operations.contains(&"search"));
     }

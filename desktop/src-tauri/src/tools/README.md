@@ -66,6 +66,8 @@
 - `resource` 的 canonical action 固定为：
   - `workspace.list`
   - `workspace.read`
+  - `workspace.createDirectory`
+  - `workspace.write`
   - `workspace.search`
   - `knowledge.list`
   - `knowledge.read`

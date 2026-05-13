@@ -972,7 +972,9 @@ fn merge_official_ai_source(settings: &mut Value, source: &Value) {
             .as_ref()
             .and_then(|item| payload_string(item, "model"))
             .filter(|value| !value.trim().is_empty())
-            .or_else(|| payload_string(settings, "model_name").filter(|value| !value.trim().is_empty()))
+            .or_else(|| {
+                payload_string(settings, "model_name").filter(|value| !value.trim().is_empty())
+            })
     } else {
         None
     };

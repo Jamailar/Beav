@@ -13,10 +13,10 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::helpers::{file_url_for_path, storage_safe_file_stem};
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
 use crate::{
-    file_content_hash, guess_mime_and_kind, make_id, media_root, normalize_legacy_workspace_path,
-    now_iso, now_rfc3339, official_ai_api_key_from_settings, official_base_url_from_settings,
-    payload_field, payload_string, persist_subjects_workspace, subjects_root, workspace_root,
-    AppState, MediaAssetRecord, SubjectRecord,
+    ffmpeg_executable, file_content_hash, guess_mime_and_kind, make_id, media_root,
+    normalize_legacy_workspace_path, now_iso, now_rfc3339, official_ai_api_key_from_settings,
+    official_base_url_from_settings, payload_field, payload_string, persist_subjects_workspace,
+    subjects_root, workspace_root, AppState, MediaAssetRecord, SubjectRecord,
 };
 
 const DEFAULT_CLONE_MODEL: &str = "minimax-voice-clone";
@@ -296,9 +296,12 @@ fn is_transcodable_voice_clone_sample(path: &Path) -> bool {
     )
 }
 
-fn transcode_voice_clone_sample_to_wav(path: &Path) -> Result<PathBuf, String> {
+fn transcode_voice_clone_sample_to_wav(
+    app: Option<&AppHandle>,
+    path: &Path,
+) -> Result<PathBuf, String> {
     let output_path = std::env::temp_dir().join(format!("{}-voice-clone.wav", make_id("redbox")));
-    let output = Command::new("ffmpeg")
+    let output = Command::new(ffmpeg_executable(app)?)
         .arg("-y")
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -329,12 +332,15 @@ fn transcode_voice_clone_sample_to_wav(path: &Path) -> Result<PathBuf, String> {
     Ok(output_path)
 }
 
-fn prepare_voice_clone_sample_upload(path: &Path) -> Result<(PathBuf, Option<PathBuf>), String> {
+fn prepare_voice_clone_sample_upload(
+    app: Option<&AppHandle>,
+    path: &Path,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
     if is_direct_voice_clone_sample(path) {
         return Ok((path.to_path_buf(), None));
     }
     if is_transcodable_voice_clone_sample(path) {
-        let converted = transcode_voice_clone_sample_to_wav(path)?;
+        let converted = transcode_voice_clone_sample_to_wav(app, path)?;
         return Ok((converted.clone(), Some(converted)));
     }
     let extension = path
@@ -349,7 +355,11 @@ fn prepare_voice_clone_sample_upload(path: &Path) -> Result<(PathBuf, Option<Pat
     ))
 }
 
-pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+pub(crate) fn clone_voice(
+    app: Option<&AppHandle>,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
     let config = resolve_voice_config(state, Some(payload))?;
     let Some(api_key) = config.api_key.as_deref() else {
         return Err("voice clone requires an API key".to_string());
@@ -369,7 +379,8 @@ pub(crate) fn clone_voice(state: &State<'_, AppState>, payload: &Value) -> Resul
         );
     }
     let (sample_path, owner_asset_id) = resolve_sample_path(state, payload)?;
-    let (upload_path, temporary_upload_path) = prepare_voice_clone_sample_upload(&sample_path)?;
+    let (upload_path, temporary_upload_path) =
+        prepare_voice_clone_sample_upload(app, &sample_path)?;
     let expected_bytes = fs::metadata(&upload_path)
         .map_err(|error| {
             format!(
@@ -825,6 +836,7 @@ pub(crate) fn synthesize_speech(
         updated_at: now,
         absolute_path: Some(absolute_path.display().to_string()),
         preview_url: Some(file_url_for_path(&absolute_path)),
+        thumbnail_url: None,
         exists: true,
     };
     with_store_mut(state, |store| {

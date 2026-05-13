@@ -1840,6 +1840,7 @@ declare global {
         pickAttachment: (payload?: { sessionId?: string }) => Promise<{ success?: boolean; canceled?: boolean; error?: string; attachment?: unknown }>;
         createPathAttachment: (payload: { path: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; attachment?: unknown }>;
         createInlineAttachment: (payload: { dataUrl: string; fileName?: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; attachment?: unknown }>;
+        createVideoThumbnail: (payload: { path?: string; source?: string; sessionId?: string }) => Promise<{ success?: boolean; error?: string; thumbnailUrl?: string; thumbnailDataUrl?: string }>;
         discardAttachments: (payload: { attachments: unknown[] }) => Promise<{ success?: boolean; error?: string }>;
         transcribeAudio: (payload: { audioBase64: string; mimeType?: string; fileName?: string }) => Promise<{ success?: boolean; text?: string; error?: string; reason?: string; diagnostic?: string }>;
         cancel: (data?: { sessionId?: string } | string) => void;

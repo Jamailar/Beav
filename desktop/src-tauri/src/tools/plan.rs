@@ -457,6 +457,8 @@ fn pinned_direct_app_cli_actions(
     {
         &[
             "video.analyze",
+            "team.guide.create",
+            "media.transcribe",
             "image.generate",
             "skills.invoke",
             "skills.installFromRepo",
@@ -756,6 +758,7 @@ mod tests {
 
         assert_eq!(visible, vec!["Read", "List", "Write", "Operate"]);
         for action in [
+            "team.guide.create",
             "skills.invoke",
             "manuscripts.createProject",
             "redclaw.profile.read",
@@ -763,7 +766,7 @@ mod tests {
         ] {
             assert!(actions.contains(&action), "{action} should be direct");
         }
-        assert_eq!(actions.len(), 4);
+        assert_eq!(actions.len(), 5);
         assert!(!plan.has_direct_app_cli_action("manuscripts.writeCurrent"));
         assert!(!visible.contains(&"tool_search"));
         assert!(!visible.contains(&"shell"));
@@ -849,7 +852,8 @@ mod tests {
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
         assert!(!plan.has_direct_app_cli_action("media.edit"));
-        assert!(!plan.has_direct_app_cli_action("media.transcribe"));
+        assert!(plan.has_direct_app_cli_action("media.transcribe"));
+        assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(!plan.has_direct_app_cli_action("web.fetch"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));
@@ -869,7 +873,8 @@ mod tests {
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
         assert!(!plan.has_direct_app_cli_action("media.edit"));
-        assert!(!plan.has_direct_app_cli_action("media.transcribe"));
+        assert!(plan.has_direct_app_cli_action("media.transcribe"));
+        assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(!plan.has_direct_app_cli_action("web.fetch"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.inspect"));
         assert!(!plan.has_direct_app_cli_action("cli_runtime.diagnose"));

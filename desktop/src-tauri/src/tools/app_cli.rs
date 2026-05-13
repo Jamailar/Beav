@@ -89,6 +89,7 @@ fn write_video_analysis_cache(path: &Path, value: &Value) {
 fn video_analysis_agent_system_prompt() -> &'static str {
     r#"你是应用内部专用 Video Analysis Agent。
 你只负责根据提供的视频和用户指令输出结构化视频理解结果，不写最终发布文案，不冒充主聊天 agent。
+如果用户目标是识别字幕、提取字幕、转录、SRT、VTT、ASR 或口播文字，主 agent 应调用 media.transcribe；这不是 Video Analysis Agent 的职责。
 必须输出严格 JSON，字段包括：success, summary, transcript, scenes, highlights, editingSuggestions, warnings。
 scenes 每项应尽量包含 startSec, endSec, title, description, visualNotes, speechNotes, importance。
 highlights 每项应尽量包含 startSec, endSec, reason, suggestedUse。
@@ -840,6 +841,10 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["tasks".to_string(), "cancel".to_string()];
                 self.handle_runtime(&tokens, payload)
             }
+            "teamguidecreate" => {
+                require_confirmed_team_plan("team.guide.create", payload)?;
+                self.call_channel("team-runtime:guide-create", payload.clone())
+            }
             "teamsessioncreate" => {
                 let tokens = vec!["team".to_string(), "create-session".to_string()];
                 self.handle_runtime(&tokens, payload)
@@ -858,6 +863,18 @@ impl<'a> AppCliExecutor<'a> {
             }
             "teammemberspawn" => {
                 let tokens = vec!["team".to_string(), "add-member".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teammembermatch" => self.call_channel(
+                "team-runtime:execute-tool",
+                json!({ "action": "team.member.match", "payload": payload }),
+            ),
+            "teammemberrename" => {
+                let tokens = vec!["team".to_string(), "rename-member".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teammembershutdown" => {
+                let tokens = vec!["team".to_string(), "shutdown-member".to_string()];
                 self.handle_runtime(&tokens, payload)
             }
             "teamtaskcreate" => {
@@ -884,6 +901,14 @@ impl<'a> AppCliExecutor<'a> {
                 let tokens = vec!["team".to_string(), "submit-report".to_string()];
                 self.handle_runtime(&tokens, payload)
             }
+            "teamreportlist" => {
+                let tokens = vec!["team".to_string(), "list-reports".to_string()];
+                self.handle_runtime(&tokens, payload)
+            }
+            "teamartifactattach" => self.call_channel(
+                "team-runtime:execute-tool",
+                json!({ "action": "team.artifact.attach", "payload": payload }),
+            ),
             "approvalrequest" => self.handle_approval_request(payload),
             "cliruntimedetect" => {
                 let tokens = vec!["detect".to_string()];
@@ -5760,6 +5785,29 @@ fn help_response(namespace: Option<&str>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_plan_confirmation_accepts_top_level_or_metadata_flag() {
+        assert!(require_confirmed_team_plan(
+            "team.guide.create",
+            &json!({ "userConfirmedTeamPlan": true })
+        )
+        .is_ok());
+        assert!(require_confirmed_team_plan(
+            "team.guide.create",
+            &json!({ "metadata": { "userConfirmedTeamPlan": true } })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn team_plan_confirmation_returns_stable_error_code() {
+        let error = require_confirmed_team_plan("team.guide.create", &json!({}))
+            .expect_err("missing confirmation should fail");
+
+        assert!(error.contains("TEAM_PLAN_CONFIRMATION_REQUIRED"));
+        assert!(error.contains("userConfirmedTeamPlan=true"));
+    }
 
     #[test]
     fn build_video_project_relative_path_uses_timestamp_file_name_by_default() {

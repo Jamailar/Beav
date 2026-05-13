@@ -63,6 +63,9 @@ function shouldAutoOpenTeamSession(session: Record<string, unknown>): boolean {
   const metadata = recordFromUnknown(session.metadata);
   const surface = String(metadata.surface || '').trim().toLowerCase();
   if (surface === 'redclaw' || source === 'team-workbench') return false;
+  const metadataAutoOpen = metadata.autoOpen === true
+    || String(metadata.autoOpen || '').trim().toLowerCase() === 'true';
+  if (source === 'team-guide' || metadataAutoOpen) return true;
   return source === 'real-subagent-orchestration'
     || source === 'ai_coordinator'
     || source === 'internal'

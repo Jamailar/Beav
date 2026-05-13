@@ -278,7 +278,8 @@ export function mapRuntimeErrorToNotification(
   const errorText = String(payload.errorPayload.error || payload.errorPayload.message || '').trim();
   const titleText = String(payload.errorPayload.title || '').trim();
   const normalizedErrorText = `${titleText} ${errorText}`.replace(/\s+/g, '').toLowerCase();
-  const shouldOpenLoginSettings = normalizedErrorText.includes('余额不足')
+  const shouldOpenRechargeSettings = normalizedErrorText.includes('余额不足');
+  const shouldOpenLoginSettings = shouldOpenRechargeSettings
     || normalizedErrorText.includes('登陆失效')
     || normalizedErrorText.includes('登录失效');
   const createdAt = Date.now();
@@ -296,7 +297,7 @@ export function mapRuntimeErrorToNotification(
     actions: [
       {
         id: shouldOpenLoginSettings ? 'open-settings-login' : 'open-runtime',
-        label: shouldOpenLoginSettings ? '去登录页' : '查看',
+        label: shouldOpenRechargeSettings ? '去充值' : shouldOpenLoginSettings ? '去登录页' : '查看',
         action: 'navigate',
         payload: shouldOpenLoginSettings
           ? { view: 'settings', settingsTab: 'ai', aiModelSubTab: 'login' }

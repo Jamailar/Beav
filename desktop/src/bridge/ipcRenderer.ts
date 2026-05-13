@@ -426,6 +426,9 @@ function buildFallbackResponse(channel: string, error: unknown, payload?: unknow
   if (channel === 'chat:create-path-attachment') {
     return { success: false, error: `${APP_BRAND.displayName} path attachment unavailable: ${message}` };
   }
+  if (channel === 'chat:create-video-thumbnail') {
+    return { success: false, error: `${APP_BRAND.displayName} video thumbnail unavailable: ${message}` };
+  }
   if (channel === 'chat:discard-attachments') {
     return { success: true };
   }
@@ -1299,6 +1302,8 @@ function createIpcRenderer() {
         invokeChannel('chat:create-path-attachment', payload),
       createInlineAttachment: async (payload: { dataUrl: string; fileName?: string; sessionId?: string }) =>
         invokeChannel('chat:create-inline-attachment', await preflightInlineAttachmentPayload(payload)),
+      createVideoThumbnail: (payload: { path?: string; source?: string; sessionId?: string }) =>
+        invokeChannel('chat:create-video-thumbnail', payload),
       discardAttachments: (payload: { attachments: unknown[] }) =>
         invokeChannel('chat:discard-attachments', payload),
       transcribeAudio: (payload: Record<string, unknown>) => invokeChannel('chat:transcribe-audio', payload),

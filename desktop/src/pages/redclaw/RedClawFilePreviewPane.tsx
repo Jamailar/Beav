@@ -34,6 +34,7 @@ const getKindIcon = (kind: ChatMessageLinkKind) => {
         case 'audio':
             return Music;
         case 'manuscript':
+        case 'document':
             return FileText;
         case 'web':
         case 'html':
@@ -59,6 +60,8 @@ const getKindLabel = (target: ChatMessageLinkTarget): string => {
                 return '音频';
             case 'manuscript':
                 return '稿件';
+            case 'document':
+                return '文档';
             case 'web':
             case 'html':
                 return '网页';

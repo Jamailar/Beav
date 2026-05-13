@@ -2859,6 +2859,8 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
     };
     let (relative_path, absolute_path, preview_url) =
         write_video_bytes_to_generated_path(&state, &bytes)?;
+    let thumbnail_url =
+        ensure_video_thumbnail_for_path(Some(app), &state, PathBuf::from(&absolute_path).as_path());
     let metadata =
         create_video_artifact_metadata(&loaded, &relative_path, &absolute_path, &preview_url);
     insert_artifact_with_connection(
@@ -2916,6 +2918,7 @@ async fn complete_video_download_and_bind(app: &AppHandle, job_id: &str) -> Resu
         updated_at: now_iso(),
         absolute_path: Some(absolute_path.clone()),
         preview_url: Some(preview_url.clone()),
+        thumbnail_url,
         exists: true,
     };
     with_store_mut(&state, |store| {
@@ -3082,7 +3085,7 @@ fn run_voice_clone_submit_worker(
             object.insert("source".to_string(), json!(loaded.job.source.clone()));
             object.insert("jobId".to_string(), json!(loaded.job.job_id.clone()));
         }
-        let result = crate::voice_service::clone_voice(&state, &payload)?;
+        let result = crate::voice_service::clone_voice(Some(&app), &state, &payload)?;
         complete_voice_clone_job(&app, &loaded, &result)
     })();
     if let Err(error) = result {

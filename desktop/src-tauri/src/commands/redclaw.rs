@@ -3,7 +3,6 @@ pub(crate) mod redclaw_task_control;
 
 use serde_json::{json, Value};
 use std::{
-    env,
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -30,7 +29,7 @@ use crate::scheduler::{
     run_redclaw_scheduler, sync_redclaw_job_definitions,
 };
 use crate::{
-    complete_redclaw_mvp_onboarding, handle_redclaw_onboarding_turn,
+    complete_redclaw_mvp_onboarding, ffmpeg_executable, handle_redclaw_onboarding_turn,
     load_redbox_prompt_or_embedded, load_redclaw_onboarding_state,
     load_redclaw_profile_prompt_bundle, load_redclaw_style_profile, now_i64, now_iso,
     parse_json_value_from_text, payload_field, payload_string, redclaw_state_value,
@@ -162,7 +161,7 @@ pub fn handle_redclaw_channel(
         "redclaw:learning-candidate-update" => update_redclaw_learning_candidate(state, payload),
         "redclaw:project-section-update" => update_redclaw_project_section(state, payload),
         "redclaw:media-plan-export" => export_redclaw_media_plan(state, payload),
-        "redclaw:media-plan-render" => render_redclaw_rough_cut(state, payload),
+        "redclaw:media-plan-render" => render_redclaw_rough_cut(app, state, payload),
         "redclaw:publish-package-export" => export_redclaw_publish_package(state, payload),
         "redclaw:review-report-export" => export_redclaw_review_report(state, payload),
         "redclaw:xhs-package-export" => export_redclaw_xhs_package(state, payload),
@@ -1699,17 +1698,6 @@ fn build_media_plan_readme(project_id: &str, items: &[(String, Option<f64>)]) ->
     body
 }
 
-fn executable_in_path(name: &str) -> Option<PathBuf> {
-    let path_env = env::var_os("PATH")?;
-    for dir in env::split_paths(&path_env) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
 fn ffconcat_file_entries(body: &str) -> Vec<String> {
     body.lines()
         .filter_map(|line| {
@@ -2002,7 +1990,11 @@ fn export_redclaw_media_plan(
     })
 }
 
-fn render_redclaw_rough_cut(state: &State<'_, AppState>, payload: &Value) -> Result<Value, String> {
+fn render_redclaw_rough_cut(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    payload: &Value,
+) -> Result<Value, String> {
     let project_id =
         payload_string(payload, "projectId").ok_or_else(|| "projectId is required".to_string())?;
     let export_result = export_redclaw_media_plan(state, payload)?;
@@ -2013,9 +2005,7 @@ fn render_redclaw_rough_cut(state: &State<'_, AppState>, payload: &Value) -> Res
     let package_dir = PathBuf::from(package_path);
     let concat_path = PathBuf::from(concat_path);
     let output_path = package_dir.join("rough-cut.mp4");
-    let ffmpeg_path = executable_in_path("ffmpeg").ok_or_else(|| {
-        "ffmpeg not found in PATH. Install ffmpeg before rendering RedClaw rough cuts.".to_string()
-    })?;
+    let ffmpeg_path = ffmpeg_executable(Some(app))?;
     let inputs = validate_ffconcat_inputs(&package_dir, &concat_path)?;
     let ffmpeg = run_ffmpeg_concat(&ffmpeg_path, &package_dir, &concat_path, &output_path)?;
     let output_size = std::fs::metadata(&output_path)

@@ -248,6 +248,7 @@ fn execute_planned_image_generation_item(
             updated_at: now_rfc3339(),
             absolute_path: Some(absolute_path.display().to_string()),
             preview_url: Some(file_url_for_path(&absolute_path)),
+            thumbnail_url: None,
             exists: true,
             content_hash: file_content_hash(&absolute_path).ok(),
         },
@@ -411,6 +412,7 @@ fn generate_planned_image_batch(
                 updated_at: now_rfc3339(),
                 absolute_path: Some(absolute_path.display().to_string()),
                 preview_url: Some(file_url_for_path(&absolute_path)),
+                thumbnail_url: None,
                 exists: true,
             };
             on_asset_created(&asset, index + 1, total)?;
@@ -749,6 +751,7 @@ pub(crate) fn generate_image_assets(
             updated_at: now_rfc3339(),
             absolute_path: Some(absolute_path.display().to_string()),
             preview_url,
+            thumbnail_url: None,
             exists: true,
         };
         on_asset_created(&asset, (index + 1) as usize, count as usize)?;
@@ -1428,6 +1431,7 @@ pub fn handle_generation_channel(
                 updated_at: now_rfc3339(),
                 absolute_path: Some(absolute_path.display().to_string()),
                 preview_url: preview_url.clone(),
+                thumbnail_url: None,
                 exists: true,
             };
             created.push(asset);

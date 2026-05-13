@@ -1675,6 +1675,8 @@ export function Settings({
   const [showAiModelSettings, setShowAiModelSettings] = useState(false);
   const [officialAiPanelEnabled, setOfficialAiPanelEnabled] = useState(false);
   const [OfficialAiPanelComponent, setOfficialAiPanelComponent] = useState<ComponentType<OfficialAiPanelProps> | null>(null);
+  const officialAiPanelRef = useRef<HTMLDivElement | null>(null);
+  const pendingOfficialAiPanelScrollRef = useRef(false);
   const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
 
   useEffect(() => {
@@ -1685,7 +1687,23 @@ export function Settings({
     if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'custom') {
       setShowAiModelSettings(true);
     }
+    if (navigationTarget.tab === 'ai' && navigationTarget.aiModelSubTab === 'login') {
+      setShowAiModelSettings(false);
+      pendingOfficialAiPanelScrollRef.current = true;
+      window.setTimeout(() => {
+        officialAiPanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }, 80);
+    }
   }, [navigationTarget]);
+
+  useEffect(() => {
+    if (activeTab !== 'ai' || !officialAiPanelEnabled || !pendingOfficialAiPanelScrollRef.current) return;
+    const handle = window.setTimeout(() => {
+      officialAiPanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      pendingOfficialAiPanelScrollRef.current = false;
+    }, OfficialAiPanelComponent ? 80 : 180);
+    return () => window.clearTimeout(handle);
+  }, [OfficialAiPanelComponent, activeTab, officialAiPanelEnabled]);
 
   const isDeprecatedEmptyOpenAiSource = useCallback((source?: AiSourceConfig | null): boolean => {
     if (!source) return false;
@@ -6312,7 +6330,7 @@ export function Settings({
                   <h2 className="text-lg font-medium text-text-primary mb-6">{t('settings.ai.title')}</h2>
 
                   {officialAiPanelEnabled && (
-                    <div className="space-y-4">
+                    <div ref={officialAiPanelRef} className="space-y-4 scroll-mt-6">
                       {OfficialAiPanelComponent ? (
                         <OfficialAiPanelComponent onReloadSettings={reloadCustomAiSettings} />
                       ) : (

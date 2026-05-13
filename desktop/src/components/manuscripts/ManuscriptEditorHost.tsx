@@ -43,9 +43,6 @@ import {
     stripManuscriptExtension,
 } from '../../../shared/manuscriptFiles';
 
-const VideoEditorV2Workbench = lazy(async () => ({
-    default: (await import('../video-editor-v2/VideoEditorV2Workbench')).VideoEditorV2Workbench,
-}));
 const AudioDraftWorkbench = lazy(async () => ({
     default: (await import('./AudioDraftWorkbench')).AudioDraftWorkbench,
 }));
@@ -2798,15 +2795,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                         )}
                     </div>
                 </div>
-                {isVideoDraft ? (
-                    <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">AI 视频剪辑工作台加载中...</div>}>
-                        <VideoEditorV2Workbench
-                            isActive={isActive}
-                            title={currentDescriptor.title}
-                            editorFile={editorFile}
-                        />
-                    </Suspense>
-                ) : isAudioDraft ? (
+                {isAudioDraft ? (
                     <Suspense fallback={<div className="flex h-full items-center justify-center text-text-tertiary">音频工作台加载中...</div>}>
                         <AudioDraftWorkbench
                             editorFile={editorFile}

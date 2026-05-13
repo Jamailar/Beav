@@ -277,6 +277,11 @@ const shouldShowLoginSettingsAction = (title: string): boolean => {
     || normalized.includes('登录失效');
 };
 
+const getLoginSettingsActionLabel = (title: string): string => {
+  const normalized = title.replace(/\s+/g, '');
+  return normalized.includes('余额不足') ? '去充值' : '查看账号';
+};
+
 const buildStatusLine = (item: ProcessItem): StatusLine | null => {
   if (item.type === 'error') {
     const title = item.title || 'AI 请求失败';
@@ -287,7 +292,9 @@ const buildStatusLine = (item: ProcessItem): StatusLine | null => {
       detail: truncateDetail(item.content || ''),
       preserveDetail: true,
       forceDanger: true,
-      action: shouldShowLoginSettingsAction(title) ? { label: '查看账号', target: 'settings-login' } : undefined,
+      action: shouldShowLoginSettingsAction(title)
+        ? { label: getLoginSettingsActionLabel(title), target: 'settings-login' }
+        : undefined,
     };
   }
 
