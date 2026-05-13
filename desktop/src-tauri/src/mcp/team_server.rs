@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::subagents::execute_team_tool;
-use crate::{AppStore, payload_string};
+use crate::{payload_string, AppStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,7 +99,8 @@ pub fn team_mcp_tool_contracts() -> Vec<TeamMcpToolContract> {
         },
         TeamMcpToolContract {
             name: "team_send_message",
-            description: "Send a durable mailbox message to another team member or the coordinator.",
+            description:
+                "Send a durable mailbox message to another team member or the coordinator.",
             host_action: "team.message.send",
             mutating: true,
             input_schema: object_schema(
@@ -271,10 +272,8 @@ fn normalize_team_mcp_payload(tool_name: &str, arguments: &Value) -> Result<Valu
             object.insert("status".to_string(), json!("running"));
             object.insert(
                 "summary".to_string(),
-                json!(
-                    payload_string(arguments, "summary")
-                        .unwrap_or_else(|| { "Artifact saved by team member".to_string() })
-                ),
+                json!(payload_string(arguments, "summary")
+                    .unwrap_or_else(|| { "Artifact saved by team member".to_string() })),
             );
             object.insert("artifacts".to_string(), json!([artifact]));
         }

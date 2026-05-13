@@ -108,21 +108,15 @@ mod tests {
             "help me",
         );
 
-        assert!(
-            prepared
-                .effective_message
-                .contains("Subagent orchestration summary")
-        );
-        assert!(
-            prepared
-                .effective_message
-                .contains("- planner: break into steps")
-        );
-        assert!(
-            prepared
-                .effective_message
-                .contains("- reviewer: verify saved artifact")
-        );
+        assert!(prepared
+            .effective_message
+            .contains("Subagent orchestration summary"));
+        assert!(prepared
+            .effective_message
+            .contains("- planner: break into steps"));
+        assert!(prepared
+            .effective_message
+            .contains("- reviewer: verify saved artifact"));
     }
 
     #[test]
@@ -156,11 +150,10 @@ mod tests {
             turn.route_value.get("intent").and_then(Value::as_str),
             Some(turn.route.intent.as_str())
         );
-        assert!(
-            turn.request
-                .message
-                .contains("Subagent orchestration summary")
-        );
+        assert!(turn
+            .request
+            .message
+            .contains("Subagent orchestration summary"));
     }
 
     #[test]

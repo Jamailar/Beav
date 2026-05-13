@@ -3,7 +3,7 @@ use std::fs;
 use rusqlite::Connection;
 use tauri::State;
 
-use crate::{AppState, knowledge_index::catalog_db_path};
+use crate::{knowledge_index::catalog_db_path, AppState};
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
     let mut stmt = conn

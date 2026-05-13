@@ -1,6 +1,6 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::runtime::{RuntimeRouteRecord, role_sequence_for_route};
+use crate::runtime::{role_sequence_for_route, RuntimeRouteRecord};
 use crate::subagents::{ForkOverrides, SubAgentConfig};
 use crate::tools::compat::canonical_tool_name;
 use crate::tools::packs::{pack_for_runtime_mode, tool_names_for_pack};

@@ -1,12 +1,13 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use tauri::{AppHandle, State};
 
 use crate::{
-    AppState, copy_image_to_clipboard, cover_root, is_manuscript_package_path, media_root,
+    copy_image_to_clipboard, cover_root, is_manuscript_package_path, media_root,
     package_entry_path, package_manifest_path, payload_string, pick_save_file_native,
     resolve_local_path, resolve_manuscript_path, strip_markdown_frontmatter, workspace_root,
+    AppState,
 };
 
 const PREVIEW_TEXT_MAX_BYTES: u64 = 512 * 1024;

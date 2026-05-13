@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::skills::{LoadedSkillRecord, skill_source_roots};
+use crate::skills::{skill_source_roots, LoadedSkillRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, rename_all = "camelCase")]

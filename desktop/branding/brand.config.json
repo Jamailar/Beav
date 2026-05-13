@@ -8,6 +8,7 @@
       "windowTitle": "RedBox",
       "identifier": "com.redconvert.redbox",
       "htmlTitle": "RedBox",
+      "tagline": "自媒体AI工作台",
       "downloadUrl": "https://redbox.ziz.hk/download",
       "githubIssuesUrl": "https://github.com/Jamailar/RedBox/issues",
       "githubRepoUrl": "https://github.com/Jamailar/RedBox",
@@ -41,6 +42,7 @@
       "windowTitle": "Thrive",
       "identifier": "com.redconvert.thrive",
       "htmlTitle": "Thrive",
+      "tagline": "The AI content workspace that helps your ideas thrive.",
       "downloadUrl": "https://thrive.ziz.hk/download",
       "appIcon": {
         "png": "branding/variants/thrive/icons/icon.png",

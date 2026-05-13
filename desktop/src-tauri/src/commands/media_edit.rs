@@ -1,10 +1,10 @@
-use crate::cli_runtime::{CliExecuteRequest, CliVerifyRule, run_managed_cli_command};
+use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::{
-    AppState, MediaAssetRecord, file_content_hash, file_url_for_path, guess_mime_and_kind, make_id,
-    media_root, now_ms, now_rfc3339, workspace_root,
+    file_content_hash, file_url_for_path, guess_mime_and_kind, make_id, media_root, now_ms,
+    now_rfc3339, workspace_root, AppState, MediaAssetRecord,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};

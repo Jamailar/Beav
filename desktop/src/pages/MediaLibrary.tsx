@@ -1503,7 +1503,7 @@ export function MediaLibrary({
                         <div className="p-5 space-y-4">
                             {!hasVideoConfig && (
                                 <div className="text-xs text-status-error">
-                                    未检测到可用的 {APP_BRAND.displayName} 官方视频配置。请先登录或配置 {APP_BRAND.displayName} 官方 AI 源。
+                                    未检测到可用的 {APP_BRAND.displayName} 官方视频配置。请先登录或配置 {APP_BRAND.displayName} 官方供应商。
                                 </div>
                             )}
 

@@ -50,7 +50,7 @@ mod tools;
 mod voice_service;
 mod workspace_loaders;
 
-use agent::{PreparedWanderTurn, execute_prepared_wander_turn};
+use agent::{execute_prepared_wander_turn, PreparedWanderTurn};
 use base64::Engine;
 use commands::chat_state::{
     ensure_chat_session, is_chat_runtime_cancel_requested, latest_session_id,
@@ -66,6 +66,9 @@ use persistence::{
     load_store, persist_store, with_store, with_store_mut,
 };
 use runtime::{
+    append_session_checkpoint, infer_protocol, next_memory_maintenance_at_ms, resolve_chat_config,
+    resolve_runtime_mode_from_context_type, role_sequence_for_route, runtime_error_payload,
+    runtime_warm_settings_fingerprint, session_lineage_fields, session_title_from_message,
     ApprovalRuntimeState, CollabMailboxMessageRecord, CollabMemberRecord,
     CollabProgressReportRecord, CollabSessionRecord, CollabTaskRecord, InteractiveLoopGuard,
     InteractiveToolCall, InteractiveToolOutcomeDigest, McpServerRecord, RedclawJobDefinitionRecord,
@@ -73,14 +76,11 @@ use runtime::{
     RedclawScheduledTaskRecord, RedclawStateRecord, ResolvedChatConfig, ReviewDecisionRecord,
     ReviewDocketRecord, RuntimeHookRecord, RuntimeTaskRecord, RuntimeTaskTraceRecord,
     RuntimeWarmEntry, RuntimeWarmState, SessionCheckpointRecord, SessionToolResultRecord,
-    SessionTranscriptRecord, SkillRecord, append_session_checkpoint, infer_protocol,
-    next_memory_maintenance_at_ms, resolve_chat_config, resolve_runtime_mode_from_context_type,
-    role_sequence_for_route, runtime_error_payload, runtime_warm_settings_fingerprint,
-    session_lineage_fields, session_title_from_message,
+    SessionTranscriptRecord, SkillRecord,
 };
 use scheduler::sync_redclaw_job_definitions;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -88,8 +88,8 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::{
-    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicU64},
+    Arc, Mutex, OnceLock,
 };
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1558,9 +1558,7 @@ fn guess_mime_and_kind(path: &Path) -> (String, String, bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
-        SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
-        SubjectVoiceInput, append_generated_media_markdown, asset_preview_url_from_result,
+        append_generated_media_markdown, asset_preview_url_from_result,
         authoring_saved_final_summary, build_interactive_user_turn_messages,
         build_subject_record_for_workspace, clear_interactive_execution_contract_metadata,
         decode_command_json_stdout, guess_mime_and_kind, interactive_attachment_inline_data_url,
@@ -1574,8 +1572,11 @@ mod tests {
         normalized_structured_payload_arguments, persist_subjects_workspace,
         redbox_fs_profile_read_completed, resolve_local_path, structured_tool_error_code,
         validate_runtime_tool_message_sequence, workspace_read_directory_response,
+        GeneratedMediaPreview, InteractiveExecutionContract, InteractiveExecutionProgress,
+        SubjectAttribute, SubjectCategory, SubjectMediaInput, SubjectMutationInput, SubjectRecord,
+        SubjectVoiceInput,
     };
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     use std::fs;
     use std::path::Path;
     use std::time::Instant;
@@ -1754,12 +1755,10 @@ mod tests {
         assert_eq!(subjects[0].name, "测试资产");
         assert_eq!(subjects[0].category_id.as_deref(), Some("category-test"));
         assert_eq!(subjects[0].image_paths.len(), 1);
-        assert!(
-            subjects_root
-                .join("subject-test")
-                .join(&subjects[0].image_paths[0])
-                .exists()
-        );
+        assert!(subjects_root
+            .join("subject-test")
+            .join(&subjects[0].image_paths[0])
+            .exists());
         assert!(subjects[0].voice_path.is_some());
         assert!(subjects[0].primary_preview_url.is_some());
         assert!(subjects[0].voice_preview_url.is_some());
@@ -2199,9 +2198,7 @@ mod tests {
                 preview_url: "file:///C:/Users/Jam/My Images/cover (1).png".to_string(),
             }],
         );
-        assert!(
-            markdown.contains("![generated-1](<file:///C:/Users/Jam/My Images/cover (1).png>)")
-        );
+        assert!(markdown.contains("![generated-1](<file:///C:/Users/Jam/My Images/cover (1).png>)"));
     }
 
     #[test]
@@ -9654,6 +9651,11 @@ fn handle_channel(
     }
     if let Some(result) =
         commands::skills_ai::handle_skills_ai_channel(app, state, channel, &payload)
+    {
+        return result;
+    }
+    if let Some(result) =
+        commands::llm_readiness::handle_llm_readiness_channel(app, state, channel, &payload)
     {
         return result;
     }

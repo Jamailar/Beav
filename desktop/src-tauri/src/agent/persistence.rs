@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::agent::{ChatExchangeContext, ChatExchangePersistenceStage, SessionAgentTurnKind};
@@ -13,9 +13,9 @@ use crate::runtime::{
     save_session_bundle_messages, update_session_context_record,
 };
 use crate::{
-    AppState, ChatMessageRecord, ChatSessionRecord, append_session_transcript, make_id,
-    next_memory_maintenance_at_ms, now_i64, now_iso, resolve_runtime_mode_from_context_type,
-    session_title_from_message, value_to_i64_string,
+    append_session_transcript, make_id, next_memory_maintenance_at_ms, now_i64, now_iso,
+    resolve_runtime_mode_from_context_type, session_title_from_message, value_to_i64_string,
+    AppState, ChatMessageRecord, ChatSessionRecord,
 };
 
 pub fn persist_chat_exchange(

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::runtime::{RuntimeTaskTraceRecord, SessionCheckpointRecord};
-use crate::{AppStore, make_id, now_i64};
+use crate::{make_id, now_i64, AppStore};
 
 pub fn session_lineage_fields(
     store: &AppStore,

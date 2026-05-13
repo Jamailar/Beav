@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
+use serde_json::{json, Value};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use tauri::State;
 
 use crate::json_util::{json_string, read_json_value, write_json_pretty};
 use crate::persistence::with_store;
-use crate::{AppState, now_iso, storage_safe_file_stem, workspace_root};
+use crate::{now_iso, storage_safe_file_stem, workspace_root, AppState};
 
 const ACCOUNT_SCHEMA_VERSION: i64 = 1;
 const ACCOUNTS_BATCH_LIMIT: usize = 64;

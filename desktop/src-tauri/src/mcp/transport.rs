@@ -1,8 +1,8 @@
 use crate::{
-    McpServerRecord, app_brand_display_name, run_curl_json, run_sse_mcp_method,
-    slug_from_relative_path,
+    app_brand_display_name, run_curl_json, run_sse_mcp_method, slug_from_relative_path,
+    McpServerRecord,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};

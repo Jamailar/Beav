@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, State};
 
 use crate::agent::{
-    PreparedSessionAgentTurn, build_runtime_query_turn, execute_prepared_session_agent_turn,
+    build_runtime_query_turn, execute_prepared_session_agent_turn, PreparedSessionAgentTurn,
 };
 use crate::events::{
     emit_runtime_event, emit_runtime_subagent_finished, emit_runtime_subagent_spawned,
@@ -12,19 +12,19 @@ use crate::events::{
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    CollabSessionRecord, RuntimeArtifact, RuntimeCheckpointRecord, RuntimeRouteRecord,
     add_collab_member, append_runtime_task_trace_scoped, append_session_checkpoint_scoped,
     create_collab_session, create_collab_task, create_review_docket, create_runtime_task,
     ensure_collab_session_coordinator, record_runtime_node, runtime_subagent_role_spec,
-    submit_collab_report, update_collab_task,
+    submit_collab_report, update_collab_task, CollabSessionRecord, RuntimeArtifact,
+    RuntimeCheckpointRecord, RuntimeRouteRecord,
 };
 use crate::subagents::{
-    SubAgentConfig, SubAgentOutput, SubAgentSpawnResult, build_orchestration_value,
-    build_subagent_configs,
+    build_orchestration_value, build_subagent_configs, SubAgentConfig, SubAgentOutput,
+    SubAgentSpawnResult,
 };
 use crate::{
-    AppState, AppStore, ChatSessionRecord, append_debug_log_state, make_id, now_i64, now_iso,
-    parse_json_value_from_text, payload_string,
+    append_debug_log_state, make_id, now_i64, now_iso, parse_json_value_from_text, payload_string,
+    AppState, AppStore, ChatSessionRecord,
 };
 
 fn snippet(value: &str, limit: usize) -> String {
@@ -1494,25 +1494,21 @@ mod tests {
             payload_string(child_metadata, "subagentRoleOutputSchema").as_deref(),
             Some("阶段计划、执行建议、关键依赖、保存策略")
         );
-        assert!(
-            payload_string(child_metadata, "subagentRoleDirective")
-                .unwrap_or_default()
-                .contains("任务规划者")
-        );
+        assert!(payload_string(child_metadata, "subagentRoleDirective")
+            .unwrap_or_default()
+            .contains("任务规划者"));
         let child_task = store
             .runtime_tasks
             .iter()
             .find(|item| item.id == spawn.child_task_id)
             .expect("child task");
-        assert!(
-            child_task
-                .metadata
-                .as_ref()
-                .and_then(|value| value.get("subagentRoleSpec"))
-                .and_then(|value| value.get("systemPrompt"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("任务规划者")
-        );
+        assert!(child_task
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("subagentRoleSpec"))
+            .and_then(|value| value.get("systemPrompt"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("任务规划者"));
     }
 }

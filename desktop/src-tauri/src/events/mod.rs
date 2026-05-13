@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::runtime::{
@@ -6,7 +6,7 @@ use crate::runtime::{
     RuntimeTaskNodeChangedPayload, RuntimeToolCallPayload, RuntimeToolOutputPayload,
     RuntimeToolResultPayload,
 };
-use crate::{AppState, append_debug_trace_state, now_i64, payload_field, payload_string};
+use crate::{append_debug_trace_state, now_i64, payload_field, payload_string, AppState};
 
 fn should_emit_legacy_chat_compat(session_id: Option<&str>) -> bool {
     let Some(id) = session_id else {

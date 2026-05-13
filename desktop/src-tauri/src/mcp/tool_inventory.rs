@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::McpServerRecord;
 
-use super::tool_names::{RawMcpToolIdentity, qualify_mcp_tools};
+use super::tool_names::{qualify_mcp_tools, RawMcpToolIdentity};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

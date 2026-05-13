@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::runtime::SkillRecord;
-use crate::skills::{LoadedSkillRecord, canonical_skill_name, load_skill_catalog};
+use crate::skills::{canonical_skill_name, load_skill_catalog, LoadedSkillRecord};
 
 pub type SkillCatalogEntry = LoadedSkillRecord;
 

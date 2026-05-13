@@ -1,9 +1,9 @@
-use crate::cli_runtime::{CliExecuteRequest, CliVerifyRule, run_managed_cli_command};
+use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::desktop_io::{
     resolve_transcription_settings, run_curl_transcription_with_response_format,
 };
-use crate::{AppState, make_id, now_ms, payload_string, workspace_root};
-use serde_json::{Value, json};
+use crate::{make_id, now_ms, payload_string, workspace_root, AppState};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};

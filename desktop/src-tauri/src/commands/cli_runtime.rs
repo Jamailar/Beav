@@ -1,19 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::cli_runtime::{
-    CliApproveEscalationRequest, CliCreateEnvironmentRequest, CliDenyEscalationRequest,
-    CliDiscoverRequest, CliEffectiveEnvironment, CliEnvironmentRecord,
-    CliEnvironmentResolveRequest, CliEnvironmentScope, CliExecuteRequest, CliExecutionMode,
-    CliExecutionStatus, CliHostShellSnapshot, CliInstallRequest, CliInstallResult, CliToolHealth,
-    CliToolManifestRecord, CliToolRecord, CliToolSource, CliVerifyExecutionRequest,
-    CliVerifyResult, add_installed_tool_to_environment, approve_cli_escalation,
-    build_cli_sandbox_spec, build_cli_tool_manifest, build_effective_environment,
-    cancel_cli_execution, collect_cli_requested_permissions, create_task_ephemeral_environment,
+    add_installed_tool_to_environment, approve_cli_escalation, build_cli_sandbox_spec,
+    build_cli_tool_manifest, build_effective_environment, cancel_cli_execution,
+    collect_cli_requested_permissions, create_task_ephemeral_environment,
     default_cli_execution_mode, deny_cli_escalation, detect_tool, detect_tool_with_shell_probe,
     discover_all_commands, emit_cli_escalation_resolved, emit_cli_execution_status,
     emit_cli_install_finished, emit_cli_install_started, emit_cli_verification_finished,
@@ -23,9 +18,15 @@ use crate::cli_runtime::{
     find_cli_tool_manifest_by_tool_id, list_cli_environments, list_cli_tool_records,
     load_cli_execution_snapshot, load_host_shell_snapshot, prepare_cli_install,
     refresh_cli_execution, resolve_cli_environment, run_cli_verification, sandbox_metadata,
-    upsert_cli_tool_manifest, upsert_cli_tool_record,
+    upsert_cli_tool_manifest, upsert_cli_tool_record, CliApproveEscalationRequest,
+    CliCreateEnvironmentRequest, CliDenyEscalationRequest, CliDiscoverRequest,
+    CliEffectiveEnvironment, CliEnvironmentRecord, CliEnvironmentResolveRequest,
+    CliEnvironmentScope, CliExecuteRequest, CliExecutionMode, CliExecutionStatus,
+    CliHostShellSnapshot, CliInstallRequest, CliInstallResult, CliToolHealth,
+    CliToolManifestRecord, CliToolRecord, CliToolSource, CliVerifyExecutionRequest,
+    CliVerifyResult,
 };
-use crate::{AppState, make_id, payload_string};
+use crate::{make_id, payload_string, AppState};
 
 fn load_host_env() -> CliHostShellSnapshot {
     load_host_shell_snapshot()

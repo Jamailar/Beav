@@ -1,11 +1,11 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::runtime::{
-    CollabMailboxMessageRecord, CollabMemberRecord, CollabProgressReportRecord,
-    CollabSessionRecord, CollabSessionSnapshot, CollabTaskRecord, ReviewDecisionRecord,
-    ReviewDocketRecord, runtime_subagent_role_spec,
+    runtime_subagent_role_spec, CollabMailboxMessageRecord, CollabMemberRecord,
+    CollabProgressReportRecord, CollabSessionRecord, CollabSessionSnapshot, CollabTaskRecord,
+    ReviewDecisionRecord, ReviewDocketRecord,
 };
-use crate::{AppStore, make_id, now_i64};
+use crate::{make_id, now_i64, AppStore};
 
 const DEFAULT_PROGRESS_INTERVAL_MS: i64 = 15 * 60 * 1000;
 const COLLAB_MAILBOX_READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -895,11 +895,10 @@ fn upsert_member_task_plan(
                 task_object.insert("objective".to_string(), json!(task.objective));
                 task_object.insert(
                     "ownerThreadId".to_string(),
-                    json!(
-                        task.runtime_task_id
-                            .clone()
-                            .unwrap_or_else(|| format!("executor:{}", task.id))
-                    ),
+                    json!(task
+                        .runtime_task_id
+                        .clone()
+                        .unwrap_or_else(|| format!("executor:{}", task.id))),
                 );
                 task_object.insert(
                     "artifactRefs".to_string(),
@@ -3051,14 +3050,12 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(5)
         );
-        assert!(
-            agent_card
-                .get("preferredTasks")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|value| value == "research")
-        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "research"));
     }
 
     #[test]
@@ -3112,17 +3109,15 @@ mod tests {
             first.get("roleId").and_then(Value::as_str),
             Some("image-director")
         );
-        assert!(
-            first
-                .get("reasons")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|value| value
-                    .as_str()
-                    .unwrap_or_default()
-                    .starts_with("preferred_task"))
-        );
+        assert!(first
+            .get("reasons")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("preferred_task")));
     }
 
     #[test]
@@ -3156,14 +3151,12 @@ mod tests {
             agent_card.get("oneLine").and_then(Value::as_str),
             Some("专门检查交付风险")
         );
-        assert!(
-            agent_card
-                .get("preferredTasks")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|value| value == "acceptance_check")
-        );
+        assert!(agent_card
+            .get("preferredTasks")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|value| value == "acceptance_check"));
     }
 
     #[test]
@@ -3202,13 +3195,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.report_type, "completion");
-        assert!(
-            report
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("completionClaim"))
-                .is_some()
-        );
+        assert!(report
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("completionClaim"))
+            .is_some());
         let member = store
             .collab_members
             .iter()

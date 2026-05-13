@@ -1,10 +1,10 @@
 use tauri::State;
 
-use super::index::{MemorySearchOptions, recall_memory_matches_indexed};
+use super::index::{recall_memory_matches_indexed, MemorySearchOptions};
 use super::types::{MemoryRecallItem, MemoryRecallSummary};
 use crate::memory::store::list_active_memories;
 use crate::persistence::with_store;
-use crate::{AppState, payload_string, truncate_chars};
+use crate::{payload_string, truncate_chars, AppState};
 
 pub(crate) fn recall_memory_matches(
     state: &State<'_, AppState>,
@@ -133,7 +133,7 @@ pub(crate) fn build_memory_recall_summary(
 
 #[cfg(test)]
 mod tests {
-    use crate::{AppStore, UserMemoryRecord, now_i64};
+    use crate::{now_i64, AppStore, UserMemoryRecord};
 
     #[test]
     fn recall_matches_rank_content_and_tags() {

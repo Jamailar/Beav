@@ -1,6 +1,6 @@
 use base64::Engine;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,19 +20,19 @@ use crate::helpers::{
 use crate::interactive_runtime_shared::text_snippet;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    McpServerRecord, SkillRecord, clear_review_docket_waiters, register_review_docket_waiter,
-    resolve_session_file_reference_inputs,
+    clear_review_docket_waiters, register_review_docket_waiter,
+    resolve_session_file_reference_inputs, McpServerRecord, SkillRecord,
 };
 use crate::skills::{
-    LoadedSkillRecord, find_catalog_skill_by_name, load_skill_bundle_sections_from_sources,
-    resolve_skill_set, skill_allows_runtime_mode,
+    find_catalog_skill_by_name, load_skill_bundle_sections_from_sources, resolve_skill_set,
+    skill_allows_runtime_mode, LoadedSkillRecord,
 };
 use crate::tools::plan::build_tool_registry_plan_for_session;
 use crate::tools::registry::normalized_allowed_app_cli_actions;
 use crate::{
-    AppState, guess_mime_and_kind, infer_protocol, join_relative, make_id, now_iso,
+    guess_mime_and_kind, infer_protocol, join_relative, make_id, now_iso,
     parse_json_value_from_text, payload_field, payload_string, resolve_manuscript_path,
-    workspace_root,
+    workspace_root, AppState,
 };
 
 pub struct AppCliExecutor<'a> {
@@ -1124,11 +1124,10 @@ impl<'a> AppCliExecutor<'a> {
             "update" => self.call_channel("advisors:update", merge_payload(&args.options, payload)),
             "delete" => self.call_channel(
                 "advisors:delete",
-                json!(
-                    args.string(&["id", "advisor-id"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "advisors delete requires --id".to_string())?
-                ),
+                json!(args
+                    .string(&["id", "advisor-id"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "advisors delete requires --id".to_string())?),
             ),
             _ => Err(format!("unsupported advisors action: {action}")),
         }
@@ -1337,11 +1336,10 @@ impl<'a> AppCliExecutor<'a> {
             "list" => self.call_channel("manuscripts:list", json!({})),
             "read" => self.call_channel(
                 "manuscripts:read",
-                json!(
-                    args.string(&["path"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "manuscripts read requires --path".to_string())?
-                ),
+                json!(args
+                    .string(&["path"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "manuscripts read requires --path".to_string())?),
             ),
             "write-current" => {
                 let mut merged = merge_payload(&args.options, payload);
@@ -1404,11 +1402,10 @@ impl<'a> AppCliExecutor<'a> {
             "create-project" => self.handle_manuscript_create_project(&args, payload),
             "delete" => self.call_channel(
                 "manuscripts:delete",
-                json!(
-                    args.string(&["path"])
-                        .or_else(|| args.positionals.first().cloned())
-                        .ok_or_else(|| "manuscripts delete requires --path".to_string())?
-                ),
+                json!(args
+                    .string(&["path"])
+                    .or_else(|| args.positionals.first().cloned())
+                    .ok_or_else(|| "manuscripts delete requires --path".to_string())?),
             ),
             _ => Err(format!("unsupported manuscripts action: {action}")),
         }
@@ -4652,11 +4649,10 @@ fn memory_action_request(
         "archive" => Ok(("memory:archive", merge_payload(&args.options, payload))),
         "delete" => Ok((
             "memory:delete",
-            json!(
-                args.string(&["id"])
-                    .or_else(|| args.positionals.first().cloned())
-                    .ok_or_else(|| "memory delete requires --id".to_string())?
-            ),
+            json!(args
+                .string(&["id"])
+                .or_else(|| args.positionals.first().cloned())
+                .ok_or_else(|| "memory delete requires --id".to_string())?),
         )),
         "rebuild-index" | "rebuildIndex" => Ok(("memory:rebuild-index", json!({}))),
         "diagnostics" => Ok(("memory:diagnostics", json!({}))),
@@ -5770,11 +5766,10 @@ mod tests {
         let path = build_video_project_relative_path(None);
 
         assert!(path.starts_with("video/"));
-        assert!(
-            path.trim_start_matches("video/")
-                .chars()
-                .all(|ch| ch.is_ascii_digit())
-        );
+        assert!(path
+            .trim_start_matches("video/")
+            .chars()
+            .all(|ch| ch.is_ascii_digit()));
     }
 
     #[test]
@@ -5784,11 +5779,10 @@ mod tests {
         ));
 
         assert!(path.starts_with("video/custom/"));
-        assert!(
-            path.trim_start_matches("video/custom/")
-                .chars()
-                .all(|ch| ch.is_ascii_digit())
-        );
+        assert!(path
+            .trim_start_matches("video/custom/")
+            .chars()
+            .all(|ch| ch.is_ascii_digit()));
     }
 
     #[test]
@@ -5940,10 +5934,8 @@ mod tests {
         .expect("storyboard prompt should compile");
 
         assert!(prompt.contains("Image 1: Jamba 人物主体参考"));
-        assert!(
-            prompt
-                .contains("Beat 1 (0-2s): Picture: Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。")
-        );
+        assert!(prompt
+            .contains("Beat 1 (0-2s): Picture: Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆。"));
         assert!(prompt.contains("Follow the beat order exactly; do not collapse the storyboard into one generic summary."));
         assert!(
             prompt.contains("Align body rhythm, lip-sync feel, and timing accents with Audio 1.")
@@ -6168,12 +6160,10 @@ mod tests {
 
         assert_eq!(parsed.applies_to, vec!["article"]);
         assert_eq!(parsed.rules.len(), 3);
-        assert!(
-            parsed
-                .rules
-                .iter()
-                .any(|rule| rule.rule_type == "line_equals_any")
-        );
+        assert!(parsed
+            .rules
+            .iter()
+            .any(|rule| rule.rule_type == "line_equals_any"));
     }
 
     #[test]

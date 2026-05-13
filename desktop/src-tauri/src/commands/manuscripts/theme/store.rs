@@ -1,6 +1,6 @@
 use super::super::*;
 use super::bundled::{bundled_richpost_theme_ids, ensure_bundled_richpost_themes};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fs;
 

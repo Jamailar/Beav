@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::provider_compat::ProviderProfile;
 
@@ -311,7 +311,7 @@ pub fn runtime_error_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeErrorCategory, RuntimeErrorLayer, runtime_error_envelope_from_error};
+    use super::{runtime_error_envelope_from_error, RuntimeErrorCategory, RuntimeErrorLayer};
     use crate::provider_compat::provider_profile_from_config;
     use crate::runtime::ResolvedChatConfig;
 

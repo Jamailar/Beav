@@ -62,6 +62,7 @@ That's it. Every page picks up the new name, logo, and colors.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `tagline` | string | Login page tagline (e.g. "自媒体AI工作台") |
 | `downloadUrl` | string | App download page (used in Settings > Version) |
 | `githubIssuesUrl` | string | GitHub Issues link |
 | `githubRepoUrl` | string | GitHub repo link |

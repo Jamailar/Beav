@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::payload_string;
 use crate::runtime::ResolvedChatConfig;
+use crate::{official_ai_api_key_from_settings, official_base_url_from_settings, payload_string};
 
 fn normalize_reasoning_effort(value: Option<&str>) -> Option<String> {
     let normalized = value?.trim().to_ascii_lowercase();
@@ -66,6 +66,17 @@ fn source_is_official(source: &Value) -> bool {
     let source_id = source_string(source, "id", "id").to_ascii_lowercase();
     let preset_id = source_string(source, "presetId", "preset_id").to_ascii_lowercase();
     source_id == "redbox_official_auto" || preset_id == "redbox-official"
+}
+
+fn config_is_official(value: &Value) -> bool {
+    let source_id = source_string(value, "sourceId", "source_id").to_ascii_lowercase();
+    let preset_id = source_string(value, "presetId", "preset_id").to_ascii_lowercase();
+    source_id == "redbox_official_auto" || preset_id == "redbox-official"
+}
+
+fn urls_match(left: &str, right: &str) -> bool {
+    let normalize = |value: &str| value.trim().trim_end_matches('/').to_ascii_lowercase();
+    !left.trim().is_empty() && normalize(left) == normalize(right)
 }
 
 fn source_model(source: &Value) -> String {
@@ -151,6 +162,8 @@ fn resolve_model_route_config(settings: &Value, runtime_mode: Option<&str>) -> O
     }
 
     Some(json!({
+        "sourceId": source.get("id").cloned().unwrap_or(Value::Null),
+        "presetId": source.get("presetId").or_else(|| source.get("preset_id")).cloned().unwrap_or(Value::Null),
         "baseURL": base_url,
         "apiKey": api_key,
         "modelName": model_name,
@@ -276,21 +289,31 @@ pub fn resolve_chat_config(
     if base_url.trim().is_empty() || model_name.trim().is_empty() {
         return None;
     }
-    let api_key = model_config
-        .get("apiKey")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .or_else(|| {
-            route_config
-                .get("apiKey")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-        })
-        .or_else(|| payload_string(settings, "api_key"));
+    let is_official_config = config_is_official(&model_config)
+        || config_is_official(&route_config)
+        || urls_match(&base_url, &official_base_url_from_settings(settings));
+    let configured_api_key = || {
+        model_config
+            .get("apiKey")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .or_else(|| {
+                route_config
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+            })
+            .or_else(|| payload_string(settings, "api_key"))
+    };
+    let api_key = if is_official_config {
+        official_ai_api_key_from_settings(settings).or_else(configured_api_key)
+    } else {
+        configured_api_key()
+    };
     let protocol = model_config
         .get("protocol")
         .and_then(Value::as_str)

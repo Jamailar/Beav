@@ -1,7 +1,7 @@
 use base64::Engine;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SampleRate, StreamConfig};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io::Cursor;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 use tauri::{AppHandle, State};
 
-use crate::{AppState, now_ms};
+use crate::{now_ms, AppState};
 
 const PREFERRED_INPUT_SAMPLE_RATE: u32 = 48_000;
 const MIN_REASONABLE_INPUT_SAMPLE_RATE: u32 = 8_000;

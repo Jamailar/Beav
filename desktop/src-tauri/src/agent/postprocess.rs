@@ -1,10 +1,10 @@
 use tauri::{AppHandle, State};
 
-use crate::AppState;
 use crate::agent::{SessionAgentTurnExecution, SessionAgentTurnKind};
 use crate::commands::chat_state::resolve_runtime_mode_for_session;
 use crate::events::{emit_chat_sequence, emit_runtime_task_checkpoint_saved};
 use crate::persistence::with_store;
+use crate::AppState;
 
 pub fn emit_session_agent_turn_postprocess(
     app: &AppHandle,

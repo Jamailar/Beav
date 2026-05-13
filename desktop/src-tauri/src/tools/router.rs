@@ -1,5 +1,5 @@
 use crate::mcp::McpToolInfo;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::payload_string;
 use crate::tools::catalog::descriptor_by_name;
@@ -514,7 +514,7 @@ impl ToolRouter {
 mod tests {
     use super::*;
     use crate::mcp::tool_inventory::{McpToolInfo, McpToolInventorySnapshot};
-    use crate::tools::plan::{ToolRegistryPlanParams, build_tool_registry_plan};
+    use crate::tools::plan::{build_tool_registry_plan, ToolRegistryPlanParams};
 
     #[test]
     fn router_normalizes_redbox_image_calls() {

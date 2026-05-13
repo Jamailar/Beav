@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type ReactNode } from 'react';
 import type { SyntheticEvent } from 'react';
-import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp } from 'lucide-react';
+import { Search, Trash2, Image, Heart, MessageCircle, X, ChevronLeft, ChevronRight, Play, FileText, ExternalLink, RefreshCw, Sparkles, Star, BookmarkPlus, FolderPlus, FolderOpen, Plus, Loader2, Users, ArrowDownUp, CheckSquare2, Square } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -399,6 +399,8 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
     const [selectedTypeFilter, setSelectedTypeFilter] = useState<KnowledgeTypeFilter>('all');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
+    const [selectedKnowledgeIds, setSelectedKnowledgeIds] = useState<Set<string>>(() => new Set());
+    const [isBatchDeleting, setIsBatchDeleting] = useState(false);
     const [sortOrder, setSortOrder] = useState<KnowledgeSortOrder>('updated-desc');
     const [visibleItemCount, setVisibleItemCount] = useState(KNOWLEDGE_RENDER_BATCH_SIZE);
     const [isAllTagsDrawerOpen, setIsAllTagsDrawerOpen] = useState(false);
@@ -1218,6 +1220,14 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
     const visibleKnowledgeItems = useMemo(() => {
         return filteredKnowledgeItems.slice(0, visibleItemCount);
     }, [filteredKnowledgeItems, visibleItemCount]);
+    const selectedKnowledgeItems = useMemo(() => (
+        knowledgeItems.filter((item) => selectedKnowledgeIds.has(`${item.kind}:${item.id}`))
+    ), [knowledgeItems, selectedKnowledgeIds]);
+    const selectedVisibleKnowledgeCount = useMemo(() => (
+        visibleKnowledgeItems.filter((item) => selectedKnowledgeIds.has(`${item.kind}:${item.id}`)).length
+    ), [selectedKnowledgeIds, visibleKnowledgeItems]);
+    const allVisibleKnowledgeSelected = visibleKnowledgeItems.length > 0
+        && selectedVisibleKnowledgeCount === visibleKnowledgeItems.length;
 
     useEffect(() => {
         setVisibleItemCount(KNOWLEDGE_RENDER_BATCH_SIZE);
@@ -1360,6 +1370,106 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
             console.error('Failed to delete note:', e);
         }
     };
+
+    const toggleKnowledgeSelection = useCallback((item: KnowledgeCardItem) => {
+        const key = `${item.kind}:${item.id}`;
+        setSelectedKnowledgeIds((current) => {
+            const next = new Set(current);
+            if (next.has(key)) {
+                next.delete(key);
+            } else {
+                next.add(key);
+            }
+            return next;
+        });
+    }, []);
+
+    const toggleVisibleKnowledgeSelection = useCallback(() => {
+        setSelectedKnowledgeIds((current) => {
+            const next = new Set(current);
+            if (allVisibleKnowledgeSelected) {
+                visibleKnowledgeItems.forEach((item) => next.delete(`${item.kind}:${item.id}`));
+            } else {
+                visibleKnowledgeItems.forEach((item) => next.add(`${item.kind}:${item.id}`));
+            }
+            return next;
+        });
+    }, [allVisibleKnowledgeSelected, visibleKnowledgeItems]);
+
+    const clearKnowledgeSelection = useCallback(() => {
+        setSelectedKnowledgeIds(new Set());
+    }, []);
+
+    const handleBatchDeleteKnowledge = useCallback(async () => {
+        if (selectedKnowledgeItems.length === 0 || isBatchDeleting) return;
+        if (!(await appConfirm(`确定要删除已选的 ${selectedKnowledgeItems.length} 条知识吗？`, { title: '批量删除', confirmLabel: '删除', tone: 'danger' }))) return;
+        setIsBatchDeleting(true);
+        try {
+            const deleteItems = selectedKnowledgeItems.map((item) => ({
+                id: item.id,
+                kind: item.kind === 'youtube'
+                    ? 'youtube-video' as const
+                    : item.kind === 'docs'
+                        ? 'document-source' as const
+                        : 'redbook-note' as const,
+            }));
+            const result = await window.ipcRenderer.knowledge.deleteBatch({ items: deleteItems }) as {
+                success?: boolean;
+                deleted?: number;
+                failed?: number;
+                results?: Array<{ id?: string; kind?: string; success?: boolean; error?: string }>;
+                error?: string;
+            };
+            const successKeys = new Set((result.results || [])
+                .filter((item) => item.success)
+                .map((item) => {
+                    if (item.kind === 'youtube-video') return `youtube:${item.id}`;
+                    if (item.kind === 'document-source') return `docs:${item.id}`;
+                    return `xhs-image:${item.id}`;
+                }));
+            const deletedNoteIds = new Set((result.results || [])
+                .filter((item) => item.success && item.kind === 'redbook-note')
+                .map((item) => item.id)
+                .filter(Boolean));
+            const deletedYoutubeIds = new Set((result.results || [])
+                .filter((item) => item.success && item.kind === 'youtube-video')
+                .map((item) => item.id)
+                .filter(Boolean));
+            const deletedDocSourceIds = new Set((result.results || [])
+                .filter((item) => item.success && item.kind === 'document-source')
+                .map((item) => item.id)
+                .filter(Boolean));
+            setNotes((prev) => prev.filter((note) => !deletedNoteIds.has(note.id)));
+            setYoutubeVideos((prev) => prev.filter((video) => !deletedYoutubeIds.has(video.id)));
+            setDocumentSources((prev) => prev.filter((source) => !deletedDocSourceIds.has(source.id)));
+            setSelectedNote((prev) => prev && deletedNoteIds.has(prev.id) ? null : prev);
+            setSelectedVideo((prev) => prev && deletedYoutubeIds.has(prev.id) ? null : prev);
+            setSelectedDocumentSource((prev) => prev && deletedDocSourceIds.has(prev.id) ? null : prev);
+            setSelectedKnowledgeIds((current) => {
+                const next = new Set(current);
+                successKeys.forEach((key) => next.delete(key));
+                selectedKnowledgeItems.forEach((item) => {
+                    if (
+                        (item.kind === 'youtube' && deletedYoutubeIds.has(item.id))
+                        || (item.kind === 'docs' && deletedDocSourceIds.has(item.id))
+                        || (item.kind !== 'youtube' && item.kind !== 'docs' && deletedNoteIds.has(item.id))
+                    ) {
+                        next.delete(`${item.kind}:${item.id}`);
+                    }
+                });
+                return next;
+            });
+            void refreshIndexStatus();
+            if (!result?.success && result?.failed) {
+                void appAlert(`已删除 ${result.deleted || 0} 条，${result.failed || 0} 条失败`);
+            }
+        } catch (error) {
+            console.error('Failed to batch delete knowledge:', error);
+            void appAlert('批量删除失败');
+        } finally {
+            setIsBatchDeleting(false);
+        }
+    }, [isBatchDeleting, refreshIndexStatus, selectedKnowledgeItems]);
 
     const handleTranscribeNote = async (noteId: string) => {
         try {
@@ -2210,6 +2320,44 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                             {indexStatus.lastError && <span className="truncate text-red-500 max-w-[360px]">{indexStatus.lastError}</span>}
                         </div>
                     )}
+
+                    {!isEmbedded && filteredKnowledgeItems.length > 0 && (
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={toggleVisibleKnowledgeSelection}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-black/[0.06] bg-white px-2.5 text-[11px] font-bold text-text-secondary shadow-sm transition-all hover:bg-black/[0.02]"
+                                    title={allVisibleKnowledgeSelected ? '取消选择当前可见' : '选择当前可见'}
+                                >
+                                    {allVisibleKnowledgeSelected ? <CheckSquare2 className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                                    {selectedKnowledgeItems.length > 0 ? `已选 ${selectedKnowledgeItems.length}` : '多选'}
+                                </button>
+                                {selectedKnowledgeItems.length > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={clearKnowledgeSelection}
+                                        className="inline-flex h-8 items-center justify-center rounded-lg border border-black/[0.06] bg-white px-2.5 text-[11px] font-bold text-text-tertiary shadow-sm transition-all hover:bg-black/[0.02]"
+                                        title="清空选择"
+                                    >
+                                        <X className="w-3.5 h-3.5" />
+                                    </button>
+                                )}
+                            </div>
+                            {selectedKnowledgeItems.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleBatchDeleteKnowledge()}
+                                    disabled={isBatchDeleting}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 text-[11px] font-bold text-red-600 shadow-sm transition-all hover:bg-red-100 disabled:opacity-60"
+                                    title="批量删除"
+                                >
+                                    {isBatchDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                    删除
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -2228,6 +2376,35 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                         ) : (
                             <div className={knowledgeColumnsClass} style={{ columnGap: '0.75rem' }}>
                                 {visibleKnowledgeItems.map((item) => {
+                                    const selectionKey = `${item.kind}:${item.id}`;
+                                    const isSelected = selectedKnowledgeIds.has(selectionKey);
+                                    const selectionButton = !isEmbedded ? (
+                                        <span
+                                            role="checkbox"
+                                            aria-checked={isSelected}
+                                            tabIndex={0}
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                toggleKnowledgeSelection(item);
+                                            }}
+                                            onKeyDown={(event) => {
+                                                if (event.key === 'Enter' || event.key === ' ') {
+                                                    event.preventDefault();
+                                                    event.stopPropagation();
+                                                    toggleKnowledgeSelection(item);
+                                                }
+                                            }}
+                                            className={clsx(
+                                                'absolute left-3 top-3 z-20 inline-flex h-7 w-7 items-center justify-center rounded-lg border shadow-sm backdrop-blur-md transition-all',
+                                                isSelected
+                                                    ? 'border-accent-primary bg-accent-primary text-white'
+                                                    : 'border-white/70 bg-white/85 text-text-tertiary hover:text-text-primary'
+                                            )}
+                                            title={isSelected ? '取消选择' : '选择'}
+                                        >
+                                            {isSelected ? <CheckSquare2 className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+                                        </span>
+                                    ) : null;
                                     if (item.kind === 'docs' && item.doc) {
                                         const source = item.doc;
                                         const hasVisualIndexSamples = source.sampleFiles.some(isVisualIndexFilePath);
@@ -2246,8 +2423,12 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                         void openDocumentDetail(source);
                                                     }
                                                 }}
-                                                className="mb-3 break-inside-avoid rounded-2xl border border-black/[0.04] bg-white shadow-sm p-4 transition-all"
+                                                className={clsx(
+                                                    'relative mb-3 break-inside-avoid rounded-2xl border bg-white shadow-sm p-4 transition-all',
+                                                    isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : 'border-black/[0.04]'
+                                                )}
                                             >
+                                                {selectionButton}
                                                 <div className="flex items-start justify-between gap-3">
                                                     <div className="min-w-0">
                                                         <div className="flex flex-wrap items-center gap-2">
@@ -2361,10 +2542,11 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                                 key={item.id}
                                                 onClick={() => void openVideoDetail(video)}
                                                 className={clsx(
-                                                    'group mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] overflow-hidden shadow-sm transition-all duration-300',
-                                                    isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-black/[0.04]'
+                                                    'group relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] overflow-hidden shadow-sm transition-all duration-300',
+                                                    isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : isProcessing ? 'border-yellow-400 animate-pulse' : isFailed ? 'border-red-400' : 'border-black/[0.04]'
                                                 )}
                                             >
+                                                {selectionButton}
                                                 <div className="relative aspect-[16/10] bg-black/[0.02] overflow-hidden">
                                                     <span className={clsx('absolute top-3 right-3 z-10 text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg shadow-sm backdrop-blur-md', getKnowledgeKindBadgeClass('youtube'))}>
                                                         {getKnowledgeKindLabel('youtube')}
@@ -2444,10 +2626,12 @@ export function Knowledge({ onNavigateToRedClaw, isEmbedded = false, isActive = 
                                             key={item.id}
                                             onClick={() => void openNoteDetail(note)}
                                             className={clsx(
-                                                'mb-4 break-inside-avoid w-full text-left bg-white border border-black/[0.04] rounded-[20px] shadow-sm transition-all duration-300',
+                                                'relative mb-4 break-inside-avoid w-full text-left bg-white border rounded-[20px] shadow-sm transition-all duration-300',
+                                                isSelected ? 'border-accent-primary ring-2 ring-accent-primary/15' : 'border-black/[0.04]',
                                                 isTextArticleCard ? 'overflow-visible p-5' : 'overflow-hidden'
                                             )}
                                         >
+                                            {selectionButton}
                                             {isTextArticleCard ? (
                                                 <div className={clsx('flex gap-4', embeddedUsesCompactCard ? 'flex-col' : 'items-start')}>
                                                     <div className={clsx(

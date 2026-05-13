@@ -6,7 +6,7 @@ use crate::persistence::{
     ensure_store_hydrated_for_media, with_store, with_store_mut,
 };
 use crate::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1075,6 +1075,7 @@ pub fn handle_library_channel(
             | "knowledge:youtube-regenerate-summaries"
             | "knowledge:read-youtube-subtitle"
             | "knowledge:delete"
+            | "knowledge:delete-batch"
             | "knowledge:transcribe"
             | "knowledge:docs:add-files"
             | "knowledge:docs:add-folder"
@@ -1230,6 +1231,74 @@ pub fn handle_library_channel(
             "knowledge:delete" => {
                 let note_id = payload_value_as_string(payload).unwrap_or_default();
                 knowledge::delete_note(app, state, &note_id)
+            }
+            "knowledge:delete-batch" => {
+                let items = payload
+                    .get("items")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| "knowledge delete batch requires `items`".to_string())?;
+                let mut deleted = 0usize;
+                let mut results = Vec::new();
+                for item in items {
+                    let id = item
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let kind = item
+                        .get("kind")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if id.is_empty() {
+                        results.push(json!({
+                            "id": id,
+                            "kind": kind,
+                            "success": false,
+                            "error": "缺少知识库条目 ID"
+                        }));
+                        continue;
+                    }
+                    let result = match kind.as_str() {
+                        "redbook-note" => knowledge::delete_note(app, state, &id),
+                        "youtube-video" => knowledge::delete_youtube_note(app, state, &id),
+                        "document-source" => knowledge::delete_document_source(app, state, &id),
+                        _ => Ok(json!({ "success": false, "error": "不支持的知识库条目类型" })),
+                    };
+                    match result {
+                        Ok(value) => {
+                            let success = value
+                                .get("success")
+                                .and_then(|value| value.as_bool())
+                                .unwrap_or(false);
+                            if success {
+                                deleted += 1;
+                            }
+                            results.push(json!({
+                                "id": id,
+                                "kind": kind,
+                                "success": success,
+                                "error": value.get("error").cloned().unwrap_or(Value::Null)
+                            }));
+                        }
+                        Err(error) => {
+                            results.push(json!({
+                                "id": id,
+                                "kind": kind,
+                                "success": false,
+                                "error": error
+                            }));
+                        }
+                    }
+                }
+                Ok(json!({
+                    "success": results.iter().all(|item| item.get("success").and_then(|value| value.as_bool()).unwrap_or(false)),
+                    "deleted": deleted,
+                    "failed": results.len().saturating_sub(deleted),
+                    "results": results,
+                }))
             }
             "knowledge:transcribe" => {
                 let note_id = payload_value_as_string(payload).unwrap_or_default();

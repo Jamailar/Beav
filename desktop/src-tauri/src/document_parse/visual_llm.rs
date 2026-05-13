@@ -1,12 +1,12 @@
 use base64::Engine;
 use image::codecs::jpeg::JpegEncoder;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
 use super::visual_manifest::{
-    DEFAULT_PROMPT_VERSION, VisualSourceUnit, metadata_only_manifest, normalize_manifest,
+    metadata_only_manifest, normalize_manifest, VisualSourceUnit, DEFAULT_PROMPT_VERSION,
 };
 
 #[derive(Debug, Clone)]

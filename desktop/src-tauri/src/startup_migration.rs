@@ -1,16 +1,15 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::scheduler::sync_redclaw_job_definitions;
 use crate::{
-    AppState, AppStore, auth, compatible_workspace_base_dir, create_manuscript_package,
-    detect_best_legacy_db, emit_space_changed, is_legacy_workspace_base,
-    is_manuscript_package_path, join_relative, legacy_workspace_dir, maybe_import_legacy_store,
-    normalize_relative_path, now_iso, persist_store, preferred_workspace_dir,
-    title_from_relative_path,
+    auth, compatible_workspace_base_dir, create_manuscript_package, detect_best_legacy_db,
+    emit_space_changed, is_legacy_workspace_base, is_manuscript_package_path, join_relative,
+    legacy_workspace_dir, maybe_import_legacy_store, normalize_relative_path, now_iso,
+    persist_store, preferred_workspace_dir, title_from_relative_path, AppState, AppStore,
 };
 
 pub(crate) const STARTUP_MIGRATION_EVENT: &str = "app:startup-migration-status";
@@ -750,12 +749,10 @@ mod tests {
         assert!(manuscripts_root.join("nested").join("deep").exists());
         assert!(!manuscripts_root.join("draft.md").exists());
         assert!(!manuscripts_root.join("nested").join("deep.md").exists());
-        assert!(
-            manuscripts_root
-                .join("existing")
-                .join("content.md")
-                .exists()
-        );
+        assert!(manuscripts_root
+            .join("existing")
+            .join("content.md")
+            .exists());
 
         let _ = fs::remove_dir_all(&workspace_root);
     }

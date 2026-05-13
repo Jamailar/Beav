@@ -1,6 +1,6 @@
 use crate::commands::chat_state::ensure_chat_session;
 use crate::session_manager::{ensure_context_session, update_metadata};
-use crate::{AppStore, ChatSessionRecord, slug_from_relative_path, title_from_relative_path};
+use crate::{slug_from_relative_path, title_from_relative_path, AppStore, ChatSessionRecord};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 

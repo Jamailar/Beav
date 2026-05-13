@@ -7,6 +7,7 @@ type GeneratedBrandConfig = {
   htmlTitle?: string;
   aiDisplayName?: string;
   logoSrc?: string;
+  tagline?: string;
   downloadUrl?: string;
   githubIssuesUrl?: string;
   githubRepoUrl?: string;
@@ -91,6 +92,7 @@ export const APP_BRAND = {
   htmlTitle: String(config.htmlTitle || config.windowTitle || config.displayName || 'App'),
   aiDisplayName: String(config.aiDisplayName || config.displayName || 'App'),
   logoSrc: String(config.logoSrc || '/branding/logo.png'),
+  tagline: String(config.tagline || ''),
   downloadUrl: String(config.downloadUrl || ''),
   githubIssuesUrl: String(config.githubIssuesUrl || ''),
   githubRepoUrl: String(config.githubRepoUrl || ''),

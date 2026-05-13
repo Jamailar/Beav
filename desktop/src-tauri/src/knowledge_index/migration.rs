@@ -1,11 +1,10 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use tauri::State;
 
 use crate::{
-    AppState,
     document_parse::VISUAL_DEFAULT_PROMPT_VERSION,
     knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
-    now_iso,
+    now_iso, AppState,
 };
 
 pub(crate) const CURRENT_SCHEMA_VERSION: &str = "1";

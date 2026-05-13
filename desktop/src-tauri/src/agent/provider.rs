@@ -1,12 +1,12 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::agent::{ChatExchangeContext, ChatExchangeResponseStage};
 use crate::runtime::runtime_error_envelope_from_error;
 use crate::{
-    AppState, append_debug_log_state, provider_profile_from_config, resolve_chat_config,
+    append_debug_log_state, provider_profile_from_config, resolve_chat_config,
     run_anthropic_interactive_chat_runtime, run_gemini_interactive_chat_runtime,
-    run_openai_interactive_chat_runtime,
+    run_openai_interactive_chat_runtime, AppState,
 };
 
 pub fn resolve_chat_exchange_response_stage(

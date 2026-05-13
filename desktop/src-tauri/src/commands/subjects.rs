@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 use tauri::{AppHandle, State};
@@ -7,10 +7,11 @@ use crate::commands::generation::generate_image_assets;
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store};
 use crate::{
-    AppState, SubjectAttribute, SubjectRecord, file_content_hash, handle_subject_category_create,
-    handle_subject_category_delete, handle_subject_category_update, handle_subject_create,
-    handle_subject_delete, handle_subject_update, hydrated_subject_record, now_iso, now_ms,
-    payload_string, persist_subjects_workspace, safe_subject_relative_path, subjects_root,
+    file_content_hash, handle_subject_category_create, handle_subject_category_delete,
+    handle_subject_category_update, handle_subject_create, handle_subject_delete,
+    handle_subject_update, hydrated_subject_record, now_iso, now_ms, payload_string,
+    persist_subjects_workspace, safe_subject_relative_path, subjects_root, AppState,
+    SubjectAttribute, SubjectRecord,
 };
 
 pub fn handle_subjects_channel(
