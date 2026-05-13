@@ -96,7 +96,10 @@ interface SubjectDraft {
 type CategoryDialogMode = 'create' | 'rename';
 type SubjectViewMode = 'grid' | 'list';
 type AssetLibraryTab = 'assets' | 'media';
+type AssetModalPhase = 'opening' | 'open' | 'closing';
 type MediaAssetSource = 'generated' | 'planned' | 'imported';
+
+const ASSET_LIBRARY_MODAL_ANIMATION_MS = 220;
 type SubjectCategoryTab = {
     id: string;
     label: string;
@@ -388,6 +391,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const [viewMode, setViewMode] = useState<SubjectViewMode>('grid');
     const [filterOpen, setFilterOpen] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isAssetModalVisible, setIsAssetModalVisible] = useState(false);
+    const [assetModalPhase, setAssetModalPhase] = useState<AssetModalPhase>('closing');
     const [isDraftCategoryMenuOpen, setIsDraftCategoryMenuOpen] = useState(false);
     const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
     const [categoryDialogMode, setCategoryDialogMode] = useState<CategoryDialogMode>('create');
@@ -408,10 +413,45 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
     const autosaveLastPayloadRef = useRef<string | null>(null);
     const autosaveSavingRef = useRef(false);
     const autosaveVersionRef = useRef(0);
+    const assetModalAnimationTimerRef = useRef<number | null>(null);
+    const assetModalAnimationFrameRef = useRef<number | null>(null);
     const [retryingVoiceSubjectId, setRetryingVoiceSubjectId] = useState<string | null>(null);
     const [generatingCardSubjectId, setGeneratingCardSubjectId] = useState<string | null>(null);
     const [previewImage, setPreviewImage] = useState<SubjectImageDraft | null>(null);
     const voiceJobsById = useMediaJobsStore((state) => state.jobsById);
+
+    const clearAssetModalAnimationHandles = useCallback(() => {
+        if (assetModalAnimationTimerRef.current !== null) {
+            window.clearTimeout(assetModalAnimationTimerRef.current);
+            assetModalAnimationTimerRef.current = null;
+        }
+        if (assetModalAnimationFrameRef.current !== null) {
+            window.cancelAnimationFrame(assetModalAnimationFrameRef.current);
+            assetModalAnimationFrameRef.current = null;
+        }
+    }, []);
+
+    const openAssetModalSurface = useCallback(() => {
+        clearAssetModalAnimationHandles();
+        setIsModalOpen(true);
+        setIsAssetModalVisible(true);
+        setAssetModalPhase('opening');
+        assetModalAnimationFrameRef.current = window.requestAnimationFrame(() => {
+            assetModalAnimationFrameRef.current = window.requestAnimationFrame(() => {
+                setAssetModalPhase('open');
+                assetModalAnimationFrameRef.current = null;
+            });
+        });
+    }, [clearAssetModalAnimationHandles]);
+
+    const resetAssetModalDraft = useCallback(() => {
+        setPreviewImage(null);
+        setDraft(createEmptyDraft());
+        setInitialVoicePresent(false);
+        setError('');
+        setRecordingError('');
+        setRecordingHint('');
+    }, []);
 
     useEffect(() => {
         if (!import.meta.env.DEV) return;
@@ -596,8 +636,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setInitialVoicePresent(false);
         setError('');
         setIsDraftCategoryMenuOpen(false);
-        setIsModalOpen(true);
-    }, [categoryFilter]);
+        openAssetModalSurface();
+    }, [categoryFilter, openAssetModalSurface]);
 
     const openEditModal = useCallback((subject: SubjectRecord) => {
         autosaveLastPayloadRef.current = null;
@@ -605,8 +645,8 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
         setInitialVoicePresent(Boolean(subject.voicePreviewUrl));
         setError('');
         setIsDraftCategoryMenuOpen(false);
-        setIsModalOpen(true);
-    }, []);
+        openAssetModalSurface();
+    }, [openAssetModalSurface]);
 
     const openCreateCategoryDialog = useCallback(() => {
         setCategoryDialogMode('create');
@@ -859,24 +899,26 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
 
     const closeModal = useCallback(() => {
         if (working) return;
+        clearAssetModalAnimationHandles();
         stopRecordingSession();
         setIsDraftCategoryMenuOpen(false);
-        setIsModalOpen(false);
-        setPreviewImage(null);
-        setDraft(createEmptyDraft());
-        setInitialVoicePresent(false);
-        setError('');
-        setRecordingError('');
-        setRecordingHint('');
-    }, [stopRecordingSession, working]);
+        setAssetModalPhase('closing');
+        assetModalAnimationTimerRef.current = window.setTimeout(() => {
+            setIsModalOpen(false);
+            setIsAssetModalVisible(false);
+            resetAssetModalDraft();
+            assetModalAnimationTimerRef.current = null;
+        }, ASSET_LIBRARY_MODAL_ANIMATION_MS);
+    }, [clearAssetModalAnimationHandles, resetAssetModalDraft, stopRecordingSession, working]);
 
     useEffect(() => () => {
+        clearAssetModalAnimationHandles();
         stopRecordingSession();
         if (autosaveTimerRef.current) {
             window.clearTimeout(autosaveTimerRef.current);
             autosaveTimerRef.current = null;
         }
-    }, [stopRecordingSession]);
+    }, [clearAssetModalAnimationHandles, stopRecordingSession]);
 
     const handleVoiceFileInput = useCallback(async (files: FileList | null) => {
         const file = files?.[0];
@@ -1588,9 +1630,19 @@ export function Subjects({ isActive = true, onReturnHome, onClose, variant = 'pa
                 )}
             </div>
 
-            {isModalOpen && (
-                <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 p-4">
-                    <div className="flex max-h-[88vh] w-full max-w-[960px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            {isAssetModalVisible && (
+                <div
+                    className={clsx(
+                        'asset-library-modal-backdrop fixed inset-0 z-[120] flex items-center justify-center p-4',
+                        assetModalPhase === 'open' ? 'asset-library-modal-backdrop--open' : 'asset-library-modal-backdrop--closed'
+                    )}
+                >
+                    <div
+                        className={clsx(
+                            'asset-library-modal-panel flex max-h-[88vh] w-full max-w-[960px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl',
+                            assetModalPhase === 'open' ? 'asset-library-modal-panel--open' : 'asset-library-modal-panel--closed'
+                        )}
+                    >
                         <div className="flex items-center justify-between px-8 pb-4 pt-6">
                             <h2 className="text-xl font-semibold leading-none text-[rgb(var(--color-text-primary))]">
                                 {draft.id ? `编辑${draftEntityLabel}` : `新建${draftEntityLabel}`}

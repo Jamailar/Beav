@@ -51,6 +51,8 @@ import type {
     SidebarTab,
 } from './redclaw/types';
 
+const PREVIEW_SIDEBAR_ANIMATION_MS = 280;
+
 interface FilePreviewResolveResult {
     success?: boolean;
     error?: string;
@@ -529,6 +531,7 @@ export function RedClaw({
     const [chatActionMessage, setChatActionMessage] = useState('');
     const [previewTarget, setPreviewTarget] = useState<ChatMessageLinkTarget | null>(null);
     const [previewSidebarCollapsed, setPreviewSidebarCollapsed] = useState(false);
+    const [isPreviewSidebarClosing, setIsPreviewSidebarClosing] = useState(false);
     const [activeAiSurface, setActiveAiSurface] = useState<RedClawAiSurface>(readInitialRedClawAiSurface);
     const [teamRooms, setTeamRooms] = useState<RedClawTeamRoom[]>([]);
     const [advisors, setAdvisors] = useState<AdvisorProfile[]>([]);
@@ -619,6 +622,13 @@ export function RedClaw({
     const routedPendingMessageRef = useRef<PendingChatMessage | null>(null);
     const consumedNavigationActionNonceRef = useRef<number | null>(null);
     const pendingRoomSelectionRef = useRef<string | null>(null);
+    const previewSidebarAnimationTimerRef = useRef<number | null>(null);
+
+    const clearPreviewSidebarAnimationTimer = useCallback(() => {
+        if (previewSidebarAnimationTimerRef.current === null) return;
+        window.clearTimeout(previewSidebarAnimationTimerRef.current);
+        previewSidebarAnimationTimerRef.current = null;
+    }, []);
 
     const markSessionRunning = useCallback((sessionId: string | null | undefined) => {
         const safeSessionId = String(sessionId || '').trim();
@@ -672,9 +682,15 @@ export function RedClaw({
         activeSessionIdRef.current = activeSessionId;
     }, [activeSessionId]);
 
+    useEffect(() => () => {
+        clearPreviewSidebarAnimationTimer();
+    }, [clearPreviewSidebarAnimationTimer]);
+
     useEffect(() => {
+        clearPreviewSidebarAnimationTimer();
+        setIsPreviewSidebarClosing(false);
         setPreviewTarget(null);
-    }, [activeSessionId, activeSpaceId]);
+    }, [activeSessionId, activeSpaceId, clearPreviewSidebarAnimationTimer]);
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -1988,6 +2004,8 @@ export function RedClaw({
     }, [onOpenRedClawOnboarding, onboardingCompleted, onboardingKnown]);
 
     const handlePreviewLink = useCallback((target: ChatMessageLinkTarget) => {
+        clearPreviewSidebarAnimationTimer();
+        setIsPreviewSidebarClosing(false);
         setPreviewTarget(target);
         setPreviewSidebarCollapsed(false);
         const source = String(target.localPathCandidate || target.href || '').trim();
@@ -2029,7 +2047,7 @@ export function RedClaw({
                     : current);
             }
         })();
-    }, []);
+    }, [clearPreviewSidebarAnimationTimer]);
 
     const handleOpenManuscript = useCallback((filePath: string) => {
         const normalizedPath = String(filePath || '').trim();
@@ -2051,14 +2069,33 @@ export function RedClaw({
     }, [handlePreviewLink, onOpenManuscriptEditor]);
 
     const handleClosePreview = useCallback(() => {
-        setPreviewTarget(null);
-        setPreviewSidebarCollapsed(false);
-    }, []);
+        if (!previewTarget || isPreviewSidebarClosing) return;
+        clearPreviewSidebarAnimationTimer();
+        setIsPreviewSidebarClosing(true);
+        previewSidebarAnimationTimerRef.current = window.setTimeout(() => {
+            setPreviewTarget(null);
+            setPreviewSidebarCollapsed(false);
+            setIsPreviewSidebarClosing(false);
+            previewSidebarAnimationTimerRef.current = null;
+        }, PREVIEW_SIDEBAR_ANIMATION_MS);
+    }, [clearPreviewSidebarAnimationTimer, isPreviewSidebarClosing, previewTarget]);
 
     const togglePreviewSidebarCollapsed = useCallback(() => {
         if (!previewTarget) return;
-        setPreviewSidebarCollapsed((current) => !current);
-    }, [previewTarget]);
+        clearPreviewSidebarAnimationTimer();
+        if (previewSidebarCollapsed || isPreviewSidebarClosing) {
+            setIsPreviewSidebarClosing(false);
+            setPreviewSidebarCollapsed(false);
+            return;
+        }
+
+        setIsPreviewSidebarClosing(true);
+        previewSidebarAnimationTimerRef.current = window.setTimeout(() => {
+            setPreviewSidebarCollapsed(true);
+            setIsPreviewSidebarClosing(false);
+            previewSidebarAnimationTimerRef.current = null;
+        }, PREVIEW_SIDEBAR_ANIMATION_MS);
+    }, [clearPreviewSidebarAnimationTimer, isPreviewSidebarClosing, previewSidebarCollapsed, previewTarget]);
 
     const handleOpenPreviewExternal = useCallback(async (target: ChatMessageLinkTarget) => {
         const source = String(target.localPathCandidate || target.href || '').trim();
@@ -2146,6 +2183,7 @@ export function RedClaw({
                 className="app-titlebar-button"
                 title={previewSidebarCollapsed ? '展开文件预览' : '折叠文件预览'}
                 aria-label={previewSidebarCollapsed ? '展开文件预览' : '折叠文件预览'}
+                data-preview-sidebar-state={previewSidebarCollapsed ? 'collapsed' : 'expanded'}
                 data-no-window-drag
             >
                 <PanelRight className="h-[14px] w-[14px]" strokeWidth={1.8} />
@@ -2168,13 +2206,13 @@ export function RedClaw({
     }
 
 
-    const previewPaneOpen = Boolean(previewTarget && !previewSidebarCollapsed);
+    const previewPaneVisible = Boolean(previewTarget && (!previewSidebarCollapsed || isPreviewSidebarClosing));
 
     return (
         <div className="h-full min-h-0 flex overflow-hidden">
             <div className={clsx(
-                'relative min-w-0 overflow-hidden transition-[flex-basis,max-width] duration-200 ease-out',
-                previewPaneOpen ? 'basis-[46%] max-w-[780px] shrink-0 border-r border-border/70' : 'flex-1'
+                'relative min-w-0 overflow-hidden transition-[flex-basis,max-width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+                previewPaneVisible ? 'basis-[46%] max-w-[780px] shrink-0 border-r border-border/70' : 'flex-1'
             )}>
                 {isSessionLoading ? (
                     <div className="h-full flex items-center justify-center">
@@ -2269,7 +2307,7 @@ export function RedClaw({
                                         )}
                                         welcomeActions={welcomeActions}
                                         contentLayout="wide"
-                                        contentWidthPreset={previewPaneOpen ? 'default' : 'narrow'}
+                                        contentWidthPreset={previewPaneVisible ? 'default' : 'narrow'}
                                         allowFileUpload={true}
                                         attachmentPreviewMode="compact-status"
                                         messageWorkflowPlacement="bottom"
@@ -2415,8 +2453,13 @@ export function RedClaw({
                     </div>
                 )}
             </div>
-            {previewPaneOpen && previewTarget ? (
-                <aside className="min-h-0 min-w-[420px] flex-1 overflow-hidden bg-surface-primary">
+            {previewPaneVisible && previewTarget ? (
+                <aside
+                    className={clsx(
+                        'redclaw-preview-sidebar min-h-0 min-w-[420px] flex-1 overflow-hidden bg-surface-primary',
+                        isPreviewSidebarClosing ? 'redclaw-preview-sidebar--closing' : 'redclaw-preview-sidebar--open'
+                    )}
+                >
                     <RedClawFilePreviewPane
                         target={previewTarget}
                         onClose={handleClosePreview}

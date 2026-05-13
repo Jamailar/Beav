@@ -146,20 +146,54 @@ pub(crate) fn parse_transcription_response(
         return Err("转写接口返回了空结果：服务响应 stdout 为空".to_string());
     }
     if preferred_format != "json" && !stdout.starts_with('{') && !stdout.starts_with('[') {
+        if is_subtitle_format(preferred_format) && !looks_like_subtitle(stdout, preferred_format) {
+            return Err(format!(
+                "转写接口返回了纯文本，不是 {} 字幕：缺少字幕序号/时间轴",
+                preferred_format.to_ascii_uppercase()
+            ));
+        }
         return Ok(stdout.to_string());
     }
 
     let value: Value =
         serde_json::from_str(&stdout).map_err(|error| format!("Invalid JSON response: {error}"))?;
-    extract_transcription_text(&value, preferred_format).ok_or_else(|| {
+    if let Some(message) = transcription_error_message(&value) {
+        return Err(format!("转写接口返回错误：{message}"));
+    }
+    let transcript = extract_transcription_text(&value, preferred_format).ok_or_else(|| {
         format!(
             "转写接口返回了空结果：未在响应中找到可用转写字段（{}）",
             transcription_response_shape(&value)
         )
-    })
+    })?;
+    if is_subtitle_format(preferred_format) && !looks_like_subtitle(&transcript, preferred_format) {
+        return Err(format!(
+            "转写接口返回了转录文本，但不是 {} 字幕：缺少字幕序号/时间轴（{}）",
+            preferred_format.to_ascii_uppercase(),
+            transcription_response_shape(&value)
+        ));
+    }
+    Ok(transcript)
 }
 
 fn extract_transcription_text(value: &Value, preferred_format: &str) -> Option<String> {
+    if is_subtitle_format(preferred_format) {
+        if let Some(text) = value
+            .get(preferred_format)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            return Some(text.to_string());
+        }
+        if let Some(data) = value.get("data") {
+            if let Some(text) = extract_transcription_text(data, preferred_format) {
+                return Some(text);
+            }
+        }
+        return extract_timed_segments(value, preferred_format);
+    }
+
     for key in ["text", "transcript", "srt", "vtt", "content", "result"] {
         if let Some(text) = value
             .get(key)
@@ -175,6 +209,13 @@ fn extract_transcription_text(value: &Value, preferred_format: &str) -> Option<S
             return Some(text);
         }
     }
+    if let Some(text) = extract_timed_segments(value, preferred_format) {
+        return Some(text);
+    }
+    None
+}
+
+fn extract_timed_segments(value: &Value, preferred_format: &str) -> Option<String> {
     let segments = value
         .get("segments")
         .or_else(|| value.get("sentences"))
@@ -247,6 +288,10 @@ fn segment_time_seconds(segment: &Value, keys: &[&str]) -> Option<f64> {
     None
 }
 
+fn segment_duration_seconds(segment: &Value) -> Option<f64> {
+    segment_time_seconds(segment, &["duration", "duration_s", "durationSeconds"])
+}
+
 fn format_srt_time(seconds: f64) -> String {
     let millis = (seconds.max(0.0) * 1000.0).round() as u64;
     let hours = millis / 3_600_000;
@@ -265,18 +310,28 @@ fn render_timed_segments(segments: &[Value], preferred_format: &str) -> String {
     if preferred_format == "vtt" {
         output.push_str("WEBVTT\n\n");
     }
-    for (index, segment) in segments.iter().enumerate() {
+    let mut cue_index = 1usize;
+    for segment in segments {
         let Some(text) = segment_text(segment) else {
             continue;
         };
         let start = segment_time_seconds(segment, &["start", "start_time", "startTime", "begin"])
-            .unwrap_or(index as f64);
-        let end = segment_time_seconds(segment, &["end", "end_time", "endTime"])
-            .unwrap_or_else(|| start + 3.0);
+            .or_else(|| segment_time_seconds(segment, &["from", "from_time", "fromTime"]));
+        let Some(start) = start else {
+            continue;
+        };
+        let end = segment_time_seconds(
+            segment,
+            &["end", "end_time", "endTime", "to", "to_time", "toTime"],
+        )
+        .or_else(|| segment_duration_seconds(segment).map(|duration| start + duration));
+        let Some(end) = end else {
+            continue;
+        };
         if preferred_format == "srt" {
             output.push_str(&format!(
                 "{}\n{} --> {}\n{}\n\n",
-                index + 1,
+                cue_index,
                 format_srt_time(start),
                 format_srt_time(end.max(start + 0.1)),
                 text
@@ -289,8 +344,28 @@ fn render_timed_segments(segments: &[Value], preferred_format: &str) -> String {
                 text
             ));
         }
+        cue_index += 1;
     }
     output
+}
+
+fn is_subtitle_format(format: &str) -> bool {
+    matches!(format, "srt" | "vtt")
+}
+
+fn looks_like_subtitle(value: &str, format: &str) -> bool {
+    let trimmed = value.trim_start();
+    if format == "vtt" && trimmed.starts_with("WEBVTT") {
+        return true;
+    }
+    if format == "srt"
+        && trimmed
+            .lines()
+            .any(|line| line.contains(" --> ") && line.contains(','))
+    {
+        return true;
+    }
+    trimmed.lines().any(|line| line.contains(" --> "))
 }
 
 fn transcription_response_shape(value: &Value) -> String {
@@ -317,6 +392,30 @@ fn transcription_response_shape(value: &Value) -> String {
         Value::Array(items) => format!("arrayLength={}", items.len()),
         _ => format!("jsonType={}", value_type_name(value)),
     }
+}
+
+fn transcription_error_message(value: &Value) -> Option<String> {
+    let error = value
+        .get("error")
+        .or_else(|| value.pointer("/data/error"))?;
+    if let Some(text) = error
+        .as_str()
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        return Some(text.to_string());
+    }
+    if let Some(message) = error
+        .get("message")
+        .or_else(|| error.get("msg"))
+        .or_else(|| error.get("detail"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        return Some(message.to_string());
+    }
+    Some(error.to_string())
 }
 
 fn value_type_name(value: &Value) -> &'static str {
@@ -515,6 +614,41 @@ mod tests {
 
         assert!(rendered.contains("1\n00:00:00,000 --> 00:00:01,500\n第一句"));
         assert!(rendered.contains("2\n00:00:01,500 --> 00:00:03,000\n第二句"));
+    }
+
+    #[test]
+    fn rejects_plain_text_when_srt_was_requested() {
+        let error = parse_transcription_response("hello world", "srt").expect_err("plain text");
+
+        assert!(error.contains("不是 SRT 字幕"));
+    }
+
+    #[test]
+    fn rejects_text_field_when_srt_was_requested() {
+        let value = json!({ "text": "hello world" });
+        let error = parse_transcription_response(&value.to_string(), "srt").expect_err("text");
+
+        assert!(error.contains("未在响应中找到可用转写字段"));
+    }
+
+    #[test]
+    fn reports_provider_error_message() {
+        let value = json!({ "error": { "message": "unsupported response_format" } });
+        let error = parse_transcription_response(&value.to_string(), "srt").expect_err("provider");
+
+        assert!(error.contains("unsupported response_format"));
+    }
+
+    #[test]
+    fn skips_segments_without_timing_for_srt() {
+        let value = json!({
+            "segments": [
+                { "text": "第一句" }
+            ]
+        });
+        let error = parse_transcription_response(&value.to_string(), "srt").expect_err("timing");
+
+        assert!(error.contains("不是 SRT 字幕"));
     }
 
     #[test]

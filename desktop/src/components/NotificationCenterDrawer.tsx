@@ -1,10 +1,13 @@
 import { Bell, CheckCheck, ExternalLink, Trash2, X } from 'lucide-react';
 import clsx from 'clsx';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { runNotificationAction } from '../notifications/actionRouter';
 import { notificationClient } from '../notifications/notificationClient';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import type { NotificationLevel } from '../notifications/types';
+
+const NOTIFICATION_DRAWER_ANIMATION_MS = 220;
+type NotificationDrawerPhase = 'opening' | 'open' | 'closing';
 
 function levelTone(level: NotificationLevel): string {
   if (level === 'error') return 'bg-red-50 text-red-700 border-red-200';
@@ -15,6 +18,8 @@ function levelTone(level: NotificationLevel): string {
 
 export function NotificationCenterDrawer() {
   const drawerOpen = useNotificationStore((state) => state.drawerOpen);
+  const [isDrawerVisible, setIsDrawerVisible] = useState(drawerOpen);
+  const [drawerPhase, setDrawerPhase] = useState<NotificationDrawerPhase>(drawerOpen ? 'open' : 'closing');
   const items = useNotificationStore((state) => state.items);
   const setDrawerOpen = useNotificationStore((state) => state.setDrawerOpen);
   const markRead = useNotificationStore((state) => state.markRead);
@@ -24,24 +29,72 @@ export function NotificationCenterDrawer() {
   const isSyncingRemote = useNotificationStore((state) => state.isSyncingRemote);
   const remoteLastError = useNotificationStore((state) => state.remoteLastError);
   const remoteLastSyncAt = useNotificationStore((state) => state.remoteLastSyncAt);
+  const drawerAnimationTimerRef = useRef<number | null>(null);
+  const drawerAnimationFrameRef = useRef<number | null>(null);
 
   const hasItems = items.length > 0;
   const title = useMemo(() => unreadCount > 0 ? `通知 (${unreadCount})` : '通知', [unreadCount]);
+
+  useLayoutEffect(() => {
+    if (drawerAnimationTimerRef.current !== null) {
+      window.clearTimeout(drawerAnimationTimerRef.current);
+      drawerAnimationTimerRef.current = null;
+    }
+    if (drawerAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(drawerAnimationFrameRef.current);
+      drawerAnimationFrameRef.current = null;
+    }
+
+    if (drawerOpen) {
+      setIsDrawerVisible(true);
+      setDrawerPhase('opening');
+      drawerAnimationFrameRef.current = window.requestAnimationFrame(() => {
+        setDrawerPhase('open');
+        drawerAnimationFrameRef.current = null;
+      });
+      return;
+    }
+
+    if (!isDrawerVisible) return;
+    setDrawerPhase('closing');
+    drawerAnimationTimerRef.current = window.setTimeout(() => {
+      setIsDrawerVisible(false);
+      setDrawerPhase('closing');
+      drawerAnimationTimerRef.current = null;
+    }, NOTIFICATION_DRAWER_ANIMATION_MS);
+  }, [drawerOpen, isDrawerVisible]);
+
+  useEffect(() => () => {
+    if (drawerAnimationTimerRef.current !== null) {
+      window.clearTimeout(drawerAnimationTimerRef.current);
+    }
+    if (drawerAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(drawerAnimationFrameRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     if (!drawerOpen) return;
     void notificationClient.list(50);
   }, [drawerOpen]);
 
-  if (!drawerOpen) return null;
+  if (!drawerOpen && !isDrawerVisible) return null;
 
   return (
     <div className="absolute inset-0 z-[115] pointer-events-none">
       <div
-        className="absolute inset-0 bg-black/20 pointer-events-auto"
+        className={clsx(
+          'notification-center-backdrop absolute inset-0 pointer-events-auto',
+          drawerPhase === 'open' ? 'notification-center-backdrop--open' : 'notification-center-backdrop--closed'
+        )}
         onMouseDown={() => setDrawerOpen(false)}
       />
-      <aside className="absolute right-0 top-0 h-full w-[380px] max-w-[92vw] border-l border-border bg-surface-primary shadow-2xl pointer-events-auto flex flex-col">
+      <aside
+        className={clsx(
+          'notification-center-drawer absolute right-0 top-0 h-full w-[380px] max-w-[92vw] border-l border-border bg-surface-primary shadow-2xl pointer-events-auto flex flex-col',
+          drawerPhase === 'open' ? 'notification-center-drawer--open' : 'notification-center-drawer--closed'
+        )}
+      >
         <div className="h-12 px-3 border-b border-border flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <Bell className="w-4 h-4 text-text-secondary" />

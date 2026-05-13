@@ -80,7 +80,8 @@ const SIDEBAR_WIDTH_STORAGE_KEY = 'redbox:layout-sidebar-width:v1';
 const SIDEBAR_DEFAULT_WIDTH = 320;
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 460;
-const SIDEBAR_CONTENT_ANIMATION_MS = 170;
+const SIDEBAR_CONTENT_ANIMATION_MS = 280;
+const GLOBAL_SEARCH_ANIMATION_MS = 220;
 const GLOBAL_KNOWLEDGE_SEARCH_EVENT = 'redbox:global-knowledge-search';
 const GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY = 'redbox:global-knowledge-search-query';
 
@@ -165,6 +166,7 @@ function AppTitleBar({
           className="app-titlebar-sidebar-toggle"
           title={isSidebarCollapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
           aria-label={isSidebarCollapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
+          data-sidebar-state={isSidebarCollapsed ? 'collapsed' : 'expanded'}
           data-no-window-drag
         >
           <PanelLeft className="w-[15px] h-[15px]" strokeWidth={1.7} />
@@ -235,6 +237,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const [updateNotice, setUpdateNotice] = useState<AppUpdateNoticePayload | null>(null);
   const [isOpeningReleasePage, setIsOpeningReleasePage] = useState(false);
   const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
+  const [isGlobalSearchClosing, setIsGlobalSearchClosing] = useState(false);
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
   const [globalSearchResults, setGlobalSearchResults] = useState<GlobalKnowledgeSearchItem[]>([]);
   const [isGlobalSearchLoading, setIsGlobalSearchLoading] = useState(false);
@@ -246,6 +249,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const sidebarResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   const globalSearchRequestRef = useRef(0);
+  const globalSearchAnimationTimerRef = useRef<number | null>(null);
   const isFixedViewportView = false;
   const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
   const hasGlobalSidebar = !immersiveMode && !hideGlobalSidebar;
@@ -253,10 +257,27 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
   const visibleGlobalSidebarContent = !sidebarVisualCollapsed ? globalSidebarContent : null;
+  const isGlobalSearchVisible = isGlobalSearchOpen || isGlobalSearchClosing;
   const activeSpaceName = useMemo(
     () => spaces.find((space) => space.id === activeSpaceId)?.name || t('layout.defaultSpaceName'),
     [activeSpaceId, spaces, t]
   );
+
+  const closeGlobalSearch = useCallback(() => {
+    if (!isGlobalSearchOpen || isGlobalSearchClosing) return;
+
+    if (globalSearchAnimationTimerRef.current !== null) {
+      window.clearTimeout(globalSearchAnimationTimerRef.current);
+      globalSearchAnimationTimerRef.current = null;
+    }
+
+    setIsGlobalSearchClosing(true);
+    globalSearchAnimationTimerRef.current = window.setTimeout(() => {
+      setIsGlobalSearchOpen(false);
+      setIsGlobalSearchClosing(false);
+      globalSearchAnimationTimerRef.current = null;
+    }, GLOBAL_SEARCH_ANIMATION_MS);
+  }, [isGlobalSearchClosing, isGlobalSearchOpen]);
 
   const loadSpaces = useCallback(async () => {
     try {
@@ -328,11 +349,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
 
   useEffect(() => {
     if (!isGlobalSearchOpen) return;
-    const focusTimer = window.setTimeout(() => globalSearchInputRef.current?.focus(), 0);
+    const focusTimer = window.setTimeout(() => globalSearchInputRef.current?.focus(), 80);
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        setIsGlobalSearchOpen(false);
+        closeGlobalSearch();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -340,7 +361,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       window.clearTimeout(focusTimer);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isGlobalSearchOpen]);
+  }, [closeGlobalSearch, isGlobalSearchOpen]);
 
   useEffect(() => {
     if (!isGlobalSearchOpen) {
@@ -390,6 +411,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   useEffect(() => () => {
     if (sidebarAnimationTimerRef.current !== null) {
       window.clearTimeout(sidebarAnimationTimerRef.current);
+    }
+    if (globalSearchAnimationTimerRef.current !== null) {
+      window.clearTimeout(globalSearchAnimationTimerRef.current);
     }
   }, []);
 
@@ -546,12 +570,31 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   }, [isSidebarAnimating, isSidebarCollapsed]);
 
   const openGlobalSearch = useCallback(() => {
+    if (globalSearchAnimationTimerRef.current !== null) {
+      window.clearTimeout(globalSearchAnimationTimerRef.current);
+      globalSearchAnimationTimerRef.current = null;
+    }
+    setIsGlobalSearchClosing(false);
     setIsGlobalSearchOpen(true);
   }, []);
 
-  const closeGlobalSearch = useCallback(() => {
-    setIsGlobalSearchOpen(false);
-  }, []);
+  useEffect(() => {
+    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || key !== 'f') return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      openGlobalSearch();
+      window.setTimeout(() => {
+        globalSearchInputRef.current?.focus();
+        globalSearchInputRef.current?.select();
+      }, 0);
+    };
+
+    window.addEventListener('keydown', handleGlobalSearchShortcut, true);
+    return () => window.removeEventListener('keydown', handleGlobalSearchShortcut, true);
+  }, [openGlobalSearch]);
 
   const submitGlobalSearch = useCallback(() => {
     const query = globalSearchQuery.trim();
@@ -564,8 +607,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(GLOBAL_KNOWLEDGE_SEARCH_EVENT, { detail: { query } }));
     }, 0);
-    setIsGlobalSearchOpen(false);
-  }, [globalSearchQuery, onNavigate]);
+    closeGlobalSearch();
+  }, [closeGlobalSearch, globalSearchQuery, onNavigate]);
 
   const navigateToGlobalSearch = useCallback((queryOverride?: string) => {
     const query = (queryOverride ?? globalSearchQuery).trim();
@@ -578,8 +621,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent(GLOBAL_KNOWLEDGE_SEARCH_EVENT, { detail: { query } }));
     }, 0);
-    setIsGlobalSearchOpen(false);
-  }, [globalSearchQuery, onNavigate]);
+    closeGlobalSearch();
+  }, [closeGlobalSearch, globalSearchQuery, onNavigate]);
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (sidebarVisualCollapsed || isSidebarAnimating) return;
@@ -697,11 +740,14 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         ) : (
           <Icon className="app-sidebar-nav-icon shrink-0" strokeWidth={primary ? 1.6 : 1.65} />
         )}
-        {!sidebarVisualCollapsed && (
-          <span className="app-sidebar-nav-label truncate whitespace-nowrap opacity-100 translate-x-0">
-            {label}
-          </span>
-        )}
+        <span className={clsx(
+          'app-sidebar-nav-label truncate whitespace-nowrap',
+          sidebarVisualCollapsed
+            ? 'app-sidebar-nav-label--collapsed'
+            : 'app-sidebar-nav-label--expanded'
+        )}>
+          {label}
+        </span>
       </button>
     );
   };
@@ -780,7 +826,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
             )}
             <div
               className={clsx(
-                'flex items-center gap-2 text-[11px] text-text-tertiary/90 whitespace-nowrap transition-[max-height,opacity,transform] duration-150 ease-out',
+                'app-sidebar-footer-meta flex items-center gap-2 text-[11px] text-text-tertiary/90 whitespace-nowrap transition-[max-height,opacity,transform]',
                 sidebarVisualCollapsed ? 'max-h-0 overflow-hidden opacity-0 translate-y-1' : 'max-h-8 overflow-visible opacity-100 translate-y-0 justify-start'
               )}
             >
@@ -995,18 +1041,23 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
         </div>
       )}
 
-      {isGlobalSearchOpen && (
+      {isGlobalSearchVisible && (
         <div
-          className="fixed inset-0 z-[125] flex items-center justify-center bg-black/18 px-4"
-          style={{ backdropFilter: 'blur(18px) saturate(1.25)', WebkitBackdropFilter: 'blur(18px) saturate(1.25)' }}
+          className={clsx(
+            'app-global-search-backdrop fixed inset-0 z-[125] flex items-center justify-center px-4',
+            isGlobalSearchClosing ? 'app-global-search-backdrop--closing' : 'app-global-search-backdrop--open'
+          )}
           onMouseDown={closeGlobalSearch}
         >
           <div
-            className="w-full max-w-xl space-y-2"
+            className={clsx(
+              'app-global-search-panel w-full max-w-xl space-y-2',
+              isGlobalSearchClosing ? 'app-global-search-panel--closing' : 'app-global-search-panel--open'
+            )}
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="flex h-14 items-center gap-3 rounded-2xl border border-accent-primary/70 bg-surface-primary px-4 shadow-[0_0_0_1px_rgba(52,211,153,0.24),0_0_34px_rgba(52,211,153,0.34),0_22px_70px_-32px_rgba(0,0,0,0.55)]">
-              <Search className="h-4 w-4 shrink-0 text-accent-primary" strokeWidth={1.8} />
+            <div className="app-global-search-box flex h-14 items-center gap-3 rounded-2xl bg-surface-primary px-4">
+              <Search className="app-global-search-icon h-4 w-4 shrink-0" strokeWidth={1.8} />
               <input
                 ref={globalSearchInputRef}
                 value={globalSearchQuery}
@@ -1020,13 +1071,13 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                     closeGlobalSearch();
                   }
                 }}
-                className="h-full min-w-0 flex-1 bg-transparent text-[15px] text-text-primary caret-accent-primary outline-none placeholder:text-text-tertiary"
+                className="app-global-search-input h-full min-w-0 flex-1 bg-transparent text-[15px] text-text-primary outline-none placeholder:text-text-tertiary"
                 placeholder="搜索知识库"
               />
             </div>
 
             {globalSearchQuery.trim() && (
-              <div className="overflow-hidden rounded-2xl border border-border/80 bg-surface-primary/92 shadow-[0_22px_70px_-34px_rgba(0,0,0,0.58)] backdrop-blur-md">
+              <div className="app-global-search-results overflow-hidden rounded-2xl border border-border/80 bg-surface-primary/92 shadow-[0_22px_70px_-34px_rgba(0,0,0,0.58)] backdrop-blur-md">
                 {isGlobalSearchLoading && globalSearchResults.length === 0 ? (
                   <div className="h-12 px-4 text-[13px] text-text-tertiary flex items-center">搜索中...</div>
                 ) : globalSearchResults.length === 0 ? (
@@ -1044,9 +1095,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                           key={`${item.kind || 'item'}-${item.itemId || index}`}
                           type="button"
                           onClick={() => navigateToGlobalSearch(globalSearchQuery)}
-                          className="group flex w-full items-start gap-3 px-4 py-3 text-left hover:bg-accent-primary/8"
+                          className="app-global-search-result-item group flex w-full items-start gap-3 px-4 py-3 text-left"
                         >
-                          <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-secondary text-accent-primary group-hover:bg-accent-primary/12">
+                          <span className="app-global-search-result-icon mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-secondary">
                             <BookOpenText className="h-3.5 w-3.5" strokeWidth={1.8} />
                           </span>
                           <span className="min-w-0 flex-1">
