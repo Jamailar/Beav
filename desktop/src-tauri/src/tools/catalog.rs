@@ -170,6 +170,19 @@ fn no_payload_schema() -> Value {
     object_schema(&[], &[], None)
 }
 
+fn model_config_effective_input_schema() -> Value {
+    object_schema(
+        &[(
+            "runtimeMode",
+            string_schema(
+                "Optional runtime mode or model route, such as redclaw, team, knowledge, chat, image, or videoAnalysis. Defaults to the current runtime mode.",
+            ),
+        )],
+        &[],
+        Some("Selects which effective model route to resolve."),
+    )
+}
+
 fn ok_output_schema(data_schema: Value) -> Value {
     object_schema(
         &[
@@ -2711,6 +2724,28 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         visibility: ActionVisibility::CompatOnly,
     },
     ActionDescriptor {
+        action: "model_config.read",
+        namespace: "model_config",
+        description: "Read the redacted application-level AI model provider and route configuration. Use this when the user asks what model, provider, endpoint, or model settings are configured.",
+        input_schema: no_payload_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "model_config.effective",
+        namespace: "model_config",
+        description: "Resolve the redacted effective AI model config for a runtime mode or route, including provider, protocol, endpoint, model name, and whether credentials exist.",
+        input_schema: model_config_effective_input_schema,
+        output_schema: generic_state_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
         action: "memory.list",
         namespace: "memory",
         description: "List durable memory entries for the current workspace.",
@@ -4491,6 +4526,8 @@ pub fn schema_for_tool_for_runtime_mode(name: &str, runtime_mode: Option<&str>) 
                                 "memory.search",
                                 "chat.sessions.list",
                                 "settings.summary",
+                                "model_config.read",
+                                "model_config.effective",
                                 "redclaw.profile.bundle",
                                 "redclaw.profile.onboarding"
                             ]

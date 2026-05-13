@@ -27,6 +27,8 @@ pub fn is_legacy_tool_alias(name: &str) -> bool {
             | "redbox_search_memory"
             | "redbox_list_chat_sessions"
             | "redbox_get_settings_summary"
+            | "redbox_get_model_config"
+            | "redbox_get_effective_model_config"
             | "redbox_list_redclaw_projects"
             | "redbox_fs"
             | "redbox_list_directory"
@@ -64,6 +66,8 @@ pub fn canonical_tool_name(name: &str) -> &str {
         | "redbox_search_memory"
         | "redbox_list_chat_sessions"
         | "redbox_get_settings_summary"
+        | "redbox_get_model_config"
+        | "redbox_get_effective_model_config"
         | "redbox_list_redclaw_projects"
         | "redclaw_update_profile_doc"
         | "redclaw_update_creator_profile" => "workflow",
@@ -98,6 +102,8 @@ pub fn normalize_tool_call(name: &str, arguments: &Value) -> NormalizedToolCall 
         "redbox_search_memory" => app_query("memory.search", arguments),
         "redbox_list_chat_sessions" => app_query("chat.sessions.list", arguments),
         "redbox_get_settings_summary" => app_query("settings.summary", arguments),
+        "redbox_get_model_config" => app_query("model_config.read", arguments),
+        "redbox_get_effective_model_config" => app_query("model_config.effective", arguments),
         "redbox_list_redclaw_projects" => app_query("redclaw.projects.list", arguments),
         "redbox_list_directory" => fs_call("list", arguments),
         "redbox_read_path" => fs_call("read", arguments),
@@ -643,6 +649,26 @@ fn normalize_redbox_call(arguments: &Value) -> NormalizedToolCall {
         ("memory", "create" | "update") => {
             app_cli_action_call("memory.add", payload, Some("Operate"), Some("memory.add"))
         }
+        (
+            "model" | "models" | "model_config" | "model-config" | "ai_model" | "ai-model"
+            | "settings.model" | "settings_model",
+            "list" | "get" | "read" | "current" | "summary",
+        ) => app_cli_action_call(
+            "model_config.read",
+            payload,
+            Some("Operate"),
+            Some("model_config.read"),
+        ),
+        (
+            "model" | "models" | "model_config" | "model-config" | "ai_model" | "ai-model"
+            | "settings.model" | "settings_model",
+            "effective" | "resolve" | "runtime",
+        ) => app_cli_action_call(
+            "model_config.effective",
+            payload,
+            Some("Operate"),
+            Some("model_config.effective"),
+        ),
         ("web", "get" | "read" | "fetch") => {
             let mut map = payload.as_object().cloned().unwrap_or_default();
             if let Some(id) = map.remove("id") {
@@ -1445,6 +1471,8 @@ fn app_cli_action_or_legacy_call(
                 "work.list" => "work list",
                 "chat.sessions.list" => "chat sessions list",
                 "settings.summary" => "settings summary",
+                "model_config.read" => "model-config read",
+                "model_config.effective" => "model-config effective",
                 "redclaw.projects.list" => "redclaw projects",
                 "redclaw.profile.onboarding" => "redclaw profile-onboarding",
                 _ => "help",
@@ -1577,6 +1605,15 @@ fn translate_legacy_app_cli_command(command: &str, payload: &Value) -> Normalize
         ["runtime", "tasks", "get", ..] => Some("runtime.tasks.get"),
         ["runtime", "tasks", "resume", ..] => Some("runtime.tasks.resume"),
         ["runtime", "tasks", "cancel", ..] => Some("runtime.tasks.cancel"),
+        ["model-config", "read", ..] | ["model_config", "read", ..] => Some("model_config.read"),
+        ["model-config", "effective", ..] | ["model_config", "effective", ..] => {
+            if let Some(runtime_mode) =
+                extract_flag_value(&tokens, &["--runtime-mode", "--runtimeMode", "--mode"])
+            {
+                translated_payload.insert("runtimeMode".to_string(), json!(runtime_mode));
+            }
+            Some("model_config.effective")
+        }
         ["mcp", "list", ..] => Some("mcp.list"),
         ["mcp", "call", ..] => Some("mcp.call"),
         ["mcp", "list-tools", ..] => Some("mcp.listTools"),
@@ -1731,6 +1768,37 @@ mod tests {
         assert_eq!(
             normalized.arguments.get("action"),
             Some(&json!("mcp.oauthStatus"))
+        );
+    }
+
+    #[test]
+    fn normalizes_model_config_queries_to_app_cli() {
+        let legacy = normalize_tool_call("query", &json!({ "operation": "model_config.read" }));
+        assert_eq!(legacy.name, "workflow");
+        assert_eq!(
+            legacy.arguments.get("command"),
+            Some(&json!("model-config read"))
+        );
+
+        let operate = normalize_tool_call(
+            "Operate",
+            &json!({
+                "resource": "model_config",
+                "operation": "effective",
+                "input": { "runtimeMode": "redclaw" }
+            }),
+        );
+        assert_eq!(operate.name, "workflow");
+        assert_eq!(
+            operate.arguments.get("action"),
+            Some(&json!("model_config.effective"))
+        );
+        assert_eq!(
+            operate
+                .arguments
+                .get("payload")
+                .and_then(|value| value.get("runtimeMode")),
+            Some(&json!("redclaw"))
         );
     }
 
