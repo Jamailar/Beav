@@ -1126,6 +1126,39 @@ declare global {
           error?: string;
         }>;
       };
+      llmReadiness: {
+        getState: () => Promise<{
+          ready?: boolean;
+          mode?: 'official' | 'custom' | 'local' | 'none' | string;
+          reason?: string;
+          sourceId?: string;
+          sourceName?: string;
+          baseURL?: string;
+          model?: string;
+          protocol?: 'openai' | 'anthropic' | 'gemini' | string;
+          officialLoggedIn?: boolean;
+          canUseOfficial?: boolean;
+          canUseCustom?: boolean;
+          updatedAt?: string;
+        }>;
+        refresh: () => Promise<unknown>;
+        configureCustomSource: (payload: {
+          baseURL: string;
+          apiKey?: string;
+          presetId?: string;
+          protocol?: 'openai' | 'anthropic' | 'gemini' | string;
+          preferredModel?: string;
+          name?: string;
+        }) => Promise<{
+          success?: boolean;
+          error?: string;
+          source?: Record<string, unknown>;
+          models?: Array<{ id: string; capabilities?: string[] }>;
+          readiness?: Record<string, unknown>;
+        }>;
+        onStateChanged: (listener: (...args: any[]) => void) => void;
+        offStateChanged: (listener: (...args: any[]) => void) => void;
+      };
       sessions: {
         list: () => Promise<Array<{
           id: string;
@@ -1672,6 +1705,7 @@ declare global {
         rebuildCatalog: (payload?: { mode?: 'full' | 'fts' | 'canonicalBlocks' | 'canonicalReparse'; sourceId?: string; includeVisualIndex?: boolean }) => Promise<unknown>;
         openIndexRoot: () => Promise<unknown>;
         deleteNote: (noteId: string) => Promise<unknown>;
+        deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'youtube-video' | 'document-source' }> }) => Promise<unknown>;
         transcribe: (noteId: string) => Promise<unknown>;
         deleteYoutube: (videoId: string) => Promise<unknown>;
         retryYoutubeSubtitle: (videoId: string) => Promise<unknown>;

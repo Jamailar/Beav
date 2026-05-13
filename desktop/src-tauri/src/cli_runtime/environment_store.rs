@@ -1,18 +1,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::cli_runtime::{
-    CliEnvironmentRecord, CliEnvironmentScope, default_environment_path_entries,
-    detect_runtime_inventory, load_host_shell_env, merge_execution_env,
+    default_environment_path_entries, detect_runtime_inventory, load_host_shell_env,
+    merge_execution_env, CliEnvironmentRecord, CliEnvironmentScope,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    AppState, AppStore, active_space_workspace_root_from_store, is_same_path, now_i64,
-    slug_from_relative_path, store_root,
+    active_space_workspace_root_from_store, is_same_path, now_i64, slug_from_relative_path,
+    store_root, AppState, AppStore,
 };
 
 const CLI_RUNTIME_DATA_DIR: &str = "cli-runtime";

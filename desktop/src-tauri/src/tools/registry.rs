@@ -1,17 +1,16 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::AppStore;
 use crate::mcp::{McpToolInfo, McpToolInventorySnapshot};
 use crate::tools::catalog::{
-    ToolDescriptor, descriptor_by_name, schema_for_tool_for_runtime_mode,
-    schema_for_tool_from_action_descriptors, tool_action_family_summary,
-    tool_action_family_summary_for_descriptors,
+    descriptor_by_name, schema_for_tool_for_runtime_mode, schema_for_tool_from_action_descriptors,
+    tool_action_family_summary, tool_action_family_summary_for_descriptors, ToolDescriptor,
 };
 use crate::tools::packs::{tool_names_for_runtime_mode, visible_tool_names_for_runtime_mode};
 use crate::tools::plan::{
-    ToolRegistryPlan, base_tool_names_for_metadata, build_tool_registry_plan_for_session,
-    build_tool_registry_plan_for_session_with_mcp,
+    base_tool_names_for_metadata, build_tool_registry_plan_for_session,
+    build_tool_registry_plan_for_session_with_mcp, ToolRegistryPlan,
 };
+use crate::AppStore;
 
 fn kind_text(kind: crate::tools::catalog::ToolKind) -> &'static str {
     match kind {

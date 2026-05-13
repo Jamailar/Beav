@@ -497,10 +497,8 @@ mod tests {
                 .iter()
                 .any(|anchor| anchor.starts_with("visual-scan-law"))
         }));
-        assert!(
-            cases
-                .iter()
-                .any(|case| case.claim.contains("grounded as visual evidence"))
-        );
+        assert!(cases
+            .iter()
+            .any(|case| case.claim.contains("grounded as visual evidence")));
     }
 }

@@ -1312,6 +1312,8 @@ export function Chat({
         apiKey: selectedChatModel.apiKey,
         baseURL: selectedChatModel.baseURL,
         modelName: selectedChatModel.modelName,
+        sourceId: selectedChatModel.sourceId,
+        presetId: selectedChatModel.presetId,
       };
     }
     const settings = await uiMeasure('chat', 'ensure_chat_model_config', async () => (
@@ -1337,6 +1339,8 @@ export function Chat({
       apiKey: resolved.apiKey,
       baseURL: resolved.baseURL,
       modelName: resolved.modelName,
+      sourceId: resolved.sourceId,
+      presetId: resolved.presetId,
     };
   }, [selectedChatModel]);
 
@@ -1411,6 +1415,8 @@ export function Chat({
       apiKey?: string;
       baseURL?: string;
       modelName?: string;
+      sourceId?: string;
+      presetId?: string;
     };
     taskHints?: unknown;
   }) => {
@@ -3169,6 +3175,8 @@ export function Chat({
       apiKey: selectedChatModel.apiKey,
       baseURL: selectedChatModel.baseURL,
       modelName: selectedChatModel.modelName,
+      sourceId: selectedChatModel.sourceId,
+      presetId: selectedChatModel.presetId,
     };
   }, [selectedChatModel]);
 

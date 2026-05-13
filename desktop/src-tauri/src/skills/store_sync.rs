@@ -10,7 +10,7 @@ use crate::skills::{
     build_market_skill_record, build_user_skill_record, canonical_skill_name,
     discover_builtin_skill_records, discover_skill_records_from_root,
 };
-use crate::{AppState, redbox_builtin_skills_root, slug_from_relative_path, workspace_root};
+use crate::{redbox_builtin_skills_root, slug_from_relative_path, workspace_root, AppState};
 
 pub fn preferred_user_skill_root() -> PathBuf {
     dirs::home_dir()

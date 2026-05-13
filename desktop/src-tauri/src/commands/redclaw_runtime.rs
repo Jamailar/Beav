@@ -1,12 +1,12 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::agent::{PreparedSessionAgentTurn, RedclawRunTurn, execute_prepared_session_agent_turn};
+use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
 use crate::commands::chat_state::{apply_context_binding_metadata, ensure_chat_session};
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    AppState, ChatMessageRecord, create_work_item, make_id, now_iso, redclaw_root,
-    resolve_manuscript_path, slug_from_relative_path, write_text_file,
+    create_work_item, make_id, now_iso, redclaw_root, resolve_manuscript_path,
+    slug_from_relative_path, write_text_file, AppState, ChatMessageRecord,
 };
 
 pub fn redclaw_session_id_for_space(space_id: &str) -> String {

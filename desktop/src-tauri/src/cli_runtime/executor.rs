@@ -7,22 +7,23 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::cli_runtime::{
-    CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest, CliExecutionMode,
-    CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus, CliVerificationStatus,
-    CliVerifyRule, append_execution_log_chunk, authorize_cli_execution, build_cli_sandbox_spec,
+    append_execution_log_chunk, authorize_cli_execution, build_cli_sandbox_spec,
     build_effective_environment, emit_cli_escalation_requested, emit_cli_execution_log,
     emit_cli_execution_started, emit_cli_execution_status, emit_cli_verification_finished,
     execution_log_metadata, execution_log_paths, find_cli_execution_by_id,
     initialize_execution_logs, load_cli_execution_snapshot, load_host_shell_snapshot,
     prepare_cli_launch, resolve_cli_environment, run_cli_verification, sandbox_metadata,
     spawn_cli_terminal, upsert_cli_execution_record, write_execution_logs,
+    CliEnvironmentResolveRequest, CliEscalationRequestRecord, CliExecuteRequest, CliExecutionMode,
+    CliExecutionRecord, CliExecutionSnapshot, CliExecutionStatus, CliVerificationStatus,
+    CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
-use crate::{AppState, make_id, now_i64, with_store};
+use crate::{make_id, now_i64, with_store, AppState};
 
 fn normalize_cwd(request: &CliExecuteRequest, environment_root: &str) -> String {
     request

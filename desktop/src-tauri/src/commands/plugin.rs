@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
     fs, io,
@@ -9,12 +9,12 @@ use tauri::{AppHandle, Emitter, State};
 use zip::ZipArchive;
 
 use crate::{
-    AppState, list_tree, now_iso, now_ms,
+    list_tree, now_iso, now_ms,
     persistence::{with_store, with_store_mut},
     read_json_value_or,
     runtime::{McpServerRecord, SkillRecord},
     skills::discover_skill_records_from_root,
-    slug_from_relative_path, store_root, workspace_root, write_json_value,
+    slug_from_relative_path, store_root, workspace_root, write_json_value, AppState,
 };
 
 const THRIVE_PLUGIN_SCHEMA_VERSION: u32 = 1;

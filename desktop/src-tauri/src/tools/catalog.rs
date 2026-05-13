@@ -1,5 +1,5 @@
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -4775,12 +4775,11 @@ mod tests {
             read.pointer("/function/name").and_then(Value::as_str),
             Some("Read")
         );
-        assert!(
-            read.pointer("/function/parameters/properties/path/description")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("Resource path")
-        );
+        assert!(read
+            .pointer("/function/parameters/properties/path/description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Resource path"));
 
         let redbox = schema_for_tool_for_runtime_mode("Operate", Some("redclaw"))
             .expect("Operate schema should exist");

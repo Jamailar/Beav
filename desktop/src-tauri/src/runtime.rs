@@ -48,7 +48,7 @@ pub use types::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     use std::path::Path;
 
     #[test]
@@ -467,6 +467,31 @@ mod tests {
                 reasoning_effort: None,
             }
         );
+    }
+
+    #[test]
+    fn resolve_chat_config_uses_runtime_official_key_for_official_override() {
+        let config = resolve_chat_config(
+            &json!({
+                "api_endpoint": "https://api.ziz.hk/thrive/v1",
+                "api_key": "stale-official-key",
+                "model_name": "gpt-4.1-mini",
+                "redbox_auth_session_json": serde_json::to_string(&json!({
+                    "apiKey": "fresh-runtime-key"
+                })).unwrap()
+            }),
+            Some(&json!({
+                "sourceId": "redbox_official_auto",
+                "presetId": "redbox-official",
+                "baseURL": "https://api.ziz.hk/thrive/v1",
+                "apiKey": "stale-renderer-key",
+                "modelName": "gpt-4.1-mini",
+                "protocol": "openai"
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(config.api_key.as_deref(), Some("fresh-runtime-key"));
     }
 
     #[test]

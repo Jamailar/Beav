@@ -1,16 +1,15 @@
 use std::{collections::HashMap, path::Path};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
 use crate::{
-    AppState,
     knowledge_index::{
         advisor_source_id, catalog_db_path, document_blocks::is_visual_candidate_path,
         schema::ensure_catalog_ready,
     },
-    with_store, workspace_root,
+    with_store, workspace_root, AppState,
 };
 
 #[derive(Debug, Clone, Serialize)]

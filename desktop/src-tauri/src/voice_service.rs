@@ -1,6 +1,6 @@
 use base64::Engine;
-use reqwest::blocking::{Client, multipart};
-use serde_json::{Map, Value, json};
+use reqwest::blocking::{multipart, Client};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
@@ -13,10 +13,10 @@ use crate::commands::library::persist_media_workspace_catalog;
 use crate::helpers::{file_url_for_path, storage_safe_file_stem};
 use crate::persistence::{ensure_store_hydrated_for_subjects, with_store, with_store_mut};
 use crate::{
-    AppState, MediaAssetRecord, SubjectRecord, file_content_hash, guess_mime_and_kind, make_id,
-    media_root, normalize_legacy_workspace_path, now_iso, now_rfc3339,
-    official_ai_api_key_from_settings, official_base_url_from_settings, payload_field,
-    payload_string, persist_subjects_workspace, subjects_root, workspace_root,
+    file_content_hash, guess_mime_and_kind, make_id, media_root, normalize_legacy_workspace_path,
+    now_iso, now_rfc3339, official_ai_api_key_from_settings, official_base_url_from_settings,
+    payload_field, payload_string, persist_subjects_workspace, subjects_root, workspace_root,
+    AppState, MediaAssetRecord, SubjectRecord,
 };
 
 const DEFAULT_CLONE_MODEL: &str = "minimax-voice-clone";

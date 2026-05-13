@@ -1,13 +1,12 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rusqlite::{Connection, params};
-use serde_json::{Value, json};
+use rusqlite::{params, Connection};
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::{
-    AppState,
     knowledge_index::{catalog_db_path, schema::ensure_catalog_ready},
-    now_iso,
+    now_iso, AppState,
 };
 
 static RETRIEVAL_RUN_COUNTER: AtomicU64 = AtomicU64::new(1);

@@ -3,11 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::cli_runtime::{
-    CliEnvironmentRecord, CliExecuteRequest, CliExecutionMode, CliPermissionGrantSet,
-    find_executable,
+    find_executable, CliEnvironmentRecord, CliExecuteRequest, CliExecutionMode,
+    CliPermissionGrantSet,
 };
 
 const MACOS_SANDBOX_EXEC_PATH: &str = "/usr/bin/sandbox-exec";
@@ -415,11 +415,10 @@ mod tests {
         } else {
             assert_eq!(spec.backend, "policy");
         }
-        assert!(
-            spec.allow_write_paths
-                .iter()
-                .any(|item| item.contains("project"))
-        );
+        assert!(spec
+            .allow_write_paths
+            .iter()
+            .any(|item| item.contains("project")));
     }
 
     #[test]
@@ -525,10 +524,8 @@ mod tests {
         assert!(metadata_paths.iter().any(|item| item == "/Users/Jam"));
         assert!(metadata_paths.iter().any(|item| item == "/Users/Jam/.nvm"));
         assert!(metadata_paths.iter().any(|item| item == "/tmp"));
-        assert!(
-            !metadata_paths
-                .iter()
-                .any(|item| item == "/Users/Jam/.nvm/versions/node/v20.20.0/bin")
-        );
+        assert!(!metadata_paths
+            .iter()
+            .any(|item| item == "/Users/Jam/.nvm/versions/node/v20.20.0/bin"));
     }
 }

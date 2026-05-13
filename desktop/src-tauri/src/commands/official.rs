@@ -1,10 +1,10 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    AppState, app_brand_display_name, append_debug_trace_state, auth, create_official_payment_form,
+    app_brand_display_name, append_debug_trace_state, auth, create_official_payment_form,
     emit_redbox_auth_data_updated, emit_redbox_auth_session_updated,
     fetch_official_models_for_settings, make_id, normalize_base_url,
     normalize_official_auth_session, now_iso, now_ms, official_account_summary_local,
@@ -17,6 +17,7 @@ use crate::{
     official_unwrap_response_payload, open_payment_form, payload_field, payload_string,
     run_official_public_json_request, run_official_public_json_request_response,
     upsert_official_settings_session, write_settings_json_array, write_settings_json_value,
+    AppState,
 };
 
 const OFFICIAL_SESSION_MIN_REFRESH_WINDOW_MS: i64 = 60_000;
@@ -291,6 +292,14 @@ fn merge_official_api_key_records(settings: &mut Value, record: Option<Value>) {
     write_settings_json_array(settings, "redbox_auth_api_keys_json", &keys);
 }
 
+fn has_official_plaintext_api_key_record(settings: &Value) -> bool {
+    official_settings_api_keys(settings).iter().any(|item| {
+        payload_string(item, "apiKey")
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    })
+}
+
 fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option<String>, String> {
     if let Some(existing) = official_ai_api_key_from_settings(settings) {
         return Ok(Some(existing));
@@ -328,7 +337,7 @@ fn ensure_official_ai_api_key_in_settings(settings: &mut Value) -> Result<Option
     );
 
     if resolved_key.is_none() {
-        if official_settings_api_keys(settings).is_empty() {
+        if !has_official_plaintext_api_key_record(settings) {
             let created = crate::run_official_json_request_response(
                 settings,
                 "POST",
@@ -367,8 +376,10 @@ fn is_official_ai_request(settings: &Value, request_url: &str, api_key: Option<&
     }
     let official_token = official_ai_api_key_from_settings(settings).unwrap_or_default();
     let provided_token = api_key.unwrap_or_default().trim();
-    !official_token.trim().is_empty()
-        && (provided_token.is_empty() || provided_token == official_token)
+    if official_token.trim().is_empty() {
+        return session_access_token(settings).is_some();
+    }
+    provided_token.is_empty() || provided_token == official_token
 }
 
 fn value_as_f64(value: &Value) -> Option<f64> {
@@ -720,10 +731,8 @@ fn switch_official_realm(settings: &mut Value, realm: &str) -> Result<(), String
         object.insert("redbox_auth_session_json".to_string(), json!(""));
         object.insert(
             "redbox_auth_sessions_json".to_string(),
-            json!(
-                serde_json::to_string(&Value::Object(sessions))
-                    .unwrap_or_else(|_| "{}".to_string())
-            ),
+            json!(serde_json::to_string(&Value::Object(sessions))
+                .unwrap_or_else(|_| "{}".to_string())),
         );
         object.insert("redbox_auth_points_json".to_string(), json!(""));
         object.insert("redbox_auth_call_records_json".to_string(), json!("[]"));
@@ -943,7 +952,7 @@ fn merge_official_ai_source(settings: &mut Value, source: &Value) {
     let source_sources = payload_string(source, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
         .unwrap_or_default();
-    let Some(official_source) = source_sources
+    let Some(mut official_source) = source_sources
         .into_iter()
         .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
     else {
@@ -953,6 +962,95 @@ fn merge_official_ai_source(settings: &mut Value, source: &Value) {
     let mut target_sources = payload_string(settings, "ai_sources_json")
         .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
         .unwrap_or_default();
+    let existing_official_source = target_sources
+        .iter()
+        .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
+        .cloned();
+    let default_source_id = payload_string(settings, "default_ai_source_id").unwrap_or_default();
+    let selected_model = if default_source_id.trim() == "redbox_official_auto" {
+        existing_official_source
+            .as_ref()
+            .and_then(|item| payload_string(item, "model"))
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| payload_string(settings, "model_name").filter(|value| !value.trim().is_empty()))
+    } else {
+        None
+    };
+    if let Some(selected_model) = selected_model {
+        let existing_models = existing_official_source
+            .as_ref()
+            .and_then(|item| item.get("models"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::trim))
+                    .filter(|item| !item.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let incoming_models = official_source
+            .get("models")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::trim))
+                    .filter(|item| !item.is_empty())
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut merged_models = Vec::<String>::new();
+        for model in existing_models
+            .into_iter()
+            .chain(incoming_models.into_iter())
+            .chain(std::iter::once(selected_model.clone()))
+        {
+            if !merged_models.iter().any(|item| item == &model) {
+                merged_models.push(model);
+            }
+        }
+        let incoming_models_meta = official_source
+            .get("modelsMeta")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(object) = official_source.as_object_mut() {
+            object.insert("model".to_string(), json!(selected_model));
+            object.insert("models".to_string(), json!(merged_models));
+            if let Some(existing_meta) = existing_official_source
+                .as_ref()
+                .and_then(|item| item.get("modelsMeta"))
+                .and_then(Value::as_array)
+                .filter(|items| !items.is_empty())
+            {
+                let mut merged_meta = incoming_models_meta;
+                for item in existing_meta {
+                    let id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or_default();
+                    if id.is_empty() {
+                        continue;
+                    }
+                    let exists = merged_meta.iter().any(|existing| {
+                        existing
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(|value| value.trim() == id)
+                            .unwrap_or(false)
+                    });
+                    if !exists {
+                        merged_meta.push(item.clone());
+                    }
+                }
+                object.insert("modelsMeta".to_string(), json!(merged_meta));
+            }
+        }
+    }
     target_sources
         .retain(|item| payload_string(item, "id").as_deref() != Some("redbox_official_auto"));
     target_sources.insert(0, official_source);
@@ -3152,6 +3250,30 @@ mod tests {
     }
 
     #[test]
+    fn redacted_api_key_record_is_not_enough_for_ai_requests() {
+        let redacted_only = json!({
+            "redbox_auth_api_keys_json": serde_json::to_string(&vec![json!({
+                "id": "key-1",
+                "key_prefix": "rbx",
+                "key_last4": "1234",
+                "isCurrent": true
+            })]).unwrap()
+        });
+        let with_plaintext = json!({
+            "redbox_auth_api_keys_json": serde_json::to_string(&vec![json!({
+                "id": "key-1",
+                "key_prefix": "rbx",
+                "key_last4": "1234",
+                "apiKey": "rbx-live-1",
+                "isCurrent": true
+            })]).unwrap()
+        });
+
+        assert!(!has_official_plaintext_api_key_record(&redacted_only));
+        assert!(has_official_plaintext_api_key_record(&with_plaintext));
+    }
+
+    #[test]
     fn switch_official_realm_sets_global_endpoint_without_reusing_cn_session() {
         let mut settings = json!({
             "redbox_official_realm": "cn",
@@ -3308,11 +3430,9 @@ mod tests {
         let sources = payload_string(&settings, "ai_sources_json")
             .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
             .unwrap_or_default();
-        assert!(
-            sources
-                .iter()
-                .any(|item| payload_string(item, "id").as_deref() == Some("custom-source"))
-        );
+        assert!(sources
+            .iter()
+            .any(|item| payload_string(item, "id").as_deref() == Some("custom-source")));
         let official_source = sources
             .iter()
             .find(|item| payload_string(item, "id").as_deref() == Some("redbox_official_auto"))
@@ -3469,10 +3589,8 @@ mod tests {
             payload_string(&request_candidates[0].1, "refresh_token").as_deref(),
             Some("refresh-1")
         );
-        assert!(
-            request_candidates
-                .iter()
-                .all(|(path, _)| *path != "/auth/token/refresh")
-        );
+        assert!(request_candidates
+            .iter()
+            .all(|(path, _)| *path != "/auth/token/refresh"));
     }
 }

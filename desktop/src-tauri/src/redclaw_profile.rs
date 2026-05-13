@@ -1,17 +1,17 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
-use crate::agent::{PreparedSessionAgentTurn, RedclawRunTurn, execute_prepared_session_agent_turn};
+use crate::agent::{execute_prepared_session_agent_turn, PreparedSessionAgentTurn, RedclawRunTurn};
 use crate::skills::{
     build_workspace_skill_record, refresh_skill_store_catalog, resolve_skill_file_path,
     write_skill_record_to_path,
 };
 use crate::{
-    AppState, app_ai_display_name, app_brand_display_name, now_iso, refresh_runtime_warm_state,
-    slug_from_relative_path, workspace_root,
+    app_ai_display_name, app_brand_display_name, now_iso, refresh_runtime_warm_state,
+    slug_from_relative_path, workspace_root, AppState,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

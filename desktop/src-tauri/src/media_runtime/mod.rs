@@ -5,22 +5,22 @@ use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::{
-    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
 };
 use std::thread;
 use std::time::Duration;
 
 use reqwest::Client;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::*;
-use crate::{AppState, commands, with_store, with_store_mut};
+use crate::{commands, with_store, with_store_mut, AppState};
 
 const MEDIA_JOB_EVENT_UPDATED: &str = "generation:job-updated";
 const MEDIA_JOB_EVENT_LOG: &str = "generation:job-log";
@@ -3634,9 +3634,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
-            vec![
-                "int-1", "int-2", "int-3", "int-4", "int-5", "batch-1", "batch-2", "bg-1"
-            ]
+            vec!["int-1", "int-2", "int-3", "int-4", "int-5", "batch-1", "batch-2", "bg-1"]
         );
     }
 

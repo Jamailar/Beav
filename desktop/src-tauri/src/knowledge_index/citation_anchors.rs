@@ -1,12 +1,12 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use tauri::State;
 
 use crate::{
-    AppState,
     knowledge_index::{
         catalog_db_path, document_blocks::DocumentBlockRecord, schema::ensure_catalog_ready,
     },
+    AppState,
 };
 
 const MAX_ANCHOR_CHARS: usize = 280;

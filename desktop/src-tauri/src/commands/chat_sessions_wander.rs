@@ -1,11 +1,11 @@
-use crate::chat_binding::{EditorChatBindingRequest, bind_editor_session};
+use crate::chat_binding::{bind_editor_session, EditorChatBindingRequest};
 use crate::commands::chat_state::diagnostics_session_defaults;
 use crate::member_skill::{attach_member_skill_metadata, detach_member_skill_metadata};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    SessionTranscriptFileMeta, append_compact_boundary_entry, list_transcript_sessions,
-    session_context_usage_value, tool_results_value_for_session, trace_value_for_session,
-    transcript_resume_messages, transcript_session_meta_by_id, update_session_context_record,
+    append_compact_boundary_entry, list_transcript_sessions, session_context_usage_value,
+    tool_results_value_for_session, trace_value_for_session, transcript_resume_messages,
+    transcript_session_meta_by_id, update_session_context_record, SessionTranscriptFileMeta,
 };
 use crate::session_manager::{
     create_context_session, create_session, delete_session, ensure_context_session, fork_session,
@@ -13,10 +13,10 @@ use crate::session_manager::{
     resolve_resume_target_session_id, session_detail_value, session_list_item_value,
     session_resume_value, update_metadata,
 };
-use crate::skills::{SkillActivationSource, merge_requested_skills_into_metadata};
+use crate::skills::{merge_requested_skills_into_metadata, SkillActivationSource};
 use crate::*;
 use base64::Engine;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,7 +39,9 @@ fn hydrate_session_file_if_needed(
         return Ok(());
     }
     let needs_load = with_store(state, |store| {
-        Ok(!crate::persistence::is_session_file_loaded(&store, session_id))
+        Ok(!crate::persistence::is_session_file_loaded(
+            &store, session_id,
+        ))
     })?;
     if !needs_load {
         return Ok(());
@@ -2051,16 +2053,13 @@ pub fn handle_chat_sessions_wander_channel(
                         })
                         .collect();
                 with_store(state, |store| {
-                    Ok(json!(
-                        items
-                            .iter()
-                            .map(|session| {
-                                let transcript_meta =
-                                    transcript_meta_by_session_id.get(&session.id);
-                                session_list_item_value(&store, session, transcript_meta)
-                            })
-                            .collect::<Vec<_>>()
-                    ))
+                    Ok(json!(items
+                        .iter()
+                        .map(|session| {
+                            let transcript_meta = transcript_meta_by_session_id.get(&session.id);
+                            session_list_item_value(&store, session, transcript_meta)
+                        })
+                        .collect::<Vec<_>>()))
                 })
             }
             "chat:create-context-session" => {
@@ -2390,7 +2389,10 @@ pub fn handle_chat_sessions_wander_channel(
                     return Ok(json!([]));
                 };
                 let loaded_messages = with_store(state, |store| {
-                    Ok(crate::persistence::is_session_file_loaded(&store, &session_id))
+                    Ok(crate::persistence::is_session_file_loaded(
+                        &store,
+                        &session_id,
+                    ))
                 })?;
                 if !loaded_messages {
                     let messages = crate::persistence::load_session_messages_from_file(

@@ -1,4 +1,4 @@
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,11 +7,11 @@ use tauri::State;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::skills::{
-    SkillActivationSource, merge_requested_skills_into_metadata, refresh_skill_store_catalog,
+    merge_requested_skills_into_metadata, refresh_skill_store_catalog, SkillActivationSource,
 };
 use crate::{
-    AdvisorRecord, AppState, AppStore, advisor_knowledge_dir, build_excerpt_around, now_i64,
-    now_iso, slug_from_relative_path, workspace_root,
+    advisor_knowledge_dir, build_excerpt_around, now_i64, now_iso, slug_from_relative_path,
+    workspace_root, AdvisorRecord, AppState, AppStore,
 };
 
 const MEMBER_SKILL_REASON: &str = "advisor-member-skill";

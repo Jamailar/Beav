@@ -1,22 +1,22 @@
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use tauri::{AppHandle, State};
 
 use crate::events::{emit_runtime_event, emit_runtime_task_checkpoint_saved};
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord, RedclawScheduledTaskRecord,
-    create_review_docket,
+    create_review_docket, RedclawJobDefinitionRecord, RedclawLongCycleTaskRecord,
+    RedclawScheduledTaskRecord,
 };
 use crate::scheduler::task_policy::{
-    TaskIntentSchema, TaskPolicyDecisionKind, TaskPreviewResult, preview_task_intent,
-    task_contract_version,
+    preview_task_intent, task_contract_version, TaskIntentSchema, TaskPolicyDecisionKind,
+    TaskPreviewResult,
 };
 use crate::scheduler::{
     cancel_job_execution, clear_definition_cooldown, emit_scheduler_snapshot,
     sync_redclaw_job_definitions,
 };
 use crate::{
-    AppState, make_id, normalize_optional_string, now_i64, now_iso, payload_field, payload_string,
+    make_id, normalize_optional_string, now_i64, now_iso, payload_field, payload_string, AppState,
 };
 
 const TASK_DRAFT_KIND_SCHEDULED: &str = "scheduled_draft";
@@ -611,7 +611,7 @@ mod tests {
         should_create_review_docket_for_draft,
     };
     use crate::scheduler::task_policy::preview_task_intent;
-    use crate::{AppStore, now_i64};
+    use crate::{now_i64, AppStore};
     use serde_json::json;
 
     #[test]

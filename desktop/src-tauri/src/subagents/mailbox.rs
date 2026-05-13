@@ -1,10 +1,10 @@
 use serde_json::Value;
 
-use crate::AppStore;
 use crate::runtime::{
-    CollabMailboxMessageRecord, cleanup_collab_mailbox, list_collab_messages, post_collab_message,
-    read_collab_mailbox, request_collab_report,
+    cleanup_collab_mailbox, list_collab_messages, post_collab_message, read_collab_mailbox,
+    request_collab_report, CollabMailboxMessageRecord,
 };
+use crate::AppStore;
 
 pub fn team_mailbox_send(
     store: &mut AppStore,

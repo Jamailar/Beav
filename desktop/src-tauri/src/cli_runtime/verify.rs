@@ -3,16 +3,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::State;
 
 use crate::cli_runtime::{
-    CliExecuteRequest, CliExecutionRecord, CliExecutionStatus, CliVerificationRecord,
-    CliVerificationStatus, CliVerifierKind, CliVerifyRule, replace_cli_verification_records,
-    upsert_cli_execution_record,
+    replace_cli_verification_records, upsert_cli_execution_record, CliExecuteRequest,
+    CliExecutionRecord, CliExecutionStatus, CliVerificationRecord, CliVerificationStatus,
+    CliVerifierKind, CliVerifyRule,
 };
 use crate::process_utils::configure_background_command;
-use crate::{AppState, make_id, now_i64};
+use crate::{make_id, now_i64, AppState};
 
 #[derive(Debug, Clone)]
 pub struct CliVerificationOutcome {

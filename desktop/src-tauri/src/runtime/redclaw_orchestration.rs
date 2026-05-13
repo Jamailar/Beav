@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::runtime::RedclawProjectRecord;
-use crate::{AppStore, make_id, now_iso, payload_string};
+use crate::{make_id, now_iso, payload_string, AppStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1675,11 +1675,9 @@ mod tests {
                 .and_then(Value::as_str),
             Some("string")
         );
-        assert!(
-            profiles
-                .iter()
-                .filter(|profile| profile.domain == "xhs")
-                .all(|profile| profile.output_contract.get("type").is_some())
-        );
+        assert!(profiles
+            .iter()
+            .filter(|profile| profile.domain == "xhs")
+            .all(|profile| profile.output_contract.get("type").is_some()));
     }
 }

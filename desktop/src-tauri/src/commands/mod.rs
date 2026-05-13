@@ -10,6 +10,7 @@ pub mod embeddings;
 pub mod file_ops;
 pub mod generation;
 pub mod library;
+pub mod llm_readiness;
 pub mod manuscripts;
 pub mod mcp_tools;
 pub mod media_edit;

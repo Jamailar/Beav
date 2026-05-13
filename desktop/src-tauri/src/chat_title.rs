@@ -1,11 +1,11 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 use crate::events::emit_runtime_task_checkpoint_saved;
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    AppState, app_brand_display_name, now_iso, parse_json_value_from_text, payload_string,
-    run_model_structured_task_with_settings, session_title_from_message,
+    app_brand_display_name, now_iso, parse_json_value_from_text, payload_string,
+    run_model_structured_task_with_settings, session_title_from_message, AppState,
 };
 
 const NEW_CHAT_TITLE: &str = "New Chat";

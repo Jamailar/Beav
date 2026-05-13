@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
-use crate::cli_runtime::{CliSandboxSpec, prepare_cli_launch};
+use crate::cli_runtime::{prepare_cli_launch, CliSandboxSpec};
 use crate::process_utils::configure_background_command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

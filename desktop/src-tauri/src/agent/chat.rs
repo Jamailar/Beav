@@ -1,15 +1,15 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::AppState;
 use crate::agent::{
-    ChatExchangeRequest, PreparedSessionAgentTurn, SessionAgentTurnKind,
-    emit_session_agent_completion, execute_prepared_session_agent_turn,
+    emit_session_agent_completion, execute_prepared_session_agent_turn, ChatExchangeRequest,
+    PreparedSessionAgentTurn, SessionAgentTurnKind,
 };
 use crate::chat_title::spawn_chat_session_auto_title;
 use crate::commands::chat_state::resolve_runtime_mode_for_session;
 use crate::commands::redclaw_runtime::{detect_redclaw_artifact_kind, save_redclaw_outputs};
 use crate::persistence::with_store;
+use crate::AppState;
 
 pub struct PreparedChatSendTurn<'a> {
     pub request: ChatExchangeRequest<'a>,

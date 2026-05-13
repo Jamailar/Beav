@@ -7,12 +7,12 @@ pub mod redaction;
 pub mod report_builder;
 pub mod upload_queue;
 
-use self::config::{LoggingConfig, logging_config_from_settings};
+use self::config::{logging_config_from_settings, LoggingConfig};
 use self::event::{
     DiagnosticReportRecord, DiagnosticsUploadResponse, LogBuildMetadata, LogEventRecord, LogLevel,
     LogPrivacy, LogSource,
 };
-use self::file_sink::{FileSinkHandle, spawn_file_sink};
+use self::file_sink::{spawn_file_sink, FileSinkHandle};
 use self::memory_sink::RecentLogBuffer;
 use self::panic_hook::{install_panic_hook, mark_runtime_clean_shutdown, mark_runtime_started};
 use self::redaction::{redact_json_local, redact_text_local};
@@ -23,8 +23,8 @@ use self::upload_queue::{
     delete_report, ensure_report_dirs, list_reports, load_report, move_report, persist_report,
     upload_response_value,
 };
-use crate::{AppState, with_store};
-use serde_json::{Value, json};
+use crate::{with_store, AppState};
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tauri::State;

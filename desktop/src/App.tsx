@@ -6,6 +6,8 @@ import { Layout } from './components/Layout';
 import { AppOnboarding, hasSeenAppOnboarding, markAppOnboardingSeen } from './components/AppOnboarding';
 import { StartupMigrationModal } from './components/StartupMigrationModal';
 import { FeedbackReportDialog, OPEN_FEEDBACK_REPORT_EVENT, type FeedbackReportContext } from './components/FeedbackReportDialog';
+import { useLlmReadinessLifecycle } from './hooks/useLlmReadinessLifecycle';
+import { useLlmReadinessState } from './hooks/useLlmReadinessState';
 import { useOfficialAuthLifecycle } from './hooks/useOfficialAuthLifecycle';
 import { useOfficialAuthState } from './hooks/useOfficialAuthState';
 import { NotificationsHost } from './notifications/NotificationsHost';
@@ -13,6 +15,7 @@ import { REDBOX_NAVIGATE_EVENT } from './notifications/types';
 import { RedClawOnboardingFlowHost } from './pages/redclaw/RedClawOnboardingFlowHost';
 import { useI18n } from './i18n';
 import { APP_BRAND } from './config/brand';
+import { AI_SOURCE_PRESETS, DEFAULT_AI_PRESET_ID } from './config/aiSources';
 import googleIcon from './assets/auth/google.svg';
 import wechatIcon from './assets/auth/wechat.svg';
 import type { AuthoringTaskHints } from './utils/redclawAuthoring';
@@ -1122,18 +1125,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
 type OfficialAuthGateMode = 'checking' | 'login' | 'expired';
 type LoginNoticeType = 'idle' | 'success' | 'error';
 type OfficialAuthRealm = 'cn' | 'global';
-
-function isOfficialAuthLoggedIn(
-  snapshot: Awaited<ReturnType<typeof window.ipcRenderer.auth.getState>> | null,
-  bootstrapped: boolean,
-): boolean {
-  if (!bootstrapped || !snapshot?.loggedIn) return false;
-  const status = String(snapshot.status || '').trim();
-  return status !== 'anonymous'
-    && status !== 'reauthRequired'
-    && status !== 'restoring'
-    && status !== 'refreshing';
-}
+type LlmSetupTab = 'official' | 'custom';
 
 function isLikelyImageUrl(value: string): boolean {
   const normalized = String(value || '').trim().toLowerCase();
@@ -1163,8 +1155,15 @@ async function buildWechatQrDataUrl(value: string): Promise<string> {
 
 function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
   const [activeRealm, setActiveRealm] = useState<OfficialAuthRealm>('cn');
+  const [activeSetupTab, setActiveSetupTab] = useState<LlmSetupTab>('official');
   const [smsBusy, setSmsBusy] = useState(false);
   const [smsForm, setSmsForm] = useState({ phone: '', code: '', inviteCode: '' });
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customForm, setCustomForm] = useState({
+    presetId: DEFAULT_AI_PRESET_ID,
+    baseURL: AI_SOURCE_PRESETS.find((preset) => preset.id === DEFAULT_AI_PRESET_ID)?.baseURL || '',
+    apiKey: '',
+  });
   const [wechatBusy, setWechatBusy] = useState(false);
   const [wechatQrUrl, setWechatQrUrl] = useState('');
   const [wechatStatus, setWechatStatus] = useState('');
@@ -1180,7 +1179,10 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
   }, []);
 
   const refreshAuthAfterLogin = useCallback(() => {
-    void window.ipcRenderer.officialAuth.bootstrap({ reason: 'login-gate-authenticated' });
+    void window.ipcRenderer.officialAuth.bootstrap({ reason: 'login-gate-authenticated' })
+      .finally(() => {
+        void window.ipcRenderer.llmReadiness.refresh();
+      });
   }, []);
 
   useEffect(() => {
@@ -1354,6 +1356,47 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
     setLoginNotice('error', 'Google 登录通道尚未接入。');
   }, [setLoginNotice]);
 
+  const handleCustomPresetChange = useCallback((presetId: string) => {
+    const preset = AI_SOURCE_PRESETS.find((item) => item.id === presetId) || AI_SOURCE_PRESETS.find((item) => item.id === DEFAULT_AI_PRESET_ID);
+    setCustomForm((prev) => ({
+      ...prev,
+      presetId: preset?.id || DEFAULT_AI_PRESET_ID,
+      baseURL: preset?.baseURL || prev.baseURL,
+    }));
+    setLoginNotice('idle', '');
+  }, [setLoginNotice]);
+
+  const handleCustomApiSetup = useCallback(async () => {
+    const preset = AI_SOURCE_PRESETS.find((item) => item.id === customForm.presetId);
+    const baseURL = String(customForm.baseURL || '').trim();
+    const apiKey = String(customForm.apiKey || '').trim();
+    if (!baseURL) {
+      setLoginNotice('error', '请先填写 API Base URL');
+      return;
+    }
+    setCustomBusy(true);
+    setLoginNotice('idle', '正在拉取模型列表…');
+    try {
+      const result = await window.ipcRenderer.llmReadiness.configureCustomSource({
+        baseURL,
+        apiKey,
+        presetId: customForm.presetId,
+        protocol: preset?.protocol,
+        name: preset?.label || 'Custom API',
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || '自定义 API 配置失败');
+      }
+      const model = String((result.source as { model?: unknown } | undefined)?.model || '').trim();
+      setLoginNotice('success', model ? `已选择 ${model}，正在进入工作台…` : '配置成功，正在进入工作台…');
+      void window.ipcRenderer.llmReadiness.refresh();
+    } catch (error) {
+      setLoginNotice('error', error instanceof Error ? error.message : '自定义 API 配置失败');
+    } finally {
+      setCustomBusy(false);
+    }
+  }, [customForm.apiKey, customForm.baseURL, customForm.presetId, setLoginNotice]);
+
   const returnToSmsLogin = useCallback(() => {
     stopWechatPolling();
     setWechatQrUrl('');
@@ -1362,7 +1405,7 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
   }, [setLoginNotice, stopWechatPolling]);
 
   const isMainlandRealm = activeRealm === 'cn';
-  const authBusy = wechatBusy || smsBusy;
+  const authBusy = wechatBusy || smsBusy || customBusy;
   const showMainlandWechatQr = isMainlandRealm && Boolean(wechatQrUrl);
   const title = mode === 'checking'
     ? 'Checking session'
@@ -1370,8 +1413,8 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
   const subtitle = mode === 'checking'
     ? `Restoring ${APP_BRAND.displayName}.`
     : mode === 'expired'
-      ? 'Your session expired. Log in to continue.'
-      : `Log in to continue to ${APP_BRAND.displayName}.`;
+      ? 'Your session expired. Log in or use your own API to continue.'
+      : `Choose how ${APP_BRAND.displayName} should run AI.`;
 
   return (
     <>
@@ -1379,20 +1422,20 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
         <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_15%_85%,rgb(var(--color-accent-primary)/0.18),transparent_34%),radial-gradient(circle_at_32%_45%,rgb(var(--color-accent-muted)/0.5),transparent_28%),linear-gradient(135deg,rgb(var(--color-background))_0%,rgb(var(--color-surface-primary))_52%,rgb(var(--color-surface-secondary))_100%)]" />
         <div className="relative grid min-h-screen grid-cols-1 lg:grid-cols-[1fr_520px]">
           <section className="hidden lg:flex min-h-screen flex-col justify-center px-[11vw]">
-            <div className="relative h-[420px] w-[360px]">
+            <div className="relative h-[440px] w-[360px]">
               <img
                 src={APP_BRAND.logoSrc}
                 alt=""
                 className="absolute left-0 top-0 h-[300px] w-[300px] object-contain opacity-20 blur-[1px]"
               />
-              <div className="absolute left-10 bottom-0 flex items-center gap-3">
+              <div className="absolute left-10 bottom-8 flex items-center gap-3">
                 <img src={APP_BRAND.logoSrc} alt="" className="h-9 w-9 object-contain" />
                 <div className="text-4xl font-semibold tracking-[0]">{APP_BRAND.displayName}</div>
               </div>
+              <p className="absolute left-10 bottom-0 text-[13px] whitespace-nowrap text-[rgb(var(--color-text-secondary))]">
+                {APP_BRAND.tagline || 'The AI content workspace that helps your ideas thrive.'}
+              </p>
             </div>
-            <p className="mt-3 max-w-[340px] text-[19px] leading-8 text-slate-700">
-              The AI content workspace that helps your ideas <span className="font-semibold text-emerald-500">thrive.</span>
-            </p>
             <div className="absolute bottom-10 left-12 flex items-center gap-2 text-xs text-slate-500">
               <ShieldCheck className="h-4 w-4 text-[rgb(var(--color-accent-primary))]" />
               Your data is encrypted and secure.
@@ -1413,7 +1456,75 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  {showMainlandWechatQr ? (
+                  <div className="grid grid-cols-2 rounded-2xl bg-white/70 p-1 text-sm font-medium text-slate-500 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveSetupTab('official');
+                        setLoginNotice('idle', '');
+                      }}
+                      className={`h-10 rounded-xl transition ${activeSetupTab === 'official' ? 'bg-slate-950 text-white shadow-sm' : 'hover:text-slate-700'}`}
+                    >
+                      官方账号
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopWechatPolling();
+                        setActiveSetupTab('custom');
+                        setLoginNotice('idle', '');
+                      }}
+                      className={`h-10 rounded-xl transition ${activeSetupTab === 'custom' ? 'bg-slate-950 text-white shadow-sm' : 'hover:text-slate-700'}`}
+                    >
+                      自定义 API
+                    </button>
+                  </div>
+
+                  {activeSetupTab === 'custom' ? (
+                    <form
+                      className="space-y-4"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleCustomApiSetup();
+                      }}
+                    >
+                      <select
+                        value={customForm.presetId}
+                        onChange={(event) => handleCustomPresetChange(event.target.value)}
+                        disabled={authBusy}
+                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition focus:border-emerald-300 focus:bg-white disabled:opacity-60"
+                      >
+                        {AI_SOURCE_PRESETS.filter((preset) => preset.id !== 'redbox-official').map((preset) => (
+                          <option key={preset.id} value={preset.id}>{preset.label}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="url"
+                        value={customForm.baseURL}
+                        onChange={(event) => setCustomForm((prev) => ({ ...prev, baseURL: event.target.value }))}
+                        placeholder="API Base URL"
+                        autoComplete="url"
+                        disabled={authBusy}
+                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
+                      />
+                      <input
+                        type="password"
+                        value={customForm.apiKey}
+                        onChange={(event) => setCustomForm((prev) => ({ ...prev, apiKey: event.target.value }))}
+                        placeholder="API Key"
+                        autoComplete="off"
+                        disabled={authBusy}
+                        className="h-12 w-full rounded-xl border border-slate-200/80 bg-white/80 px-4 text-sm text-slate-700 shadow-[0_8px_24px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 focus:border-emerald-300 focus:bg-white disabled:opacity-60"
+                      />
+                      <button
+                        type="submit"
+                        disabled={authBusy}
+                        className="h-12 w-full rounded-xl bg-[rgb(var(--color-accent-primary))] text-sm font-medium text-white shadow-[0_14px_28px_rgba(16,185,129,0.22)] transition hover:bg-[rgb(var(--color-accent-hover))] disabled:opacity-60"
+                      >
+                        {customBusy ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : '继续'}
+                      </button>
+                    </form>
+                  ) : showMainlandWechatQr ? (
                     <div className="space-y-5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-sm font-medium text-slate-700">微信扫码登录</div>
@@ -1535,12 +1646,12 @@ function OfficialLoginGate({ mode }: { mode: OfficialAuthGateMode }) {
 
 function App() {
   useOfficialAuthLifecycle();
-  const { snapshot: officialAuthState, bootstrapped: officialAuthBootstrapped } = useOfficialAuthState();
+  useLlmReadinessLifecycle();
+  const { snapshot: officialAuthState } = useOfficialAuthState();
+  const { snapshot: llmReadinessState, bootstrapped: llmReadinessBootstrapped } = useLlmReadinessState();
   const [appOnboardingOpen, setAppOnboardingOpen] = useState(false);
   const officialAuthStatus = String(officialAuthState?.status || '').trim();
-  const officialAuthPending = !officialAuthBootstrapped
-    || officialAuthStatus === 'restoring'
-    || officialAuthStatus === 'refreshing';
+  const authOrLlmPending = !llmReadinessBootstrapped;
 
   const openAppOnboarding = useCallback(() => {
     setAppOnboardingOpen(true);
@@ -1557,7 +1668,7 @@ function App() {
     }
   }, []);
 
-  if (officialAuthPending) {
+  if (authOrLlmPending) {
     return (
       <>
         <OfficialLoginGate mode="checking" />
@@ -1566,7 +1677,7 @@ function App() {
     );
   }
 
-  if (!isOfficialAuthLoggedIn(officialAuthState, officialAuthBootstrapped)) {
+  if (!llmReadinessState?.ready) {
     return (
       <>
         <OfficialLoginGate mode={officialAuthStatus === 'reauthRequired' ? 'expired' : 'login'} />

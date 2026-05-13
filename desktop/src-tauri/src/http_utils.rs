@@ -1,6 +1,6 @@
 use base64::Engine;
 use regex::Regex;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::io::Write;

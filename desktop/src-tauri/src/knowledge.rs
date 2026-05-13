@@ -1,5 +1,5 @@
 pub(crate) use crate::document_ingest::{
-    KnowledgeDocumentSourceIngestRequest, import_document_files, ingest_document_source,
+    import_document_files, ingest_document_source, KnowledgeDocumentSourceIngestRequest,
 };
 use crate::persistence::{
     apply_knowledge_hydration_snapshot, ensure_store_hydrated_for_media,
@@ -8,7 +8,7 @@ use crate::persistence::{
 use crate::workspace_loaders::read_json_file;
 use crate::*;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -2707,11 +2707,11 @@ pub(crate) fn persist_note_transcript(
 #[cfg(test)]
 mod tests {
     use super::{
-        KnowledgeEntryAssetsInput, author_entry_id, decode_embedded_js_string,
-        existing_entry_id_from_record, extract_css_url_near, extract_html_attribute_near,
-        extract_json_string_values, is_supported_social_entry_kind, materialize_note_asset_source,
+        author_entry_id, decode_embedded_js_string, existing_entry_id_from_record,
+        extract_css_url_near, extract_html_attribute_near, extract_json_string_values,
+        is_supported_social_entry_kind, materialize_note_asset_source,
         maybe_backfill_xiaohongshu_assets, note_entry_id, note_transcript_file_from_meta,
-        youtube_entry_id,
+        youtube_entry_id, KnowledgeEntryAssetsInput,
     };
     use serde_json::json;
     use std::fs;

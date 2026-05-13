@@ -1,4 +1,4 @@
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use tauri::{AppHandle, State};
 
 use crate::commands::cli_runtime::handle_cli_runtime_channel;
@@ -6,19 +6,19 @@ use crate::commands::redclaw::redclaw_task_control;
 use crate::events::emit_runtime_event;
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    ReviewDocketRecord, RuntimeApprovalDetails, RuntimeApprovalRecord, add_collab_member,
-    archive_review_docket, collab_session_snapshot, create_collab_session, create_collab_task,
-    create_review_docket, decide_review_docket, ensure_collab_session_coordinator,
-    get_review_docket, list_collab_members, list_collab_messages, list_collab_reports,
-    list_collab_sessions, list_collab_tasks, list_review_dockets, pin_collab_task_session,
-    post_collab_message, read_collab_mailbox, rename_collab_member, request_collab_report,
-    request_runtime_approval, resolve_review_docket_waiters,
-    resolve_runtime_approval_by_approval_id, retry_collab_task, review_docket_stats,
-    set_collab_session_coordinator, shutdown_collab_member, submit_collab_report,
-    transition_collab_task, update_collab_session_status, update_collab_task,
+    add_collab_member, archive_review_docket, collab_session_snapshot, create_collab_session,
+    create_collab_task, create_review_docket, decide_review_docket,
+    ensure_collab_session_coordinator, get_review_docket, list_collab_members,
+    list_collab_messages, list_collab_reports, list_collab_sessions, list_collab_tasks,
+    list_review_dockets, pin_collab_task_session, post_collab_message, read_collab_mailbox,
+    rename_collab_member, request_collab_report, request_runtime_approval,
+    resolve_review_docket_waiters, resolve_runtime_approval_by_approval_id, retry_collab_task,
+    review_docket_stats, set_collab_session_coordinator, shutdown_collab_member,
+    submit_collab_report, transition_collab_task, update_collab_session_status, update_collab_task,
+    ReviewDocketRecord, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
 use crate::subagents::{execute_team_tool, team_tool_descriptors, tick_team_wake_runtime};
-use crate::{AppState, parse_timestamp_ms, payload_string};
+use crate::{parse_timestamp_ms, payload_string, AppState};
 
 #[derive(Debug, Clone)]
 struct ApprovalActionRouteResult {

@@ -1,4 +1,4 @@
-use crate::cli_runtime::{CliExecuteRequest, CliVerifyRule, run_managed_cli_command};
+use crate::cli_runtime::{run_managed_cli_command, CliExecuteRequest, CliVerifyRule};
 use crate::commands::library::persist_media_workspace_catalog;
 use crate::manuscript_package::{
     animation_layers_from_remotion_scene, build_default_remotion_scene,
@@ -9,16 +9,16 @@ use crate::manuscript_package::{
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    ManuscriptScriptConfirmPayload, RuntimeApprovalDetails, RuntimeApprovalRecord,
     request_runtime_approval, resolve_runtime_approval_by_source_key,
+    ManuscriptScriptConfirmPayload, RuntimeApprovalDetails, RuntimeApprovalRecord,
 };
 use crate::skills::{load_skill_bundle_sections_from_sources, split_skill_body};
 use crate::*;
 use base64::Engine;
 use pulldown_cmark::{
-    Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser, html::push_html,
+    html::push_html, Event as MarkdownEvent, Options as MarkdownOptions, Parser as MarkdownParser,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -6054,13 +6054,11 @@ fn ensure_package_asset_entry(
                     if current_src.is_empty() {
                         primary_scene.insert(
                             "src".to_string(),
-                            json!(
-                                asset
-                                    .absolute_path
-                                    .clone()
-                                    .or(asset.relative_path.clone())
-                                    .unwrap_or_default()
-                            ),
+                            json!(asset
+                                .absolute_path
+                                .clone()
+                                .or(asset.relative_path.clone())
+                                .unwrap_or_default()),
                         );
                         primary_scene.insert("assetKind".to_string(), json!(asset_kind));
                         primary_scene.insert("assetId".to_string(), json!(asset.id.clone()));
@@ -9877,12 +9875,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("ai")
         );
-        assert!(
-            project
-                .pointer("/ai/scriptApproval/confirmedAt")
-                .map(Value::is_null)
-                .unwrap_or(false)
-        );
+        assert!(project
+            .pointer("/ai/scriptApproval/confirmedAt")
+            .map(Value::is_null)
+            .unwrap_or(false));
     }
 
     #[test]
@@ -9900,12 +9896,10 @@ mod tests {
             project.pointer("/script/body").and_then(Value::as_str),
             Some("可执行脚本")
         );
-        assert!(
-            approval
-                .get("confirmedAt")
-                .and_then(Value::as_i64)
-                .map(|value| value > 0)
-                .unwrap_or(false)
-        );
+        assert!(approval
+            .get("confirmedAt")
+            .and_then(Value::as_i64)
+            .map(|value| value > 0)
+            .unwrap_or(false));
     }
 }

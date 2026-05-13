@@ -1,4 +1,4 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -8,10 +8,9 @@ use std::{
 use tauri::State;
 
 use crate::{
-    AppState,
     document_parse::{CanonicalDocument, PARSER_NAME, PARSER_VERSION},
     knowledge_index::{catalog_db_path, migration, schema::ensure_catalog_ready},
-    now_i64, now_iso,
+    now_i64, now_iso, AppState,
 };
 
 #[derive(Debug, Clone)]

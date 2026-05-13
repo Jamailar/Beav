@@ -3,7 +3,6 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
-    AppState,
     knowledge_index::{
         canonical_store::next_visual_retry_at,
         document_blocks::rebuild_fts_index_for_source,
@@ -16,6 +15,7 @@ use crate::{
         migration::{self, MigrationDecision},
         schema::ensure_catalog_ready,
     },
+    AppState,
 };
 
 #[derive(Debug, Clone)]

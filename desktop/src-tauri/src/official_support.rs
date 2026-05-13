@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use tauri::{AppHandle, Emitter};
 
@@ -1421,11 +1421,9 @@ mod tests {
                 .and_then(Value::as_str),
             Some("redbox_official_auto")
         );
-        assert!(
-            sources
-                .iter()
-                .any(|item| item.get("id").and_then(Value::as_str) == Some("custom-source"))
-        );
+        assert!(sources
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some("custom-source")));
     }
 
     #[test]
@@ -1597,10 +1595,8 @@ pub(crate) fn upsert_official_settings_session(settings: &mut Value, session: Op
         }
         object.insert(
             "redbox_auth_sessions_json".to_string(),
-            json!(
-                serde_json::to_string(&Value::Object(sessions))
-                    .unwrap_or_else(|_| "{}".to_string())
-            ),
+            json!(serde_json::to_string(&Value::Object(sessions))
+                .unwrap_or_else(|_| "{}".to_string())),
         );
     }
 }

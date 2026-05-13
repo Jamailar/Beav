@@ -79,6 +79,8 @@ export interface ChatModelOption {
   key: string;
   modelName: string;
   sourceName: string;
+  sourceId?: string;
+  presetId?: string;
   baseURL: string;
   apiKey: string;
   isDefault?: boolean;
@@ -450,10 +452,11 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
       for (const item of parsed) {
         if (!item || typeof item !== 'object') continue;
         const sourceId = String(item.id || '').trim();
+        const presetId = String(item.presetId || item.preset_id || '').trim();
         if (sourceId && sourceId === defaultSourceId) {
           hasExplicitDefaultSource = true;
         }
-        const sourceName = String(item.name || sourceId || 'AI 源').trim();
+        const sourceName = String(item.name || sourceId || '供应商').trim();
         const baseURL = String(item.baseURL || item.baseUrl || '').trim();
         const apiKey = String(item.apiKey || item.key || '').trim();
         const explicitModelsMeta = Array.isArray(item.modelsMeta)
@@ -478,6 +481,8 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
             key: `${sourceId || baseURL || sourceName}::${modelName}`,
             modelName,
             sourceName,
+            sourceId,
+            presetId,
             baseURL,
             apiKey,
             isDefault: Boolean(sourceId && sourceId === defaultSourceId && modelName === String(item.model || item.modelName || '').trim()),
@@ -499,7 +504,7 @@ export function buildChatModelOptions(settings?: ChatSettingsSnapshot | null): C
     options.push({
       key: `fallback::${fallbackModel}`,
       modelName: fallbackModel,
-      sourceName: '当前默认源',
+      sourceName: '当前默认供应商',
       baseURL: String(settings.api_endpoint || '').trim(),
       apiKey: String(settings.api_key || '').trim(),
       isDefault: true,
@@ -1560,7 +1565,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
                         </button>
                       );
                     }) : (
-                      <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置模型源</div>
+                      <div className="px-3 py-2 text-sm text-text-tertiary">请先在设置里配置供应商</div>
                     )}
                   </div>
                 )}

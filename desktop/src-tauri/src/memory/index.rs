@@ -1,5 +1,5 @@
-use rusqlite::{Connection, params};
-use serde_json::{Value, json};
+use rusqlite::{params, Connection};
+use serde_json::{json, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -9,7 +9,7 @@ use tauri::State;
 use super::store::{memory_root, search_memory_records};
 use super::types::MemoryRecallItem;
 use crate::persistence::with_store;
-use crate::{AppState, UserMemoryRecord, truncate_chars};
+use crate::{truncate_chars, AppState, UserMemoryRecord};
 
 const MEMORY_INDEX_SCHEMA_VERSION: &str = "memory-index-v1";
 

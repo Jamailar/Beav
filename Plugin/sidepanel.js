@@ -44,6 +44,8 @@ const elements = {
   taskQueueBadge: document.getElementById('task-queue-badge'),
   taskCurrent: document.getElementById('task-current'),
   taskQueueMeta: document.getElementById('task-queue-meta'),
+  taskQueueControls: document.getElementById('task-queue-controls'),
+  taskQueueCancel: document.getElementById('task-queue-cancel'),
   taskLogBadge: document.getElementById('task-log-badge'),
   taskLogList: document.getElementById('task-log-list'),
 };
@@ -100,6 +102,7 @@ function bindEvents() {
   elements.bloggerNotesPause.addEventListener('click', () => void controlBloggerNotesTask('pause'));
   elements.bloggerNotesResume.addEventListener('click', () => void controlBloggerNotesTask('resume'));
   elements.bloggerNotesCancel.addEventListener('click', () => void controlBloggerNotesTask('cancel'));
+  elements.taskQueueCancel.addEventListener('click', () => void controlBloggerNotesTask('cancel'));
   elements.accountBindingAction.addEventListener('click', () => void bindCurrentProfileAsAccount());
   elements.captureActions.addEventListener('click', (event) => {
     const button = event.target?.closest?.('button[data-action]');
@@ -996,6 +999,9 @@ function renderTaskQueue(queue) {
     elements.taskQueueBadge.textContent = queued.length > 0 ? `执行中 · 排队 ${queued.length}` : '执行中';
     elements.taskQueueBadge.className = 'task-badge running';
     elements.taskCurrent.textContent = active.title || '小红书采集任务';
+    elements.taskQueueControls.classList.toggle('hidden', active.cancelRequested === true);
+    elements.taskQueueCancel.disabled = active.cancelRequested === true;
+    elements.taskQueueCancel.textContent = active.cancelRequested === true ? '停止中' : '停止任务';
     const progressText = active?.progress?.total
       ? `进度 ${Number(active.progress.current || 0)}/${Number(active.progress.total || 0)}`
       : '';
@@ -1011,6 +1017,9 @@ function renderTaskQueue(queue) {
 
   elements.taskQueueBadge.textContent = queued.length > 0 ? `排队 ${queued.length}` : '空闲';
   elements.taskQueueBadge.className = 'task-badge';
+  elements.taskQueueControls.classList.add('hidden');
+  elements.taskQueueCancel.disabled = false;
+  elements.taskQueueCancel.textContent = '停止任务';
   if (queued.length > 0) {
     elements.taskCurrent.textContent = queued[0]?.title || '等待执行的小红书任务';
     elements.taskQueueMeta.textContent = queued.length > 1 ? `后续 ${queued.length - 1} 个任务` : '等待后台调度';

@@ -1,17 +1,17 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, State};
 
 use super::{ProviderError, ProviderErrorKind, ProviderTurnDelivery, ProviderTurnResult};
 use crate::llm_transport::{
-    LlmTransportError, TransportErrorKind, run_openai_json_chat_completion_transport,
-    run_openai_streaming_chat_completion_transport,
+    run_openai_json_chat_completion_transport, run_openai_streaming_chat_completion_transport,
+    LlmTransportError, TransportErrorKind,
 };
 use crate::provider_compat::InteractiveToolChoice;
 use crate::{
-    AppState, InteractiveToolCall, ResolvedChatConfig, append_debug_log_state, normalize_base_url,
-    now_ms, provider_profile_from_config,
+    append_debug_log_state, normalize_base_url, now_ms, provider_profile_from_config, AppState,
+    InteractiveToolCall, ResolvedChatConfig,
 };
 
 static OPENAI_STREAM_DEGRADES: OnceLock<Mutex<HashMap<String, StreamDegradeState>>> =

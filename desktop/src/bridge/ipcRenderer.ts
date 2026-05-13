@@ -846,6 +846,7 @@ function createIpcRenderer() {
         fallbackChannel: 'knowledge:open-index-root',
       }),
       deleteNote: (noteId: string) => invokeChannel('knowledge:delete', noteId),
+      deleteBatch: (payload: { items: Array<{ id: string; kind: 'redbook-note' | 'youtube-video' | 'document-source' }> }) => invokeChannel('knowledge:delete-batch', payload),
       transcribe: (noteId: string) => invokeChannel('knowledge:transcribe', noteId),
       deleteYoutube: (videoId: string) => invokeChannel('knowledge:delete-youtube', videoId),
       retryYoutubeSubtitle: (videoId: string) => invokeChannel('knowledge:retry-youtube-subtitle', videoId),
@@ -985,6 +986,13 @@ function createIpcRenderer() {
     officialAuth: {
       bootstrap: (payload?: { reason?: string }) => invokeChannel('redbox-auth:bootstrap', payload || {}),
       refresh: () => invokeChannel('redbox-auth:refresh')
+    },
+    llmReadiness: {
+      getState: () => invokeChannel('llm-readiness:get-state'),
+      refresh: () => invokeChannel('llm-readiness:refresh'),
+      configureCustomSource: (payload: unknown) => invokeChannel('llm-readiness:configure-custom-source', payload),
+      onStateChanged: (listener: Listener) => on('llm-readiness:state-changed', listener),
+      offStateChanged: (listener: Listener) => off('llm-readiness:state-changed', listener),
     },
     auth: {
       getState: () => invokeChannel('auth:get-state'),

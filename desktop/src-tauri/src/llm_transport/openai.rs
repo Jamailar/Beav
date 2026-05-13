@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
-use reqwest::Client;
 use reqwest::header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_TYPE};
-use serde_json::{Value, json};
+use reqwest::Client;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Mutex, OnceLock};
@@ -15,11 +15,11 @@ use crate::events::{
     emit_runtime_stream_start, emit_runtime_task_checkpoint_saved, emit_runtime_text_delta,
 };
 use crate::{
-    AppState, InteractiveToolCall, ResolvedChatConfig, StreamingChatCompletion, StreamingToolDelta,
     append_debug_trace_state, format_http_error_message, http_error_debug_line,
     http_error_details_from_text, is_chat_runtime_cancel_requested, normalize_base_url, now_ms,
     provider_profile_from_config, run_curl_json_response, text_snippet,
-    try_refresh_official_auth_for_ai_request, update_chat_runtime_state,
+    try_refresh_official_auth_for_ai_request, update_chat_runtime_state, AppState,
+    InteractiveToolCall, ResolvedChatConfig, StreamingChatCompletion, StreamingToolDelta,
 };
 
 static OPENAI_TRANSPORT_CLIENT_AUTO: OnceLock<Client> = OnceLock::new();

@@ -1,13 +1,13 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use url::Url;
 
 use crate::{
-    WechatOfficialBindingRecord, configure_background_command, decode_base64_bytes,
-    invoke_chat_by_protocol, invoke_structured_chat_by_protocol, markdown_to_html, now_ms,
-    payload_field, payload_string, resolve_chat_config, resolve_local_path, run_curl_bytes,
-    run_curl_json, url_encode_component,
+    configure_background_command, decode_base64_bytes, invoke_chat_by_protocol,
+    invoke_structured_chat_by_protocol, markdown_to_html, now_ms, payload_field, payload_string,
+    resolve_chat_config, resolve_local_path, run_curl_bytes, run_curl_json, url_encode_component,
+    WechatOfficialBindingRecord,
 };
 
 pub(crate) fn ensure_parent_dir(path: &Path) -> Result<(), String> {

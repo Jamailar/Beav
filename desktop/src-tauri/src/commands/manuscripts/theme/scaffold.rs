@@ -4,7 +4,7 @@ use super::store::{
     richpost_theme_root_master_path_for_theme, richpost_theme_root_tokens_path_for_theme,
     richpost_theme_spec_from_manifest,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 
 fn canonical_richpost_role_css_vars(
@@ -243,43 +243,41 @@ pub(crate) fn ensure_richpost_layout_scaffold(
 }
 
 pub(crate) fn richpost_theme_catalog_value(package_path: Option<&std::path::Path>) -> Value {
-    json!(
-        richpost_theme_catalog_for_package(package_path)
-            .iter()
-            .map(|theme| {
-                json!({
-                    "id": theme.id,
-                    "label": theme.label,
-                    "description": theme.description,
-                    "source": theme.source,
-                    "shellBg": theme.shell_bg,
-                    "pageBg": theme.page_bg,
-                    "surfaceColor": theme.surface_bg,
-                    "surfaceBg": theme.surface_bg,
-                    "surfaceBorder": theme.surface_border,
-                    "surfaceShadow": theme.surface_shadow,
-                    "surfaceRadius": theme.surface_radius,
-                    "imageRadius": theme.image_radius,
-                    "previewCardBg": theme.preview_card_bg,
-                    "previewCardBorder": theme.preview_card_border,
-                    "previewCardShadow": theme.preview_card_shadow,
-                    "headingColor": theme.heading_color,
-                    "bodyColor": theme.body_color,
-                    "textColor": theme.text,
-                    "mutedColor": theme.muted,
-                    "accentColor": theme.accent,
-                    "headingFont": theme.heading_font,
-                    "bodyFont": theme.body_font,
-                    "coverFrame": theme.cover_frame,
-                    "bodyFrame": theme.body_frame,
-                    "endingFrame": theme.ending_frame,
-                    "coverBackgroundPath": theme.cover_background_path,
-                    "bodyBackgroundPath": theme.body_background_path,
-                    "endingBackgroundPath": theme.ending_background_path
-                })
+    json!(richpost_theme_catalog_for_package(package_path)
+        .iter()
+        .map(|theme| {
+            json!({
+                "id": theme.id,
+                "label": theme.label,
+                "description": theme.description,
+                "source": theme.source,
+                "shellBg": theme.shell_bg,
+                "pageBg": theme.page_bg,
+                "surfaceColor": theme.surface_bg,
+                "surfaceBg": theme.surface_bg,
+                "surfaceBorder": theme.surface_border,
+                "surfaceShadow": theme.surface_shadow,
+                "surfaceRadius": theme.surface_radius,
+                "imageRadius": theme.image_radius,
+                "previewCardBg": theme.preview_card_bg,
+                "previewCardBorder": theme.preview_card_border,
+                "previewCardShadow": theme.preview_card_shadow,
+                "headingColor": theme.heading_color,
+                "bodyColor": theme.body_color,
+                "textColor": theme.text,
+                "mutedColor": theme.muted,
+                "accentColor": theme.accent,
+                "headingFont": theme.heading_font,
+                "bodyFont": theme.body_font,
+                "coverFrame": theme.cover_frame,
+                "bodyFrame": theme.body_frame,
+                "endingFrame": theme.ending_frame,
+                "coverBackgroundPath": theme.cover_background_path,
+                "bodyBackgroundPath": theme.body_background_path,
+                "endingBackgroundPath": theme.ending_background_path
             })
-            .collect::<Vec<_>>()
-    )
+        })
+        .collect::<Vec<_>>())
 }
 
 pub(crate) fn richpost_theme_catalog_value_for_manifest(
@@ -294,43 +292,41 @@ pub(crate) fn richpost_theme_catalog_value_for_manifest(
                 .sort_by(|left, right| left.label.cmp(&right.label).then(left.id.cmp(&right.id)));
         }
     }
-    json!(
-        catalog
-            .iter()
-            .map(|theme| {
-                json!({
-                    "id": theme.id,
-                    "label": theme.label,
-                    "description": theme.description,
-                    "source": theme.source,
-                    "shellBg": theme.shell_bg,
-                    "pageBg": theme.page_bg,
-                    "surfaceColor": theme.surface_bg,
-                    "surfaceBg": theme.surface_bg,
-                    "surfaceBorder": theme.surface_border,
-                    "surfaceShadow": theme.surface_shadow,
-                    "surfaceRadius": theme.surface_radius,
-                    "imageRadius": theme.image_radius,
-                    "previewCardBg": theme.preview_card_bg,
-                    "previewCardBorder": theme.preview_card_border,
-                    "previewCardShadow": theme.preview_card_shadow,
-                    "headingColor": theme.heading_color,
-                    "bodyColor": theme.body_color,
-                    "textColor": theme.text,
-                    "mutedColor": theme.muted,
-                    "accentColor": theme.accent,
-                    "headingFont": theme.heading_font,
-                    "bodyFont": theme.body_font,
-                    "coverFrame": theme.cover_frame,
-                    "bodyFrame": theme.body_frame,
-                    "endingFrame": theme.ending_frame,
-                    "coverBackgroundPath": theme.cover_background_path,
-                    "bodyBackgroundPath": theme.body_background_path,
-                    "endingBackgroundPath": theme.ending_background_path
-                })
+    json!(catalog
+        .iter()
+        .map(|theme| {
+            json!({
+                "id": theme.id,
+                "label": theme.label,
+                "description": theme.description,
+                "source": theme.source,
+                "shellBg": theme.shell_bg,
+                "pageBg": theme.page_bg,
+                "surfaceColor": theme.surface_bg,
+                "surfaceBg": theme.surface_bg,
+                "surfaceBorder": theme.surface_border,
+                "surfaceShadow": theme.surface_shadow,
+                "surfaceRadius": theme.surface_radius,
+                "imageRadius": theme.image_radius,
+                "previewCardBg": theme.preview_card_bg,
+                "previewCardBorder": theme.preview_card_border,
+                "previewCardShadow": theme.preview_card_shadow,
+                "headingColor": theme.heading_color,
+                "bodyColor": theme.body_color,
+                "textColor": theme.text,
+                "mutedColor": theme.muted,
+                "accentColor": theme.accent,
+                "headingFont": theme.heading_font,
+                "bodyFont": theme.body_font,
+                "coverFrame": theme.cover_frame,
+                "bodyFrame": theme.body_frame,
+                "endingFrame": theme.ending_frame,
+                "coverBackgroundPath": theme.cover_background_path,
+                "bodyBackgroundPath": theme.body_background_path,
+                "endingBackgroundPath": theme.ending_background_path
             })
-            .collect::<Vec<_>>()
-    )
+        })
+        .collect::<Vec<_>>())
 }
 
 pub(crate) fn richpost_theme_state_value(

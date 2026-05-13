@@ -1,19 +1,19 @@
 use std::path::{Component, Path, PathBuf};
 
 use dirs::home_dir;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tauri::State;
 
 use crate::cli_runtime::{
+    active_workspace_root, find_cli_execution_by_id, upsert_cli_execution_record,
     CliApproveEscalationRequest, CliDenyEscalationRequest, CliEnvironmentRecord,
     CliEscalationReason, CliEscalationRequestRecord, CliEscalationStatus, CliExecuteRequest,
-    CliExecutionRecord, CliExecutionStatus, CliPermissionGrantSet, active_workspace_root,
-    find_cli_execution_by_id, upsert_cli_execution_record,
+    CliExecutionRecord, CliExecutionStatus, CliPermissionGrantSet,
 };
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::create_review_docket;
-use crate::{AppState, AppStore, make_id, now_i64};
+use crate::{make_id, now_i64, AppState, AppStore};
 
 #[derive(Debug, Clone)]
 pub struct CliPolicyCheckResult {

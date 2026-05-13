@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
@@ -7,7 +7,7 @@ use tauri::State;
 use url::Url;
 
 use crate::{
-    AppState, FileNode, ensure_parent_dir, manuscripts_root, payload_string, write_text_file,
+    ensure_parent_dir, manuscripts_root, payload_string, write_text_file, AppState, FileNode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1238,13 +1238,11 @@ mod tests {
         assert_eq!(nodes[0].title.as_deref(), Some("Package Demo"));
         assert_eq!(nodes[0].draft_type.as_deref(), Some("richpost"));
         assert!(!nodes[0].is_directory);
-        assert!(
-            nodes[0]
-                .summary
-                .as_deref()
-                .unwrap_or("")
-                .contains("Package Demo")
-        );
+        assert!(nodes[0]
+            .summary
+            .as_deref()
+            .unwrap_or("")
+            .contains("Package Demo"));
         write_package_text_entry(&package_path, "variants/xiaohongshu.md", "平台版本")
             .expect("variant should be written");
         assert_eq!(

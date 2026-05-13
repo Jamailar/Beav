@@ -1321,9 +1321,12 @@ export function RedClaw({
 
     const startNewDraftSession = useCallback(() => {
         onOpenChatSurface?.();
+        sessionRequestIdRef.current += 1;
         setActiveAiSurface('redclaw');
         activeSessionIdRef.current = null;
         setActiveSessionId(null);
+        setIsSessionLoading(false);
+        setHistoryLoading(false);
         setPreviewTarget(null);
         setChatRefreshKey((value) => value + 1);
         debugUi('sessions:new_draft', { activeSpaceId: activeSpaceId || 'default' });

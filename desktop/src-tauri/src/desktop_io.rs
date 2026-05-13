@@ -6,8 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    AdvisorVideoRecord, configure_background_command, normalize_base_url, now_iso, now_ms,
-    payload_string,
+    configure_background_command, normalize_base_url, now_iso, now_ms, payload_string,
+    AdvisorVideoRecord,
 };
 
 pub(crate) fn write_base64_payload_to_file(

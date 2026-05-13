@@ -6,11 +6,11 @@ use serde_json::json;
 use tauri::State;
 
 use crate::cli_runtime::{
-    CliExecutionRecord, CliExecutionSnapshot, CliVerificationRecord,
-    find_cli_escalation_by_execution_id,
+    find_cli_escalation_by_execution_id, CliExecutionRecord, CliExecutionSnapshot,
+    CliVerificationRecord,
 };
 use crate::persistence::{with_store, with_store_mut};
-use crate::{AppState, AppStore, store_root};
+use crate::{store_root, AppState, AppStore};
 
 const CLI_RUNTIME_ROOT_DIR: &str = "cli-runtime";
 const CLI_RUNTIME_LOGS_DIR: &str = "logs";
@@ -254,16 +254,12 @@ mod tests {
         let (stdout_path, stderr_path) =
             execution_log_paths_from_root(&runtime_root, "cli-exec-1").expect("paths should build");
         assert!(stdout_path.to_string_lossy().contains("cli-runtime/logs"));
-        assert!(
-            stdout_path
-                .to_string_lossy()
-                .ends_with("cli-exec-1.stdout.log")
-        );
-        assert!(
-            stderr_path
-                .to_string_lossy()
-                .ends_with("cli-exec-1.stderr.log")
-        );
+        assert!(stdout_path
+            .to_string_lossy()
+            .ends_with("cli-exec-1.stdout.log"));
+        assert!(stderr_path
+            .to_string_lossy()
+            .ends_with("cli-exec-1.stderr.log"));
     }
 
     #[test]

@@ -804,7 +804,7 @@ export const AiSourceSelect = ({
           ) : (
             <span className="w-4 h-4 rounded-sm border border-border bg-surface-secondary/50" />
           )}
-          <span className="truncate">{selectedSource?.name || '选择 AI 源'}</span>
+          <span className="truncate">{selectedSource?.name || '选择供应商'}</span>
         </span>
         <ChevronDown className={clsx('w-4 h-4 text-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
@@ -828,7 +828,7 @@ export const AiSourceSelect = ({
               >
                 <span className="min-w-0 flex items-center gap-2">
                   <AiSourceLogo source={source} />
-                  <span className="truncate">{source.name || '未命名模型源'}</span>
+                  <span className="truncate">{source.name || '未命名供应商'}</span>
                 </span>
                 <Check className={clsx('w-4 h-4', active ? 'opacity-100 text-accent-primary' : 'opacity-0')} />
               </button>
@@ -1174,7 +1174,7 @@ export const createAiSourceFromPreset = (presetId: string = DEFAULT_AI_PRESET_ID
   const preset = findAiPresetById(presetId) || findAiPresetById(DEFAULT_AI_PRESET_ID);
   return {
     id: generateAiSourceId(),
-    name: preset?.label || '自定义 AI 源',
+    name: preset?.label || '自定义供应商',
     presetId: preset?.id || 'custom',
     baseURL: preset?.baseURL || '',
     apiKey: '',
@@ -1189,7 +1189,7 @@ export const createAiSourceDraftFromPreset = (presetId: string = DEFAULT_AI_PRES
   const preset = findAiPresetById(presetId) || findAiPresetById(DEFAULT_AI_PRESET_ID);
   return {
     presetId: preset?.id || 'custom',
-    name: preset?.label || '自定义 AI 源',
+    name: preset?.label || '自定义供应商',
     baseURL: preset?.baseURL || '',
     apiKey: '',
     protocol: preset?.protocol || 'openai',
@@ -1218,7 +1218,7 @@ export const parseAiSources = (raw: string | undefined): AiSourceConfig[] => {
           : normalizeSourceModels([model]);
         return {
           id: String(item.id || generateAiSourceId()),
-          name: String(item.name || findAiPresetById(presetId)?.label || 'AI 源'),
+          name: String(item.name || findAiPresetById(presetId)?.label || '供应商'),
           presetId,
           baseURL,
           apiKey: String(item.apiKey || item.key || ''),

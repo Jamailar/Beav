@@ -1,12 +1,12 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::runtime::{
-    RuntimeContextBundle, append_session_checkpoint, build_runtime_context_bundle_summary,
-    load_session_bundle_messages, runtime_context_messages_for_session,
+    append_session_checkpoint, build_runtime_context_bundle_summary, load_session_bundle_messages,
+    runtime_context_messages_for_session, RuntimeContextBundle,
 };
 use crate::skills::{build_skill_prompt_bundle, normalize_skill_logical_path, resolve_skill_set};
 use crate::tools::registry::{
@@ -16,10 +16,10 @@ use crate::tools::registry::{
     tool_plan_snapshot_for_session_with_mcp,
 };
 use crate::{
-    AppState, app_ai_display_name, compact_host_runtime_context, current_host_runtime_context,
+    app_ai_display_name, compact_host_runtime_context, current_host_runtime_context,
     load_redbox_prompt, load_redclaw_profile_prompt_bundle, now_iso, payload_string,
     redbox_builtin_skill_roots, render_host_runtime_context_section, render_redbox_prompt,
-    slug_from_relative_path, truncate_chars, workspace_root,
+    slug_from_relative_path, truncate_chars, workspace_root, AppState,
 };
 
 pub(crate) fn interactive_runtime_context_bundle(

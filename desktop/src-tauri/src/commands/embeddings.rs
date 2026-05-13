@@ -1,11 +1,11 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 
 use crate::persistence::{with_store, with_store_mut};
 use crate::{
-    AppState, EmbeddingCacheRecord, SimilarityCacheRecord, compute_embedding_with_settings,
-    cosine_similarity, default_indexing_stats, knowledge_source_texts, knowledge_version, now_iso,
-    payload_field, payload_string, payload_value_as_string,
+    compute_embedding_with_settings, cosine_similarity, default_indexing_stats,
+    knowledge_source_texts, knowledge_version, now_iso, payload_field, payload_string,
+    payload_value_as_string, AppState, EmbeddingCacheRecord, SimilarityCacheRecord,
 };
 
 pub fn handle_embeddings_channel(

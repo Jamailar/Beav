@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::MutexGuard;
 use std::sync::atomic::Ordering;
+use std::sync::MutexGuard;
 use std::time::Duration;
 use tauri::State;
 
@@ -17,12 +17,12 @@ use crate::workspace_loaders::{
     load_memory_history_from_fs,
 };
 use crate::{
-    AppState, AppStore, AssistantStateRecord, RedclawStateRecord, SpaceRecord,
     active_space_workspace_root_from_store, app_brand_display_name, load_advisors_from_fs,
     load_cover_assets_from_fs, load_document_sources_from_fs, load_knowledge_authors_from_fs,
     load_knowledge_notes_from_fs, load_media_assets_from_fs, load_redclaw_state_from_fs,
     load_subject_categories_from_fs, load_subjects_from_fs, load_work_items_from_fs,
-    load_youtube_videos_from_fs, now_iso, storage_safe_file_stem,
+    load_youtube_videos_from_fs, now_iso, storage_safe_file_stem, AppState, AppStore,
+    AssistantStateRecord, RedclawStateRecord, SpaceRecord,
 };
 
 pub(crate) struct WorkspaceHydrationSnapshot {
@@ -486,10 +486,11 @@ fn load_sessions_from_jsonl(store_path: &Path, store: &mut AppStore) -> Result<(
         Ok(idx) => idx,
         Err(_) => return Ok(()),
     };
-    store
-        .chat_sessions
-        .extend(index.into_iter().filter(|entry| !entry.archived).map(|entry| {
-            crate::ChatSessionRecord {
+    store.chat_sessions.extend(
+        index
+            .into_iter()
+            .filter(|entry| !entry.archived)
+            .map(|entry| crate::ChatSessionRecord {
                 id: entry.id,
                 title: entry.title,
                 created_at: entry.created_at,
@@ -499,8 +500,8 @@ fn load_sessions_from_jsonl(store_path: &Path, store: &mut AppStore) -> Result<(
                 starred: entry.starred,
                 archived: false,
                 archived_at: None,
-            }
-        }));
+            }),
+    );
     Ok(())
 }
 
@@ -1087,7 +1088,11 @@ pub fn persist_store(path: &PathBuf, store: &AppStore) -> Result<(), String> {
             .collect::<Vec<_>>();
         let message_count = artifact
             .map(|a| a.chat_messages.len() as i64)
-            .or_else(|| existing_index.get(session_id).map(|entry| entry.message_count))
+            .or_else(|| {
+                existing_index
+                    .get(session_id)
+                    .map(|entry| entry.message_count)
+            })
             .unwrap_or(0);
         if let Some(artifact) = artifact {
             for msg in &artifact.chat_messages {
@@ -1400,7 +1405,11 @@ fn schedule_store_persist(state: &State<'_, AppState>) {
                     .collect::<Vec<_>>();
                 let message_count = artifact
                     .map(|a| a.chat_messages.len() as i64)
-                    .or_else(|| existing_index.get(session_id).map(|entry| entry.message_count))
+                    .or_else(|| {
+                        existing_index
+                            .get(session_id)
+                            .map(|entry| entry.message_count)
+                    })
                     .unwrap_or(0);
                 if let Some(artifact) = artifact {
                     for msg in &artifact.chat_messages {
@@ -1620,11 +1629,9 @@ mod tests {
             .iter()
             .find(|item| item.name == "image-prompt-optimizer")
             .expect("refreshed image-prompt-optimizer should exist");
-        assert!(
-            refreshed
-                .body
-                .contains("allowedRuntimeModes: [team, redclaw, image-generation]")
-        );
+        assert!(refreshed
+            .body
+            .contains("allowedRuntimeModes: [team, redclaw, image-generation]"));
         assert_eq!(refreshed.disabled, Some(false));
         assert_eq!(refreshed.source_scope.as_deref(), Some("builtin"));
         assert_eq!(refreshed.is_builtin, Some(true));
