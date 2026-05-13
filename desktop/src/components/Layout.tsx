@@ -248,6 +248,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   const globalSearchRequestRef = useRef(0);
   const isFixedViewportView = false;
   const usesMacOverlayTitleBar = shouldUseMacOverlayTitleBar();
+  const hasGlobalSidebar = !immersiveMode && !hideGlobalSidebar;
   const titleBarContent = renderTitleBarContent?.({ currentView }) ?? null;
   const titleBarActions = renderTitleBarActions?.({ currentView }) ?? null;
   const sidebarVisualCollapsed = isSidebarCollapsed || sidebarAnimationDirection === 'collapsing';
@@ -708,7 +709,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   return (
     <div
       className={clsx(
-        'relative flex h-screen w-full overflow-hidden text-text-primary',
+        'app-layout-shell relative flex h-screen w-full overflow-hidden text-text-primary',
+        hasGlobalSidebar && 'app-layout-shell--layered',
         immersiveMode === 'dark' ? 'bg-[#0f0f0f]' : 'bg-background'
       )}
     >
@@ -742,7 +744,7 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       )}
 
       {/* Sidebar */}
-      {!immersiveMode && !hideGlobalSidebar && (
+      {hasGlobalSidebar && (
         <aside
           className={clsx(
             'app-sidebar-shell bg-surface-secondary/85 border-r border-border flex flex-col shrink-0 overflow-hidden',
@@ -928,7 +930,8 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       {/* Main Content */}
       <main
         className={clsx(
-          'app-main-shell flex-1 flex flex-col min-w-0 relative'
+          'app-main-shell flex-1 flex flex-col min-w-0 relative',
+          hasGlobalSidebar && 'app-main-shell--layered'
         )}
       >
         {/* Content */}

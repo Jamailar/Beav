@@ -23,15 +23,35 @@
           "accentPrimary": "162 120 75",
           "accentHover": "137 101 63",
           "accentMuted": "246 237 224",
-          "brandRed": "225 29 72",
-          "brandRedText": "190 18 60"
+          "brandRed": "142 42 52",
+          "brandRedText": "124 34 44",
+          "sidebarBackground": "radial-gradient(circle at 82% 10%, rgba(130, 38, 49, 0.18), transparent 30%), radial-gradient(circle at 10% 72%, rgba(99, 24, 36, 0.16), transparent 38%), linear-gradient(180deg, #170D10 0%, #211015 48%, #140A0D 100%)",
+          "sidebarItemColor": "rgba(246, 235, 232, 0.84)",
+          "sidebarItemHoverBackground": "rgba(255, 245, 241, 0.07)",
+          "sidebarItemHoverColor": "#FFF7F3",
+          "sidebarItemActiveBackground": "rgba(164, 58, 68, 0.24)",
+          "sidebarItemActiveColor": "#FFF7F3",
+          "sidebarItemActiveIconColor": "#D86A70",
+          "sidebarNewChatBackground": "linear-gradient(135deg, rgba(161, 54, 65, 0.82) 0%, rgba(105, 30, 42, 0.9) 100%)",
+          "sidebarNewChatHoverBackground": "linear-gradient(135deg, rgba(179, 64, 75, 0.88) 0%, rgba(120, 35, 48, 0.94) 100%)",
+          "sidebarNewChatColor": "#FFF7F3"
         },
         "dark": {
-          "accentPrimary": "77 159 255",
-          "accentHover": "115 181 255",
-          "accentMuted": "42 42 42",
-          "brandRed": "245 95 95",
-          "brandRedText": "255 178 178"
+          "accentPrimary": "216 106 112",
+          "accentHover": "232 128 134",
+          "accentMuted": "48 24 29",
+          "brandRed": "216 106 112",
+          "brandRedText": "255 196 194",
+          "sidebarBackground": "radial-gradient(circle at 82% 10%, rgba(130, 38, 49, 0.22), transparent 30%), radial-gradient(circle at 10% 72%, rgba(99, 24, 36, 0.2), transparent 38%), linear-gradient(180deg, #140A0E 0%, #1E0F14 48%, #10080B 100%)",
+          "sidebarItemColor": "rgba(246, 235, 232, 0.84)",
+          "sidebarItemHoverBackground": "rgba(255, 245, 241, 0.08)",
+          "sidebarItemHoverColor": "#FFF7F3",
+          "sidebarItemActiveBackground": "rgba(164, 58, 68, 0.28)",
+          "sidebarItemActiveColor": "#FFF7F3",
+          "sidebarItemActiveIconColor": "#E08086",
+          "sidebarNewChatBackground": "linear-gradient(135deg, rgba(161, 54, 65, 0.86) 0%, rgba(105, 30, 42, 0.94) 100%)",
+          "sidebarNewChatHoverBackground": "linear-gradient(135deg, rgba(179, 64, 75, 0.92) 0%, rgba(120, 35, 48, 0.98) 100%)",
+          "sidebarNewChatColor": "#FFF7F3"
         }
       }
     },
