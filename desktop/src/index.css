@@ -297,6 +297,11 @@ select {
   position: relative;
   background: var(--app-sidebar-background);
   backdrop-filter: saturate(1.05) blur(24px);
+  transition:
+    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 220ms ease,
+    border-color 220ms ease;
+  will-change: width;
 }
 
 .app-layout-shell--layered .app-sidebar-shell {
@@ -344,6 +349,9 @@ select {
 .app-sidebar-nav {
   padding-top: 10px;
   padding-bottom: 10px;
+  transition:
+    padding 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    gap 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .app-sidebar-nav--expanded {
@@ -362,6 +370,17 @@ select {
 .app-sidebar-nav-item {
   color: var(--app-sidebar-item-color);
   letter-spacing: 0;
+  transition:
+    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    max-width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-height 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    gap 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 180ms ease,
+    color 180ms ease,
+    box-shadow 180ms ease;
 }
 
 .app-sidebar-nav-item--expanded {
@@ -418,8 +437,29 @@ select {
 }
 
 .app-sidebar-nav-label {
-  max-width: 7rem;
   font-weight: 400;
+  transition:
+    max-width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: max-width, opacity, transform;
+}
+
+.app-sidebar-nav-label--expanded {
+  max-width: 7rem;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.app-sidebar-nav-label--collapsed {
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
+.app-sidebar-footer-meta {
+  transition-duration: 240ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .app-titlebar {
@@ -468,6 +508,132 @@ select {
   color: rgb(var(--color-text-secondary) / 0.72);
   outline: none;
   box-shadow: none;
+  transition:
+    color 180ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app-titlebar-sidebar-toggle > svg {
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center;
+}
+
+.app-titlebar-sidebar-toggle[data-sidebar-state='collapsed'] > svg {
+  transform: scaleX(-1);
+}
+
+.app-global-search-backdrop {
+  background: rgb(0 0 0 / 0.18);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  animation: app-global-search-backdrop-in 220ms ease-out both;
+}
+
+.app-global-search-backdrop--closing {
+  animation: app-global-search-backdrop-out 180ms ease-in both;
+}
+
+.app-global-search-panel {
+  transform-origin: 50% 44%;
+  animation: app-global-search-panel-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+.app-global-search-panel--closing {
+  animation: app-global-search-panel-out 180ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.app-global-search-box {
+  border: 1px solid rgb(var(--color-accent-primary) / 0.58);
+  box-shadow:
+    0 0 0 1px rgb(var(--color-accent-primary) / 0.18),
+    0 0 34px rgb(var(--color-accent-primary) / 0.22),
+    0 22px 70px -32px rgb(0 0 0 / 0.55);
+  transition:
+    box-shadow 180ms ease,
+    border-color 180ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.app-global-search-icon,
+.app-global-search-result-icon {
+  color: rgb(var(--color-accent-primary) / 1);
+}
+
+.app-global-search-input {
+  caret-color: rgb(var(--color-accent-primary) / 1);
+}
+
+.app-global-search-results {
+  animation: app-global-search-results-in 200ms cubic-bezier(0.22, 1, 0.36, 1) 40ms both;
+  transform-origin: top center;
+}
+
+.app-global-search-result-item {
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.app-global-search-result-item:hover {
+  background: rgb(var(--color-accent-primary) / 0.08);
+}
+
+.app-global-search-result-icon {
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.app-global-search-result-item:hover .app-global-search-result-icon {
+  background: rgb(var(--color-accent-primary) / 0.12);
+}
+
+@keyframes app-global-search-backdrop-in {
+  from {
+    background: rgb(0 0 0 / 0);
+    backdrop-filter: blur(0) saturate(1);
+    -webkit-backdrop-filter: blur(0) saturate(1);
+  }
+}
+
+@keyframes app-global-search-backdrop-out {
+  to {
+    background: rgb(0 0 0 / 0);
+    backdrop-filter: blur(0) saturate(1);
+    -webkit-backdrop-filter: blur(0) saturate(1);
+  }
+}
+
+@keyframes app-global-search-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+  }
+}
+
+@keyframes app-global-search-panel-out {
+  to {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.99);
+  }
+}
+
+@keyframes app-global-search-results-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scaleY(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-global-search-backdrop,
+  .app-global-search-backdrop--closing,
+  .app-global-search-panel,
+  .app-global-search-panel--closing,
+  .app-global-search-results {
+    animation-duration: 1ms;
+  }
 }
 
 .app-titlebar-sidebar-toggle:hover {
@@ -515,11 +681,134 @@ select {
   border-radius: 9px;
   background: rgb(var(--color-surface-primary) / 0.62);
   color: rgb(var(--color-text-secondary) / 0.95);
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
+}
+
+.app-titlebar-button > svg {
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center;
+}
+
+.app-titlebar-button[data-preview-sidebar-state='collapsed'] > svg {
+  transform: scaleX(-1);
 }
 
 .app-titlebar-button:hover {
   background: rgb(var(--color-surface-primary) / 0.88);
   color: rgb(var(--color-text-primary) / 1);
+}
+
+.redclaw-preview-sidebar {
+  transform-origin: right center;
+  animation: redclaw-preview-sidebar-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+.redclaw-preview-sidebar--closing {
+  animation: redclaw-preview-sidebar-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.notification-center-backdrop {
+  background: rgb(0 0 0 / 0);
+  transition: background 220ms ease;
+}
+
+.notification-center-backdrop--open {
+  background: rgb(0 0 0 / 0.2);
+}
+
+.notification-center-backdrop--closed {
+  background: rgb(0 0 0 / 0);
+}
+
+.notification-center-drawer {
+  transform-origin: right center;
+  opacity: 0;
+  transform: translateX(28px) scaleX(0.985);
+  transition:
+    opacity 220ms ease,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+
+.notification-center-drawer--open {
+  opacity: 1;
+  transform: translateX(0) scaleX(1);
+}
+
+.notification-center-drawer--closed {
+  opacity: 0;
+  transform: translateX(28px) scaleX(0.985);
+}
+
+.asset-library-modal-backdrop {
+  background: rgb(0 0 0 / 0);
+  transition: background 220ms ease;
+}
+
+.asset-library-modal-backdrop--open {
+  background: rgb(0 0 0 / 0.55);
+}
+
+.asset-library-modal-backdrop--closed {
+  background: rgb(0 0 0 / 0);
+}
+
+.asset-library-modal-panel {
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+  transition:
+    opacity 200ms ease,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center;
+  will-change: opacity, transform;
+}
+
+.asset-library-modal-panel--open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.asset-library-modal-panel--closed {
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+}
+
+@keyframes redclaw-preview-sidebar-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px) scaleX(0.985);
+  }
+}
+
+@keyframes redclaw-preview-sidebar-out {
+  to {
+    opacity: 0;
+    transform: translateX(20px) scaleX(0.985);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .redclaw-preview-sidebar,
+  .redclaw-preview-sidebar--closing,
+  .notification-center-backdrop,
+  .notification-center-drawer,
+  .notification-center-backdrop--open,
+  .notification-center-backdrop--closed,
+  .notification-center-drawer--open,
+  .notification-center-drawer--closed,
+  .asset-library-modal-backdrop,
+  .asset-library-modal-backdrop--open,
+  .asset-library-modal-backdrop--closed,
+  .asset-library-modal-panel,
+  .asset-library-modal-panel--open,
+  .asset-library-modal-panel--closed {
+    animation-duration: 1ms;
+    transition-duration: 1ms;
+  }
 }
 
 .app-titlebar-badge {

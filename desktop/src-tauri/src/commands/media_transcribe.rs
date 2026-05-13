@@ -124,6 +124,142 @@ fn text_preview(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
+fn wav_duration_seconds(path: &Path) -> Option<f64> {
+    let metadata = fs::metadata(path).ok()?;
+    let bytes = metadata.len().saturating_sub(44);
+    if bytes == 0 {
+        return None;
+    }
+    Some(bytes as f64 / 32_000.0)
+}
+
+fn split_transcript_cues(text: &str) -> Vec<String> {
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let mut cues = Vec::new();
+    let mut current = String::new();
+    for ch in normalized.chars() {
+        current.push(ch);
+        let punctuation = matches!(ch, '。' | '！' | '？' | '.' | '!' | '?' | ';' | '；');
+        if current.chars().count() >= 32 || (punctuation && current.chars().count() >= 12) {
+            cues.push(current.trim().to_string());
+            current.clear();
+        }
+    }
+    if !current.trim().is_empty() {
+        cues.push(current.trim().to_string());
+    }
+    cues
+}
+
+fn format_srt_time(seconds: f64) -> String {
+    let millis = (seconds.max(0.0) * 1000.0).round() as u64;
+    let hours = millis / 3_600_000;
+    let minutes = (millis % 3_600_000) / 60_000;
+    let seconds = (millis % 60_000) / 1000;
+    let millis = millis % 1000;
+    format!("{hours:02}:{minutes:02}:{seconds:02},{millis:03}")
+}
+
+fn format_vtt_time(seconds: f64) -> String {
+    format_srt_time(seconds).replace(',', ".")
+}
+
+fn render_estimated_subtitles(
+    text: &str,
+    duration_seconds: f64,
+    format: &str,
+) -> Result<String, String> {
+    let cues = split_transcript_cues(text);
+    if cues.is_empty() {
+        return Err("转写接口只返回了空文本，无法生成字幕".to_string());
+    }
+    let safe_duration = duration_seconds.max(cues.len() as f64 * 1.2);
+    let cue_duration = safe_duration / cues.len() as f64;
+    let mut output = String::new();
+    if format == "vtt" {
+        output.push_str("WEBVTT\n\n");
+    }
+    for (index, cue) in cues.iter().enumerate() {
+        let start = index as f64 * cue_duration;
+        let end = if index + 1 == cues.len() {
+            safe_duration
+        } else {
+            (index + 1) as f64 * cue_duration
+        };
+        if format == "srt" {
+            output.push_str(&format!(
+                "{}\n{} --> {}\n{}\n\n",
+                index + 1,
+                format_srt_time(start),
+                format_srt_time(end.max(start + 0.5)),
+                cue
+            ));
+        } else {
+            output.push_str(&format!(
+                "{} --> {}\n{}\n\n",
+                format_vtt_time(start),
+                format_vtt_time(end.max(start + 0.5)),
+                cue
+            ));
+        }
+    }
+    Ok(output)
+}
+
+fn transcribe_with_subtitle_fallback(
+    endpoint: &str,
+    api_key: Option<&str>,
+    model_name: &str,
+    audio_path: &Path,
+    response_format: &'static str,
+) -> Result<(String, &'static str), String> {
+    let mut errors = Vec::new();
+    match run_curl_transcription_with_parse_format(
+        endpoint,
+        api_key,
+        model_name,
+        audio_path,
+        "audio/wav",
+        Some(response_format),
+        Some(response_format),
+    ) {
+        Ok(transcript) => return Ok((transcript, "provider")),
+        Err(error) => errors.push(format!("{response_format}: {error}")),
+    }
+    match run_curl_transcription_with_parse_format(
+        endpoint,
+        api_key,
+        model_name,
+        audio_path,
+        "audio/wav",
+        Some("verbose_json"),
+        Some(response_format),
+    ) {
+        Ok(transcript) => return Ok((transcript, "segments")),
+        Err(error) => errors.push(format!("verbose_json: {error}")),
+    }
+    match run_curl_transcription_with_parse_format(
+        endpoint,
+        api_key,
+        model_name,
+        audio_path,
+        "audio/wav",
+        None,
+        Some("text"),
+    ) {
+        Ok(text) => {
+            let duration = wav_duration_seconds(audio_path).unwrap_or(0.0);
+            return render_estimated_subtitles(&text, duration, response_format)
+                .map(|subtitles| (subtitles, "estimated"));
+        }
+        Err(error) => errors.push(format!("text: {error}")),
+    }
+    Err(format!("无法生成字幕：{}", errors.join("；")))
+}
+
 pub(crate) fn execute_media_transcribe(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -156,32 +292,28 @@ pub(crate) fn execute_media_transcribe(
     let output_dir = output_dir_for_request(state, request, &job_id)?;
     let audio_path =
         extract_audio_for_transcription(app, state, session_id, &source_path, &output_dir)?;
-    let transcript = run_curl_transcription_with_parse_format(
-        &endpoint,
-        api_key.as_deref(),
-        &model_name,
-        &audio_path,
-        "audio/wav",
-        Some(response_format),
-        Some(response_format),
-    )
-    .or_else(|first_error| {
-        if matches!(response_format, "json" | "verbose_json") {
-            return Err(first_error);
-        }
-        run_curl_transcription_with_parse_format(
+    let (transcript, timing_mode) = if matches!(response_format, "srt" | "vtt") {
+        transcribe_with_subtitle_fallback(
             &endpoint,
             api_key.as_deref(),
             &model_name,
             &audio_path,
-            "audio/wav",
-            None,
-            Some(response_format),
+            response_format,
+        )?
+    } else {
+        (
+            run_curl_transcription_with_parse_format(
+                &endpoint,
+                api_key.as_deref(),
+                &model_name,
+                &audio_path,
+                "audio/wav",
+                Some(response_format),
+                Some(response_format),
+            )?,
+            "provider",
         )
-        .map_err(|retry_error| {
-            format!("{first_error}；已自动改用默认转写响应重试，仍失败：{retry_error}")
-        })
-    })?;
+    };
 
     let output_path = output_dir.join(format!("transcript.{extension}"));
     fs::write(&output_path, &transcript).map_err(|error| error.to_string())?;
@@ -199,6 +331,7 @@ pub(crate) fn execute_media_transcribe(
         "outputDir": output_dir.display().to_string(),
         "contentPreview": text_preview(&transcript, 4000),
         "contentChars": transcript.chars().count(),
+        "timingMode": timing_mode,
         "modelName": model_name
     }))
 }
@@ -215,5 +348,15 @@ mod tests {
             normalize_transcript_format(Some("verbose-json")),
             ("verbose_json", "json")
         );
+    }
+
+    #[test]
+    fn renders_estimated_srt_from_plain_text() {
+        let rendered =
+            render_estimated_subtitles("第一句内容比较长。第二句内容也比较长。", 10.0, "srt")
+                .expect("estimated subtitles");
+
+        assert!(rendered.contains("1\n00:00:00,000 --> "));
+        assert!(rendered.contains("--> 00:00:10,000"));
     }
 }
