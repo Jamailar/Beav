@@ -2080,13 +2080,22 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
         const handleProposalChanged = (_event: unknown, payload?: { filePath?: string; proposal?: ManuscriptWriteProposal | null }) => {
             if (!editorFile) return;
             if (!isSameDraftRelativePath(payload?.filePath, editorFile)) return;
-            setEditorWriteProposal(payload?.proposal || null);
+            const nextProposal = payload?.proposal || null;
+            setEditorWriteProposal(nextProposal);
+            if (nextProposal) {
+                const nextDraft = splitWritingDraftContent(nextProposal.proposedContent, editorDescriptor?.draftType);
+                editorReviewProposalIdRef.current = nextProposal.id;
+                setEditorReviewBody(nextDraft.body);
+            } else {
+                editorReviewProposalIdRef.current = null;
+                setEditorReviewBody('');
+            }
         };
         window.ipcRenderer.on('manuscripts:write-proposal', handleProposalChanged);
         return () => {
             window.ipcRenderer.off('manuscripts:write-proposal', handleProposalChanged);
         };
-    }, [editorFile]);
+    }, [editorDescriptor?.draftType, editorFile]);
 
     useEffect(() => {
         if (!editorFile || mode !== 'editor' || editorBodyDirty) return;
@@ -2573,6 +2582,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
             ? splitWritingDraftContent(editorWriteProposal.baseContent, draftType)
             : null;
         const editorWriteProposalView = editorWriteProposal && editorWriteProposalBaseDraft ? {
+            id: editorWriteProposal.id,
             baseBody: editorWriteProposalBaseDraft.body,
             isStale: currentEditorContent !== editorWriteProposal.baseContent,
         } : null;
@@ -2836,6 +2846,7 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                             isRejectingWriteProposal={isRejectingWriteProposal}
                             editorChatSessionId={editorChatSessionId}
                             editorChatReady={editorChatSessionReady}
+                            editorSessionMetadata={editorChatBinding?.metadata ?? null}
                             onEditorBodyChange={(value) => {
                                 if (editorWriteProposalView) {
                                     setEditorReviewBody(value);

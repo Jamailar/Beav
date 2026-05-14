@@ -3985,9 +3985,12 @@ export function Settings({
           settings.cli_runtime_execution_mode,
         );
         const loadedModelRoutes = normalizeAiModelRoutes(settings.ai_model_routes_json);
-        const routeSourceMode = (sourceId: string, fallback: AiModelRouteMode = 'custom'): AiModelRouteMode => (
-          sourceId === OFFICIAL_AUTO_SOURCE_ID ? 'official' : fallback
-        );
+        const routeSourceMode = (sourceId: string, fallback: AiModelRouteMode = 'custom'): AiModelRouteMode => {
+          const normalizedSourceId = String(sourceId || '').trim();
+          if (normalizedSourceId === OFFICIAL_AUTO_SOURCE_ID) return 'official';
+          if (fallback === 'disabled') return 'disabled';
+          return normalizedSourceId ? 'custom' : fallback;
+        };
         const nextModelRoutes: AiModelRoutes = {
           ...loadedModelRoutes,
           chat: {
@@ -5854,6 +5857,24 @@ export function Settings({
         routeScopedSource(scope),
         (source) => pickBestModelForSource(source, '', 'chat'),
       );
+      const normalizeRouteForSource = (
+        route: AiModelRouteConfig,
+        sourceId: string,
+      ): AiModelRouteConfig => {
+        const normalizedSourceId = String(sourceId || '').trim();
+        if (route.mode === 'disabled') {
+          return { ...route, sourceId: normalizedSourceId };
+        }
+        if (normalizedSourceId === OFFICIAL_AUTO_SOURCE_ID) {
+          return { ...route, mode: 'official', sourceId: normalizedSourceId };
+        }
+        if (normalizedSourceId) {
+          return { ...route, mode: 'custom', sourceId: normalizedSourceId };
+        }
+        return route.mode === 'official'
+          ? { ...route, sourceId: OFFICIAL_AUTO_SOURCE_ID }
+          : { ...route, sourceId: normalizedSourceId };
+      };
       const routeTranscriptionModel = routeModel(
         'transcription',
         resolvedTranscriptionModel,
@@ -5898,30 +5919,51 @@ export function Settings({
       ) || 'minimax-voice-clone';
       const normalizedModelRoutes: AiModelRoutes = {
         ...aiModelRoutes,
-        chat: {
+        chat: normalizeRouteForSource({
           ...aiModelRoutes.chat,
           sourceId: resolvedDefaultSourceId || defaultSource?.id || '',
           model: routeChatModel('chat', resolvedModelName),
-        },
-        wander: { ...aiModelRoutes.wander, model: routeChatModel('wander', formData.model_name_wander) },
-        team: { ...aiModelRoutes.team, model: routeChatModel('team', formData.model_name_chatroom) },
-        knowledge: { ...aiModelRoutes.knowledge, model: routeChatModel('knowledge', formData.model_name_knowledge) },
-        redclaw: { ...aiModelRoutes.redclaw, model: routeChatModel('redclaw', formData.model_name_redclaw) },
-        transcription: { ...aiModelRoutes.transcription, sourceId: resolvedTranscriptionSource?.id || '', model: routeTranscriptionModel },
-        embedding: { ...aiModelRoutes.embedding, sourceId: resolvedEmbeddingSource?.id || '', model: routeEmbeddingModel },
-        image: { ...aiModelRoutes.image, sourceId: resolvedImageSource?.id || '', model: routeImageModel },
-        visualIndex: {
+        }, resolvedDefaultSourceId || defaultSource?.id || ''),
+        wander: normalizeRouteForSource(
+          { ...aiModelRoutes.wander, model: routeChatModel('wander', formData.model_name_wander) },
+          aiModelRoutes.wander.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        team: normalizeRouteForSource(
+          { ...aiModelRoutes.team, model: routeChatModel('team', formData.model_name_chatroom) },
+          aiModelRoutes.team.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        knowledge: normalizeRouteForSource(
+          { ...aiModelRoutes.knowledge, model: routeChatModel('knowledge', formData.model_name_knowledge) },
+          aiModelRoutes.knowledge.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        redclaw: normalizeRouteForSource(
+          { ...aiModelRoutes.redclaw, model: routeChatModel('redclaw', formData.model_name_redclaw) },
+          aiModelRoutes.redclaw.sourceId || OFFICIAL_AUTO_SOURCE_ID,
+        ),
+        transcription: normalizeRouteForSource(
+          { ...aiModelRoutes.transcription, sourceId: resolvedTranscriptionSource?.id || '', model: routeTranscriptionModel },
+          resolvedTranscriptionSource?.id || '',
+        ),
+        embedding: normalizeRouteForSource(
+          { ...aiModelRoutes.embedding, sourceId: resolvedEmbeddingSource?.id || '', model: routeEmbeddingModel },
+          resolvedEmbeddingSource?.id || '',
+        ),
+        image: normalizeRouteForSource(
+          { ...aiModelRoutes.image, sourceId: resolvedImageSource?.id || '', model: routeImageModel },
+          resolvedImageSource?.id || '',
+        ),
+        visualIndex: normalizeRouteForSource({
           ...aiModelRoutes.visualIndex,
           mode: formData.visual_index_enabled ? aiModelRoutes.visualIndex.mode === 'disabled' ? 'official' : aiModelRoutes.visualIndex.mode : 'disabled',
           sourceId: resolvedVisualIndexSource?.id || '',
           model: routeVisualIndexModel,
-        },
-        videoAnalysis: {
+        }, resolvedVisualIndexSource?.id || ''),
+        videoAnalysis: normalizeRouteForSource({
           ...aiModelRoutes.videoAnalysis,
           mode: formData.video_analysis_enabled ? aiModelRoutes.videoAnalysis.mode === 'disabled' ? 'official' : aiModelRoutes.videoAnalysis.mode : 'disabled',
           sourceId: resolvedVideoAnalysisSource?.id || '',
           model: routeVideoAnalysisModel,
-        },
+        }, resolvedVideoAnalysisSource?.id || ''),
         voiceTts: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: routeVoiceTtsModel },
         voiceClone: { mode: 'official', sourceId: OFFICIAL_AUTO_SOURCE_ID, model: routeVoiceCloneModel },
       };

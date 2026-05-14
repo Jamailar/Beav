@@ -50,7 +50,7 @@ type BuildEditorSessionBindingParams = {
   editorBodyDirty: boolean;
 };
 
-const WRITING_EDITOR_ALLOWED_TOOLS = ['app_cli'];
+const WRITING_EDITOR_ALLOWED_TOOLS = ['workflow'];
 const WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS = ['manuscripts.writeCurrent'];
 
 function text(value: unknown): string {
@@ -140,8 +140,11 @@ export function buildEditorSessionBinding(
     contextType: 'file',
     contextId: editorFile,
     isContextBound: true,
+    intent: 'manuscript_editing',
     allowedTools: WRITING_EDITOR_ALLOWED_TOOLS,
     allowedAppCliActions: WRITING_EDITOR_ALLOWED_APP_CLI_ACTIONS,
+    writeTarget: 'manuscripts://current',
+    allowedWriteTargets: ['manuscripts://current'],
     associatedFilePath,
     agentProfile: draftType === 'video'
       ? 'video-editor'

@@ -313,6 +313,13 @@ async function handleMessage(message, sender) {
         tabId,
         execute: () => downloadXhsMediaFromTab(tabId),
       });
+    case 'xhs:download-current-note-zip':
+      return await enqueueXhsTask({
+        type: message.type,
+        title: createXhsTaskTitle(message.type, message, tabId),
+        tabId,
+        execute: () => downloadXhsMediaZipFromTab(tabId),
+      });
     case 'xhs:collect-current-comments':
       return await enqueueXhsTask({
         type: message.type,
@@ -332,6 +339,7 @@ async function handleMessage(message, sender) {
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
         tabId,
+        capabilities: createXhsTaskCapabilities(message.type),
         execute: () => collectXhsBloggerNotesFromTab(tabId, message?.options),
       });
     case 'account:bind-current-platform':
@@ -346,6 +354,7 @@ async function handleMessage(message, sender) {
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
         tabId,
+        capabilities: createXhsTaskCapabilities(message.type),
         execute: () => collectXhsNoteLinks(message?.urls, message?.options),
       });
     case 'xhs:collect-visible-note-links':
@@ -353,6 +362,7 @@ async function handleMessage(message, sender) {
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
         tabId,
+        capabilities: createXhsTaskCapabilities(message.type),
         execute: () => collectVisibleXhsNoteLinksFromTab(tabId, message?.options),
       });
     case 'xhs:collect-keyword':
@@ -360,6 +370,7 @@ async function handleMessage(message, sender) {
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
         tabId,
+        capabilities: createXhsTaskCapabilities(message.type),
         execute: () => collectXhsKeyword(message?.keyword, message?.options),
       });
     case 'xhs:get-task-queue':
@@ -1158,6 +1169,8 @@ function createXhsTaskTitle(type, message = {}, tabId = 0) {
       return '保存当前小红书笔记';
     case 'xhs:download-current-note':
       return '下载当前笔记素材';
+    case 'xhs:download-current-note-zip':
+      return '下载当前笔记压缩包';
     case 'xhs:collect-current-comments':
       return '采集当前笔记评论';
     case 'xhs:collect-current-blogger':
@@ -1189,6 +1202,27 @@ function createXhsTaskTitle(type, message = {}, tabId = 0) {
   }
 }
 
+function createXhsTaskCapabilities(type) {
+  const pauseableTypes = new Set([
+    'xhs:collect-blogger-notes',
+    'xhs:collect-note-links',
+    'xhs:collect-visible-note-links',
+    'xhs:collect-keyword',
+  ]);
+  return {
+    pause: pauseableTypes.has(normalizeText(type)),
+    cancel: true,
+  };
+}
+
+function sanitizeXhsTaskCapabilities(input) {
+  const source = input && typeof input === 'object' ? input : {};
+  return {
+    pause: source.pause === true,
+    cancel: source.cancel !== false,
+  };
+}
+
 function sanitizeXhsTaskForState(task) {
   if (!task) return null;
   return {
@@ -1206,6 +1240,7 @@ function sanitizeXhsTaskForState(task) {
     savedCount: Number(task.savedCount || 0),
     paused: task.paused === true,
     cancelRequested: task.cancelRequested === true,
+    capabilities: sanitizeXhsTaskCapabilities(task.capabilities),
     progress: task.progress && typeof task.progress === 'object'
       ? {
           current: Number(task.progress.current || 0),
@@ -1348,6 +1383,16 @@ async function syncXhsTaskStep(progressPatch = {}) {
   setActiveXhsTaskProgress(progressPatch);
 }
 
+async function sleepXhsTaskInterruptibly(ms) {
+  const waitMs = Math.max(0, Number(ms || 0));
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    ensureXhsTaskNotCancelled();
+    await waitIfXhsTaskPaused();
+    await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
+  }
+}
+
 function controlXhsActiveTask(actionInput) {
   const action = normalizeText(actionInput);
   if (!xhsActiveTask) {
@@ -1358,8 +1403,22 @@ function controlXhsActiveTask(actionInput) {
     };
   }
   if (action === 'pause') {
+    if (xhsActiveTask.capabilities?.pause !== true) {
+      return {
+        success: false,
+        error: '当前任务不支持暂停',
+        queue: getXhsTaskQueueState(),
+      };
+    }
     xhsActiveTask.paused = true;
   } else if (action === 'resume') {
+    if (xhsActiveTask.capabilities?.pause !== true) {
+      return {
+        success: false,
+        error: '当前任务不支持继续',
+        queue: getXhsTaskQueueState(),
+      };
+    }
     xhsActiveTask.paused = false;
   } else if (action === 'cancel') {
     xhsActiveTask.cancelRequested = true;
@@ -1392,6 +1451,9 @@ function summarizeXhsTaskResult(result) {
   if (result?.mode === 'xhs-download') {
     return `下载 ${Number(result.count || 0)} 个素材`;
   }
+  if (result?.mode === 'xhs-download-zip') {
+    return `压缩包 ${Number(result.count || 0)} 个素材`;
+  }
   if (result?.mode === 'xhs-comments') {
     return `评论 ${Number(result.count || 0)} 条`;
   }
@@ -1413,6 +1475,8 @@ function getXhsTaskActionLabel(type) {
       return '保存笔记';
     case 'xhs:download-current-note':
       return '下载素材';
+    case 'xhs:download-current-note-zip':
+      return '下载压缩包';
     case 'xhs:collect-current-comments':
       return '采集评论';
     case 'xhs:collect-current-blogger':
@@ -1616,7 +1680,7 @@ function publishXhsTaskQueueState() {
   return queue;
 }
 
-function enqueueXhsTask({ type, title, tabId, execute }) {
+function enqueueXhsTask({ type, title, tabId, capabilities, execute }) {
   return new Promise((resolve, reject) => {
     const now = new Date().toISOString();
     const task = {
@@ -1628,6 +1692,7 @@ function enqueueXhsTask({ type, title, tabId, execute }) {
       savedCount: 0,
       paused: false,
       cancelRequested: false,
+      capabilities: sanitizeXhsTaskCapabilities(capabilities || createXhsTaskCapabilities(type)),
       progress: null,
       createdAt: now,
       updatedAt: now,
@@ -3452,7 +3517,7 @@ function randomIntBetween(min, max) {
 
 async function sleepXhsCollectInterval(interval) {
   const waitMs = randomIntBetween(interval.minMs, interval.maxMs);
-  await sleep(waitMs);
+  await sleepXhsTaskInterruptibly(waitMs);
   return waitMs;
 }
 
@@ -3548,6 +3613,170 @@ function downloadBrowserFile(url, filename) {
   });
 }
 
+function getZipDosTimeParts(dateInput = new Date()) {
+  const date = dateInput instanceof Date ? dateInput : new Date();
+  const dosTime = (date.getHours() << 11)
+    | (date.getMinutes() << 5)
+    | Math.floor(date.getSeconds() / 2);
+  const dosDate = ((date.getFullYear() - 1980) << 9)
+    | ((date.getMonth() + 1) << 5)
+    | date.getDate();
+  return { dosTime, dosDate };
+}
+
+function createCrc32Table() {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+}
+
+const ZIP_CRC32_TABLE = createCrc32Table();
+
+function calculateCrc32(bytes) {
+  let crc = 0xffffffff;
+  for (let index = 0; index < bytes.length; index += 1) {
+    crc = ZIP_CRC32_TABLE[(crc ^ bytes[index]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function writeUint16LE(target, offset, value) {
+  target[offset] = value & 0xff;
+  target[offset + 1] = (value >>> 8) & 0xff;
+}
+
+function writeUint32LE(target, offset, value) {
+  target[offset] = value & 0xff;
+  target[offset + 1] = (value >>> 8) & 0xff;
+  target[offset + 2] = (value >>> 16) & 0xff;
+  target[offset + 3] = (value >>> 24) & 0xff;
+}
+
+function concatUint8Arrays(parts) {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function buildStoredZip(entries) {
+  const encoder = new TextEncoder();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  const { dosTime, dosDate } = getZipDosTimeParts();
+
+  for (const entry of entries) {
+    const filenameBytes = encoder.encode(entry.filename);
+    const data = entry.bytes instanceof Uint8Array ? entry.bytes : new Uint8Array(entry.bytes || []);
+    const crc32 = calculateCrc32(data);
+    const localHeader = new Uint8Array(30 + filenameBytes.length);
+    writeUint32LE(localHeader, 0, 0x04034b50);
+    writeUint16LE(localHeader, 4, 20);
+    writeUint16LE(localHeader, 6, 0x0800);
+    writeUint16LE(localHeader, 8, 0);
+    writeUint16LE(localHeader, 10, dosTime);
+    writeUint16LE(localHeader, 12, dosDate);
+    writeUint32LE(localHeader, 14, crc32);
+    writeUint32LE(localHeader, 18, data.length);
+    writeUint32LE(localHeader, 22, data.length);
+    writeUint16LE(localHeader, 26, filenameBytes.length);
+    writeUint16LE(localHeader, 28, 0);
+    localHeader.set(filenameBytes, 30);
+    localParts.push(localHeader, data);
+
+    const centralHeader = new Uint8Array(46 + filenameBytes.length);
+    writeUint32LE(centralHeader, 0, 0x02014b50);
+    writeUint16LE(centralHeader, 4, 20);
+    writeUint16LE(centralHeader, 6, 20);
+    writeUint16LE(centralHeader, 8, 0x0800);
+    writeUint16LE(centralHeader, 10, 0);
+    writeUint16LE(centralHeader, 12, dosTime);
+    writeUint16LE(centralHeader, 14, dosDate);
+    writeUint32LE(centralHeader, 16, crc32);
+    writeUint32LE(centralHeader, 20, data.length);
+    writeUint32LE(centralHeader, 24, data.length);
+    writeUint16LE(centralHeader, 28, filenameBytes.length);
+    writeUint16LE(centralHeader, 30, 0);
+    writeUint16LE(centralHeader, 32, 0);
+    writeUint16LE(centralHeader, 34, 0);
+    writeUint16LE(centralHeader, 36, 0);
+    writeUint32LE(centralHeader, 38, 0);
+    writeUint32LE(centralHeader, 42, offset);
+    centralHeader.set(filenameBytes, 46);
+    centralParts.push(centralHeader);
+
+    offset += localHeader.length + data.length;
+  }
+
+  const centralDirectoryOffset = offset;
+  const centralDirectory = concatUint8Arrays(centralParts);
+  const endRecord = new Uint8Array(22);
+  writeUint32LE(endRecord, 0, 0x06054b50);
+  writeUint16LE(endRecord, 4, 0);
+  writeUint16LE(endRecord, 6, 0);
+  writeUint16LE(endRecord, 8, entries.length);
+  writeUint16LE(endRecord, 10, entries.length);
+  writeUint32LE(endRecord, 12, centralDirectory.length);
+  writeUint32LE(endRecord, 16, centralDirectoryOffset);
+  writeUint16LE(endRecord, 20, 0);
+  return concatUint8Arrays([...localParts, centralDirectory, endRecord]);
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function stripZipEntryPrefix(filename) {
+  return normalizeText(filename).replace(/^RedBox\/xhs\//i, '') || 'xhs-media';
+}
+
+function dataUrlToBytes(dataUrl) {
+  const match = String(dataUrl || '').match(/^data:([^,]*),(.*)$/s);
+  if (!match) throw new Error('无效的 data URL');
+  const meta = match[1] || '';
+  const body = match[2] || '';
+  if (/;base64/i.test(meta)) {
+    const binary = atob(body);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+  return new TextEncoder().encode(decodeURIComponent(body));
+}
+
+async function fetchDownloadItemBytes(item) {
+  if (String(item?.url || '').startsWith('data:')) {
+    return dataUrlToBytes(item.url);
+  }
+  const response = await fetch(item.url, {
+    credentials: 'include',
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
 async function downloadXhsMediaFromTab(tabId) {
   const payload = await runExtraction(tabId, extractXhsNotePayload, { world: 'MAIN' });
   const items = buildXhsDownloadItems(payload);
@@ -3592,6 +3821,69 @@ async function downloadXhsMediaFromTab(tabId) {
     failures,
     count: downloads.length,
     error: failures.length > 0 ? `部分素材下载失败：${failures.length} 个` : undefined,
+  };
+}
+
+async function downloadXhsMediaZipFromTab(tabId) {
+  const payload = await runExtraction(tabId, extractXhsNotePayload, { world: 'MAIN' });
+  const items = buildXhsDownloadItems(payload);
+  if (items.length === 0) {
+    throw new Error('当前小红书页面未识别到可下载的图片或视频素材');
+  }
+
+  const entries = [];
+  const failures = [];
+  for (const item of items) {
+    try {
+      const bytes = await fetchDownloadItemBytes(item);
+      entries.push({
+        filename: stripZipEntryPrefix(item.filename),
+        bytes,
+      });
+    } catch (error) {
+      failures.push({
+        filename: item.filename,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (entries.length === 0) {
+    throw new Error(failures[0]?.error || '压缩包素材下载失败');
+  }
+
+  const zipBytes = buildStoredZip(entries);
+  const title = sanitizeFilenamePart(payload?.title || payload?.noteId || 'xhs-note', 'xhs-note');
+  const noteId = sanitizeFilenamePart(payload?.noteId || hashString(payload?.source || title), 'note');
+  const filename = `RedBox/xhs/${noteId}-${title}.zip`;
+  const dataUrl = `data:application/zip;base64,${arrayBufferToBase64(zipBytes)}`;
+  const downloadId = await downloadBrowserFile(dataUrl, filename);
+  const historyItem = await appendXhsTaskHistory({
+    id: `xhs-download-zip-${hashString(`${payload?.source || ''}-${Date.now()}`)}`,
+    type: 'download-zip',
+    title: `下载压缩包：${normalizeText(payload?.title) || '小红书笔记'}`,
+    status: failures.length > 0 ? 'partial' : 'completed',
+    count: entries.length,
+    failed: failures.length,
+    summary: `已创建压缩包，包含 ${entries.length} 个素材${failures.length ? `，失败 ${failures.length} 个` : ''}`,
+    payload: {
+      source: payload?.source || '',
+      noteId: payload?.noteId || '',
+      filename,
+      downloadId,
+      failures,
+    },
+  });
+
+  return {
+    success: failures.length === 0,
+    mode: 'xhs-download-zip',
+    filename,
+    downloadId,
+    count: entries.length,
+    failed: failures.length,
+    failures,
+    task: historyItem,
+    error: failures.length > 0 ? `压缩包已生成，但有 ${failures.length} 个素材失败` : undefined,
   };
 }
 
@@ -4059,11 +4351,23 @@ async function collectXhsBloggerNotesViaApi(tabId, payload, options = {}) {
       if (index > 0) {
         intervalMs = await sleepXhsCollectInterval(options.interval);
       }
+      await syncXhsTaskStep({
+        current: results.length + failures.length,
+        total: pendingNotes.length,
+        message: `正在读取第 ${index + 1}/${pendingNotes.length} 条笔记`,
+        mode: 'api',
+      });
       const feedResult = await runExtraction(tabId, extractXhsNoteFeedByUrlFromCurrentPage, {
         world: 'MAIN',
         args: [note.urlInfo.href, note.urlInfo.id],
       });
       const entryPayload = buildXhsNotePayloadFromFeed(feedResult, note.urlInfo);
+      await syncXhsTaskStep({
+        current: results.length + failures.length,
+        total: pendingNotes.length,
+        message: `正在写入第 ${index + 1}/${pendingNotes.length} 条笔记`,
+        mode: 'api',
+      });
       const response = options.saveToRedBox !== false ? await postKnowledgeEntry(buildXhsEntry(entryPayload)) : null;
       const accountPost = buildXhsAccountPostFromEntry(entryPayload);
       if (response?.entryId) {
@@ -4300,17 +4604,35 @@ async function collectXhsNoteLinks(urlsInput, options = {}) {
       if (index > 0) {
         intervalMs = await sleepXhsCollectInterval(interval);
       }
+      await syncXhsTaskStep({
+        current: results.length + failures.length,
+        total: targetUrls.length,
+        message: `正在打开第 ${index + 1}/${targetUrls.length} 条笔记`,
+        mode: normalizeText(options?.mode) || 'tab',
+      });
       tab = await chrome.tabs.create({ url, active: false });
       await waitForTabComplete(tab.id);
       if (index === 0) {
         intervalMs = await sleepXhsCollectInterval(interval);
       } else {
-        await sleep(Math.min(1200, Math.max(600, Math.floor(interval.minMs / 2))));
+        await sleepXhsTaskInterruptibly(Math.min(1200, Math.max(600, Math.floor(interval.minMs / 2))));
       }
+      await syncXhsTaskStep({
+        current: results.length + failures.length,
+        total: targetUrls.length,
+        message: `正在读取第 ${index + 1}/${targetUrls.length} 条笔记`,
+        mode: normalizeText(options?.mode) || 'tab',
+      });
       const payload = await runExtraction(tab.id, extractXhsNotePayload, { world: 'MAIN' });
       if (!payload?.title && !payload?.content && !payload?.images?.length && !payload?.videoUrl) {
         throw new Error('未识别到笔记内容');
       }
+      await syncXhsTaskStep({
+        current: results.length + failures.length,
+        total: targetUrls.length,
+        message: `正在写入第 ${index + 1}/${targetUrls.length} 条笔记`,
+        mode: normalizeText(options?.mode) || 'tab',
+      });
       const response = shouldSave ? await postKnowledgeEntry(buildXhsEntry(payload)) : null;
       results.push({
         url,
@@ -4435,9 +4757,21 @@ async function collectXhsKeyword(keywordInput, options = {}) {
   const searchUrl = `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&source=web_explore_feed`;
   let tab = null;
   try {
+    await syncXhsTaskStep({
+      current: 0,
+      total: limit,
+      message: `正在打开关键词搜索：${keyword}`,
+      mode: 'tab',
+    });
     tab = await chrome.tabs.create({ url: searchUrl, active: false });
     await waitForTabComplete(tab.id);
-    await sleep(1600);
+    await sleepXhsTaskInterruptibly(1600);
+    await syncXhsTaskStep({
+      current: 0,
+      total: limit,
+      message: `正在加载关键词结果：${keyword}`,
+      mode: 'tab',
+    });
     await scrollXhsSearchTab(tab.id, limit);
     const payload = await runExtraction(tab.id, extractXhsVisibleNoteLinksPayload, { world: 'MAIN' });
     const urls = Array.isArray(payload?.urls) ? payload.urls.slice(0, limit) : [];

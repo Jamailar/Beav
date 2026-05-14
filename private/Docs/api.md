@@ -223,7 +223,41 @@ curl -X POST "$BASE_URL/v1/audio/transcriptions" \
   }'
 ```
 
-### 5.6 图片生成示例
+### 5.6 音频生成示例（TTS）
+```bash
+curl -X POST "$BASE_URL/v1/audio/speech" \
+  -H "Authorization: Bearer $RBX_API_KEY" \
+  -H "Content-Type: application/json" \
+  --output speech.mp3 \
+  -d '{
+    "model": "speech-2.8-hd",
+    "input": "第一段内容<#0.6#>第二段内容(laughs)。",
+    "voice": "male-qn-qingse",
+    "speed": 1.05,
+    "pitch": 0,
+    "emotion": "happy",
+    "response_format": "mp3",
+    "return_audio_binary": true,
+    "prefer_sync_tts": true,
+    "audio_setting": {
+      "sample_rate": 32000,
+      "bitrate": 128000,
+      "channel": 1
+    }
+  }'
+```
+
+支持要点：
+- `input` / `text` 支持 MiniMax 停顿 `<#0.6#>` 和语气标签 `(laughs)`、`(sighs)` 等。
+- `speed` / `voice_setting.speed`：`0.5 - 2.0`，默认 `1.0`。
+- `pitch` / `voice_setting.pitch`：`-12 - 12`，默认 `0`。
+- `emotion` / `voice_setting.emotion`：`happy`、`sad`、`angry`、`fearful`、`disgusted`、`surprised`、`calm`、`fluent`、`whipser`；也接受 `whisper`。
+- `add_silence` / `voice_setting.add_silence` 按 MiniMax 原生参数透传。
+- `sample_rate`、`bitrate`、`channel` 可放顶层，也可放在 `audio_setting` 内。
+- `prefer_sync_tts` / `prefer_async_tts` / `async_tts` 控制同步或异步合成偏好。
+- 长语音多段语气可传 `segments`。每段支持独立 `input`、`speed`、`pitch`、`emotion`、`add_silence`、`voice_setting`；媒体队列会逐段合成并合并成一个最终音频文件。
+
+### 5.7 图片生成示例
 ```bash
 curl -X POST "$BASE_URL/v1/images/generations" \
   -H "Authorization: Bearer $RBX_API_KEY" \

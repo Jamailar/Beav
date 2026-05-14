@@ -686,6 +686,20 @@ function GeneralSettingsSectionInner({
                 </div>
             </div>
 
+            <div className="rounded-lg border border-border bg-surface-secondary/30 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm font-medium text-text-primary">{t('settings.general.browserPlugin')}</span>
+                    <button
+                        type="button"
+                        onClick={() => void handleOpenDownloadPage()}
+                        className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:bg-surface-secondary"
+                    >
+                        <Download className="h-3.5 w-3.5" />
+                        {t('settings.general.installPlugin')}
+                    </button>
+                </div>
+            </div>
+
             <div className="group">
                 <label className="block text-xs font-medium text-text-secondary mb-1.5">
                     {t('settings.general.workspaceRoot')}

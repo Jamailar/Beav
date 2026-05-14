@@ -120,6 +120,23 @@ fn integer_schema(description: &str, minimum: i64, maximum: i64) -> Value {
     })
 }
 
+fn number_schema(description: &str, minimum: f64, maximum: f64) -> Value {
+    json!({
+        "type": "number",
+        "description": description,
+        "minimum": minimum,
+        "maximum": maximum,
+    })
+}
+
+fn speech_emotion_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": description,
+        "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whipser", "whisper"],
+    })
+}
+
 fn image_aspect_ratio_schema(description: &str) -> Value {
     json!({
         "type": "string",
@@ -690,6 +707,143 @@ fn subjects_get_input_schema() -> Value {
     object_schema(&[("id", string_schema("Asset id."))], &["id"], None)
 }
 
+fn asset_attributes_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "key": { "type": "string" },
+                "value": { "type": "string" }
+            },
+            "required": ["key", "value"],
+            "additionalProperties": false
+        }
+    })
+}
+
+fn asset_images_schema() -> Value {
+    json!({
+        "type": "array",
+        "maxItems": 5,
+        "items": {
+            "type": "object",
+            "properties": {
+                "relativePath": {
+                    "type": "string",
+                    "description": "Managed asset-relative image path already present in the asset folder."
+                },
+                "dataUrl": {
+                    "type": "string",
+                    "description": "Base64 data URL for a new local reference image."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Optional original file name used for extension and display hints."
+                }
+            },
+            "additionalProperties": false
+        }
+    })
+}
+
+fn asset_voice_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "relativePath": {
+                "type": "string",
+                "description": "Managed asset-relative audio sample path already present in the asset folder."
+            },
+            "dataUrl": {
+                "type": "string",
+                "description": "Base64 data URL for a new local voice sample."
+            },
+            "name": { "type": "string" },
+            "scriptText": { "type": "string" },
+            "voice": {
+                "type": "object",
+                "description": "Optional existing voice binding metadata.",
+                "additionalProperties": true
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn assets_create_input_schema() -> Value {
+    object_schema(
+        &[
+            ("id", string_schema("Optional stable asset id.")),
+            ("name", string_schema("Asset display name.")),
+            (
+                "kind",
+                string_schema("Optional typed asset kind, such as character, product, scene, prop, brand, model, or voice."),
+            ),
+            ("categoryId", string_schema("Optional existing asset category id.")),
+            (
+                "categoryName",
+                string_schema("Optional category name. The host resolves or creates it before writing the asset."),
+            ),
+            ("description", string_schema("Reusable asset description.")),
+            (
+                "tags",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            ("attributes", asset_attributes_schema()),
+            ("images", asset_images_schema()),
+            ("voice", asset_voice_schema()),
+        ],
+        &["name"],
+        Some("Create a reusable local asset. Use kind=character and categoryName=角色 for role/character assets."),
+    )
+}
+
+fn assets_update_input_schema() -> Value {
+    object_schema(
+        &[
+            ("id", string_schema("Asset id.")),
+            ("name", string_schema("Asset display name.")),
+            ("kind", string_schema("Optional typed asset kind.")),
+            ("categoryId", string_schema("Optional existing asset category id.")),
+            (
+                "categoryName",
+                string_schema("Optional category name. The host resolves or creates it before writing the asset."),
+            ),
+            ("description", string_schema("Reusable asset description.")),
+            (
+                "tags",
+                json!({ "type": "array", "items": { "type": "string" } }),
+            ),
+            ("attributes", asset_attributes_schema()),
+            ("images", asset_images_schema()),
+            ("voice", asset_voice_schema()),
+        ],
+        &["id", "name"],
+        Some("Update a reusable local asset."),
+    )
+}
+
+fn assets_category_create_input_schema() -> Value {
+    object_schema(
+        &[("name", string_schema("Category name."))],
+        &["name"],
+        None,
+    )
+}
+
+fn assets_generate_character_card_input_schema() -> Value {
+    object_schema(
+        &[
+            ("id", string_schema("Character asset id.")),
+            ("assetId", string_schema("Alias for id.")),
+            ("subjectId", string_schema("Legacy alias for id.")),
+        ],
+        &[],
+        Some("Generate a 16:9 character card image for a character asset and attach it back to the asset."),
+    )
+}
+
 fn subjects_output_schema() -> Value {
     ok_output_schema(json!({
         "type": "object",
@@ -697,7 +851,9 @@ fn subjects_output_schema() -> Value {
             "asset": { "type": "object" },
             "assets": { "type": "array", "items": { "type": "object" } },
             "subject": { "type": "object" },
-            "subjects": { "type": "array", "items": { "type": "object" } }
+            "subjects": { "type": "array", "items": { "type": "object" } },
+            "category": { "type": "object" },
+            "categories": { "type": "array", "items": { "type": "object" } }
         },
         "additionalProperties": true
     }))
@@ -783,13 +939,64 @@ fn voice_bind_asset_input_schema() -> Value {
 }
 
 fn voice_speech_input_schema() -> Value {
+    let voice_setting_schema = json!({
+        "type": "object",
+        "description": "MiniMax-compatible voice controls. Top-level speed/pitch/emotion are preferred for new calls; use this for native passthrough.",
+        "properties": {
+            "voice_id": { "type": "string" },
+            "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+            "pitch": { "type": "integer", "minimum": -12, "maximum": 12 },
+            "emotion": { "type": "string", "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whipser", "whisper"] },
+            "add_silence": { "type": "number" }
+        },
+        "additionalProperties": true
+    });
+    let audio_setting_schema = json!({
+        "type": "object",
+        "description": "Optional audio output controls, such as sample_rate, bitrate, and channel.",
+        "properties": {
+            "sample_rate": { "type": "integer" },
+            "bitrate": { "type": "integer" },
+            "channel": { "type": "integer" },
+            "format": { "type": "string" }
+        },
+        "additionalProperties": true
+    });
+    let speech_segment_schema = json!({
+        "type": "object",
+        "description": "One ordered TTS segment. Segment controls override the parent voice.speech controls. For expressive long-form speech, invoke the tts-director skill before constructing segments.",
+        "properties": {
+            "input": { "type": "string", "description": "Exact spoken text for this segment. MiniMax pause markers and tone tags are allowed." },
+            "text": { "type": "string", "description": "Alias for input." },
+            "voiceId": { "type": "string" },
+            "voice_id": { "type": "string" },
+            "voice": { "type": "string" },
+            "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+            "pitch": { "type": "integer", "minimum": -12, "maximum": 12 },
+            "emotion": { "type": "string", "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whipser", "whisper"] },
+            "add_silence": { "type": "number" },
+            "voice_setting": voice_setting_schema.clone()
+        },
+        "required": ["input"],
+        "additionalProperties": true
+    });
     object_schema(
         &[
             (
                 "input",
                 string_schema(
-                    "Final narration script text to synthesize. Pass exactly what should be spoken, do not pass control instructions."
+                    "Final narration script text to synthesize. For expressive or multi-tone narration, invoke `tts-director` first and prefer `segments` instead of making separate tool calls. MiniMax pause markers like <#0.6#> and tone tags like (laughs) or (sighs) are allowed."
                 ),
+            ),
+            (
+                "segments",
+                json!({
+                    "type": "array",
+                    "description": "Ordered TTS segments for long narration with different emotions, speed, pitch, or pause strategy. For expressive TTS, invoke `tts-director` first. Submit once; the media runtime generates each segment and merges the final audio.",
+                    "items": speech_segment_schema,
+                    "minItems": 1,
+                    "maxItems": 50
+                }),
             ),
             (
                 "voiceId",
@@ -814,6 +1021,36 @@ fn voice_speech_input_schema() -> Value {
                 string_schema("Optional language boost value, such as Chinese."),
             ),
             (
+                "speed",
+                number_schema("Speech speed. Use 1.0 as neutral; supported range is 0.5 to 2.0.", 0.5, 2.0),
+            ),
+            (
+                "pitch",
+                integer_schema("Pitch shift from -12 to 12. Use 0 unless the user asks for a higher or lower tone.", -12, 12),
+            ),
+            (
+                "emotion",
+                speech_emotion_schema("MiniMax speech emotion. Use when the script has an obvious delivery intent."),
+            ),
+            (
+                "add_silence",
+                json!({ "type": "number", "description": "MiniMax native sentence silence passthrough." }),
+            ),
+            ("voice_setting", voice_setting_schema),
+            ("audio_setting", audio_setting_schema),
+            (
+                "prefer_sync_tts",
+                bool_schema("Prefer synchronous TTS when the backend supports both sync and async modes."),
+            ),
+            (
+                "prefer_async_tts",
+                bool_schema("Prefer asynchronous TTS for long narration when the backend supports it."),
+            ),
+            (
+                "async_tts",
+                bool_schema("Force async TTS mode when supported by the backend."),
+            ),
+            (
                 "responseFormat",
                 string_schema("Audio format, usually mp3."),
             ),
@@ -836,9 +1073,9 @@ fn voice_speech_input_schema() -> Value {
                 ),
             ),
         ],
-        &["input", "voiceId"],
+        &["voiceId"],
         Some(
-            "Generate narration audio from `input` using a specific voice id. Use `Operate(resource=\"voice\", operation=\"speech\", input={\"voiceId\":\"<platform voice id>\",\"input\":\"<literal script text>\"})`. The `input` field is the exact spoken text only.",
+            "Generate narration audio from `input` or ordered `segments` using a specific voice id. For expressive, poetic, ad, character, or multi-tone long narration, invoke `tts-director` first, then send one `segments` request and let the media runtime merge the final audio; do not call voice.speech repeatedly and merge manually.",
         ),
     )
 }
@@ -2683,11 +2920,39 @@ fn redbox_input_schema() -> Value {
         "description": "Structured operation input. For image generation, put prompt/count/aspectRatio/size/quality/referenceImages here; do not hide the requested ratio inside prompt text only.",
         "properties": {
             "prompt": { "type": "string", "description": "Generation or operation prompt." },
-            "input": { "type": "string", "description": "Literal text input for speech/TTS. For voice.speech, this is exactly what should be spoken." },
+            "input": { "type": "string", "description": "Literal text input for speech/TTS. For expressive or multi-tone long narration, invoke tts-director first and prefer segments. MiniMax pause markers like <#0.6#> and tone tags like (laughs) are allowed when intentional." },
+            "segments": {
+                "type": "array",
+                "description": "Ordered TTS segments for long narration with different speed, pitch, emotion, or pauses. Invoke tts-director first for expressive speech. Submit once; media runtime merges the final audio.",
+                "maxItems": 50,
+                "items": {
+                    "type": "object",
+                    "required": ["input"],
+                    "additionalProperties": true,
+                    "properties": {
+                        "input": { "type": "string" },
+                        "text": { "type": "string" },
+                        "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+                        "pitch": { "type": "integer", "minimum": -12, "maximum": 12 },
+                        "emotion": { "type": "string", "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whipser", "whisper"] },
+                        "add_silence": { "type": "number" },
+                        "voice_setting": { "type": "object", "additionalProperties": true }
+                    }
+                }
+            },
             "voiceId": { "type": "string", "description": "Platform voice id for speech/TTS, usually read from an asset's voice.voiceId." },
             "title": { "type": "string", "description": "Optional generated media title." },
             "responseFormat": { "type": "string", "description": "Optional audio format for speech/TTS, usually mp3 or wav." },
             "languageBoost": { "type": "string", "description": "Optional language boost for speech/TTS, such as zh-CN." },
+            "speed": { "type": "number", "minimum": 0.5, "maximum": 2.0, "description": "Optional TTS speed. 1.0 is neutral; use subtle values such as 0.92 or 1.08 unless asked otherwise." },
+            "pitch": { "type": "integer", "minimum": -12, "maximum": 12, "description": "Optional TTS pitch. 0 is neutral." },
+            "emotion": { "type": "string", "enum": ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "calm", "fluent", "whipser", "whisper"], "description": "Optional MiniMax TTS emotion." },
+            "add_silence": { "type": "number", "description": "Optional MiniMax sentence silence passthrough." },
+            "voice_setting": { "type": "object", "description": "Optional native MiniMax voice_setting passthrough.", "additionalProperties": true },
+            "audio_setting": { "type": "object", "description": "Optional audio controls such as sample_rate, bitrate, and channel.", "additionalProperties": true },
+            "prefer_sync_tts": { "type": "boolean", "description": "Prefer synchronous TTS when supported." },
+            "prefer_async_tts": { "type": "boolean", "description": "Prefer asynchronous TTS for long narration when supported." },
+            "async_tts": { "type": "boolean", "description": "Force async TTS when supported." },
             "waitForCompletion": { "type": "boolean", "description": "For generated media needed by the next step, set true so the tool returns the completed asset path." },
             "count": { "type": "integer", "minimum": 1, "maximum": 6, "description": "Number of images or generated items." },
             "aspectRatio": image_aspect_ratio_schema("Image output ratio. Required for image generation when the user specifies square/portrait/landscape/vertical/wide or a ratio like 3:4."),
@@ -3055,6 +3320,72 @@ const APP_CLI_ACTIONS: &[ActionDescriptor] = &[
         output_schema: subjects_output_schema,
         mutating: false,
         concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "assets.create",
+        namespace: "assets",
+        description: "Create a reusable local asset such as a character, product, scene, prop, brand, model, voice, or visual reference. For roles, use kind=character and categoryName=角色.",
+        input_schema: assets_create_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "assets.update",
+        namespace: "assets",
+        description: "Update a reusable local asset by id.",
+        input_schema: assets_update_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "assets.delete",
+        namespace: "assets",
+        description: "Delete a reusable local asset by id. Use only when the user explicitly asks to remove the asset.",
+        input_schema: subjects_get_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "assets.categories.list",
+        namespace: "assets",
+        description: "List asset library categories.",
+        input_schema: no_payload_schema,
+        output_schema: subjects_output_schema,
+        mutating: false,
+        concurrency_safe: true,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "assets.categories.create",
+        namespace: "assets",
+        description: "Create an asset library category.",
+        input_schema: assets_category_create_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: true,
+        concurrency_safe: false,
+        runtime_modes: ALL_APP_RUNTIME_MODES,
+        visibility: ActionVisibility::Model,
+    },
+    ActionDescriptor {
+        action: "assets.generateCharacterCard",
+        namespace: "assets",
+        description: "Generate a reusable 16:9 character card image for a character asset, then write the result back to the asset image set and media library.",
+        input_schema: assets_generate_character_card_input_schema,
+        output_schema: subjects_output_schema,
+        mutating: true,
+        concurrency_safe: false,
         runtime_modes: ALL_APP_RUNTIME_MODES,
         visibility: ActionVisibility::Model,
     },
@@ -4952,6 +5283,28 @@ mod tests {
         assert!(redbox
             .pointer("/function/parameters/properties/input/properties/voiceId")
             .is_some());
+        assert_eq!(
+            redbox.pointer("/function/parameters/properties/input/properties/speed/maximum"),
+            Some(&json!(2.0))
+        );
+        assert!(redbox
+            .pointer("/function/parameters/properties/input/properties/emotion/enum")
+            .and_then(Value::as_array)
+            .expect("emotion enum")
+            .contains(&json!("happy")));
+        assert_eq!(
+            redbox.pointer(
+                "/function/parameters/properties/input/properties/segments/items/properties/speed/maximum"
+            ),
+            Some(&json!(2.0))
+        );
+        assert!(redbox
+            .pointer(
+                "/function/parameters/properties/input/properties/segments/items/properties/emotion/enum"
+            )
+            .and_then(Value::as_array)
+            .expect("segment emotion enum")
+            .contains(&json!("whisper")));
         assert!(redbox
             .pointer("/function/parameters/properties/input/properties/waitForCompletion")
             .is_some());
@@ -4987,6 +5340,10 @@ mod tests {
 
         assert!(actions.contains(&"assets.search"));
         assert!(actions.contains(&"assets.get"));
+        assert!(actions.contains(&"assets.create"));
+        assert!(actions.contains(&"assets.update"));
+        assert!(actions.contains(&"assets.generateCharacterCard"));
+        assert!(actions.contains(&"assets.categories.create"));
         assert!(!actions.contains(&"subjects.search"));
         assert!(!actions.contains(&"subjects.get"));
     }

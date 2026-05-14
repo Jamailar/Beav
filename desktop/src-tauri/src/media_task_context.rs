@@ -38,6 +38,7 @@ pub(crate) fn active_media_task_prompt_section(
         format!("- taskId: {task_id}"),
         "- Continuation rule: short replies such as `继续`, `继续做音频`, or `先做音频` continue this exact task. Do not replace the script with a new marketing, SOP, or generic口播文案.".to_string(),
         "- For `voice.speech`, the `input` must be the active script text or a direct chunk from it, and `voiceId` must match the active subject voice when provided.".to_string(),
+        "- `voice.speech` may include delivery controls such as speed, pitch, emotion, add_silence, MiniMax pause markers like <#0.6#>, and light tone tags like (laughs) or (sighs) when they improve the approved script's rhythm. For expressive, poetic, character, ad, or multi-tone narration, first activate `tts-director` with `Operate(resource=\"skills\", operation=\"invoke\", input={ \"name\": \"tts-director\" })`, then use one ordered `segments` request so the media runtime can merge the final audio.".to_string(),
     ];
     if !subject_name.trim().is_empty() {
         lines.push(format!("- subjectName: {subject_name}"));
@@ -87,7 +88,7 @@ pub(crate) fn validate_voice_speech_payload(
         }
     }
 
-    let Some(input) = payload_string(payload, "input") else {
+    let Some(input) = voice_speech_input_text(payload) else {
         return Ok(());
     };
     let approved_text = task
@@ -105,6 +106,27 @@ pub(crate) fn validate_voice_speech_payload(
         "voice.speech input does not match the active media task script.",
         &task,
     ))
+}
+
+fn voice_speech_input_text(payload: &Value) -> Option<String> {
+    payload_string(payload, "input").or_else(|| {
+        let joined = payload
+            .get("segments")?
+            .as_array()?
+            .iter()
+            .filter_map(|segment| {
+                payload_string(segment, "input").or_else(|| payload_string(segment, "text"))
+            })
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if joined.trim().is_empty() {
+            None
+        } else {
+            Some(joined)
+        }
+    })
 }
 
 fn active_media_task_for_session(store: &AppStore, session_id: Option<&str>) -> Option<Value> {

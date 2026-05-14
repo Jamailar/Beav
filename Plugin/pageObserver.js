@@ -1146,6 +1146,9 @@ function summarizeActionResponse(response, fallback) {
     if (response?.mode === 'xhs-download') {
         return `下载 ${Number(response.count || 0)} 个素材`;
     }
+    if (response?.mode === 'xhs-download-zip') {
+        return `压缩包 ${Number(response.count || 0)} 个素材`;
+    }
     if (response?.mode === 'xhs-comments') {
         return `评论 ${Number(response.count || 0)} 条`;
     }
@@ -1162,6 +1165,7 @@ async function runXhsDomAction(action, options = {}) {
     const actionMap = {
         save: { type: 'save-xhs', pending: '保存中...', done: '已保存到 RedBox' },
         download: { type: 'xhs:download-current-note', pending: '下载中...', done: '已创建下载任务' },
+        downloadZip: { type: 'xhs:download-current-note-zip', pending: '打包中...', done: '已创建压缩包下载' },
         comments: { type: 'xhs:collect-current-comments', pending: '采集中...', done: '评论已写入知识库' },
         blogger: { type: 'xhs:collect-current-blogger', pending: '采集中...', done: '已保存博主资料' },
         bloggerNotes: { type: 'xhs:collect-blogger-notes', pending: '采集中...', done: '已采集主页笔记' },
@@ -1482,16 +1486,16 @@ function createXhsDetailHost(injectionKey) {
         box-sizing: border-box;
       }
       .redbox-xhs-actions {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
+        display: inline-flex;
+        align-items: flex-start;
+        flex-direction: column;
         gap: 12px;
         padding: 0 16px 16px;
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
       }
       @media (min-width: 1280px) {
         .redbox-xhs-actions {
-          gap: 16px;
+          gap: 12px;
           padding: 0 24px 24px;
         }
       }
@@ -1529,21 +1533,31 @@ function createXhsDetailHost(injectionKey) {
       }
     `;
     const actions = document.createElement('div');
-    actions.className = 'redbox-xhs-actions p-4 xl:p-6 !pt-0 flex gap-3 xl:gap-4 flex-wrap';
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.redboxAction = 'save';
-    button.textContent = '保存笔记';
-    button.title = '保存当前小红书笔记到 RedBox';
+    actions.className = 'redbox-xhs-actions p-4 xl:p-6 !pt-0';
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.dataset.redboxAction = 'save';
+    saveButton.textContent = '保存笔记';
+    saveButton.title = '保存当前小红书笔记到 RedBox';
+    const zipButton = document.createElement('button');
+    zipButton.type = 'button';
+    zipButton.dataset.redboxAction = 'downloadZip';
+    zipButton.textContent = '下载压缩包';
+    zipButton.title = '下载当前笔记图片或视频压缩包';
     const status = document.createElement('span');
     status.className = 'redbox-xhs-status';
     status.hidden = true;
-    button.addEventListener('click', (event) => {
+    saveButton.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
         void runXhsDomAction('save', { statusTarget: actions });
     });
-    actions.append(button, status);
+    zipButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void runXhsDomAction('downloadZip', { statusTarget: actions });
+    });
+    actions.append(saveButton, zipButton, status);
     shadow.append(style, actions);
     return host;
 }

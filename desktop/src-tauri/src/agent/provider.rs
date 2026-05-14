@@ -9,6 +9,13 @@ use crate::{
     run_openai_interactive_chat_runtime, AppState,
 };
 
+fn runtime_accepts_implicit_model_config(runtime_mode: &str) -> bool {
+    matches!(
+        runtime_mode.trim(),
+        "" | "default" | "chat" | "team" | "chatroom" | "advisor-discussion"
+    )
+}
+
 pub fn resolve_chat_exchange_response_stage(
     app: Option<&AppHandle>,
     state: &State<'_, AppState>,
@@ -26,8 +33,20 @@ pub fn resolve_chat_exchange_response_stage(
     }
 
     let app = app.ok_or_else(|| "App handle unavailable for runtime execution".to_string())?;
-    let scoped_model_config = if let Some(value) = model_config {
-        value.clone()
+    let model_config_has_runtime_mode = model_config
+        .and_then(|value| {
+            value
+                .get("runtimeMode")
+                .or_else(|| value.get("runtime_mode"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    let scoped_model_config = if model_config_has_runtime_mode
+        || runtime_accepts_implicit_model_config(&context.runtime_mode)
+    {
+        model_config.cloned().unwrap_or_else(|| json!({}))
     } else {
         json!({})
     };
@@ -246,12 +265,26 @@ fn emits_live_events_for_runtime_mode(runtime_mode: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::emits_live_events_for_runtime_mode;
+    use super::{emits_live_events_for_runtime_mode, runtime_accepts_implicit_model_config};
 
     #[test]
     fn emits_live_events_for_runtime_mode_skips_wander_only() {
         assert!(emits_live_events_for_runtime_mode("team"));
         assert!(emits_live_events_for_runtime_mode("redclaw"));
         assert!(!emits_live_events_for_runtime_mode("wander"));
+    }
+
+    #[test]
+    fn dedicated_runtime_modes_ignore_implicit_chat_model_config() {
+        assert!(!runtime_accepts_implicit_model_config("redclaw"));
+        assert!(!runtime_accepts_implicit_model_config("wander"));
+        assert!(!runtime_accepts_implicit_model_config("knowledge"));
+    }
+
+    #[test]
+    fn chat_runtime_modes_accept_implicit_chat_model_config() {
+        assert!(runtime_accepts_implicit_model_config("chat"));
+        assert!(runtime_accepts_implicit_model_config("team"));
+        assert!(runtime_accepts_implicit_model_config("advisor-discussion"));
     }
 }
