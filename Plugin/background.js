@@ -57,6 +57,8 @@ const DEFAULT_PLUGIN_SETTINGS = {
   autoUpdateCheck: true,
 };
 
+const USER_PROFILE_FEATURE_ENABLED = false;
+
 let cachedKnowledgeApi = null;
 let cachedKnowledgeApiAt = 0;
 let xhsTaskSequence = 0;
@@ -328,6 +330,9 @@ async function handleMessage(message, sender) {
         execute: () => collectXhsCommentsFromTab(tabId),
       });
     case 'xhs:collect-current-blogger':
+      if (!USER_PROFILE_FEATURE_ENABLED) {
+        throw new Error('账号档案功能暂未开放');
+      }
       return await enqueueXhsTask({
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
@@ -335,6 +340,9 @@ async function handleMessage(message, sender) {
         execute: () => collectXhsBloggerFromTab(tabId),
       });
     case 'xhs:collect-blogger-notes':
+      if (!USER_PROFILE_FEATURE_ENABLED) {
+        throw new Error('账号档案功能暂未开放');
+      }
       return await enqueueXhsTask({
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
@@ -343,6 +351,9 @@ async function handleMessage(message, sender) {
         execute: () => collectXhsBloggerNotesFromTab(tabId, message?.options),
       });
     case 'account:bind-current-platform':
+      if (!USER_PROFILE_FEATURE_ENABLED) {
+        throw new Error('账号档案功能暂未开放');
+      }
       return await enqueueXhsTask({
         type: message.type,
         title: createXhsTaskTitle(message.type, message, tabId),
@@ -500,7 +511,7 @@ function detectCaptureTargetFromUrl(rawUrl) {
   }
 
   if (/(^|\.)xiaohongshu\.com$/i.test(hostname) || /(^|\.)rednote\.com$/i.test(hostname)) {
-    if (pathname.startsWith('/user/profile/')) {
+    if (USER_PROFILE_FEATURE_ENABLED && pathname.startsWith('/user/profile/')) {
       return {
         kind: 'xhs-profile',
         action: 'xhs:collect-current-blogger',

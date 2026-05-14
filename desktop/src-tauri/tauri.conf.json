@@ -49,6 +49,8 @@
     ],
     "resources": [
       "resources/knowledge-api-guide.html",
+      "resources/richpost-theme-guide.html",
+      "../../Plugin",
       "../prompts/library",
       "../builtin-skills"
     ],

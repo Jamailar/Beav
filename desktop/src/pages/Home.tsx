@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Archive, ArrowRight, Bell, Clapperboard, FileText, Folder, Image, ImagePlus, Lightbulb, Loader2, MessageSquareText, Mic2, PenLine, RefreshCw, Send, Sparkles, X } from 'lucide-react';
 import { ApprovalPanel } from './Approval';
-import { CreatorProfilesPanel } from './CreatorProfiles';
 import { formatTimestampDate, parseTimestampMs } from '../utils/time';
 import type { ThrivePluginHomeAction, ThrivePluginHomeResponse, ThrivePluginHomeWidget } from '../types';
 
@@ -9,6 +8,7 @@ interface HomeProps {
     isActive?: boolean;
     onNavigateToCoverStudio?: () => void;
     onNavigateToGenerationStudio?: (mode: 'image' | 'video' | 'audio') => void;
+    onOpenManuscript?: (filePath: string) => void;
     onNavigateToRedClaw?: (message: {
         content: string;
         displayContent?: string;
@@ -205,32 +205,37 @@ function QuickAppButton({
 
 function RecentManuscriptCard({
     manuscript,
+    onOpen,
 }: {
     manuscript: RecentManuscript;
+    onOpen?: (filePath: string) => void;
 }) {
     const Icon = manuscript.draftType === 'video'
         ? Clapperboard
         : FileText;
 
     return (
-        <div
-            className="overflow-hidden rounded-xl border border-border bg-surface-primary text-left shadow-sm"
+        <button
+            type="button"
+            onClick={() => onOpen?.(manuscript.path)}
+            className="group overflow-hidden rounded-xl border border-border bg-surface-primary text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-accent-primary/30 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary/35"
+            title={manuscript.title}
         >
             <div className="relative aspect-[16/7] overflow-hidden bg-surface-secondary">
                 <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,rgb(var(--color-accent-muted))_0%,rgb(var(--color-surface-secondary))_48%,rgb(var(--color-surface-primary))_100%)]">
-                    <Icon className="h-8 w-8 text-accent-primary/65" strokeWidth={1.6} />
+                    <Icon className="h-8 w-8 text-accent-primary/65 transition-transform group-hover:scale-105" strokeWidth={1.6} />
                 </div>
                 <span className="absolute left-3 top-3 rounded-full border border-white/50 bg-white/80 px-2 py-0.5 text-[11px] font-medium text-text-secondary shadow-sm backdrop-blur">
                     {resolveDraftTypeLabel(manuscript.draftType)}
                 </span>
             </div>
             <div className="p-3">
-                <div className="truncate text-[13px] font-semibold text-text-primary">{manuscript.title}</div>
+                <div className="truncate text-[13px] font-semibold text-text-primary group-hover:text-accent-primary">{manuscript.title}</div>
                 <div className="mt-1 truncate text-[11px] leading-4 text-text-tertiary">
                     {formatRecentDate(manuscript.updatedAt)}
                 </div>
             </div>
-        </div>
+        </button>
     );
 }
 
@@ -318,7 +323,7 @@ function PluginHomeWidgetCard({
     );
 }
 
-export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onNavigateToRedClaw }: HomeProps) {
+export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGenerationStudio, onOpenManuscript, onNavigateToRedClaw }: HomeProps) {
     const [stats, setStats] = useState<HomeStats>(EMPTY_STATS);
     const [recentManuscripts, setRecentManuscripts] = useState<RecentManuscript[]>([]);
     const [pluginHomeWidgets, setPluginHomeWidgets] = useState<ThrivePluginHomeWidget[]>([]);
@@ -572,6 +577,7 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                                     <RecentManuscriptCard
                                         key={manuscript.path}
                                         manuscript={manuscript}
+                                        onOpen={onOpenManuscript}
                                     />
                                 ))}
                             </div>
@@ -582,9 +588,6 @@ export function Home({ isActive = true, onNavigateToCoverStudio, onNavigateToGen
                         )}
                     </section>
 
-                    <section className="min-h-[150px]">
-                        <CreatorProfilesPanel isActive={isActive} embedded />
-                    </section>
                 </div>
 
                 <aside className="min-h-[520px] rounded-2xl border border-border bg-surface-primary p-5 shadow-sm xl:sticky xl:top-5 xl:self-start" aria-label="AI 建议">

@@ -1339,7 +1339,7 @@ pub(crate) fn official_sync_source_into_settings(settings: &mut Value, models: &
         }
         object.insert("video_endpoint".to_string(), json!(official_base_url));
         object.insert("video_api_key".to_string(), json!(official_video_api_key));
-        object.insert("video_model".to_string(), json!("wan2.7-t2v-video"));
+        object.insert("video_model".to_string(), json!("seedance-2.0"));
         object.insert(
             "redbox_official_models_json".to_string(),
             json!(serde_json::to_string(models).unwrap_or_else(|_| "[]".to_string())),

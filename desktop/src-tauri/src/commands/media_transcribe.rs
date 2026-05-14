@@ -6,6 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
+const OFFICIAL_AGENT_SRT_TRANSCRIPTION_MODEL: &str = "fun-asr";
+
 fn resolve_media_transcribe_path(
     state: &State<'_, AppState>,
     raw_path: &str,
@@ -38,6 +40,76 @@ fn normalize_transcript_format(value: Option<&str>) -> (&'static str, &'static s
         "json" => ("json", "json"),
         "verbose_json" | "verbose-json" => ("verbose_json", "json"),
         _ => ("srt", "srt"),
+    }
+}
+
+fn json_setting(settings: &Value, key: &str) -> Option<Value> {
+    payload_string(settings, key).and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+}
+
+fn source_is_official_managed(source: &Value) -> bool {
+    let id = source
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let preset_id = source
+        .get("presetId")
+        .or_else(|| source.get("preset_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    id == "redbox_official_auto" || id.ends_with("_official_auto") || preset_id == "redbox-official"
+}
+
+fn transcription_route_uses_official_source(settings: &Value) -> bool {
+    let Some(routes) = json_setting(settings, "ai_model_routes_json") else {
+        return false;
+    };
+    let Some(source_id) = routes
+        .get("transcription")
+        .and_then(|route| route.get("sourceId").or_else(|| route.get("source_id")))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    if source_id == "redbox_official_auto" || source_id.ends_with("_official_auto") {
+        return true;
+    }
+    json_setting(settings, "ai_sources_json")
+        .and_then(|sources| sources.as_array().cloned())
+        .map(|sources| {
+            sources.iter().any(|source| {
+                source
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id.trim() == source_id)
+                    .unwrap_or(false)
+                    && source_is_official_managed(source)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn resolve_agent_srt_transcription_model(
+    settings: &Value,
+    endpoint: &str,
+    configured_model: &str,
+    response_format: &str,
+) -> String {
+    if response_format == "srt"
+        && (crate::media_generation::is_redbox_official_endpoint(endpoint)
+            || transcription_route_uses_official_source(settings))
+    {
+        // Temporary official-source compatibility shim: agent-generated SRT must use fun-asr
+        // until the official ASR routing/model matrix is updated.
+        OFFICIAL_AGENT_SRT_TRANSCRIPTION_MODEL.to_string()
+    } else {
+        configured_model.to_string()
     }
 }
 
@@ -287,6 +359,12 @@ pub(crate) fn execute_media_transcribe(
             "未配置音频转写服务，请先在设置中填写 transcription endpoint/model。".to_string(),
         );
     };
+    let effective_model_name = resolve_agent_srt_transcription_model(
+        &settings_snapshot,
+        &endpoint,
+        &model_name,
+        response_format,
+    );
 
     let job_id = make_id("media-transcribe-job");
     let output_dir = output_dir_for_request(state, request, &job_id)?;
@@ -296,7 +374,7 @@ pub(crate) fn execute_media_transcribe(
         transcribe_with_subtitle_fallback(
             &endpoint,
             api_key.as_deref(),
-            &model_name,
+            &effective_model_name,
             &audio_path,
             response_format,
         )?
@@ -305,7 +383,7 @@ pub(crate) fn execute_media_transcribe(
             run_curl_transcription_with_parse_format(
                 &endpoint,
                 api_key.as_deref(),
-                &model_name,
+                &effective_model_name,
                 &audio_path,
                 "audio/wav",
                 Some(response_format),
@@ -332,7 +410,7 @@ pub(crate) fn execute_media_transcribe(
         "contentPreview": text_preview(&transcript, 4000),
         "contentChars": transcript.chars().count(),
         "timingMode": timing_mode,
-        "modelName": model_name
+        "modelName": effective_model_name
     }))
 }
 
@@ -358,5 +436,62 @@ mod tests {
 
         assert!(rendered.contains("1\n00:00:00,000 --> "));
         assert!(rendered.contains("--> 00:00:10,000"));
+    }
+
+    #[test]
+    fn official_agent_srt_transcription_forces_fun_asr() {
+        let settings = json!({
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "transcription": { "sourceId": "redbox_official_auto" }
+            })).unwrap()
+        });
+
+        let model = resolve_agent_srt_transcription_model(
+            &settings,
+            "https://example.com/v1",
+            "user-selected-asr",
+            "srt",
+        );
+
+        assert_eq!(model, "fun-asr");
+    }
+
+    #[test]
+    fn official_agent_non_srt_transcription_preserves_user_model() {
+        let settings = json!({
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "transcription": { "sourceId": "redbox_official_auto" }
+            })).unwrap()
+        });
+
+        let model = resolve_agent_srt_transcription_model(
+            &settings,
+            "https://example.com/v1",
+            "user-selected-asr",
+            "text",
+        );
+
+        assert_eq!(model, "user-selected-asr");
+    }
+
+    #[test]
+    fn custom_agent_srt_transcription_preserves_user_model() {
+        let settings = json!({
+            "ai_model_routes_json": serde_json::to_string(&json!({
+                "transcription": { "sourceId": "custom-source" }
+            })).unwrap(),
+            "ai_sources_json": serde_json::to_string(&json!([
+                { "id": "custom-source", "presetId": "custom" }
+            ])).unwrap()
+        });
+
+        let model = resolve_agent_srt_transcription_model(
+            &settings,
+            "https://example.com/v1",
+            "user-selected-asr",
+            "srt",
+        );
+
+        assert_eq!(model, "user-selected-asr");
     }
 }

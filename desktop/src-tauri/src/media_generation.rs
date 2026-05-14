@@ -2377,13 +2377,13 @@ mod tests {
     fn resolve_video_generation_settings_preserves_legacy_thrive_official_endpoint() {
         let settings = json!({
             "video_endpoint": "https://api.ziz.hk/thrive/v1",
-            "video_model": "wan2.7-t2v-video"
+            "video_model": "seedance-2.0"
         });
         let (endpoint, _api_key, model) =
             resolve_video_generation_settings(&settings).expect("video settings");
 
         assert_eq!(endpoint, "https://api.ziz.hk/thrive/v1");
-        assert_eq!(model, "wan2.7-t2v-video");
+        assert_eq!(model, "seedance-2.0");
         assert!(is_redbox_official_endpoint(&endpoint));
     }
 

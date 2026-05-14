@@ -1442,6 +1442,7 @@ fn looks_like_video_model_id(model: &str) -> bool {
         "r2v",
         "kling",
         "veo",
+        "seedance",
         "hailuo",
         "runway",
     ]
@@ -1500,33 +1501,13 @@ fn resolve_provider_metadata(
         "voice_clone" => normalize_optional_string(payload_string(payload, "model"))
             .or_else(|| payload_string(&settings, "voice_clone_model")),
         _ => {
-            let generation_mode = payload_field(payload, "generationMode")
-                .and_then(Value::as_str)
-                .unwrap_or("text-to-video");
-            normalize_optional_string(payload_string(payload, "model")).or_else(|| {
-                let configured =
-                    resolve_video_generation_settings(&settings).map(|(_, _, model)| model);
-                Some(match configured {
-                    Some(model) => {
-                        if generation_mode == "reference-guided" {
-                            "wan2.7-r2v-video".to_string()
-                        } else if matches!(generation_mode, "first-last-frame" | "continuation") {
-                            "wan2.7-i2v-video".to_string()
-                        } else {
-                            model
-                        }
-                    }
-                    None => {
-                        if generation_mode == "reference-guided" {
-                            "wan2.7-r2v-video".to_string()
-                        } else if matches!(generation_mode, "first-last-frame" | "continuation") {
-                            "wan2.7-i2v-video".to_string()
-                        } else {
-                            "wan2.7-t2v-video".to_string()
-                        }
-                    }
+            if provider == "redbox-official" {
+                Some("seedance-2.0".to_string())
+            } else {
+                normalize_optional_string(payload_string(payload, "model")).or_else(|| {
+                    resolve_video_generation_settings(&settings).map(|(_, _, model)| model)
                 })
-            })
+            }
         }
     };
     Ok((provider, model))
@@ -3575,25 +3556,15 @@ async fn run_video_submit_worker(
         let settings = with_store(&state, |store| Ok(store.settings.clone()))?;
         let (endpoint, api_key, default_model) = resolve_video_generation_settings(&settings)
             .ok_or_else(|| "video generation requires a configured video provider".to_string())?;
-        let generation_mode = loaded
-            .job
-            .request_json
-            .get("generationMode")
-            .and_then(Value::as_str)
-            .unwrap_or("text-to-video");
-        let effective_model = loaded.job.provider_model.clone().unwrap_or_else(|| {
-            if crate::media_generation::is_redbox_compatible_endpoint(&endpoint) {
-                if generation_mode == "reference-guided" {
-                    "wan2.7-r2v-video".to_string()
-                } else if matches!(generation_mode, "first-last-frame" | "continuation") {
-                    "wan2.7-i2v-video".to_string()
-                } else {
-                    default_model.clone()
-                }
-            } else {
-                default_model.clone()
-            }
-        });
+        let effective_model = if crate::media_generation::is_redbox_compatible_endpoint(&endpoint) {
+            "seedance-2.0".to_string()
+        } else {
+            loaded
+                .job
+                .provider_model
+                .clone()
+                .unwrap_or_else(|| default_model.clone())
+        };
         let response = run_video_generation_request_async(
             &endpoint,
             api_key.as_deref(),
@@ -4006,7 +3977,7 @@ mod tests {
                 priority: priority.to_string(),
                 status: "queued".to_string(),
                 provider_key: "redbox-official".to_string(),
-                provider_model: Some("wan2.7-t2v-video".to_string()),
+                provider_model: Some("seedance-2.0".to_string()),
                 request_json: json!({}),
                 result_json: None,
                 project_id: None,
@@ -4057,7 +4028,7 @@ mod tests {
     fn image_jobs_ignore_requested_model_and_use_configured_default() {
         let resolved = resolve_image_provider_model(
             Some("gpt-image-1".to_string()),
-            Some("wan2.7-r2v-video".to_string()),
+            Some("seedance-2.0".to_string()),
         )
         .expect("configured image model should be used");
         assert_eq!(resolved, Some("gpt-image-1".to_string()));
@@ -4065,7 +4036,7 @@ mod tests {
 
     #[test]
     fn image_jobs_reject_video_model_as_default_config() {
-        let error = resolve_image_provider_model(Some("wan2.7-r2v-video".to_string()), None)
+        let error = resolve_image_provider_model(Some("seedance-2.0".to_string()), None)
             .expect_err("video model should not be accepted as image default");
         assert!(error.contains("默认图片模型"));
     }

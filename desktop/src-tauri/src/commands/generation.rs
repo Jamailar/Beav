@@ -35,12 +35,8 @@ fn summarize_json_for_log(value: &Value) -> String {
     }
 }
 
-fn official_video_model_for_mode(generation_mode: &str, default_model: &str) -> String {
-    match generation_mode {
-        "reference-guided" => "wan2.7-r2v-video".to_string(),
-        "first-last-frame" | "continuation" => "wan2.7-i2v-video".to_string(),
-        _ => default_model.to_string(),
-    }
+fn official_video_model_for_mode(_generation_mode: &str) -> String {
+    "seedance-2.0".to_string()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1036,11 +1032,9 @@ pub fn handle_generation_channel(
                     .and_then(|value| value.as_str())
                     .unwrap_or("text-to-video");
                 let effective_video_model = if is_redbox_official_video_endpoint(&endpoint) {
-                    official_video_model_for_mode(generation_mode, default_model)
+                    official_video_model_for_mode(generation_mode)
                 } else {
-                    model.clone().unwrap_or_else(|| {
-                        official_video_model_for_mode(generation_mode, default_model)
-                    })
+                    model.clone().unwrap_or_else(|| default_model.clone())
                 };
                 let asset_label = video_generation_asset_label(index, count);
                 if let Some(context) = video_log_context.as_ref() {

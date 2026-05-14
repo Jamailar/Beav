@@ -895,6 +895,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
                 isActive={currentView === 'home'}
                 onNavigateToCoverStudio={() => setCurrentView('cover-studio')}
                 onNavigateToGenerationStudio={(mode) => navigateToGenerationStudio({ mode, source: 'standalone' })}
+                onOpenManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
               />
             </Suspense>

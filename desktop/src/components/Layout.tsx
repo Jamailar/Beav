@@ -12,6 +12,7 @@ import { appAlert, appConfirm } from '../utils/appDialogs';
 import { selectNotificationUnreadCount, useNotificationStore } from '../notifications/store';
 import { REDBOX_NAVIGATE_EVENT } from '../notifications/types';
 import { uiMeasure } from '../utils/uiDebug';
+import { SHOW_CURRENT_RELEASE_NOTES_EVENT, currentReleaseNotesMarkdown } from '../utils/currentReleaseNotes';
 
 interface LayoutProps {
   children: ReactNode;
@@ -59,6 +60,7 @@ interface AppUpdateNoticePayload {
   name: string;
   publishedAt: string;
   body: string;
+  mode?: 'update' | 'current';
 }
 
 type GlobalKnowledgeSearchItem = {
@@ -77,6 +79,7 @@ type GlobalKnowledgeSearchResponse = {
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'redbox:layout-sidebar-collapsed:v1';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'redbox:layout-sidebar-width:v1';
+const UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY = 'redbox:update-notice-shown-version:v1';
 const SIDEBAR_DEFAULT_WIDTH = 320;
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 460;
@@ -88,6 +91,28 @@ const GLOBAL_KNOWLEDGE_SEARCH_STORAGE_KEY = 'redbox:global-knowledge-search-quer
 function readInitialThemeMode(): ThemeMode {
   if (typeof window === 'undefined') return 'light';
   return readThemeMode();
+}
+
+function shouldShowAppUpdateNotice(payload: AppUpdateNoticePayload): boolean {
+  if (payload.mode === 'current') return true;
+  const latestVersion = String(payload.latestVersion || '').trim();
+  if (!latestVersion || typeof window === 'undefined') return Boolean(latestVersion);
+  try {
+    return window.localStorage.getItem(UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY) !== latestVersion;
+  } catch {
+    return true;
+  }
+}
+
+function markAppUpdateNoticeShown(payload: AppUpdateNoticePayload): void {
+  if (payload.mode === 'current') return;
+  const latestVersion = String(payload.latestVersion || '').trim();
+  if (!latestVersion || typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(UPDATE_NOTICE_SHOWN_VERSION_STORAGE_KEY, latestVersion);
+  } catch {
+    // Ignore storage failures; update checks should never break the shell.
+  }
 }
 
 function readInitialSidebarCollapsed(): boolean {
@@ -420,11 +445,30 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
   useEffect(() => {
     const handleUpdateNotice = (_event: unknown, payload: AppUpdateNoticePayload) => {
       if (!payload || !payload.latestVersion) return;
+      if (!shouldShowAppUpdateNotice(payload)) return;
+      markAppUpdateNoticeShown(payload);
       setUpdateNotice(payload);
+    };
+    const handleCurrentReleaseNotes = (event: Event) => {
+      const detail = event instanceof CustomEvent
+        ? event.detail as { version?: unknown } | null
+        : null;
+      const version = String(detail?.version || '').trim() || '2.0.0';
+      setUpdateNotice({
+        currentVersion: version,
+        latestVersion: version,
+        htmlUrl: '',
+        name: `RedBox v${version}`,
+        publishedAt: '2026-05-14',
+        body: currentReleaseNotesMarkdown(),
+        mode: 'current',
+      });
     };
     const updateCheckTimer = window.setTimeout(() => {
       void window.ipcRenderer.checkAppUpdate(false).then((result) => {
         if (result?.hasUpdate && result.notice) {
+          if (!shouldShowAppUpdateNotice(result.notice)) return;
+          markAppUpdateNoticeShown(result.notice);
           setUpdateNotice(result.notice);
         }
       }).catch((error) => {
@@ -432,9 +476,11 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
       });
     }, 1800);
     window.ipcRenderer.on('app:update-available', handleUpdateNotice);
+    window.addEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     return () => {
       window.clearTimeout(updateCheckTimer);
       window.ipcRenderer.off('app:update-available', handleUpdateNotice);
+      window.removeEventListener(SHOW_CURRENT_RELEASE_NOTES_EVENT, handleCurrentReleaseNotes);
     };
   }, []);
 
@@ -1150,7 +1196,9 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                     <Download className="w-6 h-6" />
                   </div>
                   <div>
-                    <div className="text-3xl font-semibold text-text-primary leading-tight">{t('layout.newVersionFound')}</div>
+                    <div className="text-3xl font-semibold text-text-primary leading-tight">
+                      {updateNotice.mode === 'current' ? t('layout.currentReleaseNotes') : t('layout.newVersionFound')}
+                    </div>
                     <div className="text-xl text-text-secondary mt-1">→ {updateNotice.latestVersion}</div>
                     <div className="text-xs text-text-tertiary mt-2">
                       {t('layout.currentVersion', { version: updateNotice.currentVersion })}
@@ -1158,16 +1206,18 @@ export function Layout({ children, currentView, onNavigate, immersiveMode = fals
                     </div>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void openReleasePage();
-                  }}
-                  disabled={isOpeningReleasePage}
-                  className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap"
-                >
-                  {isOpeningReleasePage ? t('layout.opening') : t('layout.downloadAndInstall')}
-                </button>
+                {updateNotice.mode !== 'current' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void openReleasePage();
+                    }}
+                    disabled={isOpeningReleasePage}
+                    className="h-11 px-5 rounded-lg bg-accent-primary text-white text-sm font-medium hover:bg-accent-hover disabled:opacity-60 transition-colors whitespace-nowrap"
+                  >
+                    {isOpeningReleasePage ? t('layout.opening') : t('layout.downloadAndInstall')}
+                  </button>
+                )}
               </div>
             </div>
 
