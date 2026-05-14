@@ -520,6 +520,7 @@ const DEFAULT_SAFE_DIRECT_APP_CLI_ACTIONS: &[&str] = &[
     "image.generate",
     "video.generate",
     "video.analyze",
+    "media.edit",
     "media.transcribe",
 ];
 
@@ -572,6 +573,7 @@ fn pinned_direct_app_cli_actions(
         &[
             "web.fetch",
             "video.analyze",
+            "media.edit",
             "team.guide.create",
             "media.transcribe",
             "image.generate",
@@ -1011,7 +1013,7 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
-        assert!(!plan.has_direct_app_cli_action("media.edit"));
+        assert!(plan.has_direct_app_cli_action("media.edit"));
         assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
@@ -1085,7 +1087,7 @@ mod tests {
         });
 
         assert!(plan.has_direct_app_cli_action("video.analyze"));
-        assert!(!plan.has_direct_app_cli_action("media.edit"));
+        assert!(plan.has_direct_app_cli_action("media.edit"));
         assert!(plan.has_direct_app_cli_action("media.transcribe"));
         assert!(plan.has_direct_app_cli_action("team.guide.create"));
         assert!(plan.has_direct_app_cli_action("web.fetch"));
