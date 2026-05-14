@@ -29,6 +29,7 @@ const TASK_SCOPED_METADATA_FIELDS: &[&str] = &[
     "intent",
     "platform",
     "taskType",
+    "taskIntent",
     "formatTarget",
     "executionProfile",
     "artifactType",
@@ -124,9 +125,197 @@ fn payload_knowledge_references(payload: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+fn payload_asset_references(payload: &Value) -> Vec<Value> {
+    payload
+        .get("assetReferences")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let object = item.as_object()?;
+                    let id = object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?;
+                    let mut reference = serde_json::Map::new();
+                    reference.insert("type".to_string(), json!("asset"));
+                    reference.insert("assetId".to_string(), json!(id));
+                    if let Some(value) = object.get("name").and_then(Value::as_str) {
+                        let trimmed = value.trim();
+                        if !trimmed.is_empty() {
+                            reference.insert("name".to_string(), json!(trimmed));
+                        }
+                    }
+                    Some(Value::Object(reference))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalized_lookup_key(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn extract_inline_asset_mention_names(text: &str) -> Vec<String> {
+    let mut names = Vec::<String>::new();
+    let mut chars = text.char_indices().peekable();
+    while let Some((_, ch)) = chars.next() {
+        if ch != '@' {
+            continue;
+        }
+        let mut name = String::new();
+        while let Some((_, next)) = chars.peek().copied() {
+            if next.is_whitespace()
+                || matches!(
+                    next,
+                    '@' | '#'
+                        | ','
+                        | '，'
+                        | '.'
+                        | '。'
+                        | '!'
+                        | '！'
+                        | '?'
+                        | '？'
+                        | ':'
+                        | '：'
+                        | ';'
+                        | '；'
+                        | '('
+                        | ')'
+                        | '（'
+                        | '）'
+                        | '['
+                        | ']'
+                        | '【'
+                        | '】'
+                        | '<'
+                        | '>'
+                        | '《'
+                        | '》'
+                        | '"'
+                        | '\''
+                )
+            {
+                break;
+            }
+            name.push(next);
+            chars.next();
+            if name.chars().count() >= 64 {
+                break;
+            }
+        }
+        let name = name.trim();
+        if !name.is_empty()
+            && !names
+                .iter()
+                .any(|item| normalized_lookup_key(item) == normalized_lookup_key(name))
+        {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+fn merge_inline_asset_mentions(
+    state: &State<'_, AppState>,
+    message: &str,
+    display_content: &str,
+    existing: &[Value],
+) -> Result<Vec<Value>, String> {
+    with_store(state, |store| {
+        Ok(merge_inline_asset_mentions_from_store(
+            &store,
+            message,
+            display_content,
+            existing,
+        ))
+    })
+}
+
+fn merge_inline_asset_mentions_from_store(
+    store: &crate::AppStore,
+    message: &str,
+    display_content: &str,
+    existing: &[Value],
+) -> Vec<Value> {
+    let mut references = existing.to_vec();
+    let mention_names = extract_inline_asset_mention_names(message)
+        .into_iter()
+        .chain(extract_inline_asset_mention_names(display_content))
+        .collect::<Vec<_>>();
+    if mention_names.is_empty() {
+        return references;
+    }
+    for mention_name in mention_names {
+        let mention_key = normalized_lookup_key(&mention_name);
+        if references.iter().any(|item| {
+            item.get("name")
+                .and_then(Value::as_str)
+                .map(normalized_lookup_key)
+                .is_some_and(|name| name == mention_key)
+        }) {
+            continue;
+        }
+        let matches = store
+            .subjects
+            .iter()
+            .filter(|subject| normalized_lookup_key(&subject.name) == mention_key)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            continue;
+        }
+        let subject = matches[0];
+        if references.iter().any(|item| {
+            item.get("assetId")
+                .or_else(|| item.get("id"))
+                .and_then(Value::as_str)
+                .is_some_and(|id| id == subject.id)
+        }) {
+            continue;
+        }
+        references.push(json!({
+            "type": "asset",
+            "assetId": subject.id,
+            "name": subject.name,
+        }));
+    }
+    references
+}
+
+fn infer_media_task_intent(message: &str, display_content: &str) -> Option<String> {
+    let combined = format!("{message}\n{display_content}").to_lowercase();
+    if combined.contains("视频") || combined.contains("video") || combined.contains("mp4") {
+        return Some("video".to_string());
+    }
+    if combined.contains("图片")
+        || combined.contains("图像")
+        || combined.contains("封面")
+        || combined.contains("配图")
+        || combined.contains("image")
+    {
+        return Some("image".to_string());
+    }
+    if combined.contains("语音")
+        || combined.contains("声音")
+        || combined.contains("音频")
+        || combined.contains("tts")
+        || combined.contains("voice")
+        || combined.contains("audio")
+    {
+        return Some("voice".to_string());
+    }
+    None
+}
+
 fn chat_user_message_metadata(
     advisor_id: Option<&str>,
     knowledge_references: &[Value],
+    asset_references: &[Value],
+    task_intent: Option<&str>,
 ) -> Option<Value> {
     let mut references = Vec::<Value>::new();
     if let Some(member_id) = advisor_id.map(str::trim).filter(|value| !value.is_empty()) {
@@ -137,13 +326,22 @@ fn chat_user_message_metadata(
         }));
     }
     references.extend(knowledge_references.iter().cloned());
+    references.extend(asset_references.iter().cloned());
     if references.is_empty() {
+        if let Some(task_intent) = task_intent.map(str::trim).filter(|value| !value.is_empty()) {
+            return Some(json!({ "taskIntent": task_intent }));
+        }
         return None;
     }
-    Some(json!({
+    let mut metadata = json!({
         "references": references,
         "explicitKnowledgeRefs": knowledge_references,
-    }))
+        "explicitAssetRefs": asset_references,
+    });
+    if let Some(task_intent) = task_intent.map(str::trim).filter(|value| !value.is_empty()) {
+        metadata["taskIntent"] = json!(task_intent);
+    }
+    Some(metadata)
 }
 
 fn persist_chat_user_message_before_run(
@@ -154,8 +352,15 @@ fn persist_chat_user_message_before_run(
     attachment: Option<Value>,
     advisor_id: Option<&str>,
     knowledge_references: &[Value],
+    asset_references: &[Value],
+    task_intent: Option<&str>,
 ) -> Result<(), String> {
-    let metadata = chat_user_message_metadata(advisor_id, knowledge_references);
+    let metadata = chat_user_message_metadata(
+        advisor_id,
+        knowledge_references,
+        asset_references,
+        task_intent,
+    );
     with_store_mut(state, |store| {
         store.chat_messages.push(ChatMessageRecord {
             id: make_id("message"),
@@ -199,6 +404,8 @@ fn apply_chat_turn_session_metadata(
     session_id: &str,
     advisor_id: Option<&str>,
     knowledge_references: &[Value],
+    asset_references: &[Value],
+    task_intent: Option<&str>,
 ) -> Result<Option<Value>, String> {
     with_store_mut(state, |store| {
         let advisor_snapshot = if let Some(advisor_id) = advisor_id {
@@ -270,6 +477,15 @@ fn apply_chat_turn_session_metadata(
                 "explicitKnowledgeRefs".to_string(),
                 Value::Array(knowledge_references.to_vec()),
             );
+        }
+        if !asset_references.is_empty() {
+            metadata.insert(
+                "explicitAssetRefs".to_string(),
+                Value::Array(asset_references.to_vec()),
+            );
+        }
+        if let Some(task_intent) = task_intent.map(str::trim).filter(|value| !value.is_empty()) {
+            metadata.insert("taskIntent".to_string(), json!(task_intent));
         }
         session.metadata = Some(Value::Object(metadata));
         Ok(previous_metadata)
@@ -495,9 +711,27 @@ pub fn handle_send_channel(
                 let _ = activated_skills;
             }
             let knowledge_references = payload_knowledge_references(&payload);
+            let payload_asset_references = payload_asset_references(&payload);
+            let asset_references = merge_inline_asset_mentions(
+                state,
+                &message,
+                &display_content,
+                &payload_asset_references,
+            )?;
+            let task_intent = payload_field(&payload, "taskHints")
+                .and_then(|value| value.get("taskIntent"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .or_else(|| infer_media_task_intent(&message, &display_content));
             let advisor_id = payload_member_mention_advisor_id(&payload);
             let turn_metadata_restore = if let Some(active_session_id) = session_id.as_deref() {
-                if advisor_id.is_some() || !knowledge_references.is_empty() {
+                if advisor_id.is_some()
+                    || !knowledge_references.is_empty()
+                    || !asset_references.is_empty()
+                    || task_intent.is_some()
+                {
                     Some((
                         active_session_id.to_string(),
                         apply_chat_turn_session_metadata(
@@ -505,6 +739,8 @@ pub fn handle_send_channel(
                             active_session_id,
                             advisor_id.as_deref(),
                             &knowledge_references,
+                            &asset_references,
+                            task_intent.as_deref(),
                         )?,
                     ))
                 } else {
@@ -531,6 +767,8 @@ pub fn handle_send_channel(
                     runtime_attachment.clone(),
                     advisor_id.as_deref(),
                     &knowledge_references,
+                    &asset_references,
+                    task_intent.as_deref(),
                 )?;
             }
             let mut turn = build_chat_send_turn(
@@ -680,8 +918,104 @@ pub fn handle_send_channel(
 
 #[cfg(test)]
 mod tests {
-    use super::clear_stale_task_hints_from_metadata;
+    use super::{
+        chat_user_message_metadata, clear_stale_task_hints_from_metadata,
+        extract_inline_asset_mention_names, infer_media_task_intent,
+        merge_inline_asset_mentions_from_store,
+    };
+    use crate::{AppStore, SubjectRecord};
     use serde_json::json;
+
+    fn subject(id: &str, name: &str) -> SubjectRecord {
+        SubjectRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            category_id: None,
+            description: None,
+            tags: Vec::new(),
+            attributes: Vec::new(),
+            image_paths: Vec::new(),
+            voice_path: None,
+            voice_script: None,
+            voice: None,
+            created_at: "1".to_string(),
+            updated_at: "1".to_string(),
+            absolute_image_paths: Vec::new(),
+            preview_urls: Vec::new(),
+            primary_preview_url: None,
+            absolute_voice_path: None,
+            voice_preview_url: None,
+        }
+    }
+
+    #[test]
+    fn extracts_inline_asset_mentions_from_plain_text() {
+        assert_eq!(
+            extract_inline_asset_mention_names("做一个 @Jamba 的口播视频"),
+            vec!["Jamba".to_string()]
+        );
+        assert_eq!(
+            extract_inline_asset_mention_names("@Jamba，做视频 @Jamba"),
+            vec!["Jamba".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolves_unique_inline_asset_mentions_from_store() {
+        let mut store = AppStore::default();
+        store
+            .subjects
+            .push(subject("subject_1774704234274_53536cc0", "Jamba"));
+
+        let refs =
+            merge_inline_asset_mentions_from_store(&store, "做一个 @Jamba 的口播视频", "", &[]);
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(
+            refs[0].get("assetId").and_then(|value| value.as_str()),
+            Some("subject_1774704234274_53536cc0")
+        );
+        assert_eq!(
+            refs[0].get("name").and_then(|value| value.as_str()),
+            Some("Jamba")
+        );
+    }
+
+    #[test]
+    fn skips_ambiguous_inline_asset_mentions() {
+        let mut store = AppStore::default();
+        store.subjects.push(subject("subject-a", "Jamba"));
+        store.subjects.push(subject("subject-b", "jamba"));
+
+        let refs = merge_inline_asset_mentions_from_store(&store, "@Jamba 做视频", "", &[]);
+
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn infers_generic_media_task_intent() {
+        assert_eq!(
+            infer_media_task_intent("做一个 @Jamba 的口播视频", "").as_deref(),
+            Some("video")
+        );
+        assert_eq!(
+            infer_media_task_intent("生成一张封面", "").as_deref(),
+            Some("image")
+        );
+        assert_eq!(
+            infer_media_task_intent("合成一段语音", "").as_deref(),
+            Some("voice")
+        );
+    }
+
+    #[test]
+    fn user_message_metadata_carries_task_intent_without_references() {
+        let metadata = chat_user_message_metadata(None, &[], &[], Some("video"))
+            .expect("metadata should include task intent");
+
+        assert_eq!(metadata.get("taskIntent"), Some(&json!("video")));
+        assert!(metadata.get("explicitAssetRefs").is_none());
+    }
 
     #[test]
     fn clears_task_scoped_metadata_without_dropping_session_context() {
@@ -697,6 +1031,7 @@ mod tests {
             "intent": "manuscript_creation",
             "platform": "xiaohongshu",
             "taskType": "direct_write",
+            "taskIntent": "video",
             "formatTarget": "markdown",
             "executionProfile": "artifact-authoring",
             "artifactType": "manuscript",
@@ -726,6 +1061,7 @@ mod tests {
             "intent",
             "platform",
             "taskType",
+            "taskIntent",
             "formatTarget",
             "executionProfile",
             "artifactType",
