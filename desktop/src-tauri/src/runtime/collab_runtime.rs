@@ -213,10 +213,10 @@ fn role_profile_defaults(role_id: &str) -> Value {
                 vec!["backend_debugging", "long_code_review"],
                 vec!["media.generate", "image.generate", "resource"],
             ),
-            "animation-director" => (
-                vec!["video_animation", "remotion", "shot_design"],
-                vec!["镜头规划", "动画结构", "时间线表达", "可执行视觉规范"],
-                vec!["animation_design", "video_generation", "timeline_planning"],
+            "video-director" => (
+                vec!["shot_design", "video_generation", "edit_planning"],
+                vec!["镜头规划", "剪辑结构", "时间线表达", "可执行视觉规范"],
+                vec!["video_generation", "timeline_planning"],
                 vec!["legal_review", "billing_debugging"],
                 vec!["editor", "media.generate", "resource"],
             ),
@@ -2717,7 +2717,7 @@ mod tests {
                 "sessionId": session.id,
                 "displayName": "视频工程师",
                 "roleId": "video-engineer",
-                "capabilities": ["ffmpeg", "remotion"]
+                "capabilities": ["ffmpeg"]
             }),
         )
         .unwrap();

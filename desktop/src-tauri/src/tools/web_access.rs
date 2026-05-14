@@ -2,6 +2,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::net::{IpAddr, ToSocketAddrs};
+use std::thread;
 use std::time::Duration;
 use url::Url;
 
@@ -14,6 +15,13 @@ const MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 const WEB_FETCH_TIMEOUT_SECONDS: u64 = 20;
 
 pub(crate) fn fetch(payload: &Value) -> Result<Value, String> {
+    let payload = payload.clone();
+    thread::spawn(move || fetch_blocking(&payload))
+        .join()
+        .map_err(|_| "web.fetch worker panicked".to_string())?
+}
+
+fn fetch_blocking(payload: &Value) -> Result<Value, String> {
     let raw_url = payload_string(payload, "url")
         .or_else(|| payload_string(payload, "path"))
         .ok_or_else(|| "web.fetch requires payload.url".to_string())?;

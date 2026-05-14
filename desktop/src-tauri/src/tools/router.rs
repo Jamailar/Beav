@@ -542,6 +542,46 @@ mod tests {
     }
 
     #[test]
+    fn router_normalizes_voice_speech_operate_to_completed_audio_job() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare(
+                "Operate",
+                &json!({
+                    "resource": "voice",
+                    "operation": "speech",
+                    "input": {
+                        "voiceId": "voice_2eee156a6468427bb185a831",
+                        "input": "君不见黄河之水天上来。",
+                        "title": "将进酒-Jamba朗诵"
+                    }
+                }),
+            )
+            .expect("voice speech should prepare");
+
+        assert_eq!(prepared.name, "workflow");
+        assert_eq!(
+            prepared.arguments.get("action"),
+            Some(&json!("voice.speech"))
+        );
+        let payload = prepared
+            .arguments
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("payload should exist");
+        assert_eq!(
+            payload.get("voiceId"),
+            Some(&json!("voice_2eee156a6468427bb185a831"))
+        );
+        assert_eq!(payload.get("input"), Some(&json!("君不见黄河之水天上来。")));
+        assert_eq!(payload.get("waitForCompletion"), Some(&json!(true)));
+    }
+
+    #[test]
     fn router_rejects_legacy_tool_aliases_by_default() {
         let plan = build_tool_registry_plan(ToolRegistryPlanParams {
             runtime_mode: "image-generation",
@@ -575,6 +615,21 @@ mod tests {
             .expect_err("legacy command should be disabled");
 
         assert!(error.contains("LEGACY_COMMAND_DISABLED"));
+    }
+
+    #[test]
+    fn router_prepares_visible_shell_tool() {
+        let plan = build_tool_registry_plan(ToolRegistryPlanParams {
+            runtime_mode: "redclaw",
+            ..ToolRegistryPlanParams::default()
+        });
+        let router = ToolRouter::new(plan);
+        let prepared = router
+            .prepare("shell", &json!({ "command": "pwd" }))
+            .expect("visible shell tool should be routable");
+
+        assert_eq!(prepared.name, "shell");
+        assert_eq!(prepared.arguments.get("command"), Some(&json!("pwd")));
     }
 
     #[test]

@@ -37,12 +37,13 @@ pub(crate) fn resolve_video_generation_settings(
     let endpoint = payload_string(settings, "video_endpoint").map(|endpoint| {
         let normalized = normalize_base_url(&endpoint);
         let normalized_lower = normalized.to_lowercase();
-        if normalized_lower.contains("api.ziz.hk") && !normalized_lower.contains("/thrive/v1") {
-            crate::REDBOX_OFFICIAL_CN_BASE_URL.to_string()
+        let official_route = format!("/{}/v1", crate::app_brand_slug());
+        if normalized_lower.contains("api.ziz.hk") && !normalized_lower.contains(&official_route) {
+            crate::official_base_url_for_realm("cn")
         } else if normalized_lower.contains("api.thrivingos.com")
-            && !normalized_lower.contains("/thrive/v1")
+            && !normalized_lower.contains(&official_route)
         {
-            crate::REDBOX_OFFICIAL_GLOBAL_BASE_URL.to_string()
+            crate::official_base_url_for_realm("global")
         } else {
             normalized
         }
@@ -170,7 +171,8 @@ fn is_official_gemini_endpoint(endpoint: &str) -> bool {
 
 fn is_redbox_official_image_endpoint(endpoint: &str) -> bool {
     let normalized = normalize_base_url(endpoint).to_lowercase();
-    is_redbox_compatible_endpoint(&normalized) && normalized.contains("/thrive/v1")
+    is_redbox_compatible_endpoint(&normalized)
+        && normalized.contains(&format!("/{}/v1", crate::app_brand_slug()))
 }
 
 fn resolve_gemini_openai_endpoint(endpoint: &str) -> String {
@@ -2235,6 +2237,7 @@ mod tests {
 
     #[test]
     fn build_video_request_body_adds_redbox_fields_only_for_redbox_endpoint() {
+        let official_cn_base_url = crate::official_base_url_for_realm("cn");
         let payload = json!({
             "prompt": "test",
             "aspectRatio": "9:16",
@@ -2242,7 +2245,7 @@ mod tests {
             "durationSeconds": 6,
         });
 
-        let redbox = build_video_request_body("https://api.ziz.hk/thrive/v1", "wan-test", &payload)
+        let redbox = build_video_request_body(&official_cn_base_url, "wan-test", &payload)
             .expect("redbox body");
         let generic = build_video_request_body("https://example.com/v1", "wan-test", &payload)
             .expect("generic body");
@@ -2258,6 +2261,7 @@ mod tests {
 
     #[test]
     fn build_video_request_body_adds_reference_media_for_redbox_reference_guided() {
+        let official_cn_base_url = crate::official_base_url_for_realm("cn");
         let payload = json!({
             "prompt": "test",
             "generationMode": "reference-guided",
@@ -2267,7 +2271,7 @@ mod tests {
             ],
         });
 
-        let redbox = build_video_request_body("https://api.ziz.hk/thrive/v1", "wan-test", &payload)
+        let redbox = build_video_request_body(&official_cn_base_url, "wan-test", &payload)
             .expect("redbox body");
         let generic = build_video_request_body("https://example.com/v1", "wan-test", &payload)
             .expect("generic body");
@@ -2339,15 +2343,13 @@ mod tests {
 
     #[test]
     fn redbox_official_reference_images_use_json_generation_endpoint() {
-        assert!(is_redbox_official_image_endpoint(
-            "https://api.ziz.hk/thrive/v1"
-        ));
-        assert!(is_redbox_official_image_endpoint(
-            "https://api.thrivingos.com/thrive/v1"
-        ));
+        let official_cn_base_url = crate::official_base_url_for_realm("cn");
+        let official_global_base_url = crate::official_base_url_for_realm("global");
+        assert!(is_redbox_official_image_endpoint(&official_cn_base_url));
+        assert!(is_redbox_official_image_endpoint(&official_global_base_url));
         assert_eq!(
-            normalize_image_generation_url("https://api.ziz.hk/thrive/v1"),
-            "https://api.ziz.hk/thrive/v1/images/generations"
+            normalize_image_generation_url(&official_cn_base_url),
+            format!("{official_cn_base_url}/images/generations")
         );
     }
 

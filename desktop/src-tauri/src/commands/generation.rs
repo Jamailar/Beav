@@ -11,7 +11,7 @@ use tauri::{AppHandle, State};
 fn is_redbox_official_video_endpoint(endpoint: &str) -> bool {
     let normalized = normalize_base_url(endpoint).to_lowercase();
     (normalized.contains("api.ziz.hk") || normalized.contains("api.thrivingos.com"))
-        && normalized.contains("/thrive/v1")
+        && normalized.contains(&format!("/{}/v1", app_brand_slug()))
 }
 const MAX_IMAGE_BATCH_ITEMS: usize = 6;
 const IMAGE_BATCH_PARALLELISM: usize = 4;

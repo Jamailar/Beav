@@ -1,6 +1,7 @@
 use serde_json::Value;
 use tauri::{AppHandle, State};
 
+use crate::persistence::with_store;
 use crate::{media_runtime, payload_field, payload_string, voice_service, AppState};
 
 pub fn handle_voice_channel(
@@ -57,6 +58,12 @@ pub fn handle_voice_channel(
             voice_service::bind_subject_voice(state, payload)
         }
         "voice:speech" => {
+            if let Err(error) = with_store(state, |store| {
+                crate::media_task_context::validate_voice_speech_payload(&store, payload)
+                    .map_err(|error| error.to_string())
+            }) {
+                return Some(Err(error));
+            }
             if payload_field(payload, "runtimeBypass")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)

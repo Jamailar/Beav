@@ -62,7 +62,6 @@
   - `manuscripts://current`
   - `profiles://creator_profile`
   - `editor://current/script`
-  - `editor://current/remotion`
 - `resource` 的 canonical action 固定为：
   - `workspace.list`
   - `workspace.read`

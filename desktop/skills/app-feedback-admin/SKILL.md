@@ -59,7 +59,7 @@ python3 desktop/skills/app-feedback-admin/scripts/fetch_feedback.py detail <feed
    - desktop UI: `desktop/src/pages/*`, `desktop/src/components/*`, `desktop/src/bridge/ipcRenderer.ts`
    - Tauri host: `desktop/src-tauri/src/commands/*`, `runtime/*`, `persistence/*`, `events/*`
    - AI runtime: `desktop/src-tauri/src/agent/*`, `skills/*`, `tools/*`, `mcp/*`, `subagents/*`
-   - media/video: `desktop/src-tauri/src/media*`, `desktop/remotion/*`, editor/runtime files
+   - media/video: `desktop/src-tauri/src/media*`, editor/runtime files
    - plugin intake: `Plugin/*`
    - website/release: `RedBoxweb/*`, `private/scripts/hybrid-release/*`
 6. Produce a concrete plan, not loose advice. Include ticket ids, severity, evidence, suspected module, implementation target files, verification steps, and whether it is a fix or product iteration.

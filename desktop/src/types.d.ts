@@ -1806,6 +1806,7 @@ declare global {
         message: string;
         displayContent?: string;
         attachment?: unknown;
+        assetReferences?: unknown[];
         modelConfig?: unknown;
         taskHints?: {
           intent?: string;

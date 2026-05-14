@@ -1,9 +1,9 @@
 ---
 name: video-director
-description: Use when generating short videos, including motion clips, animated cover/video requests, reference-image video, image-to-video, and first/last-frame transitions. Produces a detailed shot script first, then generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, including any product or visual reference images, asks the user to confirm, and only then calls the correct video model.
+description: Use when generating short videos, including reference-image video, image-to-video, first/last-frame transitions, and character talking-head videos. Produces a detailed shot script first, generates storyboard contact-sheet preview images through image.generate using four/six/nine-panel grids, includes any product or visual reference images, asks the user to confirm, and only then calls the correct video model. For asset-library character talking-head / 口播 videos, it must synthesize the approved spoken script with the character voice through TTS before calling video generation.
 allowedRuntimeModes: [chatroom, redclaw]
 allowedTools: [workflow]
-activationScope: turn
+activationScope: session
 ---
 
 # Video Director
@@ -22,7 +22,8 @@ Before any video tool call, follow this order:
 6. Default to direct video generation after confirmation.
 7. Only use a video project pack if the user explicitly asks for a project/package/editor workflow, or the task is already bound to an existing pack.
 8. Decide whether this should be a single-video job or a multi-video assembly.
-9. Only after confirmation, call `Operate(resource="video", operation="generate", input={ ... })`.
+9. If the confirmed task is a character talking-head / 口播 video, complete the TTS-first workflow below.
+10. Only after confirmation and any required TTS audio is complete, call `Operate(resource="video", operation="generate", input={ ... })`.
 
 If the user has not yet confirmed the script, do not generate the video.
 
@@ -30,7 +31,13 @@ The storyboard contact-sheet preview is mandatory after the first shot script is
 
 ## Asset-Library Character Talking-Head Rule
 
-When the user wants a talking-head / 口播 video using a character from the asset library, do not send the character image directly to video generation and hope the model invents the speech.
+When the user wants a talking-head / 口播 / presenter / livestream welcome video using a character from the asset library, the character image is only the visual identity reference. It is not the speech track.
+
+Keep these three inputs separate:
+
+- `voiceId`: the reusable cloned voice identity stored on the character asset. This is the primary voice field for future TTS calls.
+- voice sample / reference audio: fallback source material for cloning when no ready `voiceId` exists. Do not keep analyzing or presenting it once a ready `voiceId` has been found.
+- generated TTS audio asset: the completed spoken script. This is the only audio that should drive a character talking-head video.
 
 Use this exact order:
 
@@ -38,19 +45,61 @@ Use this exact order:
    - Confirm the final spoken script.
    - Confirm the storyboard / shot table.
    - The `Sound` column must contain the actual spoken lines, not vague labels like “角色讲解”.
-2. **Generate the complete voice track**
-   - Read the selected character asset and use its stored `voiceId` / `voice_id`.
-   - Call `Operate(resource="voice", operation="speech", input={ ... })` with the full approved spoken script.
+2. **Resolve the character voice**
+   - Read the selected character asset before generating media.
+   - If the asset has a ready `voiceId` / `voice_id`, treat that as the resolved voice and stop inspecting voice samples. Report the resolved `voiceId`, not the reference-audio filename.
+   - If the asset has a voice sample but no ready `voiceId`, call `Operate(resource="voice", operation="clone", input={ ... })` first, wait for completion, and use the returned `voiceId`.
+   - If there is no ready `voiceId` and no usable voice sample, stop and ask the user to provide or choose a voice. Do not fall back to a generic voice silently.
+3. **Generate the complete voice track with TTS**
+   - Call `Operate(resource="voice", operation="speech", input={ ... })` with the full approved spoken script and the resolved `voiceId`.
    - Prefer one complete audio asset for the whole talking-head segment unless the user explicitly wants separate clips.
-   - Wait for the audio result before starting video generation.
-3. **Generate video with both references**
+   - Wait until the TTS result contains a usable audio asset path, URL, or asset id.
+   - Do not start video generation while the TTS job is only queued or running.
+4. **Generate video with visual reference plus generated audio**
    - Use the selected character image as the visual reference.
    - Use the newly generated complete TTS audio asset as `drivingAudio`.
+   - Identify it in the prompt preface as generated speech audio, for example `Audio 1: generated Jamba TTS speech for lip-sync / speaking rhythm`.
    - Then call `Operate(resource="video", operation="generate", input={ ... })`, normally in `reference-guided` mode.
 
-This is mandatory because the generated audio must be complete and aligned with the approved script. A character voice id is not a finished audio track; it must be converted to audio with TTS before video generation.
+This is mandatory because the video model needs a finished audio waveform aligned with the approved script. A character `voiceId` is not audio. A voice sample is not the approved spoken line. The spoken text inside the video prompt is not a substitute for TTS.
 
-If the character asset has no stored `voiceId`, stop and ask the user to choose/bind a voice before generating the video.
+Forbidden shortcuts:
+
+- Do not call video generation for character口播 with only the character image and a script.
+- Do not pass `voiceId`, voice sample audio, or “音色素材” as `drivingAudio`.
+- Do not rely on `generateAudio` to create the character voice for talking-head work.
+- Do not describe the intended speech only in the video prompt and expect the video model to synthesize it.
+- Do not split the TTS per storyboard row unless the user asks for separately editable audio clips or the video will be assembled from multiple independent speaking clips.
+
+Recommended TTS payload shape:
+
+```json
+{
+  "voiceId": "voice_xxx",
+  "input": "完整、已确认的口播台词。",
+  "title": "Jamba welcome voiceover",
+  "waitForCompletion": true
+}
+```
+
+Recommended video payload shape after TTS completes:
+
+```json
+{
+  "generationMode": "reference-guided",
+  "referenceImages": ["/absolute/path/to/jamba.png"],
+  "drivingAudio": "/absolute/path/to/generated-jamba-tts.mp3",
+  "drivingAudioLabel": "Generated Jamba TTS speech from the approved script",
+  "storyboardShots": [
+    {
+      "time": "0-3s",
+      "picture": "Jamba faces camera in the livestream room and smiles naturally.",
+      "sound": "欢迎来到直播间，今天给大家准备了一个超实用的好物。",
+      "shot": "Medium close-up, stable presenter framing."
+    }
+  ]
+}
+```
 
 ## Video Project Pack Rule
 
@@ -77,7 +126,7 @@ It should be used to keep these files together:
 - `manifest.json`
 - `script.md`
 - `assets.json`
-- `remotion.scene.json`
+- `editor.project.json`
 - imported reference images / keyframes / generated clips / final output
 
 After the pack is created:
@@ -297,11 +346,12 @@ If the script contains multiple shots, a named character, an important environme
 - Use explicit labels such as:
   - `Image 1: Jamba portrait reference`
   - `Image 2: livestream background mood reference`
-  - `Audio 1: Jamba voice reference for tone and speaking rhythm`
+  - `Voice: Jamba voiceId for TTS = voice_xxx`
+  - `Audio 1: generated Jamba TTS speech from the approved script`
 - Do this before the motion/camera description so the model does not confuse multiple references.
-- If a suitable finished audio reference exists and the chosen mode supports audio conditioning, treat it as a first-class reference asset instead of telling the user the platform cannot accept audio.
+- If a suitable finished generated speech audio exists and the chosen mode supports audio conditioning, treat it as a first-class reference asset instead of telling the user the platform cannot accept audio.
 - For asset-library character 口播 videos, do not treat a saved `voiceId` as `Audio 1` directly. First synthesize the approved spoken script with TTS, then treat the generated audio asset as `Audio 1`.
-- If the request uses an asset from the asset library and that asset has a saved `voiceId`, use that `voiceId` as the default TTS voice for the spoken script unless the user explicitly asks to disable it or replace it.
+- If the request uses an asset from the asset library and that asset has a saved `voiceId`, use that `voiceId` as the default TTS voice for the spoken script unless the user explicitly asks to disable it or replace it. Do not surface the old reference-audio filename as the important result; the important result is the resolved `voiceId`.
 - For `text-to-video`, describe subject, camera, motion, environment, pacing, and visual style.
 - For `reference-guided`, describe the desired movement and cinematic behavior while preserving and combining the important elements from the provided reference images.
 - For `first-last-frame`, describe the transition between the first and last frame; do not rewrite the full scene unless the transition requires it.
@@ -315,18 +365,23 @@ If the script contains multiple shots, a named character, an important environme
 ## Tool Usage
 
 - Always use `Operate(resource="video", operation="generate", input={ ... })`.
-- For asset-library character 口播 videos, call `Operate(resource="voice", operation="speech", input={ ... })` before the video tool:
+- For asset-library character 口播 videos, resolve the voice before the video tool:
+  - If the character has a ready `voiceId`, use it directly for TTS and do not inspect or summarize reference audio unless troubleshooting voice binding.
+  - If the character has only a voice sample, call `Operate(resource="voice", operation="clone", input={ ... })`, wait for completion, and use the returned `voiceId`.
+  - If no voice can be resolved, ask for a voice instead of generating a silent or generic-voice video.
+- After resolving the voice, call `Operate(resource="voice", operation="speech", input={ ... })` before the video tool:
   - `input`: the full approved spoken script
   - `voiceId`: the selected character asset's stored voice id
   - `title`: a clear audio asset title
   - `projectId` / `boundManuscriptPath`: include them when known
   - `waitForCompletion`: true when the runtime supports it, because video generation needs the completed audio asset
+- Use the resulting TTS asset path or URL as `drivingAudio`; never use the character `voiceId` or raw voice sample as `drivingAudio`.
 - Pass no reference images for `text-to-video`.
 - Pass 1 to 5 reference images for `reference-guided`.
 - Pass exactly two reference images in `首帧,尾帧` order for `first-last-frame`.
 - If a suitable finished audio asset exists, pass it as `drivingAudio` and describe it explicitly as `Audio 1` in the prompt preface.
 - For `reference-guided`, if a suitable finished audio asset exists, also pass it as the mode's voice reference input.
-- When a subject-library character is used for 口播, default to that character's saved `voiceId` for TTS, then pass the generated TTS audio as `Audio 1`.
+- When a subject-library character is used for 口播, default to that character's saved `voiceId` for TTS, then pass the generated TTS audio as `Audio 1`. A ready `voiceId` supersedes any stored reference-audio filename for planning and reporting.
 - If a video project pack already contains storyboard keyframes or image assets, prefer `video-project-path` or `video-project-id` together with those packaged assets as the main visual condition for `reference-guided`.
 - When the final prompt, script, or reference path list is long, keep them in `payload` instead of stuffing everything into one shell-like command string.
 - Keep the final generation prompt focused on execution details derived from the approved script.
@@ -339,13 +394,13 @@ If the script contains multiple shots, a named character, an important environme
     {
       "time": "0-2s",
       "picture": "Jamba 手持戴森 V8 吸尘器，身体随节奏左右摇摆，吸尘器作为道具举起。",
-      "sound": "Jamba 声音参考配音，轻快节奏感。",
+      "sound": "使用 Jamba 已绑定 voiceId 生成的 TTS 口播，轻快节奏感。",
       "shot": "中景，人物全身入镜。"
     },
     {
       "time": "2-4s",
       "picture": "Jamba 一边跳舞一边用吸尘器做挥舞动作，身体转动，动作夸张有趣。",
-      "sound": "节奏感音乐 + Jamba 声音。",
+      "sound": "节奏感音乐 + Jamba voiceId 生成的 TTS 声音。",
       "shot": "中近景，跟随人物移动。"
     }
   ]

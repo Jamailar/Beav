@@ -12,11 +12,13 @@ import { ToolConfirmDialog } from '../components/ToolConfirmDialog';
 import {
   buildChatModelOptions,
   ChatComposer,
+  type ChatAssetMentionOption,
   type ChatComposerHandle,
   type ChatKnowledgeMentionOption,
   type ChatMemberMentionOption,
   type ChatModelOption,
   type ChatSettingsSnapshot,
+  type ChatSkillMentionOption,
   type UploadedFileAttachment,
 } from '../components/ChatComposer';
 import {
@@ -67,6 +69,30 @@ interface KnowledgeMentionCatalogRecord {
   hasTranscript?: boolean;
 }
 
+interface SkillMentionCatalogRecord {
+  name?: string;
+  description?: string;
+  location?: string;
+  aliases?: string[];
+  sourceScope?: string;
+  isBuiltin?: boolean;
+  disabled?: boolean;
+}
+
+interface AssetMentionCatalogRecord {
+  id?: string;
+  name?: string;
+  description?: string;
+  tags?: string[];
+  categoryId?: string;
+  imagePaths?: string[];
+  absoluteImagePaths?: string[];
+  previewUrls?: string[];
+  primaryPreviewUrl?: string;
+  voicePath?: string;
+  absoluteVoicePath?: string;
+}
+
 interface KnowledgeMentionListPageResponse {
   items?: KnowledgeMentionCatalogRecord[];
   nextCursor?: string | null;
@@ -113,6 +139,56 @@ function normalizeKnowledgeMentionRecord(item: KnowledgeMentionCatalogRecord): C
     fileCount: typeof item.fileCount === 'number' ? item.fileCount : undefined,
     hasTranscript: Boolean(item.hasTranscript),
   };
+}
+
+function normalizeSkillMentionRecord(item: SkillMentionCatalogRecord): ChatSkillMentionOption | null {
+  const name = String(item.name || '').trim();
+  if (!name || item.disabled) return null;
+  return {
+    name,
+    description: String(item.description || '').trim() || undefined,
+    location: String(item.location || '').trim() || undefined,
+    sourceScope: String(item.sourceScope || '').trim() || undefined,
+    isBuiltin: Boolean(item.isBuiltin),
+    aliases: Array.isArray(item.aliases) ? item.aliases.map((alias) => String(alias || '').trim()).filter(Boolean) : [],
+  };
+}
+
+function normalizeAssetMentionRecord(item: AssetMentionCatalogRecord): ChatAssetMentionOption | null {
+  const id = String(item.id || '').trim();
+  const name = String(item.name || '').trim();
+  if (!id || !name) return null;
+  return {
+    id,
+    name,
+    description: String(item.description || '').trim() || undefined,
+    categoryId: String(item.categoryId || '').trim() || undefined,
+    tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag || '').trim()).filter(Boolean) : [],
+    imagePaths: Array.isArray(item.imagePaths) ? item.imagePaths.map((path) => String(path || '').trim()).filter(Boolean) : [],
+    absoluteImagePaths: Array.isArray(item.absoluteImagePaths) ? item.absoluteImagePaths.map((path) => String(path || '').trim()).filter(Boolean) : [],
+    previewUrls: Array.isArray(item.previewUrls) ? item.previewUrls.map((url) => String(url || '').trim()).filter(Boolean) : [],
+    primaryPreviewUrl: String(item.primaryPreviewUrl || '').trim() || undefined,
+    voicePath: String(item.voicePath || '').trim() || undefined,
+    absoluteVoicePath: String(item.absoluteVoicePath || '').trim() || undefined,
+  };
+}
+
+function mergeSkillMentionsIntoTaskHints(
+  taskHints: unknown,
+  skillMentions: ChatSkillMentionOption[],
+): unknown {
+  const skillNames = skillMentions
+    .map((item) => item.name.trim())
+    .filter(Boolean);
+  if (skillNames.length === 0) return taskHints;
+  const base = taskHints && typeof taskHints === 'object' && !Array.isArray(taskHints)
+    ? { ...(taskHints as Record<string, unknown>) }
+    : {};
+  const existing = Array.isArray(base.activeSkills)
+    ? base.activeSkills.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  base.activeSkills = Array.from(new Set([...existing, ...skillNames]));
+  return base;
 }
 
 function knowledgeReferencesFromMessageMetadata(metadata: unknown): ChatKnowledgeMentionOption[] {
@@ -889,6 +965,10 @@ export function Chat({
   const [chatModelOptions, setChatModelOptions] = useState<ChatModelOption[]>([]);
   const [memberMentionOptions, setMemberMentionOptions] = useState<ChatMemberMentionOption[]>([]);
   const [selectedMemberMention, setSelectedMemberMention] = useState<ChatMemberMentionOption | null>(null);
+  const [skillMentionOptions, setSkillMentionOptions] = useState<ChatSkillMentionOption[]>([]);
+  const [selectedSkillMentions, setSelectedSkillMentions] = useState<ChatSkillMentionOption[]>([]);
+  const [assetMentionOptions, setAssetMentionOptions] = useState<ChatAssetMentionOption[]>([]);
+  const [selectedAssetMentions, setSelectedAssetMentions] = useState<ChatAssetMentionOption[]>([]);
   const [knowledgeMentionOptions, setKnowledgeMentionOptions] = useState<ChatKnowledgeMentionOption[]>([]);
   const [selectedKnowledgeMentions, setSelectedKnowledgeMentions] = useState<ChatKnowledgeMentionOption[]>([]);
   const documentThemeMode = useDocumentThemeMode();
@@ -1185,6 +1265,8 @@ export function Chat({
 
   useEffect(() => {
     setSelectedMemberMention(null);
+    setSelectedSkillMentions([]);
+    setSelectedAssetMentions([]);
     setSelectedKnowledgeMentions([]);
   }, [currentSessionId]);
 
@@ -1227,9 +1309,46 @@ export function Chat({
     }
   }, [normalizeMemberMentionOptions]);
 
+  const loadSkillMentionOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
+    try {
+      const skills = await window.ipcRenderer.listSkills();
+      setSkillMentionOptions(
+        (skills || [])
+          .map((item) => normalizeSkillMentionRecord(item as SkillMentionCatalogRecord))
+          .filter((item): item is ChatSkillMentionOption => Boolean(item)),
+      );
+    } catch (error) {
+      console.error('Failed to load skill mention options:', error);
+      setSkillMentionOptions([]);
+    }
+  }, []);
+
+  const loadAssetMentionOptions = useCallback(async () => {
+    if (!isActiveRef.current) return;
+    try {
+      const result = await window.ipcRenderer.subjects.list({ limit: 500 });
+      const records = Array.isArray(result?.subjects)
+        ? result.subjects
+        : Array.isArray(result?.assets)
+          ? result.assets
+          : [];
+      setAssetMentionOptions(
+        records
+          .map((item) => normalizeAssetMentionRecord(item as AssetMentionCatalogRecord))
+          .filter((item): item is ChatAssetMentionOption => Boolean(item)),
+      );
+    } catch (error) {
+      console.error('Failed to load asset mention options:', error);
+      setAssetMentionOptions([]);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isActive) return;
     void loadMemberMentionOptions();
+    void loadSkillMentionOptions();
+    void loadAssetMentionOptions();
     const handleAdvisorsChanged = () => {
       void loadMemberMentionOptions();
     };
@@ -1237,7 +1356,7 @@ export function Chat({
     return () => {
       window.ipcRenderer.off('advisors:changed', handleAdvisorsChanged);
     };
-  }, [isActive, loadMemberMentionOptions]);
+  }, [isActive, loadAssetMentionOptions, loadMemberMentionOptions, loadSkillMentionOptions]);
 
   const loadKnowledgeMentionOptions = useCallback(async (query = '') => {
     if (!isActiveRef.current) return;
@@ -1413,6 +1532,7 @@ export function Chat({
       avatar?: string;
     };
     knowledgeReferences?: ChatKnowledgeMentionOption[];
+    assetReferences?: ChatAssetMentionOption[];
     modelConfig?: {
       apiKey?: string;
       baseURL?: string;
@@ -3247,6 +3367,8 @@ export function Chat({
     attachments: UploadedFileAttachment[] = [],
     memberMention: ChatMemberMentionOption | null = selectedMemberMention || fixedMemberMention,
     knowledgeMentions: ChatKnowledgeMentionOption[] = selectedKnowledgeMentions,
+    skillMentions: ChatSkillMentionOption[] = selectedSkillMentions,
+    assetMentions: ChatAssetMentionOption[] = selectedAssetMentions,
   ) => {
     const primaryAttachment = attachments[0];
     const safeKnowledgeMentions = knowledgeMentions.filter((item) => item.id);
@@ -3257,6 +3379,7 @@ export function Chat({
       attachmentCount: attachments.length,
       targetAdvisorId: memberMention?.id || null,
       knowledgeReferenceCount: safeKnowledgeMentions.length,
+      assetReferenceCount: assetMentions.length,
     });
     suppressComposerFocus('send_message', 5000);
     blurComposer('send_message');
@@ -3264,21 +3387,26 @@ export function Chat({
     setErrorNotice(null);
     const normalizedContent = String(content || '').trim();
     const mentionLabel = memberMention ? `@${memberMention.name}` : '';
+    const inlineLabels = [
+      mentionLabel,
+      ...skillMentions.map((item) => `@${item.name}`),
+      ...assetMentions.map((item) => `@${item.name}`),
+    ].filter(Boolean);
+    const missingInlineLabels = inlineLabels.filter((label) => !normalizedContent.includes(label));
     const knowledgeLabels = safeKnowledgeMentions.map((item) => `#${item.title || '知识库内容'}`);
     const displayBody = normalizedContent || (attachments.length > 0 ? `请分析这些附件：${attachments.map((item) => item.name).join('、')}` : safeKnowledgeMentions.length > 0 ? '请结合提到的知识库内容回答。' : '');
-    const displayText = [mentionLabel, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
+    const displayText = [...missingInlineLabels, ...knowledgeLabels, displayBody].filter(Boolean).join(' ').trim();
     if (!displayText) return;
     const attachmentBlockReason = attachmentsSendBlockReason(attachments);
     if (attachmentBlockReason) {
       setErrorNotice(attachmentBlockReason);
       return;
     }
-    const baseRuntimeMessage = normalizedContent || displayBody || displayText;
-    const knowledgeRuntimeContext = buildKnowledgeReferenceRuntimeContext(safeKnowledgeMentions);
-    const runtimeMessage = [
-      baseRuntimeMessage,
-      knowledgeRuntimeContext ? `\n\n[KnowledgeReferences]\n${knowledgeRuntimeContext}\n[/KnowledgeReferences]` : '',
-    ].filter(Boolean).join('');
+    const runtimeMessage = normalizedContent || displayBody || displayText;
+    const assetReferencesForSend = assetMentions.map((item) => ({
+      id: item.id,
+      name: item.name,
+    }));
     const processingStartedAt = Date.now();
     const memberActor: ChatMessageMemberActor | undefined = memberMention ? {
       type: 'member',
@@ -3347,6 +3475,8 @@ export function Chat({
     }
     setInput('');
     setSelectedMemberMention(null);
+    setSelectedSkillMentions([]);
+    setSelectedAssetMentions([]);
     setSelectedKnowledgeMentions([]);
     resetPendingAttachment();
     setIsProcessing(true);
@@ -3378,8 +3508,9 @@ export function Chat({
         avatar: memberMention.avatar,
       } : undefined,
       knowledgeReferences: safeKnowledgeMentions,
+      assetReferences: assetReferencesForSend,
       modelConfig: resolvedModelConfig || getChatModelConfig(),
-      taskHints: fixedSessionTaskHints,
+      taskHints: mergeSkillMentionsIntoTaskHints(fixedSessionTaskHints, skillMentions),
     });
   };
 
@@ -3559,7 +3690,7 @@ export function Chat({
         className={options?.className}
         value={input}
         onValueChange={setInput}
-        onSubmit={() => sendMessage(input, pendingAttachments, selectedMemberMention, selectedKnowledgeMentions)}
+        onSubmit={() => sendMessage(input, pendingAttachments, selectedMemberMention, selectedKnowledgeMentions, selectedSkillMentions, selectedAssetMentions)}
         placeholder={placeholder}
         attachment={pendingAttachment}
         attachments={pendingAttachments}
@@ -3583,6 +3714,12 @@ export function Chat({
         memberMentionOptions={memberMentionOptions}
         selectedMemberMention={selectedMemberMention}
         onSelectedMemberMentionChange={setSelectedMemberMention}
+        skillMentionOptions={skillMentionOptions}
+        selectedSkillMentions={selectedSkillMentions}
+        onSelectedSkillMentionsChange={setSelectedSkillMentions}
+        assetMentionOptions={assetMentionOptions}
+        selectedAssetMentions={selectedAssetMentions}
+        onSelectedAssetMentionsChange={setSelectedAssetMentions}
         knowledgeMentionOptions={knowledgeMentionOptions}
         selectedKnowledgeMentions={selectedKnowledgeMentions}
         onSelectedKnowledgeMentionsChange={setSelectedKnowledgeMentions}

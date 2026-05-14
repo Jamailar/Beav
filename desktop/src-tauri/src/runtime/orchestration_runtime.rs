@@ -55,13 +55,13 @@ pub fn runtime_subagent_role_spec(role_id: &str) -> RuntimeSubagentRoleSpec {
                 "你是图像策略代理，负责把目标转成可执行的配图/封面方案，并推动真实出图或落盘。"
                     .to_string(),
         },
-        "animation-director" => RuntimeSubagentRoleSpec {
-            role_id: "animation-director".to_string(),
-            purpose: "负责视频动画方案、Remotion 场景、字幕层和镜头运动设计。".to_string(),
-            handoff_contract: "必须给执行层返回可直接解析的结构化动画结果，不要只给口头建议。".to_string(),
-            output_schema: "动画摘要、Remotion JSON artifact、风险说明".to_string(),
+        "video-director" => RuntimeSubagentRoleSpec {
+            role_id: "video-director".to_string(),
+            purpose: "负责视频镜头规划、字幕层和剪辑节奏设计。".to_string(),
+            handoff_contract: "必须给执行层返回可直接解析的结构化视频编辑建议，不要只给口头建议。".to_string(),
+            output_schema: "视频编辑摘要、镜头结构、风险说明".to_string(),
             system_prompt:
-                "你是视频动画导演，负责把脚本与时间线转成可执行的 Remotion 动画结构，并优先保证宿主可落地。"
+                "你是视频导演，负责把脚本与素材组织成可执行的视频剪辑结构，并优先保证宿主可落地。"
                     .to_string(),
         },
         "reviewer" => RuntimeSubagentRoleSpec {

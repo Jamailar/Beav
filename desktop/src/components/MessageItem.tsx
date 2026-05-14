@@ -84,6 +84,7 @@ const INTERNAL_PROTOCOL_BLOCKS = [
 
   // --- Bracket 风格协议块（有闭合）---
   /\[KnowledgeReferences\][\s\S]*?\[\/KnowledgeReferences\]/gi,
+  /\[AssetReferences\][\s\S]*?\[\/AssetReferences\]/gi,
 
   // --- Bracket 风格协议块（无闭合，延伸到下一个大写节标题或文本末尾）---
   /\[SystemReminder[^\]]*\][\s\S]*?(?=\n\[[A-Z]|$)/gi,

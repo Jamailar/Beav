@@ -5,8 +5,6 @@
 ## Current Files
 
 - `base.txt`
-- `animation_design_skill.txt`
-- `animation_director.txt`
 - `storyboard_designer.txt`
 
 ## Rule

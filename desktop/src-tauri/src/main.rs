@@ -31,6 +31,7 @@ mod manuscript_package;
 mod mcp;
 mod media_generation;
 mod media_runtime;
+mod media_task_context;
 mod member_skill;
 mod memory;
 mod memory_maintenance;
@@ -3611,7 +3612,7 @@ fn execute_interactive_tool_call(
     tool_call_id: Option<&str>,
     name: &str,
     arguments: &Value,
-    model_config: Option<&Value>,
+    _model_config: Option<&Value>,
 ) -> Result<Value, String> {
     let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let tool_executor = tools::executor::InteractiveToolExecutor::new(
@@ -3729,7 +3730,7 @@ fn execute_interactive_tool_call(
                         return Ok(());
                     }
                     Err(format!(
-                        "脚本尚未确认，暂时不能执行 `{next_action}`。请先使用 `script_read` 读取脚本，再用 `script_update` 写入脚本草案，让用户阅读；用户明确确认后，再调用 `script_confirm`，之后才能改时间线、生成 Remotion 动画或导出。"
+                        "脚本尚未确认，暂时不能执行 `{next_action}`。请先使用 `script_read` 读取脚本，再用 `script_update` 写入脚本草案，让用户阅读；用户明确确认后，再调用 `script_confirm`，之后才能剪辑或导出。"
                     ))
                 };
                 let reject_video_timeline_action = |legacy_action: &str| -> Result<Value, String> {
@@ -3755,10 +3756,6 @@ fn execute_interactive_tool_call(
                             )
                         }
                     }
-                    "remotion_read" | "remotion-read" => call_manuscript_channel(
-                        "manuscripts:get-remotion-context",
-                        json!({ "filePath": file_path }),
-                    ),
                     "script_update" | "script-update" => {
                         let result = call_manuscript_channel(
                             "manuscripts:update-package-script",
@@ -4455,31 +4452,6 @@ fn execute_interactive_tool_call(
                             )
                         })
                     }
-                    "remotion_generate" | "remotion-generate" => {
-                        call_manuscript_channel("manuscripts:generate-remotion-scene", {
-                            ensure_script_confirmed("remotion_generate")?;
-                            let mut payload =
-                                editor_tool_payload(file_path, arguments, &["instructions"]);
-                            if let Some(active_session_id) = session_id {
-                                if let Some(object) = payload.as_object_mut() {
-                                    object
-                                        .insert("sessionId".to_string(), json!(active_session_id));
-                                }
-                            }
-                            if let (Some(object), Some(config)) =
-                                (payload.as_object_mut(), model_config)
-                            {
-                                object.insert("modelConfig".to_string(), config.clone());
-                            }
-                            payload
-                        })
-                    }
-                    "remotion_save" | "remotion-save" => {
-                        call_manuscript_channel("manuscripts:save-remotion-scene", {
-                            ensure_script_confirmed("remotion_save")?;
-                            editor_tool_payload(file_path, arguments, &["scene"])
-                        })
-                    }
                     "export" => call_manuscript_channel("manuscripts:render-remotion-video", {
                         ensure_script_confirmed("export")?;
                         editor_tool_payload(file_path, arguments, &[])
@@ -4720,7 +4692,6 @@ contentPath: {content_path}\n\
         .display()
         .to_string();
     let timeline_path = package_timeline_path(&package_root).display().to_string();
-    let remotion_scene_path = package_remotion_path(&package_root).display().to_string();
     let track_ui_path = package_track_ui_path(&package_root).display().to_string();
     let scene_ui_path = package_scene_ui_path(&package_root).display().to_string();
     let assets_path = package_assets_path(&package_root).display().to_string();
@@ -4748,18 +4719,17 @@ clips: {}\n\
 manifest: {manifest_path}\n\
 editorProject: {editor_project_path}\n\
 timelineOtio: {timeline_path}\n\
-remotionScene: {remotion_scene_path}\n\
 trackUi: {track_ui_path}\n\
 sceneUi: {scene_ui_path}\n\
 assets: {assets_path}\n\
 \n\
 ## 工程理解规则\n\
-- 视频稿件当前以 `manifest.json` + entry 脚本 + `remotion.scene.json` 为主。脚本确认状态存放在 `manifest.json.videoAi.scriptApproval`。\n\
-- `remotion.scene.json` 是视频工程真相层，包含 `baseMedia`、`ffmpegRecipe` 与 `scenes`。AI 剪辑完成后，应把基础视频产物写回 `baseMedia.outputPath`。\n\
-- `editor.project.json` 与 `timeline.otio.json` 在视频稿件里只作为 legacy 兼容输入，不再是新的写入目标；音频稿件仍可继续使用旧编辑路径。\n\
+- 视频稿件当前以 `manifest.json` + entry 脚本 + `editor.project.json` 为主。脚本确认状态存放在 `manifest.json.videoAi.scriptApproval`。\n\
+- AI 剪辑完成后，应把基础视频产物写回当前视频工程状态。\n\
+- `timeline.otio.json` 在视频稿件里只作为 legacy 兼容输入，不再是新的写入目标；音频稿件仍可继续使用旧编辑路径。\n\
 - `track-ui.json` / `scene-ui.json` 不是视频 AI 工作流的主真相，不要把它们误当成正文内容。\n\
 \n\
-工具规则：使用 `editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、改动画、做剪辑或导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；只有用户明确确认后，才能调用 `script_confirm`。视频稿件确认后，先用 `project_read` 读取最新 `videoProject`，再用 `ffmpeg_edit` 产出基础视频到 `baseMedia.outputPath`，然后再用 `remotion_read` / `remotion_generate` / `remotion_save` 叠加标题、字幕和图形动画，最后才 `export`。不要再使用 `timeline_read`、`track_add`、`clip_*`、`marker_*`、`undo`、`redo` 这些旧时间轴动作编辑视频。Remotion 在当前宿主里默认是一个主 scene 加若干 overlay/entity 的结构：优先在主 scene 内继续叠加动画，而不是机械拆分多个 scene。生成动画后，默认目标是让编辑器直接预览基础视频与 Remotion 叠层，不要把“立即导出成视频”当作默认下一步。修改脚本、基础剪辑或 Remotion 动画后，最终回答要简要说明改动与脚本确认状态。",
+工具规则：使用 `editor` 读取和修改当前工程，但必须遵守 script-first 协议。先调用 `script_read` 读取当前脚本与确认状态；如果用户要求改节奏、改镜头、做剪辑或导出，先用 `script_update` 把新的完整脚本草案写回脚本区，让用户阅读；只有用户明确确认后，才能调用 `script_confirm`。视频稿件确认后，先用 `project_read` 读取最新 `videoProject`，再用 `ffmpeg_edit` 执行受控剪辑，最后按需 `export`。不要再使用 `timeline_read`、`track_add`、`clip_*`、`marker_*`、`undo`、`redo` 这些旧时间轴动作编辑视频。修改脚本或基础剪辑后，最终回答要简要说明改动与脚本确认状态。",
         package_root.display(),
         serde_json::to_string(&track_names).unwrap_or_else(|_| "[]".to_string()),
         serde_json::to_string(&clips).unwrap_or_else(|_| "[]".to_string()),

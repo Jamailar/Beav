@@ -1856,11 +1856,11 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 instructions: instructionsOverride || editorBody,
             }) as { success?: boolean; state?: PackageState; error?: string };
             if (!result?.success || !result.state) {
-                throw new Error(result?.error || '生成 Remotion 动画方案失败');
+                throw new Error(result?.error || '该生成功能已关闭');
             }
             setPackageState(result.state);
         } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '生成 Remotion 动画方案失败');
+            void appAlert(error instanceof Error ? error.message : '该生成功能已关闭');
         } finally {
             setIsGeneratingRemotion(false);
         }
@@ -1874,11 +1874,11 @@ export function ManuscriptEditorHost({ filePath, onNavigateToRedClaw, onNavigate
                 scene,
             }) as { success?: boolean; state?: PackageState; error?: string };
             if (!result?.success || !result.state) {
-                throw new Error(result?.error || '保存 Remotion 动画方案失败');
+                throw new Error(result?.error || '该生成功能已关闭');
             }
             setPackageState(result.state);
         } catch (error) {
-            void appAlert(error instanceof Error ? error.message : '保存 Remotion 动画方案失败');
+            void appAlert(error instanceof Error ? error.message : '该生成功能已关闭');
         }
     }, [editorDescriptor?.draftType, editorFile]);
 

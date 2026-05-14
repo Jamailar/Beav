@@ -82,6 +82,14 @@ pub(crate) fn app_brand_display_name() -> &'static str {
     }
 }
 
+pub(crate) fn app_brand_slug() -> &'static str {
+    match env!("CARGO_PKG_NAME") {
+        "thrive" => "thrive",
+        "redbox" => "redbox",
+        _ => "redbox",
+    }
+}
+
 pub(crate) fn app_ai_display_name() -> &'static str {
     app_brand_display_name()
 }

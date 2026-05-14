@@ -22,7 +22,6 @@ mod tests {
                 "image-director",
                 "image-prompt-optimizer",
                 "member-skill-distiller",
-                "remotion-best-practices",
                 "skill-creator",
                 "video-director",
                 "wander-synthesis",

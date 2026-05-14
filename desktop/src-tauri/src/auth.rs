@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::{
-    app_brand_display_name, append_debug_trace_state, now_iso, now_ms, payload_field,
-    payload_string, AppState, AppStore, REDBOX_OFFICIAL_BASE_URL,
+    app_brand_display_name, append_debug_trace_state, now_iso, now_ms, official_base_url_for_realm,
+    payload_field, payload_string, AppState, AppStore,
 };
 
 pub(crate) const AUTH_STATE_CHANGED_EVENT: &str = "auth:state-changed";
@@ -930,7 +930,7 @@ pub(crate) fn official_bearer_token(state: &State<'_, AppState>) -> Option<Strin
 pub(crate) fn official_base_url(settings: &Value) -> String {
     payload_string(settings, "redbox_official_base_url")
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| REDBOX_OFFICIAL_BASE_URL.to_string())
+        .unwrap_or_else(|| official_base_url_for_realm("cn"))
 }
 
 #[cfg(test)]

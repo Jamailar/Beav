@@ -3,7 +3,7 @@ use tauri::{plugin::PermissionState, AppHandle, State};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::{
-    auth, official_base_url_from_settings, official_realm_from_settings,
+    app_brand_slug, auth, official_base_url_from_settings, official_realm_from_settings,
     official_unwrap_response_payload, payload_string, run_official_json_request_response,
     with_store, AppState,
 };
@@ -85,7 +85,7 @@ fn official_notification_context(settings: &Value) -> Value {
         .or_else(|| payload_string(&session, "user_id"))
         .unwrap_or_default();
     json!({
-        "appSlug": "thrive",
+        "appSlug": app_brand_slug(),
         "userId": user_id,
         "realm": official_realm_from_settings(settings),
         "baseUrl": official_base_url_from_settings(settings),

@@ -48,6 +48,8 @@ pub(crate) fn interactive_runtime_context_bundle(
         prompt_suffix,
         active_speaker_section,
         explicit_knowledge_section,
+        explicit_asset_section,
+        active_media_task_section,
         has_member_speaker,
         host_runtime_context_section,
         subagent_role_overlay_section,
@@ -105,6 +107,8 @@ pub(crate) fn interactive_runtime_context_bundle(
             skill_prompt.prompt_suffix,
             active_speaker_prompt_section(metadata, &store.advisors),
             explicit_knowledge_prompt_section(metadata),
+            explicit_asset_prompt_section(metadata),
+            crate::media_task_context::active_media_task_prompt_section(&store, session_id),
             has_active_member_speaker(metadata),
             render_host_runtime_context_section(&host_context),
             subagent_role_overlay_section(metadata),
@@ -119,6 +123,8 @@ pub(crate) fn interactive_runtime_context_bundle(
                 "runtime_mode={runtime_mode}; {}",
                 compact_host_runtime_context(&host_context)
             ),
+            String::new(),
+            String::new(),
             String::new(),
             String::new(),
             String::new(),
@@ -181,8 +187,14 @@ pub(crate) fn interactive_runtime_context_bundle(
         if !explicit_knowledge_section.trim().is_empty() {
             sections.push(explicit_knowledge_section.trim().to_string());
         }
+        if !explicit_asset_section.trim().is_empty() {
+            sections.push(explicit_asset_section.trim().to_string());
+        }
         if !active_speaker_section.trim().is_empty() {
             sections.push(active_speaker_section.trim().to_string());
+        }
+        if !active_media_task_section.trim().is_empty() {
+            sections.push(active_media_task_section.trim().to_string());
         }
         if !prompt_suffix.trim().is_empty() {
             sections.push(prompt_suffix.trim().to_string());
@@ -232,6 +244,10 @@ pub(crate) fn interactive_runtime_context_bundle(
                 rendered.push_str("\n\n");
                 rendered.push_str(explicit_knowledge_section.trim());
             }
+            if !explicit_asset_section.trim().is_empty() {
+                rendered.push_str("\n\n");
+                rendered.push_str(explicit_asset_section.trim());
+            }
             if let Some(account_context_section) = account_context_section.as_ref() {
                 rendered.push_str("\n\n");
                 rendered.push_str(account_context_section.trim());
@@ -239,6 +255,10 @@ pub(crate) fn interactive_runtime_context_bundle(
             if !active_speaker_section.trim().is_empty() {
                 rendered.push_str("\n\n");
                 rendered.push_str(active_speaker_section.trim());
+            }
+            if !active_media_task_section.trim().is_empty() {
+                rendered.push_str("\n\n");
+                rendered.push_str(active_media_task_section.trim());
             }
             return RuntimeContextBundle::new(
                 rendered.clone(),
@@ -417,9 +437,17 @@ pub(crate) fn interactive_runtime_context_bundle(
             rendered.push_str("\n\n");
             rendered.push_str(explicit_knowledge_section.trim());
         }
+        if !explicit_asset_section.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(explicit_asset_section.trim());
+        }
         if !active_speaker_section.trim().is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(active_speaker_section.trim());
+        }
+        if !active_media_task_section.trim().is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(active_media_task_section.trim());
         }
         return RuntimeContextBundle::new(
             rendered.clone(),
@@ -457,15 +485,29 @@ Host runtime context: {}\n{}",
             fallback.push_str("\n\n");
             fallback.push_str(explicit_knowledge_section.trim());
         }
+        if !explicit_asset_section.trim().is_empty() {
+            fallback.push_str("\n\n");
+            fallback.push_str(explicit_asset_section.trim());
+        }
         if let Some(account_context_section) = account_context_section.as_ref() {
             fallback.push_str("\n\n");
             fallback.push_str(account_context_section.trim());
         }
         fallback.push_str("\n\n");
         fallback.push_str(active_speaker_section.trim());
-    } else if !explicit_knowledge_section.trim().is_empty() {
+    } else if !explicit_knowledge_section.trim().is_empty()
+        || !explicit_asset_section.trim().is_empty()
+    {
         fallback.push_str("\n\n");
-        fallback.push_str(explicit_knowledge_section.trim());
+        if !explicit_knowledge_section.trim().is_empty() {
+            fallback.push_str(explicit_knowledge_section.trim());
+        }
+        if !explicit_asset_section.trim().is_empty() {
+            if !explicit_knowledge_section.trim().is_empty() {
+                fallback.push_str("\n\n");
+            }
+            fallback.push_str(explicit_asset_section.trim());
+        }
         if let Some(account_context_section) = account_context_section.as_ref() {
             fallback.push_str("\n\n");
             fallback.push_str(account_context_section.trim());
@@ -473,6 +515,10 @@ Host runtime context: {}\n{}",
     } else if let Some(account_context_section) = account_context_section.as_ref() {
         fallback.push_str("\n\n");
         fallback.push_str(account_context_section.trim());
+    }
+    if !active_media_task_section.trim().is_empty() {
+        fallback.push_str("\n\n");
+        fallback.push_str(active_media_task_section.trim());
     }
     RuntimeContextBundle::new(
         fallback.clone(),
@@ -631,6 +677,58 @@ fn explicit_knowledge_prompt_section(metadata: Option<&Value>) -> String {
         }
     }
     lines.join("\n")
+}
+
+fn explicit_asset_prompt_section(metadata: Option<&Value>) -> String {
+    let Some(metadata) = metadata else {
+        return String::new();
+    };
+    let Some(items) = metadata
+        .get("explicitAssetRefs")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty())
+    else {
+        return String::new();
+    };
+    let mut lines = vec![
+        "ExplicitAssetReferences:".to_string(),
+        "- The user explicitly mentioned the following asset library items with `@` in this turn."
+            .to_string(),
+        "- Treat these references as resolved selections, not ambiguous natural-language names."
+            .to_string(),
+        "- Do not ask whether the asset exists. Use `assets.get` or `Read(path=\"assets://<asset-id>\")` to load details before making asset-dependent claims or media.".to_string(),
+        "- Keep this reference context internal; do not print this section back to the user."
+            .to_string(),
+    ];
+    let mut rendered_count = 0usize;
+    for item in items.iter().take(12) {
+        let asset_id = item
+            .get("assetId")
+            .or_else(|| item.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(asset_id) = asset_id else {
+            continue;
+        };
+        let name = item
+            .get("name")
+            .or_else(|| item.get("title"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("未命名资产");
+        rendered_count += 1;
+        lines.push(format!(
+            "{}. name: {}; id: {}",
+            rendered_count, name, asset_id
+        ));
+    }
+    if rendered_count == 0 {
+        String::new()
+    } else {
+        lines.join("\n")
+    }
 }
 
 fn active_speaker_prompt_section(
@@ -1060,4 +1158,31 @@ pub(crate) fn interactive_runtime_tools_for_mode(
         ))
     })
     .unwrap_or_else(|_| openai_schemas_for_runtime_mode(runtime_mode))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_asset_prompt_section_uses_compact_resolved_refs() {
+        let metadata = json!({
+            "explicitAssetRefs": [{
+                "assetId": "subject_1774704234274_53536cc0",
+                "name": "Jamba",
+                "imagePaths": ["/private/huge/path.png"],
+                "voicePath": "/private/voice.wav"
+            }]
+        });
+
+        let section = explicit_asset_prompt_section(Some(&metadata));
+
+        assert!(section.contains("ExplicitAssetReferences"));
+        assert!(section.contains("name: Jamba"));
+        assert!(section.contains("id: subject_1774704234274_53536cc0"));
+        assert!(section.contains("assets://<asset-id>"));
+        assert!(!section.contains("imagePaths"));
+        assert!(!section.contains("voicePath"));
+        assert!(!section.contains("/private/huge/path.png"));
+    }
 }
