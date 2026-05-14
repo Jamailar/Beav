@@ -10,6 +10,7 @@ import {
     FolderOpen,
     Image as ImageIcon,
     ImagePlus,
+    Layers,
     Loader2,
     Music2,
     Paperclip,
@@ -35,7 +36,7 @@ import { filterAiModelsByCapability, normalizeAiModelDescriptors, parseAiSources
 import { resolveAssetUrl } from '../utils/pathManager';
 import { appAlert } from '../utils/appDialogs';
 
-type StudioMode = 'image' | 'video' | 'audio';
+type StudioMode = 'image' | 'video' | 'audio' | 'cover';
 type ImageGenerationMode = 'text-to-image' | 'reference-guided' | 'image-to-image';
 type VideoGenerationMode = 'text-to-video' | 'reference-guided' | 'first-last-frame' | 'continuation';
 type GenerationSurface = 'manual' | 'agent';
@@ -141,7 +142,27 @@ type AudioGenerationRequest = {
     responseFormat: string;
 };
 
-type GenerationRequest = ImageGenerationRequest | VideoGenerationRequest | AudioGenerationRequest;
+type CoverPromptSwitches = {
+    learnTypography: boolean;
+    learnColorMood: boolean;
+    beautifyFace: boolean;
+    replaceBackground: boolean;
+};
+
+type CoverGenerationRequest = {
+    type: 'cover';
+    prompt: string;
+    title: string;
+    projectId: string;
+    count: number;
+    model: string;
+    quality: string;
+    templateImage: ReferenceItem | null;
+    baseImage: ReferenceItem | null;
+    promptSwitches: CoverPromptSwitches;
+};
+
+type GenerationRequest = ImageGenerationRequest | VideoGenerationRequest | AudioGenerationRequest | CoverGenerationRequest;
 
 type GenerationFeedEntry = {
     kind: 'generation';
@@ -274,6 +295,20 @@ const AUDIO_FORMAT_OPTIONS = [
     { value: 'mp3', label: 'MP3' },
     { value: 'wav', label: 'WAV' },
 ] as const;
+
+const COVER_STYLE_OPTIONS: Array<{ key: keyof CoverPromptSwitches; label: string }> = [
+    { key: 'learnTypography', label: '字体' },
+    { key: 'learnColorMood', label: '色彩' },
+    { key: 'beautifyFace', label: '人像' },
+    { key: 'replaceBackground', label: '换景' },
+];
+
+const DEFAULT_COVER_PROMPT_SWITCHES: CoverPromptSwitches = {
+    learnTypography: true,
+    learnColorMood: true,
+    beautifyFace: false,
+    replaceBackground: false,
+};
 
 const SOURCE_LABELS: Record<string, string> = {
     standalone: '独立创作',
@@ -607,6 +642,7 @@ function applyIntentPreset(
         setImageProjectId: (value: string) => void;
         setVideoProjectId: (value: string) => void;
         setAudioProjectId: (value: string) => void;
+        setCoverProjectId: (value: string) => void;
         setContextIntent: (value: GenerationIntent | null) => void;
     },
 ): void {
@@ -619,6 +655,7 @@ function applyIntentPreset(
         setters.setImageProjectId(intent.bindTarget.projectId);
         setters.setVideoProjectId(intent.bindTarget.projectId);
         setters.setAudioProjectId(intent.bindTarget.projectId);
+        setters.setCoverProjectId(intent.bindTarget.projectId);
     }
     if (intent.preset?.aspectRatio) {
         if (intent.mode === 'image') {
@@ -636,6 +673,13 @@ function applyIntentPreset(
 }
 
 function buildRequestSummary(request: GenerationRequest): string[] {
+    if (request.type === 'cover') {
+        return [
+            request.model || '默认模型',
+            '3:4',
+            request.quality || '默认',
+        ];
+    }
     if (request.type === 'image') {
         return [
             request.model || '默认模型',
@@ -674,6 +718,8 @@ function serializeFeedEntries(entries: FeedEntry[]): string {
                 request: {
                     ...entry.request,
                     referenceItems: [],
+                    templateImage: entry.request.type === 'cover' ? null : undefined,
+                    baseImage: entry.request.type === 'cover' ? null : undefined,
                     firstClip: entry.request.type === 'video' ? null : undefined,
                     drivingAudio: entry.request.type === 'video' ? null : undefined,
                 },
@@ -725,7 +771,9 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
     if (!value || typeof value !== 'object') return null;
     const record = value as Record<string, unknown>;
     const rawType = String(record.type || '').trim().toLowerCase();
-    const resolvedType = rawType === 'audio'
+    const resolvedType = rawType === 'cover'
+        ? 'cover'
+        : rawType === 'audio'
         ? 'audio'
         : rawType === 'video'
         ? 'video'
@@ -738,6 +786,29 @@ function normalizeGenerationRequest(value: unknown): GenerationRequest | null {
                     : 'image';
     const prompt = String(record.prompt || record.userPrompt || record.input || record.text || '').trim();
     if (!prompt) return null;
+
+    if (resolvedType === 'cover') {
+        const rawSwitches = record.promptSwitches && typeof record.promptSwitches === 'object'
+            ? record.promptSwitches as Partial<CoverPromptSwitches>
+            : {};
+        return {
+            type: 'cover',
+            prompt,
+            title: String(record.title || '').trim(),
+            projectId: String(record.projectId || '').trim(),
+            count: Math.max(1, Math.min(4, Number(record.count || 1) || 1)),
+            model: String(record.model || '').trim(),
+            quality: String(record.quality || 'auto').trim() || 'auto',
+            templateImage: normalizeReferenceItem(record.templateImage),
+            baseImage: normalizeReferenceItem(record.baseImage),
+            promptSwitches: {
+                learnTypography: rawSwitches.learnTypography !== false,
+                learnColorMood: rawSwitches.learnColorMood !== false,
+                beautifyFace: rawSwitches.beautifyFace === true,
+                replaceBackground: rawSwitches.replaceBackground === true,
+            },
+        } satisfies CoverGenerationRequest;
+    }
 
     if (resolvedType === 'audio') {
         return {
@@ -902,6 +973,7 @@ function readPersistedFeedEntries(): FeedEntry[] {
 }
 
 function requestModeLabel(request: GenerationRequest): string {
+    if (request.type === 'cover') return '封面创作';
     if (request.type === 'image') return '图片创作';
     if (request.type === 'audio') return '音频创作';
     return '视频创作';
@@ -909,12 +981,16 @@ function requestModeLabel(request: GenerationRequest): string {
 
 function requestLeadingReference(request: GenerationRequest): ReferenceItem | null {
     if (request.type === 'audio') return null;
+    if (request.type === 'cover') return request.baseImage || request.templateImage || null;
     if (request.referenceItems.length > 0) return request.referenceItems[0];
     if (request.type === 'video' && request.firstClip) return request.firstClip;
     return null;
 }
 
 function requestSupportText(request: GenerationRequest): string {
+    if (request.type === 'cover') {
+        return `${request.count} 张`;
+    }
     if (request.type === 'image') {
         if (request.generationMode === 'image-to-image') return '图生图';
         if (request.generationMode === 'reference-guided') return '参考图引导';
@@ -955,7 +1031,9 @@ function parseAspectRatio(value: string | undefined, fallback: string): { width:
 }
 
 function estimateGenerationProgress(request: GenerationRequest, elapsedMs: number): number {
-    const expectedDurationMs = request.type === 'image'
+    const expectedDurationMs = request.type === 'cover'
+        ? 32_000
+        : request.type === 'image'
         ? 28_000
         : request.type === 'audio'
             ? 45_000
@@ -1205,6 +1283,13 @@ function summarizeReferenceItems(items: ReferenceItem[]): Array<{ name: string; 
 }
 
 function sanitizeGenerationRequestForAgent(request: GenerationRequest): Record<string, unknown> {
+    if (request.type === 'cover') {
+        return {
+            ...request,
+            templateImage: request.templateImage ? summarizeReferenceItems([request.templateImage])[0] : null,
+            baseImage: request.baseImage ? summarizeReferenceItems([request.baseImage])[0] : null,
+        };
+    }
     if (request.type === 'video') {
         return {
             ...request,
@@ -1234,6 +1319,7 @@ function buildGenerationAgentRuntimeContext(params: {
 }): string {
     const latest = {
         image: latestAssetOfKind(params.recentAssets, 'image') || null,
+        cover: latestAssetOfKind(params.recentAssets, 'cover') || null,
         video: latestAssetOfKind(params.recentAssets, 'video') || null,
         audio: latestAssetOfKind(params.recentAssets, 'audio') || null,
     };
@@ -1254,6 +1340,8 @@ function buildGenerationAgentRuntimeContext(params: {
             attachmentNote: params.attachmentNote || '',
             toolIntent: params.mode === 'image'
                 ? 'Call image.generate after refining the prompt.'
+                : params.mode === 'cover'
+                    ? 'Create a social cover. Use the uploaded reference cover for style and the base image as the subject/background when available, then call the image generation tool or cover generation capability with structured cover intent.'
                 : params.mode === 'video'
                     ? 'Call video.generate after refining storyboard, mode and references. If the video needs expressive TTS, first invoke the tts-director skill, then call voice.speech and use the completed audio.'
                     : 'Call voice.speech after refining the literal spoken text. For expressive, long-form, poetic, ad, character, or multi-emotion speech, first invoke the tts-director skill and submit one segments request.',
@@ -1263,11 +1351,12 @@ function buildGenerationAgentRuntimeContext(params: {
 }
 
 function placeholderCountForRequest(request: GenerationRequest): number {
-    return request.type === 'image' ? Math.max(1, request.count) : 1;
+    return request.type === 'image' || request.type === 'cover' ? Math.max(1, request.count) : 1;
 }
 
 function placeholderAspectRatioForRequest(request: GenerationRequest): string {
     if (request.type === 'audio') return '16 / 5';
+    if (request.type === 'cover') return '3 / 4';
     return request.type === 'image'
         ? normalizeAspectRatio(request.aspectRatio, '4 / 3')
         : normalizeAspectRatio(request.aspectRatio, '16 / 9');
@@ -1275,6 +1364,7 @@ function placeholderAspectRatioForRequest(request: GenerationRequest): string {
 
 function isPortraitRequest(request: GenerationRequest): boolean {
     if (request.type === 'audio') return false;
+    if (request.type === 'cover') return true;
     const ratio = request.type === 'image'
         ? parseAspectRatio(request.aspectRatio, '4:3')
         : parseAspectRatio(request.aspectRatio, '16:9');
@@ -1842,7 +1932,9 @@ function ReferenceStack({
     if (!lead) {
         return (
             <div className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-surface-secondary text-text-tertiary">
-                {request.type === 'image'
+                {request.type === 'cover'
+                    ? <Layers className="h-3.5 w-3.5" />
+                    : request.type === 'image'
                     ? <ImageIcon className="h-3.5 w-3.5" />
                     : request.type === 'audio'
                         ? <Music2 className="h-3.5 w-3.5" />
@@ -1859,6 +1951,9 @@ function ReferenceStack({
 
 function requestReferenceItems(request: GenerationRequest): ReferenceItem[] {
     if (request.type === 'audio') return [];
+    if (request.type === 'cover') {
+        return [request.templateImage, request.baseImage].filter(Boolean) as ReferenceItem[];
+    }
     const items = [...request.referenceItems];
     if (request.type === 'video') {
         if (request.firstClip) items.push(request.firstClip);
@@ -2003,7 +2098,7 @@ function FeedEntryMessage({
                             任务创作中 {progress}%...
                         </div>
                         <div className="text-[11px] text-text-tertiary">
-                            {entry.request.type === 'image' ? '正在生成图片' : entry.request.type === 'audio' ? '正在生成音频' : '正在生成视频'}
+                            {entry.request.type === 'cover' ? '正在生成封面' : entry.request.type === 'image' ? '正在生成图片' : entry.request.type === 'audio' ? '正在生成音频' : '正在生成视频'}
                         </div>
                     </div>
                     <div className="h-2.5 overflow-hidden rounded-full bg-surface-tertiary">
@@ -2099,7 +2194,7 @@ function FeedEntryMessage({
                                 }}
                             />
                             <div className="absolute left-5 top-5 text-[12px] font-semibold text-text-secondary">
-                                {entry.request.type === 'image' ? '正在创建图片' : entry.request.type === 'audio' ? '正在创建音频' : '正在创建视频'}
+                                {entry.request.type === 'cover' ? '正在创建封面' : entry.request.type === 'image' ? '正在创建图片' : entry.request.type === 'audio' ? '正在创建音频' : '正在创建视频'}
                             </div>
                         </div>
                     ))}
@@ -2242,13 +2337,26 @@ export function GenerationStudio({
     const [audioVoiceOptions, setAudioVoiceOptions] = useState<PickerOption[]>([]);
     const [isLoadingAudioVoices, setIsLoadingAudioVoices] = useState(false);
     const [audioError, setAudioError] = useState('');
+    const [coverPrompt, setCoverPrompt] = useState('');
+    const [coverTitle, setCoverTitle] = useState('');
+    const [coverProjectId, setCoverProjectId] = useState('');
+    const [coverCount, setCoverCount] = useState(1);
+    const [coverModel, setCoverModel] = useState('');
+    const [coverQuality, setCoverQuality] = useState('auto');
+    const [coverTemplateImage, setCoverTemplateImage] = useState<ReferenceItem | null>(null);
+    const [coverBaseImage, setCoverBaseImage] = useState<ReferenceItem | null>(null);
+    const [coverPromptSwitches, setCoverPromptSwitches] = useState<CoverPromptSwitches>(DEFAULT_COVER_PROMPT_SWITCHES);
+    const [isReadingCoverRefs, setIsReadingCoverRefs] = useState(false);
+    const [coverError, setCoverError] = useState('');
     const trackedJobsById = useMediaJobsStore((state) => state.jobsById);
     const isAgentMode = generationSurface === 'agent';
     const activeGenerationProjectId = studioMode === 'image'
         ? imageProjectId
         : studioMode === 'video'
             ? videoProjectId
-            : audioProjectId;
+            : studioMode === 'cover'
+                ? coverProjectId
+                : audioProjectId;
     const generationAgentTitle = useMemo(
         () => contextIntent?.sourceTitle ? `Agent 模式 · ${contextIntent.sourceTitle}` : 'Agent 模式',
         [contextIntent?.sourceTitle],
@@ -2333,9 +2441,11 @@ export function GenerationStudio({
             setSettings(normalizedSettings);
 
             setImageModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || '') : prev));
+            setCoverModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_model || '') : prev));
             setImageAspectRatio((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_aspect_ratio || '4:3') : prev));
             setImageSize((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_size || '') : prev));
             setImageQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality === 'low' ? 'auto' : normalizedSettings.image_quality || 'auto') : prev));
+            setCoverQuality((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.image_quality === 'low' ? 'auto' : normalizedSettings.image_quality || 'auto') : prev));
             setAudioModel((prev) => (overwriteDraftDefaults || !prev.trim() ? (normalizedSettings.voice_tts_model || normalizedSettings.tts_model || 'speech-2.8-turbo') : prev));
         } catch (error) {
             console.error('Failed to load generation studio context:', error);
@@ -2358,6 +2468,7 @@ export function GenerationStudio({
             setImageProjectId,
             setVideoProjectId,
             setAudioProjectId,
+            setCoverProjectId,
             setContextIntent,
         });
         onIntentConsumed?.();
@@ -2555,14 +2666,23 @@ export function GenerationStudio({
     const videoModelLabel = effectiveVideoModel;
     const currentConfigHint = studioMode === 'image'
         ? `${imageModelLabel} · ${imageAspectRatio || 'Auto'} · ${imageSize || '自动'}`
+        : studioMode === 'cover'
+            ? `${coverModel || imageModelLabel} · 3:4 · ${coverQuality || '默认'}`
         : studioMode === 'audio'
             ? `${effectiveAudioModel} · ${audioVoiceId ? shortVoiceId(audioVoiceId) : '未选音色'} · ${audioResponseFormat}`
             : `${videoModelLabel} · ${videoAspectRatio} · ${videoResolution}`;
-    const activeError = studioMode === 'image' ? imageError : studioMode === 'audio' ? audioError : videoError;
+    const activeError = studioMode === 'image' ? imageError : studioMode === 'cover' ? coverError : studioMode === 'audio' ? audioError : videoError;
     const visibleError = isAgentMode ? (agentSessionError || activeError) : activeError;
 
     useEffect(() => {
         setImageModel((prev) => {
+            const current = prev.trim();
+            if (current && imageModelOptions.some((option) => option.value === current)) {
+                return prev;
+            }
+            return imageModelOptions[0]?.value || '';
+        });
+        setCoverModel((prev) => {
             const current = prev.trim();
             if (current && imageModelOptions.some((option) => option.value === current)) {
                 return prev;
@@ -2828,6 +2948,77 @@ export function GenerationStudio({
         return true;
     }, [contextIntent?.source, createFeedEntry, hasVoiceConfig, updateFeedEntries]);
 
+    const runCoverRequest = useCallback((request: CoverGenerationRequest): boolean => {
+        if (!request.templateImage?.dataUrl) {
+            setCoverError('请先添加参考封面');
+            return false;
+        }
+        if (!request.baseImage?.dataUrl) {
+            setCoverError('请先添加底图');
+            return false;
+        }
+        if (!request.prompt.trim()) {
+            setCoverError('请先输入封面标题或要求');
+            return false;
+        }
+        if (!hasImageConfig) {
+            setCoverError('未检测到生图配置，请先在设置中补齐');
+            return false;
+        }
+        if (!request.model.trim()) {
+            setCoverError('未检测到已添加的生图模型，请先在设置中添加生图模型');
+            return false;
+        }
+
+        const entry = createFeedEntry(request);
+        updateFeedEntries((prev) => [...prev, entry]);
+        setCoverError('');
+
+        void (async () => {
+            try {
+                const result = await window.ipcRenderer.invoke('cover:generate', {
+                    templateImage: request.templateImage?.dataUrl,
+                    baseImage: request.baseImage?.dataUrl,
+                    titles: [{ id: makeId('cover-title'), type: 'main', text: request.prompt.trim() }],
+                    titleMode: 'titles',
+                    titlePrompt: undefined,
+                    promptSwitches: request.promptSwitches,
+                    templateName: request.title.trim() || undefined,
+                    count: request.count,
+                    model: request.model.trim() || undefined,
+                    provider: settings.image_provider || undefined,
+                    providerTemplate: settings.image_provider_template || undefined,
+                    quality: request.quality.trim() || undefined,
+                }) as { success?: boolean; error?: string; assets?: GeneratedAsset[] };
+
+                if (!result?.success) {
+                    throw new Error(result?.error || '封面生成失败');
+                }
+
+                updateFeedEntries((prev) => prev.map((item) => (
+                    item.id === entry.id
+                        ? { ...item, status: 'success', completedAt: new Date().toISOString(), assets: normalizeGeneratedAssets(result.assets), error: undefined }
+                        : item
+                )));
+            } catch (error) {
+                const message = error instanceof Error ? error.message : '封面生成失败';
+                setCoverError(message);
+                updateFeedEntries((prev) => prev.map((item) => (
+                    item.id === entry.id
+                        ? { ...item, status: 'error', error: message }
+                        : item
+                )));
+            }
+        })();
+        return true;
+    }, [
+        createFeedEntry,
+        hasImageConfig,
+        settings.image_provider,
+        settings.image_provider_template,
+        updateFeedEntries,
+    ]);
+
     const handleGenerateImage = useCallback(() => {
         const effectiveImageMode: ImageGenerationMode = imageReferences.length > 0
             ? (imageMode === 'text-to-image' ? 'reference-guided' : imageMode)
@@ -2936,7 +3127,39 @@ export function GenerationStudio({
         runAudioRequest,
     ]);
 
+    const handleGenerateCover = useCallback(() => {
+        const accepted = runCoverRequest({
+            type: 'cover',
+            prompt: coverPrompt,
+            title: coverTitle,
+            projectId: coverProjectId,
+            count: coverCount,
+            model: coverModel,
+            quality: coverQuality,
+            templateImage: coverTemplateImage,
+            baseImage: coverBaseImage,
+            promptSwitches: coverPromptSwitches,
+        });
+        if (!accepted) return;
+        setCoverPrompt('');
+    }, [
+        coverBaseImage,
+        coverCount,
+        coverModel,
+        coverProjectId,
+        coverPrompt,
+        coverPromptSwitches,
+        coverQuality,
+        coverTemplateImage,
+        coverTitle,
+        runCoverRequest,
+    ]);
+
     const handleRegenerate = useCallback((entry: GenerationFeedEntry) => {
+        if (entry.request.type === 'cover') {
+            runCoverRequest(entry.request);
+            return;
+        }
         if (entry.request.type === 'image') {
             runImageRequest(entry.request);
             return;
@@ -2946,10 +3169,22 @@ export function GenerationStudio({
             return;
         }
         runVideoRequest(entry.request);
-    }, [runAudioRequest, runImageRequest, runVideoRequest]);
+    }, [runAudioRequest, runCoverRequest, runImageRequest, runVideoRequest]);
 
     const handleEditEntry = useCallback((entry: GenerationFeedEntry) => {
         setStudioMode(entry.request.type);
+        if (entry.request.type === 'cover') {
+            setCoverPrompt(entry.request.prompt);
+            setCoverTitle(entry.request.title);
+            setCoverProjectId(entry.request.projectId);
+            setCoverCount(entry.request.count);
+            setCoverModel(entry.request.model);
+            setCoverQuality(entry.request.quality);
+            setCoverTemplateImage(entry.request.templateImage);
+            setCoverBaseImage(entry.request.baseImage);
+            setCoverPromptSwitches(entry.request.promptSwitches);
+            return;
+        }
         if (entry.request.type === 'image') {
             setImagePrompt(entry.request.prompt);
             setImageTitle(entry.request.title);
@@ -3119,6 +3354,33 @@ export function GenerationStudio({
         }
     }, []);
 
+    const handleCoverReferenceFile = useCallback(async (
+        event: React.ChangeEvent<HTMLInputElement>,
+        target: 'template' | 'base',
+    ) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        setIsReadingCoverRefs(true);
+        try {
+            const item = {
+                name: file.name,
+                dataUrl: await readFileAsDataUrl(file),
+            };
+            if (target === 'template') {
+                setCoverTemplateImage(item);
+            } else {
+                setCoverBaseImage(item);
+            }
+            setCoverError('');
+        } catch (error) {
+            console.error('Failed to read cover reference:', error);
+            setCoverError('封面素材读取失败，请重试');
+        } finally {
+            setIsReadingCoverRefs(false);
+            event.target.value = '';
+        }
+    }, []);
+
     const handleVideoReferenceFile = useCallback(async (
         event: React.ChangeEvent<HTMLInputElement>,
         target: number | 'first' | 'last' | 'firstClip' | 'drivingAudio',
@@ -3228,6 +3490,20 @@ export function GenerationStudio({
                 responseFormat: audioResponseFormat,
             };
         }
+        if (studioMode === 'cover') {
+            return {
+                type: 'cover',
+                prompt: coverPrompt,
+                title: coverTitle,
+                projectId: coverProjectId,
+                count: coverCount,
+                model: coverModel,
+                quality: coverQuality,
+                templateImage: coverTemplateImage,
+                baseImage: coverBaseImage,
+                promptSwitches: coverPromptSwitches,
+            };
+        }
         const effectiveImageMode: ImageGenerationMode = imageReferences.length > 0
             ? (imageMode === 'text-to-image' ? 'reference-guided' : imageMode)
             : 'text-to-image';
@@ -3251,6 +3527,15 @@ export function GenerationStudio({
         audioResponseFormat,
         audioTitle,
         audioVoiceId,
+        coverBaseImage,
+        coverCount,
+        coverModel,
+        coverProjectId,
+        coverPrompt,
+        coverPromptSwitches,
+        coverQuality,
+        coverTemplateImage,
+        coverTitle,
         effectiveAudioModel,
         effectiveVideoModel,
         imageAspectRatio,
@@ -3285,7 +3570,7 @@ export function GenerationStudio({
 
     const composerGridClass = studioMode === 'audio'
         ? 'grid gap-4'
-        : studioMode === 'video' && videoMode === 'first-last-frame'
+        : studioMode === 'cover' || (studioMode === 'video' && videoMode === 'first-last-frame')
         ? 'grid items-start gap-4 md:grid-cols-[196px_minmax(0,1fr)]'
         : 'grid items-start gap-4 md:grid-cols-[104px_minmax(0,1fr)]';
     const composerWidthClass = 'mx-auto w-full max-w-[900px]';
@@ -3306,12 +3591,20 @@ export function GenerationStudio({
             }
             if (result.canceled || !result.attachment) return;
             setAgentAttachment(result.attachment);
-            setImageError('');
+            if (studioMode === 'cover') {
+                setCoverError('');
+            } else {
+                setImageError('');
+            }
         } catch (error) {
             console.error('Failed to pick generation agent attachment:', error);
-            setImageError(error instanceof Error ? error.message : '上传附件失败');
+            if (studioMode === 'cover') {
+                setCoverError(error instanceof Error ? error.message : '上传附件失败');
+            } else {
+                setImageError(error instanceof Error ? error.message : '上传附件失败');
+            }
         }
-    }, [agentExecutionActive, agentSessionId, isAgentSessionLoading]);
+    }, [agentExecutionActive, agentSessionId, isAgentSessionLoading, studioMode]);
     const handleSendAgentMessage = useCallback(async () => {
         const content = currentAgentRequest.prompt.trim();
         if ((!content && !agentAttachment) || !agentSessionId || isAgentSessionLoading || agentExecutionActive) return;
@@ -3349,6 +3642,9 @@ export function GenerationStudio({
             if (currentAgentRequest.type === 'image' && currentAgentRequest.referenceItems.length > 0) {
                 attachmentContextNotes.push(`当前轮次还存在 ${currentAgentRequest.referenceItems.length} 张创作参考图未随消息附带；如需让 AI 读取这些图，请移除当前文件附件，或把参考图直接通过左侧图片区发送。`);
             }
+            if (currentAgentRequest.type === 'cover' && (currentAgentRequest.templateImage || currentAgentRequest.baseImage)) {
+                attachmentContextNotes.push('当前轮次还存在封面参考图或底图未随消息附带；如需让 AI 读取这些图，请移除当前文件附件。');
+            }
         } else if (currentAgentRequest.type === 'image' && currentAgentRequest.referenceItems.length > 0) {
             try {
                 const contactSheet = await buildReferenceContactSheet(currentAgentRequest.referenceItems);
@@ -3358,6 +3654,20 @@ export function GenerationStudio({
                 console.error('Failed to create inline agent attachment:', error);
                 setImageError(error instanceof Error ? error.message : '参考图附件创建失败');
                 return;
+            }
+        }
+        if (currentAgentRequest.type === 'cover' && !agentAttachment) {
+            const coverRefs = [currentAgentRequest.templateImage, currentAgentRequest.baseImage].filter(Boolean) as ReferenceItem[];
+            if (coverRefs.length > 0) {
+                try {
+                    const contactSheet = await buildReferenceContactSheet(coverRefs);
+                    attachments.push(await createInlineAttachment({ name: contactSheet.fileName, dataUrl: contactSheet.dataUrl }, contactSheet.fileName));
+                    attachmentContextNotes.push(`封面素材：${contactSheet.note}。第 1 张是参考封面，第 2 张是底图。`);
+                } catch (error) {
+                    console.error('Failed to prepare generation agent cover attachments:', error);
+                    setCoverError(error instanceof Error ? error.message : '封面素材附件创建失败');
+                    return;
+                }
             }
         }
         if (currentAgentRequest.type === 'video') {
@@ -3400,6 +3710,9 @@ export function GenerationStudio({
         if (studioMode === 'image') {
             setImagePrompt('');
             setImageError('');
+        } else if (studioMode === 'cover') {
+            setCoverPrompt('');
+            setCoverError('');
         } else if (studioMode === 'video') {
             setVideoPrompt('');
             setVideoError('');
@@ -3434,6 +3747,19 @@ export function GenerationStudio({
             >
                 <ImagePlus className="h-4 w-4" />
                 生图
+            </button>
+            <button
+                type="button"
+                onClick={() => setStudioMode('cover')}
+                className={clsx(
+                    'inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[14px] font-medium',
+                    studioMode === 'cover'
+                        ? 'border-brand-red/50 bg-brand-red text-white'
+                        : 'border-border bg-surface-primary text-text-secondary',
+                )}
+            >
+                <Layers className="h-4 w-4" />
+                做封面
             </button>
             <button
                 type="button"
@@ -3594,6 +3920,23 @@ export function GenerationStudio({
                                                     onChange={handleImageReferenceFiles}
                                                     onClear={() => setImageReferences([])}
                                                 />
+                                            ) : studioMode === 'cover' ? (
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <UploadPreviewCard
+                                                        label={isReadingCoverRefs ? '读取中' : '参考'}
+                                                        accept="image/*"
+                                                        items={coverTemplateImage ? [coverTemplateImage] : []}
+                                                        onChange={(event) => void handleCoverReferenceFile(event, 'template')}
+                                                        onClear={() => setCoverTemplateImage(null)}
+                                                    />
+                                                    <UploadPreviewCard
+                                                        label={isReadingCoverRefs ? '读取中' : '底图'}
+                                                        accept="image/*"
+                                                        items={coverBaseImage ? [coverBaseImage] : []}
+                                                        onChange={(event) => void handleCoverReferenceFile(event, 'base')}
+                                                        onClear={() => setCoverBaseImage(null)}
+                                                    />
+                                                </div>
                                             ) : videoMode === 'first-last-frame' ? (
                                                 <div className="grid grid-cols-2 gap-3">
                                                     <UploadPreviewCard
@@ -3634,20 +3977,22 @@ export function GenerationStudio({
 
                                     <div className="space-y-3">
                                         <textarea
-                                            value={studioMode === 'image' ? imagePrompt : studioMode === 'audio' ? audioPrompt : videoPrompt}
+                                            value={studioMode === 'image' ? imagePrompt : studioMode === 'cover' ? coverPrompt : studioMode === 'audio' ? audioPrompt : videoPrompt}
                                             onChange={(event) => (
                                                 studioMode === 'image'
                                                     ? setImagePrompt(event.target.value)
+                                                    : studioMode === 'cover'
+                                                        ? setCoverPrompt(event.target.value)
                                                     : studioMode === 'audio'
                                                         ? setAudioPrompt(event.target.value)
                                                         : setVideoPrompt(event.target.value)
                                             )}
                                             rows={4}
-                                            placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'audio' ? '输入要合成的旁白、台词或口播文本...' : '描述您想生成的视频场景、镜头、动作...'}
+                                            placeholder={studioMode === 'image' ? '描述您想生成的场景、风格、细节...' : studioMode === 'cover' ? '输入封面标题，或直接描述想要的点击感...' : studioMode === 'audio' ? '输入要合成的旁白、台词或口播文本...' : '描述您想生成的视频场景、镜头、动作...'}
                                             className="min-h-[112px] max-h-[240px] w-full resize-y overflow-y-auto bg-transparent text-[14px] leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
                                         />
 
-                                        {studioMode === 'image' && isAgentMode && agentAttachment && (
+                                        {(studioMode === 'image' || studioMode === 'cover') && isAgentMode && agentAttachment && (
                                             <AgentAttachmentCard
                                                 attachment={agentAttachment}
                                                 onClear={() => setAgentAttachment(null)}
@@ -3708,6 +4053,82 @@ export function GenerationStudio({
                                                         onClick={isAgentMode ? handleSendAgentMessage : handleGenerateImage}
                                                         disabled={isAgentMode ? !canSendAgentMessage : (!hasImageConfig || !imageModel.trim())}
                                                         className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
+                                                    >
+                                                        {isAgentMode ? (
+                                                            agentExecutionActive ? (
+                                                                <Loader2 className="h-5 w-5 animate-spin" />
+                                                            ) : (
+                                                                <ArrowUp className="h-5 w-5" />
+                                                            )
+                                                        ) : (
+                                                            <Sparkles className="h-5 w-5" />
+                                                        )}
+                                                    </button>
+                                                </>
+                                            ) : studioMode === 'cover' ? (
+                                                <>
+                                                    {isAgentMode && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handlePickAgentAttachment()}
+                                                            disabled={!agentSessionId || isAgentSessionLoading || agentExecutionActive}
+                                                            className="inline-flex h-10 items-center gap-1.5 rounded-[10px] border border-border bg-surface-secondary px-3 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-tertiary disabled:opacity-45"
+                                                        >
+                                                            <Paperclip className="h-3.5 w-3.5" />
+                                                            附件
+                                                        </button>
+                                                    )}
+                                                    <PopoverSelect
+                                                        value={coverModel}
+                                                        onChange={setCoverModel}
+                                                        options={imageModelOptions}
+                                                        className="min-w-[156px]"
+                                                        title="图片模型"
+                                                        panelClassName="w-[240px]"
+                                                        layout="column"
+                                                        disabled={imageModelOptions.length === 0}
+                                                        emptyText="未添加生图模型"
+                                                    />
+                                                    {!isAgentMode && (
+                                                        <>
+                                                            {COVER_STYLE_OPTIONS.map((option) => {
+                                                                const active = coverPromptSwitches[option.key];
+                                                                return (
+                                                                    <button
+                                                                        key={option.key}
+                                                                        type="button"
+                                                                        onClick={() => setCoverPromptSwitches((prev) => ({
+                                                                            ...prev,
+                                                                            [option.key]: !prev[option.key],
+                                                                        }))}
+                                                                        className={clsx(
+                                                                            'inline-flex h-9 items-center rounded-full border px-3 text-[12px] font-medium transition-colors',
+                                                                            active
+                                                                                ? 'border-brand-red/40 bg-brand-red/10 text-brand-red'
+                                                                                : 'border-border bg-surface-primary text-text-secondary',
+                                                                        )}
+                                                                    >
+                                                                        {option.label}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </>
+                                                    )}
+                                                    <PopoverSelect
+                                                        value={String(coverCount)}
+                                                        onChange={(value) => setCoverCount(Number(value) || 1)}
+                                                        options={IMAGE_COUNT_OPTIONS}
+                                                        className="min-w-[78px]"
+                                                        title="生成数量"
+                                                        panelClassName="w-[220px]"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={isAgentMode ? handleSendAgentMessage : handleGenerateCover}
+                                                        disabled={isAgentMode ? !canSendAgentMessage : (!hasImageConfig || !coverModel.trim())}
+                                                        className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-brand-red text-white shadow-[var(--ui-shadow-1)] hover:bg-brand-red/90 disabled:opacity-45"
+                                                        title="生成封面"
+                                                        aria-label="生成封面"
                                                     >
                                                         {isAgentMode ? (
                                                             agentExecutionActive ? (
@@ -3848,6 +4269,12 @@ export function GenerationStudio({
                                             </div>
                                         )}
 
+                                        {studioMode === 'cover' && isReadingCoverRefs && (
+                                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
+                                                <span>正在读取封面素材...</span>
+                                            </div>
+                                        )}
+
                                         {studioMode === 'video' && (
                                             <div className="flex flex-wrap items-center gap-3 text-[12px] text-text-tertiary">
                                                 {videoDrivingAudio && <span>已附带驱动音频</span>}
@@ -3862,6 +4289,12 @@ export function GenerationStudio({
                                         )}
 
                                         {studioMode === 'image' && !isAgentMode && !hasImageConfig && (
+                                            <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
+                                                未检测到生图配置。请先到“设置 → AI 模型”填写图片生成的 Endpoint、API Key 和模型。
+                                            </div>
+                                        )}
+
+                                        {studioMode === 'cover' && !isAgentMode && !hasImageConfig && (
                                             <div className="rounded-[14px] bg-brand-red/10 px-4 py-3 text-sm text-brand-red">
                                                 未检测到生图配置。请先到“设置 → AI 模型”填写图片生成的 Endpoint、API Key 和模型。
                                             </div>

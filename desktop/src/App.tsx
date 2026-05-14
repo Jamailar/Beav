@@ -192,7 +192,7 @@ export interface PendingChatMessage {
 }
 
 export interface GenerationIntent {
-  mode: 'image' | 'video' | 'audio';
+  mode: 'image' | 'video' | 'audio' | 'cover';
   source: 'standalone' | 'media-library' | 'manuscripts' | 'cover-studio';
   sourceTitle?: string;
   bindTarget?: {
@@ -893,7 +893,7 @@ function AuthenticatedApp({ onOpenAppOnboarding }: { onOpenAppOnboarding: () => 
             <Suspense fallback={currentView === 'home' ? <ViewLoadingFallback /> : null}>
               <HomePage
                 isActive={currentView === 'home'}
-                onNavigateToCoverStudio={() => setCurrentView('cover-studio')}
+                onNavigateToCoverStudio={() => navigateToGenerationStudio({ mode: 'cover', source: 'standalone' })}
                 onNavigateToGenerationStudio={(mode) => navigateToGenerationStudio({ mode, source: 'standalone' })}
                 onOpenManuscript={navigateToManuscript}
                 onNavigateToRedClaw={navigateToRedClaw}
